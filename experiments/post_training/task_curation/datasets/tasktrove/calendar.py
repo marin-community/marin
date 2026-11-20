@@ -12,9 +12,9 @@ golden control; an archive whose witness is not a nonempty JSON list of events i
 """
 
 import json
+from dataclasses import replace
 from typing import Any
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.models import (
@@ -47,7 +47,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_script_grader,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)
@@ -173,7 +173,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=2699,
                 notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
         (
@@ -191,19 +190,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "
                     "agent-calendar-v2."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
     )
     return [
         RlDataSource(
-            info=info,
+            info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
             pipeline=process_rows,
             config=CurationRecipe(
                 name=name,
                 source=tasktrove_source(config),
                 convert=TaskTroveConverter(config, convert_calendar),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=rubric,
                 controls=Controls(golden=calendar_golden),

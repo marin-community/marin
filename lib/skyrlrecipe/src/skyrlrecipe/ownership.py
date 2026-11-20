@@ -36,6 +36,7 @@ OWNER_MESSAGES = MappingProxyType(
     {
         **dict.fromkeys(DERIVED_PATHS, "derived from context_budget; set context_budget instead"),
         **dict.fromkeys(LAUNCH_PATHS, "the launch document sets it; it is not a recipe setting"),
+        "checkpoint_export": "the launch document owns export settings; it is not a recipe section",
     }
 )
 

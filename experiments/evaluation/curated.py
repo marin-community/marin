@@ -8,9 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from huggingface_hub import HfApi
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
+from evalrecords.records import (
     DEFAULT_EVALUATION_CONCURRENCY,
     CuratedRef,
     CuratedSettings,
@@ -19,6 +17,8 @@ from marin.evaluation.records import (
     PromptFormat,
     ResolvedEvaluationSelection,
 )
+from huggingface_hub import HfApi
+from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep
 from rigging.secrets import is_secret_reference
 from taskcompendium.identity import canonical_sha256
@@ -28,6 +28,9 @@ from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.preparation import prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
+
+# The standard flow seeds every run alike, so runs of different models draw the same samples.
+DEFAULT_RUN_SEED = 0
 
 
 def pinned_model(model: ModelConfig) -> ModelConfig:
@@ -110,10 +113,13 @@ def settings_for(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
+    default_seed: int | None,
 ) -> CuratedSettings:
+    """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``."""
     if model.effective_tokenizer_revision is None:
         raise ValueError("Curated evaluation requires an explicit tokenizer revision")
     run = selection.run
+    explicit_seed = seed if seed is not None else run.seed
     if run.judge is not None:
         url = urlsplit(run.judge_endpoint or "")
         if (
@@ -131,7 +137,7 @@ def settings_for(
         concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
         max_tokens=run.max_tokens,
         source_limit=limit if limit is not None else run.limit,
-        seed=seed if seed is not None else run.seed,
+        seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
     )
 

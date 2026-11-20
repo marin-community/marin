@@ -5,9 +5,10 @@
 
 import hashlib
 import json
+import threading
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,17 +18,7 @@ import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.resources.state import JobState, TaskState
-from iris.rpc import job_pb2
-from marin.evaluation.harbor.driver_config import (
-    HarborDatasetKind,
-    HarborErrorTaxonomy,
-    ValidatedHarborConfig,
-)
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import (
+from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -39,6 +30,16 @@ from marin.evaluation.records import (
     read_record,
     record_path,
 )
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.resources.state import JobState, TaskState
+from iris.rpc import job_pb2
+from marin.evaluation.harbor.driver_config import (
+    HarborDatasetKind,
+    HarborErrorTaxonomy,
+    ValidatedHarborConfig,
+)
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     Evaluation,
@@ -52,17 +53,23 @@ from marin.evaluation.runner import (
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
+from marin.execution.step_status import StatusFile
 from marin.inference.config import (
     EffectiveServing,
     ResolvedModelLocator,
     SpeculativeMethod,
     SpeculativeServingConfig,
 )
-from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
+from marin.inference.iris import (
+    InferenceStartupPhase,
+    PreparedInference,
+    RemoteInferenceSession,
+    RemoteInferenceStartupError,
+)
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
@@ -264,7 +271,8 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
             client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
         ),
     )
-    monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr("marin.evaluation.runner.prepare_inference", PreparedInference)
+    monkeypatch.setattr("marin.evaluation.runner.serve_inference", lambda prepared: remote(prepared.config))
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
         lambda model, *_args, **_kwargs: SimpleNamespace(
@@ -320,7 +328,8 @@ def _evaluate_with_session(
     with (
         patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
         patch("marin.evaluation.runner.iris_ctx", lambda: context),
-        patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
+        patch("marin.evaluation.runner.prepare_inference", PreparedInference),
+        patch("marin.evaluation.runner.serve_inference", lambda _prepared: nullcontext(session)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
             lambda model, *_args, **_kwargs: SimpleNamespace(
@@ -514,6 +523,81 @@ def test_evaluation_steps_record_each_hosted_judge_startup_failure(tmp_path, mon
         assert _step_status(batch, index) == STATUS_SUCCESS
 
 
+def test_evaluation_steps_prepare_evaluation_judges_with_the_candidate_and_serve_only_the_candidate(
+    tmp_path, monkeypatch
+):
+    events: list[str] = []
+    judge_prepare_started = threading.Event()
+
+    def prepare(config):
+        model = config.model.model_id
+        if model == "policy-judge":
+            judge_prepare_started.set()
+        else:
+            assert judge_prepare_started.wait(timeout=5)
+        events.append(f"prepared {model}")
+        return PreparedInference(config)
+
+    def serve(prepared):
+        events.append(f"serve {prepared.config.model.model_id}")
+        return nullcontext(_remote_session(f"https://{prepared.config.model.model_id}.example/v1"))
+
+    _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("serve_inference is patched below"))
+    monkeypatch.setattr("marin.evaluation.runner.prepare_inference", prepare)
+    monkeypatch.setattr("marin.evaluation.runner.serve_inference", serve)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    hosted = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "one", _successful_evaluation),))
+    policy_judge = HostedJudge(
+        model=ModelConfig(name="policy-judge", location="org/policy-judge", resource_hint=ResourceHint(hbm_gb=3)),
+        accelerator=hosted.accelerator,
+        api_model="org/policy-judge",
+    )
+    batch = replace(hosted, judge=None, prepared_judges=(policy_judge,))
+
+    _run_test_batch(batch)
+
+    assert sorted(events[:2]) == ["prepared candidate", "prepared policy-judge"]
+    assert events[2:] == ["serve candidate"]
+
+
+@dataclass(frozen=True)
+class _PrepareJob:
+    job_id: str
+
+    def logs(self, max_lines: int) -> tuple[str, ...]:
+        return ("snapshot download failed",)
+
+
+def test_judge_prepare_failure_submits_no_serving_job(tmp_path, monkeypatch):
+    def prepare(config):
+        if config.model.model_id == "judge":
+            raise RemoteInferenceStartupError(
+                "Model cache preparation failed",
+                jobs=(_PrepareJob("/prepare/judge"),),
+                phase=InferenceStartupPhase.PREPARATION,
+            )
+        return PreparedInference(config)
+
+    _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("no model may be served"))
+    monkeypatch.setattr("marin.evaluation.runner.prepare_inference", prepare)
+    evaluations = (
+        _evaluation(tmp_path, "one", _successful_evaluation),
+        _evaluation(tmp_path, "two", _successful_evaluation),
+    )
+    batch = _hosted_judge_batch(tmp_path, evaluations)
+
+    with pytest.raises(RuntimeError, match=r"step\(s\) failed"):
+        _run_test_batch(batch)
+
+    for index, evaluation in enumerate(evaluations):
+        record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
+        assert record.status is RunStatus.INFRA_FAILED
+        assert _step_status(batch, index) == STATUS_FAILED
+        assert record.jobs == {"orchestrator": "/orchestrator", "judge": "/prepare/judge"}
+        assert record.log_tails == {"judge": ("snapshot download failed",)}
+        assert "Model cache preparation failed" in (record.error or "")
+
+
 def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path, monkeypatch):
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
@@ -565,7 +649,10 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
-    assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
+    expected_config = json.loads(json.dumps(asdict(batch.model)))
+    # An unset NCCL setting is omitted from records so that earlier records keep their config digests.
+    del expected_config["serve"]["vllm_use_nccl_symm_mem"]
+    assert succeeded.model.config.model_dump(mode="json") == expected_config
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
     assert {(row.run_id, row.status) for row in catalog_rows} == {
         ("run-failure", "failed"),
@@ -1060,7 +1147,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
 
     assert batch.secret_env == {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
@@ -1089,7 +1176,7 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
 
     assert batch.secret_env == {
         "DAYTONA_API_KEY": (
-            "env:DAYTONA_API_KEY",
+            "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
         "TOGETHER_API_KEY": (
@@ -1372,7 +1459,13 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
         execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
         _evaluate_with_session(execution, _remote_session(), orchestrator_job_id="/test")
         submitted.append(evaluation.identity)
-        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            job=SimpleNamespace(job_id="/test/eval"),
+            records_prefix=batch.records_prefix,
+            model_name=batch.model.name,
+            evaluations=(),
+        )
 
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
     monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)

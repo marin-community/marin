@@ -1,0 +1,21 @@
+# Nemotron 3.5 Super VL 120B-A12B: hybrid Mamba/attention MoE with a vision encoder, 249 GB bf16.
+# Thinking is on by default and honors enable_thinking. Parsers and TP4 follow the model card's
+# 4x H100 vLLM recipe, without the card's MTP speculative decoding.
+name: nvidia-nemotron-3.5-super-vl-120b-a12b-bf16
+location: nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16
+revision: fb0ee0bc6b3f70342afd8d84cb80dbadbaa8a1fe
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 73728
+  tool_call_parser: qwen3_coder
+  reasoning_parser: nemotron_v3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

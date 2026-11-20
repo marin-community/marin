@@ -32,8 +32,9 @@ inference, and submits evaluation workers. It cancels an evaluator before resumi
 its archive when inference is interrupted.
 
 The catalog fixes prompts, graders, shots, sampling, trials and context policies.
-Evalchemy protocols inherit the served model's temperature and seed unless the
-run explicitly overrides them, preserving the legacy launcher's request behavior.
+Evalchemy protocols send no temperature, so the served model's generation settings
+apply; set them per model in its serving config. Runs use seed 0 unless a seed is
+given. TPU vLLM rejects seeded sampling, so runs there are unseeded by default.
 Native likelihood tasks use completion logprobs. Generation protocols specify chat
 or raw completion transport. Instruct-model menus choose separately published chat
 variants where the original entrypoint used a chat template. HumanEval's standard
@@ -56,6 +57,17 @@ ten trials per selected row. Context policies can exclude rows; a corpus with no
 eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
+
+[LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
+multiple-choice questions over contexts of 8,000 to 2 million words, with the
+upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
+prompt and answer parser. Each item is published in full and middle-truncated to
+token budgets from 8K to 894K, and a run sends the largest copy that fits the
+served context. Serve a long context, such as `qwen3.5-35b-a3b-262k` or
+`qwen3-32b-yarn-128k`. `longbench-v2` decodes greedily with thinking off and 4,096
+output tokens; `longbench-v2-thinking` samples with thinking on and 32,768 output
+tokens, which leaves less room for the prompt. A limit takes short, medium and
+long items in turn.
 
 ## Launch file-backed evaluations
 
@@ -118,7 +130,7 @@ Harbor execution is independent of curated TaskSpec evaluation.
 
 - `--model-config`: a model catalog YAML instead of a registry model.
 - `--limit`: override the source-row cap for each selected corpus.
-- `--seed`: override the protocol's trial seed base.
+- `--seed`: override the run seed; trial seeds advance from it.
 - `--max-concurrent`: simultaneous evaluations sharing the candidate server.
 - `--instances`: candidate serving instances behind the inference broker.
 - `--run-id`: reuse an explicitly named launch when its resolved identities match.
@@ -150,7 +162,12 @@ The selected evaluations share a `group_id`; `--run-id` sets that launch ID.
 Curated producer records
 contain launch identity, status, jobs and the raw FineStore location. Their metric
 maps stay empty. Evaldash imports the raw archive and stores its derived scores in
-its own catalog; it does not rewrite the producer's record.
+its own catalog; it does not rewrite the producer's record. The launcher prints the
+same derived coverage and scores when it waits for a launch. For a finished run:
+
+```bash
+uv run python -m experiments.evaluation.cli scores gs://marin-eval-metadata/evals/<run_id>
+```
 
 Raw stores contain protocol and manifest snapshots in `evaluation/run.json`, a
 selection ledger, append-only start/finish attempts, samples, rollouts and grading
@@ -166,7 +183,7 @@ different protocols distinct in dashboard comparisons. See
 ## Use the shared launcher in a pipeline
 
 ```python
-from marin.evaluation.records import EvaluationSelection
+from evalrecords.records import EvaluationSelection
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 

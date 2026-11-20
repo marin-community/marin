@@ -121,6 +121,7 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
+    RequiredEvalManifest,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -176,6 +177,13 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_FRAC,
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
+)
+from experiments.datakit.decontam.pinned_references import (
+    COVERAGE_MANIFEST,
+    COVERAGE_RELATIVE,
+    COVERAGE_VERSION,
+    reference_catalog,
+    reference_sources_sha256,
 )
 from experiments.datakit.decontam.prepare_eval_corpus import (
     AA_BENCHMARK_NAMES,
@@ -808,6 +816,14 @@ def decontamination_steps(
         required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
         required_eval_names=AA_BENCHMARK_NAMES,
+        additional_required_eval_manifests=(
+            RequiredEvalManifest(
+                path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
+                version=COVERAGE_VERSION,
+                names=tuple(source.name for source in reference_catalog()),
+                source_catalog_sha256=reference_sources_sha256(reference_catalog()),
+            ),
+        ),
         best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
         worker_resources=worker_resources,

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 
-from marin.evaluation.records import PromptFormat
+from evalrecords.records import PromptFormat
 from taskcompendium.evaluation.spec import OperationKind
 
 from experiments.evaluation.preparation import EvaluationCorpusRecipe

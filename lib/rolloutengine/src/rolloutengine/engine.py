@@ -106,13 +106,14 @@ class RolloutEngine:
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
         """
         self.check(spec)
+        harness = self.harnesses[spec.harness]
         run_id = uuid.uuid4().hex if run_id is None else run_id
         events = _EventDelivery(self.observer, run_id, spec.task.id)
         attempt = _Attempt(
             spec,
-            self.harnesses[spec.harness],
+            harness,
             run_id,
-            _Recorder(model, spec.limits, spec.trace, events),
+            _Recorder(model, spec.limits, spec.trace, events, context_recovery=harness.context_recovery),
             _Cleanup(spec.limits.cleanup_timeout),
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),

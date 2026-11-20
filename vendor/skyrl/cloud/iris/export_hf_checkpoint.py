@@ -18,7 +18,7 @@ runtime and a live process group at the saved parallel geometry.
 The task enters ``skyrl_train.entrypoints.checkpoint_export`` instead of an RL entrypoint.
 It creates only the saved policy worker group, restores only model tensors, invokes the
 strategy's existing HF converter, and exits. It does not create rollout engines, datasets,
-generators, tracking, reference models, critics, optimizers, or schedulers. ``--timeout``
+generators, tracking, reference models, optimizers, or schedulers. ``--timeout``
 belongs to this export job and is independent of the source training gang's process-group
 timeout.
 
@@ -69,6 +69,12 @@ def _verify_hf_model_export(export_path: str) -> None:
     from skyrl_train.hf_model_io import verify_hf_model_export  # noqa: PLC0415 - keep launcher imports Torch-free
 
     verify_hf_model_export(export_path)
+
+
+def _has_completed_hf_model_export(export_path: str) -> bool:
+    from skyrl_train.hf_model_io import has_completed_hf_model_export  # noqa: PLC0415 - keep launcher imports Torch-free
+
+    return has_completed_hf_model_export(export_path)
 
 
 @dataclass(frozen=True)
@@ -143,16 +149,13 @@ def checkpoint_export_launch_config(
 
     # Export is policy-only. Keep the role-plan inputs internally consistent so
     # launch validation derives exactly the saved policy gang, without reserving
-    # rollout/reference/critic/teacher bundles that the export entrypoint never uses.
+    # rollout/reference/teacher bundles that the export entrypoint never uses.
     config.skyrl.trainer.placement.colocate_all = True
     config.skyrl.trainer.placement.colocate_policy_ref = True
     config.skyrl.trainer.offload_optimizer_during_rollouts = False
     algorithm = config.skyrl.trainer.setdefault("algorithm", {})
     algorithm["use_kl_loss"] = False
     algorithm["use_kl_in_reward"] = False
-    critic = config.skyrl.trainer.setdefault("critic", {})
-    critic["model"] = critic.get("model", {})
-    critic["model"]["path"] = None
     config.skyrl.pop("teachers", None)
     config.skyrl.pop("teacher_routing", None)
     if config.skyrl.generator.get("speculative_decoding") is not None:
@@ -375,17 +378,21 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
     exit_code = subprocess.call(command, stdout=sys.stderr)
     if exit_code != 0:
         raise subprocess.CalledProcessError(exit_code, command)
-    if not spec.no_wait:
-        export_path = policy_export_path(spec.request.export_path, spec.request.step)
-        _verify_hf_model_export(export_path)
 
 
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     """Submit one export job, verify synchronous output, and persist request state."""
+    export_path = policy_export_path(spec.request.export_path, spec.request.step)
+    if spec.request.hf_hub_repo_id is None and _has_completed_hf_model_export(export_path):
+        _write_hf_export_request(spec.request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
+        print(f"[export-hf] reused verified global_step_{spec.request.step} export")
+        return
     request = spec.request.with_status(HFExportStatus.IN_PROGRESS, timeout=spec.timeout, increment_attempts=True)
     _write_hf_export_request(request)
     try:
         _run_export(spec, command)
+        if not _has_completed_hf_model_export(export_path):
+            raise RuntimeError(f"Export job returned without a completed HF model at {export_path}")
     except BaseException as error:
         exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
@@ -453,6 +460,9 @@ def main() -> None:
         return
     if request is None:
         _run_export(spec, cmd)
+        if not spec.no_wait:
+            export_path = policy_export_path(spec.request.export_path, spec.request.step)
+            _verify_hf_model_export(export_path)
     else:
         submit_requested_export(spec, cmd)
 

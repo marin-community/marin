@@ -1,6 +1,5 @@
-from collections.abc import Sequence
-from typing import List, Dict, Any, Union, Callable, Optional
-from omegaconf import OmegaConf, DictConfig
+from typing import List, Dict, Union, Callable, Optional
+from omegaconf import DictConfig
 from enum import Enum
 import ray
 from skyrl_train.workers.worker import PPORayActorGroup
@@ -24,6 +23,7 @@ from skyrl_train.checkpoint_listing import extract_step_from_path, list_checkpoi
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
+from skyrl_train.batch_metrics import consumed_stop_metrics
 
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
@@ -52,27 +52,20 @@ class ResumeMode(Enum):
         return super()._missing_(value)
 
 
-def get_node_ids(
-    policy_model: PPORayActorGroup, critic_model: Optional[PPORayActorGroup], ref_model: Optional[PPORayActorGroup]
-) -> List[str]:
-    """Get the node ids of the policy, critic, and ref models.
+def get_node_ids(policy_model: PPORayActorGroup, ref_model: Optional[PPORayActorGroup]) -> List[str]:
+    """Get the node ids of the policy and ref models.
 
     Args:
         policy_model: Policy model actor group
-        critic_model: Critic model actor group (Optional)
         ref_model: Ref model actor group (Optional)
     """
     policy_node_ids: List[str] = ray.get(policy_model.async_run_ray_method("pass_through", "get_ray_node_id"))
-    if critic_model is not None:
-        critic_node_ids: List[str] = ray.get(critic_model.async_run_ray_method("pass_through", "get_ray_node_id"))
-    else:
-        critic_node_ids = []
     if ref_model is not None:
         ref_node_ids: List[str] = ray.get(ref_model.async_run_ray_method("pass_through", "get_ray_node_id"))
     else:
         ref_node_ids = []
 
-    unique_node_ids = list(set(policy_node_ids + critic_node_ids + ref_node_ids))
+    unique_node_ids = list(set(policy_node_ids + ref_node_ids))
     return unique_node_ids
 
 
@@ -175,24 +168,6 @@ def sanitize_data_source(data_source: str) -> str:
     if data_source is None:
         return "unknown"
     return data_source.replace("/", "_")
-
-
-def consumed_stop_metrics(stop_reasons: Sequence[str | None] | None, sequence_count: int) -> dict[str, float]:
-    """Count length stops on admitted sequences; the fraction needs every stop reason."""
-    reasons = [None] * sequence_count if stop_reasons is None else stop_reasons
-    known = sum(reason is not None and reason != "" for reason in reasons)
-    length_stops = sum(reason == "length" for reason in reasons)
-    metrics = {
-        "sequences": float(sequence_count),
-        "length_stop_count": float(length_stops),
-        "known_stop_count": float(known),
-        "unknown_stop_count": float(sequence_count - known),
-    }
-    if sequence_count:
-        metrics["stop_reason_coverage"] = known / sequence_count
-        if known == sequence_count:
-            metrics["length_stop_fraction"] = length_stops / sequence_count
-    return {f"consumed/{name}": value for name, value in metrics.items()}
 
 
 def async_step_metrics(
@@ -431,17 +406,3 @@ def build_eval_dataloader(cfg: DictConfig, dataset: PromptDataset) -> StatefulDa
     )
     logger.info(f"Validation set size: {len(dataloader)}")
     return dataloader
-
-
-def get_rope_scaling_config(trainer_cfg: DictConfig) -> dict[str, Any]:
-    if "rope_scaling" not in trainer_cfg:
-        return {}
-    if trainer_cfg.rope_scaling is None:
-        return None
-    return OmegaConf.to_container(trainer_cfg.rope_scaling)
-
-
-def get_rope_theta_config(trainer_cfg: DictConfig) -> int | None:
-    if "rope_theta" not in trainer_cfg:
-        return None
-    return trainer_cfg.rope_theta

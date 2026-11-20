@@ -16,6 +16,7 @@ from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpe
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
+from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
@@ -73,6 +74,25 @@ def test_a_dataset_machine_attaches_only_to_rows_that_need_one(tmp_path: Path):
     assert [spec.task_machine for spec in loaded] == [runtime, runtime, None]
     for spec in (loaded[0], loaded[2]):
         validate_spec(spec, {"shellsim": ShellSimMachineFactory()})
+
+
+def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp_path: Path):
+    harbor = text_task("harbor-task", source="harbor-source")
+    ordinary = text_task("ordinary-task", source="ordinary-source")
+    prefix = harbor.model_copy(
+        update={
+            "id": "prefix-task",
+            "context": ConversationInput(
+                events=(TextMessage(role="user", content="Complete"), TextMessage(role="assistant", content='{"a":['))
+            ),
+        }
+    )
+
+    loaded = _load(tmp_path, (harbor, ordinary, prefix), harness_by_dataset={"harbor-source": HARBOR_TRIAL_SESSION})
+
+    assert loaded[0].harness == HARBOR_TRIAL_SESSION
+    assert is_shell_harness(loaded[1].harness)
+    assert loaded[2].harness == ASSISTANT_PREFIX_HARNESS
 
 
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):

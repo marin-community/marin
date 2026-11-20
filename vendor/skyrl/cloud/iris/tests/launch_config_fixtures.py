@@ -66,12 +66,12 @@ def raw_launch_config() -> dict[str, Any]:
             },
             "model_num_attention_heads": 8,
             "trainer": {
-                "seed": 42,
                 "strategy": "megatron",
                 "algorithm": {"use_kl_loss": False},
                 "placement": {
                     "colocate_all": True,
                     "policy_num_nodes": 1,
+                    "ref_num_nodes": 1,
                     "policy_num_gpus_per_node": 8,
                 },
                 "train_batch_size": 8,

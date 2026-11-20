@@ -20,27 +20,8 @@ from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
 
-from fray.current_client import current_client
-from fray.types import ResourceConfig
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
-from iris.client.client import IrisClient
-from iris.cluster.config import load_config
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import job_pb2
-from marin.evaluation.dataset_evaluator import DatasetEvaluator
-from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
-from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
-from marin.evaluation.harbor.driver_config import (
-    ValidatedHarborConfig,
-    harbor_runtime_descriptor,
-    preflight_harbor_configs,
-)
-from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
-from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
+from evalrecords.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
+from evalrecords.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
@@ -52,6 +33,25 @@ from marin.evaluation.records import (
     list_records,
     scoring_settings,
 )
+from fray.current_client import current_client
+from fray.types import ResourceConfig
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.client.client import IrisClient
+from iris.cluster.config import load_config
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import job_pb2
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
+from marin.evaluation.harbor.driver_config import (
+    ValidatedHarborConfig,
+    harbor_runtime_descriptor,
+    preflight_harbor_configs,
+)
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
+from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,
@@ -80,6 +80,7 @@ from rigging.secrets import SecretSpec, resolve_secret_spec
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.curated import (
+    DEFAULT_RUN_SEED,
     corpus_key,
     corpus_steps,
     pinned_model,
@@ -265,6 +266,7 @@ def _resolve_definitions(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
+    default_seed: int | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
@@ -285,7 +287,7 @@ def _resolve_definitions(
             protocol = resolve_selection(
                 definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
             )
-            settings = settings_for(definition, model, limit, seed)
+            settings = settings_for(definition, model, limit, seed, default_seed)
             resolved.append(
                 (
                     name,
@@ -400,11 +402,15 @@ def build_evaluation_batch(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
+    seeded = supports_request_seed(accelerator.platform, model.serve.backend)
+    if not seeded and has_curated_definitions and spec.seed is None:
+        logger.info("TPU vLLM rejects seeded sampling; runs without an explicit seed are unseeded")
     definitions = _resolve_definitions(
         requested_definitions,
         model,
         spec.limit,
         spec.seed,
+        DEFAULT_RUN_SEED if seeded else None,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
     )
@@ -542,6 +548,7 @@ def build_evaluation_batch(
         max_concurrent=spec.max_concurrent,
         instances=spec.instances,
         judge=judge,
+        prepared_judges=(policy_judge,) if policy_judge is not None else (),
         secret_env=secret_env,
         egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,

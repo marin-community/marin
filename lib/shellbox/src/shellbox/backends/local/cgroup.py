@@ -16,6 +16,8 @@ from shellbox.process_session import await_cleanup, own_cleanup
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 CPU_PERIOD = 100000
 CLOSE_TIMEOUT = 10
+UNIT_SUFFIXES = (".service", ".scope")
+WORKER_LEAF_NAME = "worker"
 logger = logging.getLogger(__name__)
 
 
@@ -40,27 +42,103 @@ def check_cgroup_parent(parent: Path) -> None:
         raise UnsupportedMachineSpec("Run the local worker inside a writable delegated cgroup hierarchy")
 
 
+def cgroup_limits_applied(path: Path, *, cpus: int, memory_mb: int) -> bool:
+    """Whether the kernel actually applied the demanded limits to a machine cgroup."""
+    try:
+        quota, period = (path / "cpu.max").read_text().split()[:2]
+        cpu_applied = int(quota) == cpus * CPU_PERIOD and int(period) == CPU_PERIOD
+        memory_applied = int((path / "memory.max").read_text()) == memory_mb * 1024 * 1024
+        return cpu_applied and memory_applied
+    except (OSError, ValueError) as error:
+        logger.warning("Cannot read back limits in %s: %s", path, error)
+        return False
+
+
+def probe_cgroup_limits(parent: Path, *, cpus: int = 1, memory_mb: int = 1024) -> bool:
+    """Create a throwaway machine cgroup and verify the kernel applied its limits.
+
+    Container scopes cannot enable domain controllers while the worker's own
+    process stays inside them (cgroup v2's no-internal-process rule), and some
+    runtimes also refuse the memory controller outright. Readback catches
+    limit writes that only logged a warning.
+    """
+    try:
+        cgroup = MachineCgroup.create(parent, cpus=cpus, memory_mb=memory_mb)
+    except (OSError, UnsupportedMachineSpec) as error:
+        logger.warning("Cannot probe cgroup limits under %s: %s", parent, error)
+        return False
+    try:
+        return cgroup_limits_applied(cgroup.path, cpus=cpus, memory_mb=memory_mb)
+    finally:
+        cgroup.kill()
+        cgroup.remove_if_empty()
+
+
+def _delegation_target(current: Path) -> tuple[Path, Path | None]:
+    """Return the delegation parent and the leaf group to move this worker into.
+
+    The parent never lies above the worker's own unit, so sandbox groups stay
+    inside the worker's container scope. An empty enclosing unit (the systemd
+    ``DelegateSubgroup`` layout) or an existing worker leaf needs no move.
+    Otherwise the unit directly contains the worker — for example a container
+    scope — and its processes must move into a child leaf before the unit can
+    enable domain controllers for children (cgroup v2's no-internal-process
+    rule).
+    """
+    unit = current.parent
+    if unit != current and unit.is_relative_to(CGROUP_ROOT):
+        if current.name == WORKER_LEAF_NAME or (
+            unit.name.endswith(UNIT_SUFFIXES) and not (unit / "cgroup.procs").read_text().strip()
+        ):
+            return unit, None
+    return current, current / WORKER_LEAF_NAME
+
+
+def _move_worker_processes(current: Path, leaf: Path) -> None:
+    """Move every process listed in ``current`` into the child ``leaf`` group.
+
+    Processes that disappear or refuse to migrate only warn: discovery still
+    returns the parent for containment, and the limits probe reports whether
+    the kernel can enforce limits afterwards.
+    """
+    try:
+        leaf.mkdir(exist_ok=True)
+        for pid in (current / "cgroup.procs").read_text().split():
+            try:
+                (leaf / "cgroup.procs").write_text(pid)
+            except OSError as error:
+                logger.warning("Cannot move process %s into %s: %s", pid, leaf, error)
+    except OSError as error:
+        logger.warning("Cannot create the worker leaf group %s: %s", leaf, error)
+
+
 def delegated_cgroup_parent() -> Path | None:
-    """Find writable delegation within the worker's own cgroup or systemd unit."""
+    """Find a writable delegation inside the worker's own scope to enforce limits in.
+
+    The parent is the worker's enclosing unit: the empty unit above a
+    ``DelegateSubgroup`` subgroup, or the worker's own scope after its
+    processes move into a child leaf group. Sandbox groups become siblings of
+    that leaf, always inside the worker's container scope — never a pod slice
+    or other parent above it. If the parent cannot apply CPU and memory
+    limits, it is still returned for process containment and unavailable
+    limits warn at use.
+    """
     if not (CGROUP_ROOT / "cgroup.controllers").is_file():
         return None
     current = _current_cgroup()
     if not current.is_relative_to(CGROUP_ROOT):
         return None
-    candidates = [current]
-    # DelegateSubgroup moves the worker below its unit. Do not cross a unit
-    # boundary into a shared systemd slice, even when that slice is writable.
-    unit_suffixes = (".service", ".scope")
-    if not current.name.endswith(unit_suffixes) and current.parent.name.endswith(unit_suffixes):
-        if not (current.parent / "cgroup.procs").read_text().strip():
-            candidates.insert(0, current.parent)
-    for parent in candidates:
-        try:
-            check_cgroup_parent(parent)
-        except UnsupportedMachineSpec:
-            continue
+    parent, leaf = _delegation_target(current)
+    try:
+        check_cgroup_parent(parent)
+    except UnsupportedMachineSpec:
+        return None
+    if leaf is not None:
+        _move_worker_processes(current, leaf)
+    if probe_cgroup_limits(parent):
         return parent
-    return None
+    logger.warning("Cgroup delegation %s cannot enforce cpu/memory limits; using it for containment only", parent)
+    return parent
 
 
 def _apply_resource_limits(parent: Path, path: Path, *, cpus: int | None, memory_mb: int | None) -> None:

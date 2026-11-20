@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
@@ -305,6 +306,12 @@ class HarborEvaluationCallback(TrainerCallback):
 
     def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
+        # Per-sandbox declarative builds are limited to standalone evals for now; reject them
+        # before the trainer acquires resources.
+        for cohort in self.cohorts:
+            kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
+            if kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
+                raise ValueError(f"Harbor validation cohort {cohort['name']} requires Daytona snapshot image builds")
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
         self.daytona_api_key_env = daytona_api_key_env
@@ -1255,8 +1262,3 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             raise
 
     return callbacks
-
-
-def get_available_callback_types() -> List[str]:
-    """Get list of available callback type names for YAML configs."""
-    return list(CALLBACK_REGISTRY.keys())

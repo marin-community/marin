@@ -46,7 +46,7 @@ CODE_ASSETS = (
     ),
 )
 CODE_REVISION = (
-    "2-"
+    "3-"
     + canonical_sha256(
         {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -112,14 +112,13 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
     environment = required_grader_environment(context)
     environment = environment.model_copy(
         update={
-            "setup_commands": (*environment.setup_commands, "python3 /tests/prepare.py"),
             "environment_variables": {**environment.environment_variables, **THREAD_ENVIRONMENT},
         }
     )
     config = {"suite": suite, "problem": problem, "direction": problem.get("direction", "")}
     package = GraderPackage(
         ScriptGrader(
-            argv=("python3", "/app/program.py"),
+            argv=("sh", "-c", "python3 /tests/prepare.py && exec python3 /app/program.py"),
             cwd="/app",
             environment=environment,
             timeout=STARTUP_ALLOWANCE + EXECUTION_TIMEOUT[suite],

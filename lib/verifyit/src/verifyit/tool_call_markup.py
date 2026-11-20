@@ -6,9 +6,9 @@
 import json
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import NoReturn
 
+from verifyit.compat import StrEnum
 from verifyit.json_objects import unique_object
 
 TOOL_OPEN = "<tool_call>"

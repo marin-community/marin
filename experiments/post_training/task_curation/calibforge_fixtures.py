@@ -13,9 +13,24 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from experiments.post_training.task_curation.environment_fidelity import dynamic_copy_error
+
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
 SETUP_ROOT = "/setup_files"
+
+SHELL_METACHARACTERS = "$`;&|<>()*?[~"
+"""Shell syntax a conservative setup step may not carry."""
+
+
+SETUP_SCRIPT_PREAMBLE = (
+    "#!/bin/sh",
+    "set -eu",
+    "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
+    "trap 'rm -rf \"$stage\"' EXIT",
+    f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
+)
+"""Every compiled setup script starts by unpacking the staged fixtures."""
 COMPILED_PENDING = "compiled_pending_equivalence_and_admission"
 
 
@@ -29,6 +44,45 @@ class FixtureBundle:
 
 class DeferredEnvironment(ValueError):
     """A native recipe needs a lowering contract not yet qualified."""
+
+
+def copy_target(workdir: str, destination: str, source_count: int) -> tuple[str, bool]:
+    """Where Docker places one COPY inside the workdir, and whether it fills a directory.
+
+    A trailing slash or more than one source means Docker copies into the
+    destination directory rather than onto the destination path.
+    """
+    target = str(PurePosixPath(workdir) / destination)
+    return target, destination.endswith("/") or source_count > 1
+
+
+def copy_commands(staged: str, target: str, *, into_directory: bool) -> tuple[str, ...]:
+    """The setup lines that place one staged source at its target."""
+    if into_directory:
+        return ("mkdir -p " + shlex.quote(target), "cp -a " + staged + "/. " + shlex.quote(target + "/"))
+    return (
+        "mkdir -p " + shlex.quote(str(PurePosixPath(target).parent)),
+        "cp -a " + staged + " " + shlex.quote(target),
+    )
+
+
+def teardown_commands() -> tuple[str, str]:
+    return (f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}", f"rmdir {SETUP_ROOT}")
+
+
+def setup_script_name(command: str) -> str:
+    return command.split()[-1].rsplit("/", 1)[-1]
+
+
+def fixture_generator(arguments: list[str], copied_files: set[str]) -> bool:
+    """Whether a staged Python script may generate workspace fixtures."""
+    return (
+        len(arguments) == 2
+        and arguments[0] == "python3"
+        and arguments[1].startswith("/app/")
+        and arguments[1].endswith(".py")
+        and arguments[1] in copied_files
+    )
 
 
 def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
@@ -45,13 +99,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
     if ignore.exists() and ignore.read_text().strip():
         raise DeferredEnvironment("requires_dockerignore_support")
     workdir = "/"
-    commands = [
-        "#!/bin/sh",
-        "set -eu",
-        "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
-        "trap 'rm -rf \"$stage\"' EXIT",
-        f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
-    ]
+    commands = list(SETUP_SCRIPT_PREAMBLE)
     resources: dict[str, Path] = {}
     copied_files: set[str] = set()
     executed_scripts: set[str] = set()
@@ -72,38 +120,27 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
             if not json_form and "\n" in item["args"][0]:
                 raise DeferredEnvironment("requires_multiline_run_support")
             arguments = item["args"] if json_form else shlex.split(item["args"][0], comments=True)
-            fixture_generator = (
-                len(arguments) == 2
-                and arguments[0] == "python3"
-                and arguments[1].startswith("/app/")
-                and arguments[1].endswith(".py")
-                and arguments[1] in copied_files
-            )
+            generates_fixture = fixture_generator(arguments, copied_files)
             remove_generator = len(arguments) == 3 and arguments[:2] == ["rm", "-f"] and arguments[2] in executed_scripts
             if (
                 not arguments
-                or not (arguments[0] in {"mkdir", "chmod", "touch"} or fixture_generator or remove_generator)
-                or any(any(character in argument for character in "$`;&|<>()*?[~") for argument in arguments)
+                or not (arguments[0] in {"mkdir", "chmod", "touch"} or generates_fixture or remove_generator)
+                or any(any(character in argument for character in SHELL_METACHARACTERS) for argument in arguments)
             ):
                 raise DeferredEnvironment("requires_dependency_or_complex_run_support")
-            if fixture_generator:
+            if generates_fixture:
                 executed_scripts.add(arguments[1])
             if remove_generator:
                 executed_scripts.remove(arguments[2])
             commands.append("(cd " + shlex.quote(workdir) + " && " + shlex.join(arguments) + ")")
             continue
         *sources, destination = item["args"]
-        if any(character in destination for character in "$*?[") or ".." in PurePosixPath(destination).parts:
-            raise DeferredEnvironment("requires_dynamic_destination_support")
-        target = str(PurePosixPath(workdir) / destination)
-        directory_target = destination.endswith("/") or len(sources) > 1
         for source in sources:
-            if (
-                any(character in source for character in "$*?[")
-                or PurePosixPath(source).is_absolute()
-                or ".." in PurePosixPath(source).parts
-            ):
-                raise DeferredEnvironment("requires_dynamic_source_support")
+            dynamic = dynamic_copy_error(destination, source)
+            if dynamic is not None:
+                raise DeferredEnvironment(dynamic)
+        target, directory_target = copy_target(workdir, destination, len(sources))
+        for source in sources:
             path = context / source
             if not path.exists():
                 raise DeferredEnvironment("missing_source:" + source)
@@ -119,16 +156,12 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
                     for member in members
                     if member.is_file()
                 )
-                commands.extend(
-                    ["mkdir -p " + shlex.quote(target), "cp -a " + staged + "/. " + shlex.quote(target + "/")]
-                )
+                commands.extend(copy_commands(staged, target, into_directory=True))
             else:
-                copied_files.add(str(PurePosixPath(target) / path.name) if directory_target else target)
-                parent = target if directory_target else str(PurePosixPath(target).parent)
-                commands.append("mkdir -p " + shlex.quote(parent))
-                commands.append("cp -a " + staged + " " + shlex.quote(target + ("/" if directory_target else "")))
-    commands.append(f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}")
-    commands.append(f"rmdir {SETUP_ROOT}")
+                file_target = str(PurePosixPath(target) / path.name) if directory_target else target
+                copied_files.add(file_target)
+                commands.extend(copy_commands(staged, file_target, into_directory=False))
+    commands.extend(teardown_commands())
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
         for name, path in sorted(resources.items()):

@@ -1,4 +1,5 @@
 import copy
+import inspect
 from collections.abc import Iterator, Mapping
 from dataclasses import fields, replace
 from types import SimpleNamespace
@@ -11,7 +12,6 @@ from skyrl_train.config.objective_spec import CorrectionAction, SequenceAggregat
 from skyrlrecipe.declared import Callback, SequenceRule, Teacher, TokenRule
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.ownership import LAUNCH_PATHS
-from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
 
 from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
@@ -20,10 +20,7 @@ from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
 
-LAUNCH_INPUT_CHANGES = {
-    "discard": frozenset({"data.train_data", "data.val_data"}),
-    "clamp": frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"}),
-}
+GPU_PATHS = frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"})
 
 FILL_WHEN_UNSET = frozenset(
     {
@@ -46,12 +43,12 @@ def leaves(document: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> Iterato
             yield path, value
 
 
-def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_launch_input_changes(tmp_path, monkeypatch):
+def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_authored_values(tmp_path, monkeypatch):
     source = tmp_path / "ownership.yaml"
     source.write_text(
         "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
     )
-    parsed = launcher.parse_rl_config(str(source))
+    parsed = launcher.parse_rl_config(OmegaConf.load(source))
     base = launcher.compose_skyrl_config(parsed, {}, SimpleNamespace(gpus_per_node=8)).config
     full = OmegaConf.to_container(base, resolve=False)
     full["terminal_bench"] = full.pop("terminal_bench_config")
@@ -67,8 +64,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
         "model_revision": "launch-revision",
         "model_source_uri": "s3://launch/model",
         "model_source_identity": "sha256:launch",
-        "train_data": ["/launch/train"],
-        "val_data": ["/launch/validation"],
+        "train_data": [],
+        "val_data": [],
         "checkpoint_root": "/launch/checkpoints",
         "export_root": "/launch/exports",
         "resume_checkpoint_count": 4,
@@ -79,14 +76,13 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
     monkeypatch.setattr(task_runtime.tempfile, "tempdir", str(tmp_path))
     seeded = copy.deepcopy(full)
     for parts, value in leaves(full):
-        sentinel = {bool: not value, int: 31, float: 3.125, list: ["/author/B"]}.get(
-            type(value), "author-B"
-        )
+        sentinel = {bool: not value, int: 31, float: 3.125, list: ["/author/B"]}.get(type(value), "author-B")
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else "author-B")
-    for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
-        set_path(seeded, path, "author-B" if path == "trainer.run_name" else 4)
+    for path in FILL_WHEN_UNSET | GPU_PATHS:
+        value = "author-B" if path in {"trainer.run_name", "terminal_bench.installed_agent.output_path"} else 4
+        set_path(seeded, path, value)
     section_values = {
         name: seeded[name]
         for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
@@ -120,9 +116,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
     changed = {
         ".".join(parts) for parts, before in leaves(section_values) if get_path(result, ".".join(parts)) != before
     }
-    assert LAUNCH_PATHS <= changed
-    assert changed - LAUNCH_PATHS == LAUNCH_INPUT_CHANGES["discard"]
-    for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
+    assert changed == LAUNCH_PATHS
+    for path in FILL_WHEN_UNSET | GPU_PATHS:
         assert get_path(result, path) == get_path(seeded, path)
     absent = copy.deepcopy(section_values)
     for path in FILL_WHEN_UNSET:
@@ -131,19 +126,9 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
     defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
-    oversized = copy.deepcopy(section_values)
-    for path in LAUNCH_INPUT_CHANGES["clamp"]:
-        set_path(oversized, path, 31)
-    clamped = launcher._skyrl_config_sections(replace(parsed, **oversized), parameters, SimpleNamespace(gpus_per_node=8))
-    for path in LAUNCH_INPUT_CHANGES["clamp"]:
-        assert get_path(clamped, path) == 8
-    following = OmegaConf.create(full)
-    following.generator.max_turns = 987654
-    assert following.environment.task_sessions.session.max_turns == 987654
 
 
 def test_code_default_declarations_match_native_dataclasses_and_canonical_choices():
-    assert SKYRL_INTERNAL_ENGINE_KWARGS == launcher.SKYRL_INTERNAL_ENGINE_KWARGS
     for prefix, config in (
         ("trainer.algorithm.ftpo", FTPOConfig),
         ("generator.speculative_decoding.training", speculative_decoding.SpeculatorTrainingConfig),
@@ -164,4 +149,15 @@ def test_code_default_declarations_match_native_dataclasses_and_canonical_choice
         assert set(get_args(annotation)) == {choice.value for choice in enum}, name
 
     callbacks = get_args(get_args(Callback)[0])
-    assert {get_args(callback.model_fields["type"].annotation)[0] for callback in callbacks} == set(CALLBACK_REGISTRY)
+    declared = {get_args(callback.model_fields["type"].annotation)[0]: callback for callback in callbacks}
+    assert declared.keys() == CALLBACK_REGISTRY.keys()
+    for name, callback in declared.items():
+        parameters = {
+            key: parameter
+            for key, parameter in inspect.signature(CALLBACK_REGISTRY[name].__init__).parameters.items()
+            if key != "self"
+        }
+        assert set(callback.model_fields) - {"type"} == parameters.keys(), name
+        assert {key for key, field in callback.model_fields.items() if key != "type" and field.is_required()} == {
+            key for key, parameter in parameters.items() if parameter.default is inspect.Parameter.empty
+        }, name

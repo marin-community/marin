@@ -15,7 +15,12 @@ import pytest
 
 import levanter.tracker as tracker_mod
 from levanter.callbacks import StepInfo, eval_loss_loop
-from levanter.callbacks._metrics import compute_instant_throughput, log_performance_stats, log_step_info
+from levanter.callbacks._metrics import (
+    compute_instant_throughput,
+    log_performance_stats,
+    log_step_info,
+    log_throughput_summary,
+)
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -193,6 +198,13 @@ def test_compute_instant_throughput_zero_duration_is_empty():
     assert t.tokens_per_second is None
     assert t.model_flops_per_second is None
     assert t.mfu is None
+
+
+def test_throughput_summary_reports_the_median_step(caplog):
+    """An outlier step does not move the summary: 1 s steps of 8 x 1024 tokens at 1 TFLOP per example."""
+    with caplog.at_level("INFO", logger="levanter.callbacks._metrics"):
+        log_throughput_summary([1.0, 9.0, 1.0], 8, 1024, 1e12, first_step=2, last_step=4)
+    assert "median step over steps 2-4: 1.000 s  8,192 tokens/s  8.0 model TFLOP/s" in caplog.text
 
 
 def test_context_switch_flops_baseline_preserves_history_and_current_rates(monkeypatch):

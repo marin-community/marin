@@ -13,17 +13,8 @@ from loguru import logger
 from marinskyrl.environment_contract import TRAINING_TYPE_ENV, TrainingType
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
 
-try:
-    from rigging import telemetry
-    from rigging.telemetry.serialization import EventBody
-except ImportError as error:
-    # An installed rigging without the telemetry submodule raises ImportError, not
-    # ModuleNotFoundError; the name check still keeps a failure inside rigging visible.
-    if error.name != "rigging":
-        raise
-    from skyrl_train import inert_telemetry as telemetry
-    from skyrl_train.inert_telemetry import EventBody
-
+from rigging import telemetry
+from rigging.telemetry.serialization import EventBody
 
 # A process that forwards a foreign system's metrics publishes under that system's name; this one
 # covers everything MarinSkyRL measures about itself.
@@ -336,6 +327,19 @@ def record_generated_work(work: GeneratedWork, weights_step: int) -> None:
             progress_time,
             attributes={"work_kind": "rollout", "role": TRAINER_ROLE},
         )
+
+
+def record_consumed_staleness(
+    uids: Sequence[str], staleness: Sequence[int], response_tokens: Sequence[int], *, step: int
+) -> None:
+    """Record selected sequence and token counts once per consumed group."""
+    counts: dict[str, dict[str, int]] = {}
+    for uid, steps, token_count in zip(uids, staleness, response_tokens, strict=True):
+        group = counts.setdefault(uid, {"staleness": steps, "groups": 1, "sequences": 0, "response_tokens": 0})
+        group["sequences"] += 1
+        group["response_tokens"] += int(token_count)
+    for group in counts.values():
+        record_event("consumed_staleness", group, attributes={"role": TRAINER_ROLE, "step": str(step)})
 
 
 def record_rollout_staleness(stalenesses: Sequence[int], step: int) -> None:
