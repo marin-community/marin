@@ -193,7 +193,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
             (directory / "curriculum.json").write_text(json.dumps(payload))
             stages.append(
                 curation_embedding_pipeline(
-                    curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+                    curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
                     curriculum=ArtifactStep.adopt("curriculum-fixture", f"2026.10.14.{revision}", source=str(directory)),
                     runtime=runtime,
                     description_model=DescriptionModel("fixture", "1"),
@@ -339,7 +339,7 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
         runtime.activate(context),
     ):
         stages = curation_embedding_pipeline(
-            curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+            curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
             curriculum=ArtifactStep.adopt("curriculum-fixture", "2026.10.14.1", source=str(directory)),
             runtime=runtime,
             description_model=DescriptionModel("fixture", "1"),
@@ -448,7 +448,7 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert resumed.exit_code == 0, resumed.output
     releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
     sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
-    assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
+    assert sources["OpenAI:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "Campaign Release:smartie-calibforge-admitted" for row in declared)
+    assert any(row["source_id"] == "TaskTrove:smartie-calibforge-admitted" for row in declared)
