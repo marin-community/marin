@@ -8,6 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
@@ -127,6 +128,6 @@ def repair_action(action: Action, local: Path) -> dict:
         subprocess.run(command, check=True)
         result = json.loads((local / "judge-result.json").read_text())
         result["requested_temperature"] = action.requested_temperature
-        result["effective_temperature"] = 0.7
+        result["effective_temperature"] = PROTOCOLS[PROTOCOL_ID].temperature
         return result
     raise ValueError(f"Action is not an automatic repair: {type(action).__name__}")

@@ -25,6 +25,7 @@ from experiments.post_training.task_curation.difficulty.accounting import GpuAcc
 from experiments.post_training.task_curation.difficulty.importer import population_revision, receipt_row
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest
 from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
+from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_from_payload, action_id
 from experiments.post_training.task_curation.difficulty.state import Gap, GapReason, LedgerRow, Outcome
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
@@ -44,15 +45,15 @@ from experiments.post_training.task_curation.difficulty_trials import (
 LOGGER = logging.getLogger(__name__)
 
 
-def selected_tasks(source: PreparedSource, action: dict) -> list[PreparedTask]:
-    requested = next(entry for entry in action["sources"] if entry["source_id"] == source.sample.source_id)
-    if requested["registry_revision"] != population_revision(source.sample.model_dump(mode="json")):
+def selected_tasks(source: PreparedSource, action: AttemptBatch) -> list[PreparedTask]:
+    requested = next(entry for entry in action.sources if entry.source_id == source.sample.source_id)
+    if requested.registry_revision != population_revision(source.sample.model_dump(mode="json")):
         raise ValueError("Attempt batch population changed after planning")
     hashes = {task.task_id: task.task_sha256 for task in source.sample.tasks}
-    for task_id, expected, count in requested["tasks"]:
+    for task_id, expected, count in requested.tasks:
         if hashes[task_id] != expected or count != 1:
             raise ValueError("Attempt batch task bytes or coverage policy changed")
-    wanted = {task_id for task_id, _, _ in requested["tasks"]}
+    wanted = {task_id for task_id, _, _ in requested.tasks}
     tasks = [task for task in source.tasks if task.task_id in wanted]
     if {task.task_id for task in tasks} != wanted:
         raise ValueError("Prepared tasks do not cover the complete batch")
@@ -164,7 +165,8 @@ def main() -> None:
     action = json.loads(StoragePath(args.action_manifest).read_text())
     if StoragePath(args.action_manifest).name != digest(action) + ".json":
         raise ValueError("Action manifest changed after planning")
-    if action["kind"] != "AttemptBatch" or action["solver"] != config.solver:
+    action = action_from_payload(action)
+    if not isinstance(action, AttemptBatch) or action.solver != config.solver:
         raise ValueError("Worker does not match its action")
     if args.local_root.exists() or StoragePath(args.output_root).exists():
         raise FileExistsError("Batch outputs are immutable; select a new action")
@@ -236,7 +238,7 @@ def main() -> None:
                         Outcome.COST,
                         None,
                         str(output.parent),
-                        meter.idle_cost(),
+                        meter.idle_gpu_hours(),
                         datetime.now(UTC).isoformat(),
                     )
                 ],
@@ -264,7 +266,7 @@ def main() -> None:
             seal_model_traffic(args.local_root, output)
             if judge is not None:
                 seal_model_traffic(judge_root, output / "judge")
-    write_json_evidence(output.parent / "worker-completion.json", {"action_id": digest(action), "worker_exit": 0})
+    write_json_evidence(output.parent / "worker-completion.json", {"action_id": action_id(action), "worker_exit": 0})
 
 
 if __name__ == "__main__":

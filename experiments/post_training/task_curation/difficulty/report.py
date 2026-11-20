@@ -10,7 +10,13 @@ from datetime import UTC, datetime
 
 from finestore.rl.difficulty import Solver
 
-from experiments.post_training.task_curation.difficulty.planner import Action, AttemptBatch, action_id, action_payload
+from experiments.post_training.task_curation.difficulty.planner import (
+    Action,
+    action_cells,
+    action_gpu_hours,
+    action_id,
+    action_payload,
+)
 from experiments.post_training.task_curation.difficulty.state import (
     CatalogSource,
     CellState,
@@ -44,15 +50,8 @@ def status_report(
     cells = cells_for_catalog(rows, catalog, policy)
     by_cell = defaultdict(list)
     for action in actions:
-        payload = action_payload(action)
-        if "sources" in payload:
-            keys = [(source["source_id"], payload["solver"]) for source in payload["sources"]]
-        elif "source" in payload:
-            keys = [(payload["source"]["source_id"], payload["solver"])]
-        else:
-            keys = payload["cells"]
-        for source_id, solver in keys:
-            by_cell[(source_id, solver)].append({"action_id": action_id(action), "kind": payload["kind"]})
+        for source_id, solver in action_cells(action):
+            by_cell[(source_id, solver)].append({"action_id": action_id(action), "kind": type(action).__name__})
     solvers = {}
     for solver in Solver:
         selected = [cell for cell in cells if cell.solver == solver]
@@ -92,6 +91,6 @@ def status_report(
 def plan_report(actions: Sequence[Action]) -> dict:
     return {
         "summary": dict(Counter(type(action).__name__ for action in actions)),
-        "max_gpu_hours": sum(action.max_gpu_hours for action in actions if isinstance(action, AttemptBatch)),
+        "max_gpu_hours": sum(action_gpu_hours(action) for action in actions),
         "actions": [{"action_id": action_id(action), **action_payload(action)} for action in actions],
     }

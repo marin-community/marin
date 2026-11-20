@@ -20,6 +20,7 @@ from experiments.post_training.task_curation.difficulty.capacity import availabl
 from experiments.post_training.task_curation.difficulty.catalog import served_catalog
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, collect_finished, reconcile_once
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
+from experiments.post_training.task_curation.difficulty.launch import cpu_job_command
 from experiments.post_training.task_curation.difficulty.ledger import read_rows
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason
@@ -29,7 +30,9 @@ LOGGER = logging.getLogger(__name__)
 CONTROLLER_INTERVAL = 60
 
 
-def run_controller(ledger: str, applet_id: str, once: bool, providers: frozenset[Solver]) -> None:
+def run_controller(
+    ledger: str, applet_id: str, once: bool, providers: frozenset[Solver], budget_gpu_hours: float
+) -> None:
     context = iris_ctx()
     backend = IrisBackend(context.client, context.job_id, ledger)
     notifications = EscalationLog(ledger)
@@ -52,7 +55,7 @@ def run_controller(ledger: str, applet_id: str, once: bool, providers: frozenset
         available = frozenset(uri for uri in artifacts if StoragePath(uri).exists())
         waiting = any(gap.reason == GapReason.PROVIDER_CAPACITY_WAIT for cell in cells for gap in cell.gaps)
         capacity = providers or (available_provider_solvers(ledger) if waiting else frozenset())
-        result = reconcile_once(ledger, catalog, policy, backend, notifications, capacity, available)
+        result = reconcile_once(ledger, catalog, policy, backend, notifications, capacity, available, budget_gpu_hours)
         LOGGER.info("DIFFICULTY_RECONCILED %s", json.dumps(result, sort_keys=True))
         if once:
             while any(job.active and job.job_id.startswith(str(context.job_id) + "/") for job in backend.jobs()):
@@ -62,7 +65,9 @@ def run_controller(ledger: str, applet_id: str, once: bool, providers: frozenset
         time.sleep(CONTROLLER_INTERVAL)
 
 
-def launch_controller(ledger: str, applet_id: str, once: bool, providers: frozenset[Solver], generation: str) -> None:
+def launch_controller(
+    ledger: str, applet_id: str, once: bool, providers: frozenset[Solver], generation: str, budget_gpu_hours: float
+) -> None:
     """Submit one CPU parent; its inherited client owns every remediation child."""
     for job in list_iris_jobs():
         if "atlas-difficulty-reconciler-controller-" in job.job_id and job.active:
@@ -72,35 +77,8 @@ def launch_controller(ledger: str, applet_id: str, once: bool, providers: frozen
     if record is None or not record.edge_refresh_token:
         raise ValueError("Controller needs a refreshable Marina login; run iris login")
     environment = {**os.environ, "DIFFICULTY_MARINA_REFRESH": record.edge_refresh_token}
-    command = [
-        "uv",
-        "run",
-        "--no-sync",
-        "iris",
-        "--cluster=marin",
-        "job",
-        "run",
-        "--job-name",
-        "atlas-difficulty-reconciler-controller-" + generation[:16],
-        "--target-cluster=cw-rno2a",
-        "--cpu",
-        "4",
-        "--memory",
-        "8GB",
-        "--disk",
-        "10GB",
-        "--enable-extra-resources",
-        "--priority",
-        "interactive",
-        "--timeout",
-        "259200",
-        "--max-retries",
-        "0",
-        "--no-wait",
-        "--secret",
-        "MARINA_IAP_REFRESH_TOKEN",
-        "env:DIFFICULTY_MARINA_REFRESH",
-    ]
+    command = cpu_job_command("atlas-difficulty-reconciler-controller-" + generation[:16])
+    command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:DIFFICULTY_MARINA_REFRESH"])
     for name in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "GLM_BULK_TOKEN", "TOGETHER_API_KEY"):
         command.extend(["--secret", name, "env:" + name])
     command.extend(
@@ -120,6 +98,8 @@ def launch_controller(ledger: str, applet_id: str, once: bool, providers: frozen
             ledger,
             "--applet-id",
             applet_id,
+            "--gpu-hour-budget",
+            str(budget_gpu_hours),
         ]
     )
     if once:

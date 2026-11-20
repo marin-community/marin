@@ -12,7 +12,6 @@ from finestore.rl.difficulty import Solver
 from experiments.post_training.task_curation.difficulty.ledger import digest
 from experiments.post_training.task_curation.difficulty.state import CellState, CellStatus, Gap, GapReason, LedgerRow
 
-MAX_SOURCES_PER_JOB = 20
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
 
@@ -95,6 +94,21 @@ def action_payload(action: Action) -> dict:
 
 def action_id(action: Action) -> str:
     return digest(action_payload(action))
+
+
+def action_gpu_hours(action: Action) -> float:
+    if isinstance(action, AttemptBatch):
+        return action.max_gpu_hours
+    return MAX_GPU_HOURS_PER_JOB if isinstance(action, QualifyJudgeRoute) else 0.0
+
+
+def action_cells(action: Action) -> tuple[tuple[str, Solver], ...]:
+    payload = action_payload(action)
+    if isinstance(action, AttemptBatch):
+        return tuple((source.source_id, action.solver) for source in action.sources)
+    if "source" in payload:
+        return ((payload["source"]["source_id"], Solver(payload["solver"])),)
+    return tuple((source_id, Solver(solver)) for source_id, solver in payload["cells"])
 
 
 def selected_source(cell: CellState) -> SourceAttempts:
@@ -296,11 +310,9 @@ def plan(
             grouped.setdefault(gap.reason, []).append(cell)
     actions = {}
     for reason, selected in sorted(grouped.items()):
-        remediation = (
-            ProviderRemediation(available_providers)
-            if reason == GapReason.PROVIDER_CAPACITY_WAIT
-            else REMEDIATIONS[reason]
-        )
+        remediation = REMEDIATIONS[reason]
+        if isinstance(remediation, ProviderRemediation):
+            remediation = replace(remediation, available=available_providers)
         for action in remediation.plan(selected):
             key = action_id(action)
             if key not in recorded:
@@ -320,7 +332,7 @@ def source_attempts_from_payload(value: dict) -> SourceAttempts:
 
 
 def action_from_payload(payload: dict) -> Action:
-    """Normalize one content-addressed action at the executor boundary."""
+    """Decode a manifest into its typed action, retaining frozen source identities."""
     kind = payload["kind"]
     if kind == "AttemptBatch":
         return AttemptBatch(

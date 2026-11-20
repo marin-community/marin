@@ -13,7 +13,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.ledger import digest
+from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, digest
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_from_payload
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
 
@@ -71,7 +71,7 @@ def main() -> None:
             result = {"status": "completed", "run_root": output}
         else:
             result = repair_action(action, local)
-    target = StoragePath(args.ledger) / "v1" / "results" / f"{key}.json"
+    target = StoragePath(args.ledger) / LEDGER_VERSION / "results" / f"{key}.json"
     target.parent.mkdirs()
     if target.exists():
         raise FileExistsError(target)

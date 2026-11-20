@@ -27,11 +27,11 @@ from marin.inference.iris import remote_inference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret
-from rigging.timing import Duration
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
+from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
@@ -54,6 +54,15 @@ TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
 TOGETHER_MODEL = "zai-org/GLM-5.3"
 
 
+def hosted_liveness_response(base_url: str, api_key: str, model: str) -> httpx.Response:
+    """Return the provider's response to one bounded liveness request."""
+    with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=60) as client:
+        return client.post(
+            base_url.rstrip("/") + "/chat/completions",
+            json={"model": model, "messages": [{"role": "user", "content": "liveness"}], "max_tokens": 1},
+        )
+
+
 def hosted_endpoint_liveness(base_url: str, api_key: str, model: str) -> None:
     """Fail in seconds when the hosted endpoint is dead, instead of a 30-minute probe timeout.
 
@@ -62,12 +71,7 @@ def hosted_endpoint_liveness(base_url: str, api_key: str, model: str) -> None:
     serving pod deleted, and the campaign's serving probe hung for its full window).
     """
     try:
-        with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=60) as client:
-            response = client.post(
-                base_url.rstrip("/") + "/chat/completions",
-                json={"model": model, "messages": [{"role": "user", "content": "liveness"}], "max_tokens": 1},
-            )
-            response.raise_for_status()
+        hosted_liveness_response(base_url, api_key, model).raise_for_status()
     except Exception as error:
         raise RuntimeError(
             f"The hosted endpoint {base_url} (model {model}) did not answer a liveness completion "
@@ -81,7 +85,6 @@ LOGGER = logging.getLogger(__name__)
 # peers such as the Snowball ablation roots. Every launch declares its band.
 PRIORITY_CHOICES = ("production", "interactive", "batch", "system")
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
-JOB_TIMEOUT = Duration.from_seconds(259200)
 NATIVE_CONTEXT_SAFETY_BUFFER = 0
 # A hosted endpoint queues probes behind hosted traffic; a retry succeeds once
 # the queue drains instead of killing the campaign (hosted-v13c died on a

@@ -12,6 +12,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.state import ArtifactKind, Gap, GapReason, LedgerRow, Outcome
 
+LEDGER_VERSION = "v1"
 DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
 
 
@@ -20,14 +21,17 @@ def digest(value: object) -> str:
 
 
 def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
-    """Publish an immutable partition; replaying the same evidence writes nothing."""
+    """Return the immutable partition URI, or None for an empty batch.
+
+    Replaying identical evidence returns its existing partition without writing.
+    """
     if not rows:
         return None
     payload = "".join(
         json.dumps(asdict(row), sort_keys=True) + "\n" for row in sorted(rows, key=lambda row: row.attempt_id)
     )
     key = hashlib.sha256(payload.encode()).hexdigest()
-    path = StoragePath(root) / "v1" / "rows" / f"{key}.jsonl"
+    path = StoragePath(root) / LEDGER_VERSION / "rows" / f"{key}.jsonl"
     if path.exists():
         if path.read_text() != payload:
             raise ValueError(f"Ledger partition content changed: {path}")
@@ -41,7 +45,7 @@ def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
 
 def read_rows(root: str) -> list[LedgerRow]:
     rows: dict[str, LedgerRow] = {}
-    for path in sorted((StoragePath(root) / "v1" / "rows" / "*.jsonl").glob(), key=str):
+    for path in sorted((StoragePath(root) / LEDGER_VERSION / "rows" / "*.jsonl").glob(), key=str):
         for line in path.read_text().splitlines():
             value = json.loads(line)
             value["solver"] = Solver(value["solver"])

@@ -15,7 +15,10 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from experiments.post_training.task_curation.difficulty.executor import Job, action_job_slots
+from experiments.post_training.task_curation.difficulty.launch import DAYTONA_API_URL, DAYTONA_TARGET, JOB_TIMEOUT
+from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION
 from experiments.post_training.task_curation.difficulty.planner import (
+    MAX_GPU_HOURS_PER_JOB,
     Action,
     AttemptBatch,
     QualifyJudgeRoute,
@@ -26,6 +29,7 @@ from experiments.post_training.task_curation.difficulty_protocol import PINS
 
 JOB_COMPONENT = "difficulty-reconcile-"
 MAX_JUDGE_GPUS = 8
+JOB_NAMESPACE = "atlas-difficulty"
 
 
 @dataclass(frozen=True)
@@ -35,7 +39,7 @@ class IrisBackend:
     ledger: str
 
     def jobs(self) -> list[Job]:
-        prefix = f"/{self.controller_job.user}/atlas-difficulty"
+        prefix = f"/{self.controller_job.user}/{JOB_NAMESPACE}"
         raw = self.client.list_jobs(prefix=prefix)
         jobs = []
         grouped: dict[str, list[Job]] = {}
@@ -52,7 +56,7 @@ class IrisBackend:
                 jobs.append(job)
         for root, group in grouped.items():
             prefix = root.rsplit("/", 1)[-1].removeprefix(JOB_COMPONENT)
-            matches = (StoragePath(self.ledger) / "v1" / "actions" / (prefix + "*.json")).glob()
+            matches = (StoragePath(self.ledger) / LEDGER_VERSION / "actions" / (prefix + "*.json")).glob()
             if len(matches) != 1:
                 raise ValueError(f"Active job has no unique action manifest: {root}")
             action = action_from_payload(json.loads(matches[0].read_text()))
@@ -62,17 +66,17 @@ class IrisBackend:
     def submit(self, action: Action, manifest_uri: str) -> str:
         key = action_id(action)
         name = JOB_COMPONENT + key[:24]
-        existing = self.client.list_jobs(prefix=f"/{self.controller_job.user}/atlas-difficulty")
+        existing = self.client.list_jobs(prefix=f"/{self.controller_job.user}/{JOB_NAMESPACE}")
         for job in existing:
             if str(job.job_id).endswith("/" + name):
                 return str(job.job_id)
-        timeout = 259200
+        timeout = int(JOB_TIMEOUT.to_seconds())
         if isinstance(action, AttemptBatch):
             # Include the largest locally served judge in the reservation bound.
             gpu_count = PINS[action.solver].gpus + MAX_JUDGE_GPUS
             timeout = int(action.max_gpu_hours * 3600 / gpu_count)
         elif isinstance(action, QualifyJudgeRoute):
-            timeout = int(40 * 3600 / MAX_JUDGE_GPUS)
+            timeout = int(MAX_GPU_HOURS_PER_JOB * 3600 / MAX_JUDGE_GPUS)
         command = [
             "python",
             "-m",
@@ -86,9 +90,7 @@ class IrisBackend:
             entrypoint=Entrypoint.from_command(*command),
             name=name,
             resources=ResourceSpec(cpu=8, memory="32GB", disk="128GB"),
-            environment=EnvironmentSpec(
-                env_vars={"DAYTONA_API_URL": "https://app.daytona.io/api", "DAYTONA_TARGET": "us"}
-            ),
+            environment=EnvironmentSpec(env_vars={"DAYTONA_API_URL": DAYTONA_API_URL, "DAYTONA_TARGET": DAYTONA_TARGET}),
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             egress_policy=job_pb2.EGRESS_POLICY_CLUSTER,

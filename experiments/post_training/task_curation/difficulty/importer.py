@@ -15,7 +15,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
-from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest, read_rows
+from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, append_rows, digest, read_rows
 from experiments.post_training.task_curation.difficulty.legacy import LegacyReasonError, legacy_gaps
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, Gap, GapReason, LedgerRow, Outcome
 
@@ -90,12 +90,20 @@ def source_rows(run: str, prepared: dict, solver: Solver, parent: str | None) ->
     sample = prepared["sample"]
     source_id = sample["source_id"]
     key = hashlib.sha256(source_id.encode()).hexdigest()
-    root = StoragePath(run) / "trials" / key
+    run_path = StoragePath(run)
+    root = run_path / "trials" / key
     measurement = optional_json(root / "measurement.json")
     aggregate = optional_json(root / "attempts.json")
     # Interrupted sources can have attempt receipts without an aggregate.
     references = (aggregate or {}).get("attempt_receipts", [])
-    own = {ref["uri"]: ref for ref in references if ref["uri"].startswith(run.rstrip("/") + "/")}
+    own = {}
+    for ref in references:
+        path = StoragePath(ref["uri"])
+        try:
+            path.relative_to(run_path)
+        except ValueError:
+            continue  # Linked ancestor receipts are imported with their original run.
+        own[str(path)] = ref
     incomplete = (root / "attempts" / "*" / "*" / "attempt.json").glob() if measurement is None else []
     for path in incomplete:
         if str(path) not in own:
@@ -221,7 +229,7 @@ def import_runs(roots: list[str], ledger: str, refresh_roots: frozenset[str] = f
     if failures:
         raise LegacyReasonError("Complete reason audit failed:\n" + "\n".join(failures))
     receipt = {"roots": sorted(seen), "reports": reports}
-    target = StoragePath(ledger) / "v1" / "imports" / f"{digest(receipt)}.json"
+    target = StoragePath(ledger) / LEDGER_VERSION / "imports" / f"{digest(receipt)}.json"
     target.parent.mkdirs()
     if not target.exists():
         target.write_text(json.dumps(receipt, sort_keys=True) + "\n")

@@ -17,6 +17,7 @@ from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.snapshot import ensure_snapshot, list_snapshots, snapshot_request_for_spec
 from shellbox.image import DockerfileSource
 
+from experiments.post_training.task_curation.difficulty.launch import DAYTONA_API_URL, DAYTONA_TARGET
 from experiments.post_training.task_curation.difficulty.planner import BuildSnapshot, action_from_payload
 from experiments.post_training.task_curation.difficulty.state import GapReason
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
@@ -54,7 +55,7 @@ async def build_snapshots(action: BuildSnapshot, local: Path) -> dict:
             }
         requests[request.name] = request
     connection = DaytonaConnection(
-        api_key=require_secret("DAYTONA_RL_API_KEY"), api_url="https://app.daytona.io/api", target="us"
+        api_key=require_secret("DAYTONA_RL_API_KEY"), api_url=DAYTONA_API_URL, target=DAYTONA_TARGET
     )
     async with connection.client_factory()() as client:
         inventory = await list_snapshots(client)

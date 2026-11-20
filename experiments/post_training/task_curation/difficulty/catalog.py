@@ -3,12 +3,8 @@
 
 """Resolve frozen task panels against the current served source declarations."""
 
-import json
-
 from marina.client import DEFAULT_MARINA_URL, applet_query
 from rigging.auth import TokenProvider
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, population_revision
 from experiments.post_training.task_curation.difficulty.state import CatalogSource
@@ -27,10 +23,6 @@ DEFAULT_QUEUES = (
 )
 
 
-def historical_catalog(queue: str, sha256: str) -> list[CatalogSource]:
-    return catalog_sources(queue, sha256)
-
-
 def served_catalog(
     applet_id: str, queues: tuple[tuple[str, str], ...] = DEFAULT_QUEUES, token_provider: TokenProvider | None = None
 ) -> list[CatalogSource]:
@@ -45,20 +37,8 @@ def served_catalog(
     )["rows"]
     panels: dict[tuple[str, str], CatalogSource] = {}
     for uri, expected in queues:
-        path = StoragePath(uri)
-        if file_sha256(path) != expected:
-            raise ValueError(f"Frozen queue changed: {uri}")
-        for row in json.loads(path.read_text()):
-            sample = row["sample"]
-            identity = canonical_source_id(sample["source_id"])
-            source = CatalogSource(
-                sample["source_id"],
-                population_revision(sample),
-                tuple((t["task_id"], t["task_sha256"]) for t in sample["tasks"]),
-                uri,
-                expected,
-            )
-            panels[(identity, source.registry_revision)] = source
+        for source in catalog_sources(uri, expected):
+            panels[(canonical_source_id(source.source_id), source.registry_revision)] = source
     sources = []
     for row in declarations:
         declaration = row["declaration"]

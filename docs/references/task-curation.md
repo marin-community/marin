@@ -2556,7 +2556,7 @@ Use one entry point for status, read-only planning and execution:
 ```bash
 uv run python -m experiments.post_training.task_curation.difficulty status --since 24h
 uv run python -m experiments.post_training.task_curation.difficulty plan
-uv run python -m experiments.post_training.task_curation.difficulty reconcile --once
+uv run python -m experiments.post_training.task_curation.difficulty reconcile --gpu-hour-budget 800 --once
 ```
 
 `status` and `plan` read the current served declarations. A source whose current
@@ -2604,6 +2604,16 @@ bound. The cap is 22 active Difficulty Iris jobs in the owner's namespace, inclu
 the controller, legacy campaigns and serving children. A candidate or judge
 repair reserves headroom for its serving children before those jobs appear.
 Serving keeps compilation and CUDA graphs enabled.
+
+`--gpu-hour-budget` is an explicit campaign approval. The first controller binds
+its amount and start time in `v1/budget.json`; controller restarts retain that
+binding. Admission adds recorded GPU-hours since that start to full reservations
+for unfinished GPU actions. It defers a new GPU action if its reservation would
+exceed the budget and emits one retained watchdog escalation. CPU repairs can
+continue. The 800 GPU-hour example is the approved initial candidate budget;
+obtain a new ruling before changing it. Historical costs before the binding do
+not consume the new budget. Estimates exclude hosted API and Daytona charges.
+
 
 The launcher resolves `DAYTONA_EVAL_API_KEY` and `DAYTONA_RL_API_KEY` from
 Secret Manager. Validation maps the EVAL key to Harbor's `DAYTONA_API_KEY` and

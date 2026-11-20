@@ -312,8 +312,8 @@ def test_gpu_accounting_conserves_overlapping_task_and_idle_windows():
     now[0] = 14400
     b = meter.finish("b")
     assert a == 12.0 and b == 12.0
-    assert meter.idle_cost() == 8.0
-    assert a + b + meter.idle_cost() == 32.0
+    assert meter.idle_gpu_hours() == 8.0
+    assert a + b + meter.idle_gpu_hours() == 32.0
 
 
 def test_a_later_provider_wait_does_not_hide_another_tasks_network_violation():

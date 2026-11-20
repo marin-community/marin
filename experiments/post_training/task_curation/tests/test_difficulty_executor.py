@@ -5,17 +5,19 @@
 
 import json
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.difficulty.budget import campaign_budget
 from experiments.post_training.task_curation.difficulty.executor import (
     EscalationLog,
     Job,
     collect_finished,
     execute_plan,
 )
-from experiments.post_training.task_curation.difficulty.ledger import read_rows
+from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
 from experiments.post_training.task_curation.difficulty.planner import action_id, plan
 from experiments.post_training.task_curation.difficulty.state import (
     CellStatus,
@@ -25,7 +27,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     Outcome,
     cell_state,
 )
-from experiments.post_training.task_curation.tests.test_difficulty_reconciler import SOURCE, blocked
+from experiments.post_training.task_curation.tests.test_difficulty_reconciler import SOURCE, blocked, row
 
 
 @dataclass
@@ -115,8 +117,32 @@ def test_blocked_repair_escalates_once_and_leaves_other_cells_schedulable(tmp_pa
     collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
     rows = read_rows(ledger)
     assert sum(row.outcome == Outcome.ESCALATED for row in rows) == 1
-    assert len((tmp_path / "ledger" / "ESCALATIONS.md").read_text().splitlines()) == 3
+    escalation = (tmp_path / "ledger" / "ESCALATIONS.md").read_text()
+    assert "Original frozen panel is not available" in escalation and str(result) in escalation
     other = replace(SOURCE, source_id="other")
     next_actions = plan([cell, cell_state([], other, Solver.SMALL, CoveragePolicy())], rows)
     assert all(action_id(action) != action_id(actions[0]) for action in next_actions)
     assert any(action.sources[0].source_id == "other" for action in next_actions)
+
+
+def test_budget_counts_recorded_spend_and_inflight_reservations_across_restart(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    budget = campaign_budget(ledger, 800)
+    # Prior campaign costs do not consume this newly approved budget.
+    historical = replace(row("old-cost", outcome=Outcome.COST), gpu_hours=1000)
+    current = replace(row("new-cost", outcome=Outcome.COST), gpu_hours=760, recorded_at=datetime.now(UTC).isoformat())
+    append_rows(ledger, [historical, current])
+    other = replace(SOURCE, source_id="other")
+    cells = [cell_state([], source, Solver.SMALL, CoveragePolicy()) for source in (SOURCE, other)]
+    actions = plan(cells, [])
+    backend = JobStore(str(tmp_path / "jobs"))
+    first = execute_plan(actions, read_rows(ledger), [SOURCE, other], ledger, backend, EscalationLog(ledger), budget)
+    assert len(first["submitted"]) == 1
+    assert first["recorded_gpu_hours"] == 760 and first["reserved_gpu_hours"] == 40
+    restarted = campaign_budget(ledger, 800)
+    second = execute_plan(actions, read_rows(ledger), [SOURCE, other], ledger, backend, EscalationLog(ledger), restarted)
+    assert second["submitted"] == [] and second["reserved_gpu_hours"] == 40
+    assert restarted == budget
+    escalations = list((tmp_path / "ledger" / "v1" / "escalations").glob("*.json"))
+    assert len(escalations) == 1
+    assert "760.000000 + in-flight 40.000000" in json.loads(escalations[0].read_text())["message"]

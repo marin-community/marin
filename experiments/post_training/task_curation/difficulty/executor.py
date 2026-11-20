@@ -14,7 +14,8 @@ from finestore.rl.difficulty import Solver
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest, read_rows
+from experiments.post_training.task_curation.difficulty.budget import GpuBudget, campaign_budget
+from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, append_rows, digest, read_rows
 from experiments.post_training.task_curation.difficulty.planner import (
     Action,
     AttemptBatch,
@@ -24,7 +25,9 @@ from experiments.post_training.task_curation.difficulty.planner import (
     QualifyJudgeRoute,
     RebuildEnvironmentArtifact,
     RetryAfter,
+    action_cells,
     action_from_payload,
+    action_gpu_hours,
     action_id,
     action_payload,
     plan,
@@ -71,7 +74,7 @@ class EscalationLog:
 
     def write(self, key: str, message: str) -> None:
         """Publish a deduplicated escalation and its watchdog log event."""
-        target = StoragePath(self.root) / "v1" / "escalations" / f"{key}.json"
+        target = StoragePath(self.root) / LEDGER_VERSION / "escalations" / f"{key}.json"
         payload = {"action_id": key, "message": message}
         target.parent.mkdirs()
         if not target.exists():
@@ -85,15 +88,6 @@ class EscalationLog:
 
 def action_job_slots(action: Action) -> int:
     return ATTEMPT_JOB_SLOTS if isinstance(action, (AttemptBatch, QualifyJudgeRoute)) else 1
-
-
-def action_cells(action: Action) -> tuple[tuple[str, Solver], ...]:
-    payload = action_payload(action)
-    if isinstance(action, AttemptBatch):
-        return tuple((source.source_id, action.solver) for source in action.sources)
-    if "source" in payload:
-        return ((payload["source"]["source_id"], Solver(payload["solver"])),)
-    return tuple((source_id, Solver(solver)) for source_id, solver in payload["cells"])
 
 
 def action_rows(
@@ -127,12 +121,15 @@ def execute_plan(
     ledger: str,
     backend: JobBackend,
     notifications: NotificationSink,
+    budget: GpuBudget | None = None,
 ) -> dict:
     """Persist submissions after successful submit; a lost reply is recovered by job name."""
     jobs = backend.jobs()
     slots = sum(job.slots for job in jobs if job.active)
     recorded = {row.action_id for row in rows if row.action_id}
     submitted, escalated, deferred = [], [], []
+    spent = budget.recorded_gpu_hours(rows) if budget else 0.0
+    reserved = budget.reserved_gpu_hours(rows, ledger) if budget else 0.0
     for action in actions:
         key = action_id(action)
         if key in recorded:
@@ -159,7 +156,19 @@ def execute_plan(
         if slots + required_slots > CONCURRENT_JOB_CAP:
             deferred.append(key)
             continue
-        manifest = StoragePath(ledger) / "v1" / "actions" / f"{key}.json"
+        reservation = action_gpu_hours(action)
+        if budget and reservation and spent + reserved + reservation > budget.limit_gpu_hours:
+            budget_key = digest([budget.started_at, budget.limit_gpu_hours, "budget-exhausted"])
+            if not (StoragePath(ledger) / LEDGER_VERSION / "escalations" / f"{budget_key}.json").exists():
+                notifications.write(
+                    budget_key,
+                    f"Difficulty GPU budget exhausted: recorded {spent:.6f} + in-flight {reserved:.6f} "
+                    f"+ next reservation {reservation:.6f} exceeds {budget.limit_gpu_hours:.6f} GPU-h; "
+                    "new GPU jobs are deferred; an operator budget ruling is required",
+                )
+            deferred.append(key)
+            continue
+        manifest = StoragePath(ledger) / LEDGER_VERSION / "actions" / f"{key}.json"
         payload = json.dumps(action_payload(action), sort_keys=True) + "\n"
         manifest.parent.mkdirs()
         if manifest.exists() and manifest.read_text() != payload:
@@ -171,12 +180,16 @@ def execute_plan(
         LOGGER.info("DIFFICULTY_SUBMITTED %s", json.dumps({"action_id": key, "job_id": job_id}))
         submitted.append(job_id)
         slots += required_slots
+        reserved += reservation
     return {
         "submitted": submitted,
         "escalated": escalated,
         "deferred": deferred,
         "active_job_slots": slots,
         "concurrent_job_cap": CONCURRENT_JOB_CAP,
+        "recorded_gpu_hours": spent,
+        "reserved_gpu_hours": reserved,
+        "budget_gpu_hours": budget.limit_gpu_hours if budget else None,
     }
 
 
@@ -188,20 +201,22 @@ def reconcile_once(
     notifications: NotificationSink,
     available_providers: frozenset[Solver],
     available_artifacts: frozenset[str],
+    budget_limit_gpu_hours: float,
 ) -> dict:
     """Take one consistent evidence snapshot, execute its plan, then release the lease."""
-    if not (StoragePath(ledger) / "v1" / "imports" / "*.json").glob():
+    if not (StoragePath(ledger) / LEDGER_VERSION / "imports" / "*.json").glob():
         raise ValueError("Initial backfill is unsealed; finish import before reconcile")
-    lease = create_lock(str(StoragePath(ledger) / "v1" / "reconcile.lock"))
+    lease = create_lock(str(StoragePath(ledger) / LEDGER_VERSION / "reconcile.lock"))
     if not lease.try_acquire():
         return {"state": "another_reconciler_holds_lease"}
     try:
         with lease_refresh(lease):
             rows = read_rows(ledger)
             rows += collect_finished(rows, backend.jobs(), ledger, notifications)
+            budget = campaign_budget(ledger, budget_limit_gpu_hours)
             cells = cells_for_catalog(rows, catalog, policy)
             actions = plan(cells, rows, available_providers, available_artifacts)
-            return execute_plan(actions, rows, catalog, ledger, backend, notifications)
+            return execute_plan(actions, rows, catalog, ledger, backend, notifications, budget)
     finally:
         lease.release()
 
@@ -236,13 +251,13 @@ def collect_finished(
                 job_id=row.job_id,
             )
         )
-        target = StoragePath(ledger) / "v1" / "results" / f"{row.action_id}.json"
+        target = StoragePath(ledger) / LEDGER_VERSION / "results" / f"{row.action_id}.json"
         if job.state == "succeeded":
             result = json.loads(target.read_text())
             if result["status"] == "completed":
                 continue
             if result["status"] == "ready":
-                manifest = StoragePath(ledger) / "v1" / "actions" / f"{row.action_id}.json"
+                manifest = StoragePath(ledger) / LEDGER_VERSION / "actions" / f"{row.action_id}.json"
                 action = action_from_payload(json.loads(manifest.read_text()))
                 repaired = repaired_gap(action)
                 additions.append(

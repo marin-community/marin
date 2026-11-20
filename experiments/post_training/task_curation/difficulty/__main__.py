@@ -15,10 +15,10 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.audit import audit_captured_runs, launch_import
-from experiments.post_training.task_curation.difficulty.catalog import DEFAULT_APPLET, historical_catalog, served_catalog
+from experiments.post_training.task_curation.difficulty.catalog import DEFAULT_APPLET, served_catalog
 from experiments.post_training.task_curation.difficulty.controller import launch_controller, run_controller
-from experiments.post_training.task_curation.difficulty.importer import import_runs
-from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LEDGER, digest, read_rows
+from experiments.post_training.task_curation.difficulty.importer import catalog_sources, import_runs
+from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LEDGER, LEDGER_VERSION, digest, read_rows
 from experiments.post_training.task_curation.difficulty.planner import action_id, plan
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog, plan_report, status_report
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason
@@ -65,6 +65,7 @@ def main() -> None:
         command.add_argument("--provider-available", action="append", type=Solver, default=[])
         if name == "reconcile":
             command.add_argument("--once", action="store_true")
+            command.add_argument("--gpu-hour-budget", type=float, required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.command == "audit":
@@ -89,12 +90,14 @@ def main() -> None:
             parser.error("import requires --run-root or --discover-root")
         print(json.dumps(import_runs(roots, args.ledger, frozenset([*args.refresh_run_root, *args.run_root])), indent=2))
         return
+    if args.command == "reconcile" and args.queue:
+        parser.error("reconcile uses the complete current served catalog")
     if args.command == "reconcile" and get_iris_ctx() is not None:
-        run_controller(args.ledger, args.applet_id, args.once, frozenset(args.provider_available))
+        run_controller(args.ledger, args.applet_id, args.once, frozenset(args.provider_available), args.gpu_hour_budget)
         return
     if bool(args.queue) != bool(args.queue_sha256):
         parser.error("historical mode requires --queue and --queue-sha256")
-    catalog = historical_catalog(args.queue, args.queue_sha256) if args.queue else served_catalog(args.applet_id)
+    catalog = catalog_sources(args.queue, args.queue_sha256) if args.queue else served_catalog(args.applet_id)
     rows = read_rows(args.ledger)
     policy = CoveragePolicy()
     cells = cells_for_catalog(rows, catalog, policy)
@@ -108,9 +111,7 @@ def main() -> None:
     available = frozenset(uri for uri in artifacts if StoragePath(uri).exists())
     actions = plan(cells, rows, frozenset(args.provider_available), available)
     if args.command == "reconcile":
-        if args.queue:
-            parser.error("reconcile uses the complete current served catalog")
-        if not (StoragePath(args.ledger) / "v1" / "imports" / "*.json").glob():
+        if not (StoragePath(args.ledger) / LEDGER_VERSION / "imports" / "*.json").glob():
             raise ValueError("Initial backfill is unsealed; finish import before reconcile")
         if not actions:
             print(json.dumps({"submitted": [], "state": "no_new_evidence"}))
@@ -121,6 +122,7 @@ def main() -> None:
             args.once,
             frozenset(args.provider_available),
             digest([action_id(action) for action in actions]),
+            args.gpu_hour_budget,
         )
         return
     if args.command == "plan":

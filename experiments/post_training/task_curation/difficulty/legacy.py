@@ -9,6 +9,7 @@ from finestore.rl.difficulty import (
     DifficultyGap,
     difficulty_gaps,
 )
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.state import ArtifactKind, Gap, GapReason
@@ -102,7 +103,7 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
                 suffix = "env-278169f50750da36/2026.10.08/requirements.lock"
                 if not artifact_uri.endswith(suffix):
                     raise ValueError("Local environment artifact has no regional binding")
-                artifact_uri = "s3://marin-us-east-02a/marin/images/" + suffix
+                artifact_uri = str(StoragePath("s3://marin-us-east-02a/marin/images") / suffix)
         gaps.append(
             Gap(
                 canonical,

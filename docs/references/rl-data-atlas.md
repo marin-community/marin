@@ -1292,7 +1292,7 @@ for current coverage, typed gaps, GPU-hour reports and bounded scheduling:
 ```bash
 uv run python -m experiments.post_training.task_curation.difficulty status --since 24h
 uv run python -m experiments.post_training.task_curation.difficulty plan
-uv run python -m experiments.post_training.task_curation.difficulty reconcile --once
+uv run python -m experiments.post_training.task_curation.difficulty reconcile --gpu-hour-budget 800 --once
 ```
 
 The append-only ledger is authoritative. Legacy per-run catalogs remain

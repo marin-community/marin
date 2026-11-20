@@ -18,6 +18,7 @@ from finestore.rl.difficulty import Solver
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec
 from verifyit.spec import JudgeSpec
@@ -139,7 +140,9 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         assert with_judge and name == difficulty_runtime.TOGETHER_API_KEY_ENV
         return "fixture-judge-key"
 
-    def launch(prepared_path, config_path, local_root, output, api_key, judge, ledger, action_manifest, daytona_api_key=None):
+    def launch(
+        prepared_path, config_path, local_root, output, api_key, judge, ledger, action_manifest, daytona_api_key=None
+    ):
         config = CandidateRun.model_validate_json(config_path.read_text())
         assert config.judge == judge
         launches.append(config)
@@ -167,7 +170,9 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     monkeypatch.setattr(difficulty_runtime, "require_secret", secret)
     monkeypatch.setattr(difficulty_runtime, "run_trial_worker", launch)
     manifest = tmp_path / "action.json"
-    manifest.write_text(json.dumps({"sources": [{"source_id": source.sample.source_id, "tasks": [[task.id, "a" * 64, 1]]}]}))
+    manifest.write_text(
+        json.dumps({"sources": [{"source_id": source.sample.source_id, "tasks": [[task.id, "a" * 64, 1]]}]})
+    )
     output = tmp_path / "output"
     monkeypatch.setattr(
         "sys.argv",
@@ -189,8 +194,10 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
             "3",
             "--priority",
             "interactive",
-            "--ledger", str(tmp_path / "ledger"),
-            "--action-manifest", str(manifest),
+            "--ledger",
+            str(tmp_path / "ledger"),
+            "--action-manifest",
+            str(manifest),
         ],
     )
     difficulty_runtime.main()
@@ -236,8 +243,9 @@ def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatc
         assert endpoint.startswith("http")
     assert len(captured) == 1
     assert captured[0].iris.priority == job_pb2.PRIORITY_BAND_INTERACTIVE
-
-
+    assert captured[0].iris.worker_timeout == Duration.from_hours(72)
+    assert captured[0].engine.startup_timeout_seconds == 259200
+    assert captured[0].iris.endpoint_ready_timeout_seconds == 259200
 
 
 def test_every_judge_tier_carries_an_immutable_checkpoint_pin():

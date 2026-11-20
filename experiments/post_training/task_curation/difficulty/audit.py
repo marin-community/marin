@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from experiments.post_training.task_curation.difficulty import legacy
+from experiments.post_training.task_curation.difficulty.launch import cpu_job_command
 
 
 @dataclass(frozen=True)
@@ -24,12 +25,7 @@ class ReasonAudit:
 
 
 def audit_captured_runs(report_path: Path, audit_log_path: Path) -> ReasonAudit:
-    """Replay every catalog reason and every failure from a completed raw-receipt scan.
-
-    The regional scanner visits every raw receipt before reporting its unknowns.
-    Replaying its complete failure list locally avoids moving trial archives or
-    re-reading already validated immutable attempts across regions.
-    """
+    """Validate captured reasons against current mappings; reject incomplete scans."""
     report_bytes = report_path.read_bytes()
     log_bytes = audit_log_path.read_bytes()
     report = json.loads(report_bytes)
@@ -64,7 +60,6 @@ def launch_import(
 ) -> ReasonAudit:
     """Submit only after the full captured audit exits successfully in this process."""
     audit = audit_captured_runs(report_path, audit_log_path)
-    # An exception above exits before Iris receives any submission request.
     print(
         "DIFFICULTY_REASON_AUDIT_OK "
         + json.dumps(
@@ -79,41 +74,20 @@ def launch_import(
         ),
         flush=True,
     )
-    command = [
-        "uv",
-        "run",
-        "--no-sync",
-        "iris",
-        "--cluster=marin",
-        "job",
-        "run",
-        "--job-name",
-        job_name,
-        "--target-cluster=cw-rno2a",
-        "--cpu",
-        "4",
-        "--memory",
-        "8GB",
-        "--disk",
-        "10GB",
-        "--enable-extra-resources",
-        "--priority",
-        "interactive",
-        "--timeout",
-        "259200",
-        "--max-retries",
-        "0",
-        "--no-wait",
-        "--",
-        "python",
-        "-m",
-        "experiments.post_training.task_curation.difficulty",
-        "import",
-        "--discover-root",
-        base,
-        "--ledger",
-        ledger,
-    ]
+    command = cpu_job_command(job_name)
+    command.extend(
+        [
+            "--",
+            "python",
+            "-m",
+            "experiments.post_training.task_curation.difficulty",
+            "import",
+            "--discover-root",
+            base,
+            "--ledger",
+            ledger,
+        ]
+    )
     for root in refresh_roots:
         command.extend(["--refresh-run-root", root])
     subprocess.run(command, check=True)

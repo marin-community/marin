@@ -40,11 +40,12 @@ class GpuAccounting:
             self.active[key] = 0.0
 
     def finish(self, key: str) -> float:
+        """Return the completed task's share of reserved GPU-hours."""
         with self.lock:
             self.advance()
             return self.active.pop(key)
 
-    def idle_cost(self) -> float:
+    def idle_gpu_hours(self) -> float:
         with self.lock:
             self.advance()
             if self.active:
