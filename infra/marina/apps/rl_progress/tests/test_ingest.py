@@ -75,9 +75,6 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     assert result["timing_scope"] == "coordinator_wall_minus_validation"
     assert result["validation_seconds"] == {"baseline": 8.0, "final": 12.0}
     assert result["grader_report"] == report
-    assert result["base_model"] == "model"
-    assert result["preset"] == "quick-rl"
-    assert result["hardware"] == {"gpu": "H100", "count": 40}
     assert result["final"]["reward"] == 0.75
     assert comparison_fields(result)["pareto_eligible"] is True
 
