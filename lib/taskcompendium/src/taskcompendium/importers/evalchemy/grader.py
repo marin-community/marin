@@ -26,6 +26,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
+    "genomeqa": ("genomeqa.py",),
     "gsm8k_cot": ("math.py", "minerva.py", "amc.py"),
     "minerva_math": ("math.py", "minerva.py", "amc.py"),
     "bbh_cot": ("choices.py",),
