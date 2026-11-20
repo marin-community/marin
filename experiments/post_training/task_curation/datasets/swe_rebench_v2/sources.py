@@ -9,7 +9,6 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
-    ADMISSION_RECEIPTS_INPUT,
     IMAGE_BINDINGS_INPUT,
     VERSION,
     convert_row,
