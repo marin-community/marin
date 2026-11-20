@@ -1,14 +1,22 @@
+# Qwen3.6-35B-A3B: hybrid gated-delta-net MoE, 262k native context, thinking on by default.
+# Serving follows the October eval campaign (TP2 x DP2 on 4xH100 at 73,728 tokens).
 name: qwen3.6-35b-a3b
 location: Qwen/Qwen3.6-35B-A3B
+revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
 apply_chat_template: true
 resource_hint:
   gpu:
     H100: 4
+  # Each data-parallel replica streams the full bf16 checkpoint through host memory; checkpoint-based
+  # sizing assumes one copy, and 160g was OOM-killed during weight loading.
+  memory: 320g
 serve:
   tensor_parallel_size: 2
   data_parallel_size: 2
-  max_model_len: 32768
+  max_model_len: 73728
   limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: qwen3
+  tool_call_parser: qwen3_coder
   vllm_extra_args:
   - --enable-prefix-caching
 agent:
