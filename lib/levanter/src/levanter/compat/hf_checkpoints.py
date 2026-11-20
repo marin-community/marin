@@ -1380,6 +1380,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "pytorch_model.bin",
                 "pytorch_model-*.bin",
                 "pytorch_model.bin.index.json",
+                ".verified-copy-manifest.json",
+                ".cache_metadata.json",
             ]
         )
         if _is_url_like(repo):
