@@ -131,13 +131,14 @@ def _seed(model: str, revision: str, ttl: int = 14) -> StoragePath:
 
 def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monkeypatch):
     config = _config(REVISION)
-    config = replace(config, iris=replace(config.iris, task_timeout=Duration.from_seconds(259200)))
+    timeout = Duration.from_hours(72)
+    config = replace(config, iris=replace(config.iris, task_timeout=timeout))
     with remote_inference(config):
         pass
 
     assert serving.events == ["prepare", "gpu"]
     (request,) = serving.requests
-    assert request.timeout == Duration.from_seconds(259200)
+    assert request.timeout == timeout
     assert isinstance(request.resources.device, CpuConfig)
     assert request.resources.regions == ["us-east1"]
     assert request.resources.target_cluster == "cw-rno2a"

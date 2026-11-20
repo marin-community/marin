@@ -90,7 +90,8 @@ _ENDPOINT_READY_POLL_SECONDS = 2.0
 # Bound on time spent queued (pending/building) before the server job is placed.
 # Distinct from the readiness timeout, which budgets server startup and only
 # counts while the job is actually running.
-_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
+_SECONDS_PER_HOUR = Duration.from_hours(1).to_seconds()
+_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * _SECONDS_PER_HOUR
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
@@ -518,7 +519,7 @@ def _register_dashboard(
 
 
 def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float) -> None:
-    deadline = time.monotonic() + timeout_hours * 3600
+    deadline = time.monotonic() + timeout_hours * _SECONDS_PER_HOUR
     while time.monotonic() < deadline:
         check_alive()
         time.sleep(_TIMEOUT_POLL_SECONDS)
@@ -816,7 +817,7 @@ def _start_direct_inference(
         engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
-        timeout_hours=iris.task_timeout.to_seconds() / 3600 if iris.task_timeout is not None else 24 * 365,
+        timeout_hours=iris.task_timeout.to_seconds() / _SECONDS_PER_HOUR if iris.task_timeout is not None else 24 * 365,
         port_name=None,
     )
     device = iris.worker_resources.device
