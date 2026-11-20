@@ -72,7 +72,7 @@ def runtime_env(profile: dict) -> dict:
     flags.extend(name + "=" + value for name, value in profile["xla_flags"].items() if value is not None)
     env["XLA_FLAGS"] = " ".join(flags)
     # resolve_training_env picks the JAX compilation cache from this process's MARIN_TEMP_PREFIX.
-    # A local cache path makes Iris skip the per-fusion autotune cache, and the GEMMs run untuned.
+    # It must be the shared remote cache, so a warm-up run's compiled step reaches the real run.
     os.environ["MARIN_PREFIX"] = env["MARIN_PREFIX"] = "s3://marin-us-east-02a/marin"
     os.environ["MARIN_TEMP_PREFIX"] = env["MARIN_TEMP_PREFIX"] = "s3://marin-us-east-02a"
     return env
@@ -91,12 +91,13 @@ def worker(config, output, settings):
     _run_grug_local(config)
 
 
-def build(
-    template: Path, arm: str, date: str, length: str = "1h", profile_steps: int = 0, autotune_level: int | None = None
-):
+def build(template: Path, arm: str, date: str, length: str = "1h", profile_steps: int = 0, warm_steps: int = 0):
     label, alpha = ARMS[arm]
     spec = LENGTHS[length]
-    run_id = f"task504-distill-{length}-{arm}-{label}-{date}" + ("-profile" if profile_steps else "")
+    if profile_steps and warm_steps:
+        raise ValueError("choose a profile run or a warm-up run, not both")
+    suffix = "-profile" if profile_steps else "-warm" if warm_steps else ""
+    run_id = f"task504-distill-{length}-{arm}-{label}-{date}{suffix}"
     text = (template / "config.json").read_text()
     template_id = json.loads(text)["trainer"]["trainer"]["tracker"]["id"]
     template_prefix = "tmp/ttl=30d/long-loop-436/e12/" + template_id.removeprefix("e12-")
@@ -112,6 +113,10 @@ def build(
         # A short run that traces a few steady-state steps; start after the first-step restore gate.
         raw["stop_after_steps"] = 5 + profile_steps + 2
         trainer["trainer"]["profiler"].update(enabled=True, start_step=5, num_steps=profile_steps)
+    if warm_steps:
+        # The process that compiles the train step runs about 3x slower than one that loads the
+        # same executable from the persistent cache. A short run puts it there for the real run.
+        raw["stop_after_steps"] = warm_steps
     config = draccus.decode(GrugRunConfig, raw)
     settings = json.loads((template / "data-settings.json").read_text())
     # A scoring time cap drops whole cells, so substitute exactly the rows that were assembled.
@@ -128,9 +133,6 @@ def build(
         teacher_validation_cache=f"{ROWS}/heldout",
     )
     profile = json.loads((template / "runtime-profile.json").read_text())
-    if autotune_level is not None:
-        # A fresh compile at level 0 gets untuned GEMM tiles; the template loads a cached program.
-        profile["xla_flags"]["--xla_gpu_autotune_level"] = str(autotune_level)
     _apply_hero_ep_runtime_defaults(
         inline_watch_enabled=True, processes_per_task=8, moe_implementation="sonic", remat_mode=config.model.remat_mode
     )
@@ -173,12 +175,12 @@ def main():
     parser.add_argument("--scheduling-hours", type=float, default=3.0)
     parser.add_argument("--length", choices=sorted(LENGTHS), default="1h")
     parser.add_argument("--profile-steps", type=int, default=0, help="run a short job that profiles this many steps")
-    parser.add_argument("--autotune-level", type=int, help="override the template's XLA GPU autotune level")
+    parser.add_argument("--warm-steps", type=int, default=0, help="run only this many steps to fill the compile cache")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
     configure_coreweave_s3()
-    kwargs, plan = build(args.template, args.arm, args.date, args.length, args.profile_steps, args.autotune_level)
+    kwargs, plan = build(args.template, args.arm, args.date, args.length, args.profile_steps, args.warm_steps)
     kwargs["scheduling_timeout"] = Duration.from_seconds(args.scheduling_hours * 3600)
     print(json.dumps(plan, indent=2))
     if args.dry_run:
