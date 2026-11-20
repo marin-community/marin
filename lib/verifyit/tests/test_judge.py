@@ -14,6 +14,7 @@ from verifyit.modes import grade_judge
 from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
+    JudgeSampling,
     JudgeSpec,
     parse_spec,
     render_spec,
@@ -199,6 +200,24 @@ def test_label_judge_preserves_long_request_timeout_at_the_http_boundary(fake_ju
     assert result.reward == 1
     assert len(fake_judge.requests) == len(timeouts) == 1
     assert all(599 < timeout <= 600 for timeout in timeouts[0].values())
+
+
+@pytest.mark.parametrize(
+    "sampling,temperatures",
+    [(JudgeSampling.ZERO_TEMPERATURE, [0.0]), (JudgeSampling.PROVIDER_DEFAULT, [None])],
+)
+def test_label_judge_sends_temperature_zero_unless_the_provider_samples(fake_judge, sampling, temperatures):
+    fake_judge.replies = ["PASS"]
+    spec = JudgeSpec(
+        references=("reference",),
+        rubric="labels",
+        exact_gate=False,
+        prompt_template="Reference: {reference}\nCandidate: {candidate}",
+        label_scores={"PASS": 1.0, "FAIL": 0.0},
+        sampling=sampling,
+    )
+    assert grade_judge.grade_judge_candidate(spec, "candidate").reward == 1
+    assert [request.get("temperature") for request in fake_judge.requests] == temperatures
 
 
 def test_paraphrase_falls_through_to_the_model(tmp_path, fake_judge):

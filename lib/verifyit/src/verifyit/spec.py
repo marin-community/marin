@@ -305,6 +305,13 @@ RUBRIC_LABELS = "labels"
 RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
 
 
+class JudgeSampling(StrEnum):
+    """Judge sampling: temperature 0, or the served model's own defaults for judges that loop when greedy."""
+
+    ZERO_TEMPERATURE = "zero_temperature"
+    PROVIDER_DEFAULT = "provider_default"
+
+
 class JudgeCompletionPolicy(StrEnum):
     COMPLETED_TEXT = "completed_text"
     CONTENT = "content"
@@ -346,6 +353,7 @@ class JudgeSpec:
     max_completion_tokens: int = 8192
     incomplete_retry_tokens: int = 0
     reasoning_effort: str = ""
+    sampling: JudgeSampling = field(default=JudgeSampling.ZERO_TEMPERATURE, kw_only=True)
     label_scan: str = "literal"
     label_case: str = "sensitive"
     api: str = "chat_completions"

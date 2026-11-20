@@ -11,7 +11,7 @@ adds one rule that marks hedged answers incorrect. Each solver sees only the pro
 
 from typing import Any
 
-from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
+from verifyit.spec import JudgeCompletionPolicy, JudgeSampling, JudgeSpec
 
 from taskcompendium.convert.answers import answer_task, nonempty_text, source_defect, source_evidence
 from taskcompendium.evaluation.corpus import chat_item
@@ -163,8 +163,10 @@ def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
         exact_gate=False,
         label_scores={f"<points>{points} out of 7</points>": points / 7 for points in PROOF_POINTS},
         label_scan="lines",
-        # GLM-5.3-Flash reasons for up to ~85K tokens and 340 s on IMO-GradingBench proofs; the
-        # transport budget stays inside the evaluator's 600 s grading cap.
+        # GLM-5.3-Flash reasons for up to ~85K tokens and 340 s on IMO-GradingBench proofs, and can
+        # reason without end at temperature 0; the transport budget stays inside the evaluator's
+        # 600 s grading cap.
+        sampling=JudgeSampling.PROVIDER_DEFAULT,
         max_completion_tokens=131072,
         completion_policy=JudgeCompletionPolicy.CONTENT,
         request_timeout=450,

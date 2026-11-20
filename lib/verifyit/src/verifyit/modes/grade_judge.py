@@ -63,6 +63,7 @@ from verifyit.spec import (
     ExactSpec,
     JudgeCompletionPolicy,
     JudgeRuntimeSource,
+    JudgeSampling,
     JudgeSpec,
     Spec,
 )
@@ -396,7 +397,12 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             "finish_reason": completion.finish_reason,
             "transport_attempts": completion.transport_attempts,
             "completion": completion.text,
-            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget, "temperature": 0.0},
+            "judge_request": {
+                "model": model,
+                "messages": messages,
+                "max_completion_tokens": budget,
+                **_temperature(spec),
+            },
         }
         if completion.incomplete:
             if index + 1 < len(budgets):
@@ -431,7 +437,13 @@ def _label_completion(
 ) -> _LabelCompletion:
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
+        request = {
+            "model": model,
+            "messages": messages,
+            **_temperature(spec),
+            "max_completion_tokens": budget,
+            **options,
+        }
         response, attempts = _judge_transport(
             spec,
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
@@ -719,6 +731,10 @@ def _attempt_detail(attempts: tuple[_CompletionAttempt, ...] | list[_CompletionA
     return {"attempt_count": len(attempts), "attempts": [asdict(attempt) for attempt in attempts]}
 
 
+def _temperature(spec: JudgeSpec) -> dict[str, float]:
+    return {"temperature": 0.0} if spec.sampling is JudgeSampling.ZERO_TEMPERATURE else {}
+
+
 def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
     if spec.incomplete_retry_tokens:
         return spec.max_completion_tokens, spec.incomplete_retry_tokens
@@ -731,7 +747,7 @@ def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, b
         client,
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
+        **_temperature(spec),
         timeout=spec.request_timeout,
         max_completion_tokens=budget,
         **options,
