@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import errno
+import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -272,8 +274,8 @@ async def test_machine_startup_expected_failure_is_transient(
     "failure",
     [
         SimulationError("Is a directory: /app"),
-        RuntimeError("Iris command failed: Is a directory"),
-        IsADirectoryError("temporary download directory"),
+        IsADirectoryError(errno.EISDIR, "Is a directory", "/workspace/app"),
+        IsADirectoryError(errno.EISDIR, "Is a directory", "/tmp/download/file"),
     ],
 )
 async def test_directory_read_names_requested_path_without_retry(failure: Exception) -> None:
@@ -343,17 +345,16 @@ def test_contained_timeout_preserves_the_command(script: str, timeout: str, code
     assert (result.returncode, result.stdout) == (code, stdout)
 
 
-@pytest.mark.parametrize(
-    "detail,expected",
-    [
-        ("Not a directory", NotADirectoryError),
-        ("Permission denied", PermissionError),
-        ("No such file or directory", FileNotFoundError),
-    ],
-)
-async def test_write_backend_path_failures_are_normalized(detail: str, expected: type[OSError]) -> None:
+@pytest.mark.parametrize("code", [errno.ENOTDIR, errno.EACCES, errno.ENOENT])
+@pytest.mark.parametrize("simulated", [False, True])
+async def test_write_backend_path_failures_are_normalized(code: int, simulated: bool) -> None:
+    expected = type(OSError(code, os.strerror(code)))
     machine = MemoryMachine()
-    machine.failure = RuntimeError(f"Iris command failed: {detail}")
+    # Iris raises errno-typed errors against its remote path; ShellSim raises "<strerror>: <path>" text.
+    remote = "/remote/workspace/output"
+    machine.failure = (
+        SimulationError(f"{os.strerror(code)}: {remote}") if simulated else OSError(code, os.strerror(code), remote)
+    )
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
     with pytest.raises(expected) as caught:
         await env.write(OUTPUT, b"data")
