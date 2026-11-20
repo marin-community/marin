@@ -12,10 +12,15 @@ vocabulary to a multiple of the tensor-parallel size and preserve tokenizer
 IDs. The default attention path uses Grug reference attention. Set
 `model.attn_backend: splash` to use TPU Splash.
 
-The initial route supports unquantized training, HF weight initialization,
-full-state Levanter checkpoints and tagged held-out evaluation. Quantization,
-adapters, HF export and optional entropy/harness callbacks are rejected by
-the training entrypoint. Native checkpoints include model architecture and
+Native Llama supports unquantized training, HF weight initialization, full-state
+Levanter checkpoints, and tagged held-out evaluation. Set `hf_save_path` to a
+local directory and `hf_save_steps` to export full-model HF snapshots. Export
+requires standard weighted RMSNorm and bias-free projections. Training from
+scratch exports using the data tokenizer and the model configuration. The
+training entry point rejects quantization, adapters, Hub uploads, and optional
+entropy and harness callbacks.
+
+Native checkpoints include model architecture and
 vocabulary metadata; restore validates those fields before constructing the
 explicitly sharded template. Metadata-free weight loading relies on the
 caller's complete vocabulary and architecture configuration.
