@@ -24,6 +24,7 @@ from daytona import (
     AsyncDaytona,
     CreateSnapshotParams,
     DaytonaConflictError,
+    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
     Image,
@@ -42,6 +43,14 @@ SNAPSHOT_PAGE_SIZE = 100
 # Gateway and availability statuses a Daytona API request may return transiently.
 TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
+
+
+def is_transient_daytona_error(error: DaytonaError) -> bool:
+    """Whether a request failed in transit: a lost connection, or a gateway or availability status.
+
+    The provider may have run the request, so repeat only a request that is safe to run twice.
+    """
+    return isinstance(error, DaytonaConnectionError) or error.status_code in TRANSIENT_DAYTONA_STATUS
 
 
 @dataclass(frozen=True)
@@ -174,7 +183,7 @@ async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
             return await client.snapshot.get(name)
         except DaytonaError as error:
             attempts += 1
-            if error.status_code not in TRANSIENT_DAYTONA_STATUS or attempts == 3:
+            if not is_transient_daytona_error(error) or attempts == 3:
                 raise
             await asyncio.sleep(backoff.next_interval())
 

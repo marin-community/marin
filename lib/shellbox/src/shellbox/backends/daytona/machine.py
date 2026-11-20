@@ -26,18 +26,18 @@ from daytona import (
     CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
-    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
+    ExecuteResponse,
 )
 from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
-    TRANSIENT_DAYTONA_STATUS,
     daytona_image,
     ensure_snapshot,
+    is_transient_daytona_error,
     snapshot_request_for_spec,
 )
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
@@ -65,7 +65,9 @@ CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
 EXIT_PREFIX = "SHELLBOX_EXIT="
-CONNECTION_RETRIES = 3
+GONE_MARKER = "SHELLBOX_GONE"
+CLAIMED_MARKER = "SHELLBOX_CLAIMED"
+TRANSIENT_RETRIES = 3
 CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 # The exit trap records the command's status, so a request that lost its connection can still read it.
@@ -93,15 +95,17 @@ def _control_command(script: str) -> str:
     )
 
 
-async def _reconnecting[T](request: Callable[[], Awaitable[T]]) -> T:
-    """Repeat a provider request that lost its connection. The request must be safe to run twice."""
+async def _retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
+    """Repeat a provider request that failed in transit. The request must be safe to run twice."""
     backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
-    for _ in range(CONNECTION_RETRIES):
+    for _ in range(TRANSIENT_RETRIES):
         try:
             return await request()
-        except DaytonaConnectionError:
+        except DaytonaError as error:
+            if not is_transient_daytona_error(error):
+                raise
             delay = backoff.next_interval()
-            logger.warning("Retrying a Daytona request that lost its connection: delay=%.3f", delay)
+            logger.warning("Retrying a Daytona request after %s: delay=%.3f", type(error).__name__, delay)
             await sleep(delay)
     return await request()
 
@@ -146,9 +150,13 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
             except DaytonaNotFoundError:
                 return
             except DaytonaError as error:
-                if error.status_code not in TRANSIENT_DAYTONA_STATUS:
+                if not is_transient_daytona_error(error):
                     raise
-                logger.warning("Retrying Daytona sandbox deletion after HTTP %s: %s", error.status_code, name)
+                logger.warning(
+                    "Retrying Daytona sandbox deletion after %s: %s",
+                    f"HTTP {error.status_code}" if error.status_code else type(error).__name__,
+                    name,
+                )
             await sleep(backoff.next_interval())
 
 
@@ -217,8 +225,8 @@ class DaytonaMachine:
         self._closing: asyncio.Task[None] | None = None
 
     async def _control(self, script: str):
-        """Run a root command that is safe to run twice, repeating a request that lost its connection."""
-        return await _reconnecting(lambda: self.sandbox.process.exec(_control_command(script), cwd=CONTROL_CWD))
+        """Run a root command that is safe to run twice, repeating a request that failed in transit."""
+        return await _retry_transient(lambda: self.sandbox.process.exec(_control_command(script), cwd=CONTROL_CWD))
 
     async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
         if user in (None, "root", "0"):
@@ -319,20 +327,35 @@ class DaytonaMachine:
         if not size or not limit:
             return b"", truncated
         source = f"{path}{CLIPPED_OUTPUT_SUFFIX}" if truncated else path
-        data = await _reconnecting(lambda: self.sandbox.fs.download_file(source))
+        data = await _retry_transient(lambda: self.sandbox.fs.download_file(source))
         assert isinstance(data, bytes)
         return data, truncated
 
-    async def _exit_code_after_lost_connection(self, request: Callable[[], Awaitable[object]], completed: str) -> int:
-        """Return the exit code of a command whose request lost its connection, repeating ``request``."""
-        await _reconnecting(request)
+    async def _response_after_lost_request(
+        self, request: Callable[[], Awaitable[ExecuteResponse]], pidfile: str, completed: str
+    ) -> tuple[int, str]:
+        """Repeat a command request that failed in transit and return the command's exit code and diagnostic."""
+        response = await _retry_transient(request)
+        diagnostic = response.result or ""
+        if CLAIMED_MARKER not in diagnostic.splitlines():
+            # No earlier request started the command, so this response is the command's own.
+            return response.exit_code, diagnostic
         backoff = ExponentialBackoff(initial=0.5, maximum=5, factor=2, jitter=0)
-        path = shlex.quote(completed)
+        pidfile, completed = shlex.quote(pidfile), shlex.quote(completed)
+        # The exit trap writes the exit code before it removes the pidfile. A pidfile that names a dead
+        # process next to an empty exit code means the command shell was killed, so no exit code will come.
+        probe = (
+            f"if [ -s {completed} ]; then printf '{EXIT_PREFIX}%s\\n' \"$(cat {completed})\"; "
+            f'elif {{ read -r pid < {pidfile}; }} 2>/dev/null && ! kill -0 "$pid" 2>/dev/null '
+            f"&& [ ! -s {completed} ]; then echo {GONE_MARKER}; fi"
+        )
         while True:
-            status = await self._control(f"if [ -s {path} ]; then printf '{EXIT_PREFIX}%s\\n' \"$(cat {path})\"; fi")
-            match = re.search(rf"(?m)^{EXIT_PREFIX}([0-9]+)$", status.result or "")
+            status = (await self._control(probe)).result or ""
+            match = re.search(rf"(?m)^{EXIT_PREFIX}([0-9]+)$", status)
             if match is not None:
-                return int(match.group(1))
+                return int(match.group(1)), ""
+            if re.search(rf"(?m)^{GONE_MARKER}$", status):
+                raise RuntimeError("Daytona command ended without an exit code after its request was lost")
             await sleep(backoff.next_interval())
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
@@ -416,7 +439,7 @@ class DaytonaMachine:
                 )
                 # Only the first request to claim the directory runs the command.
                 script = (
-                    f"mkdir {shlex.quote(claim_path)} 2>/dev/null || exit 0; "
+                    f"mkdir {shlex.quote(claim_path)} 2>/dev/null || {{ echo {CLAIMED_MARKER}; exit 0; }}; "
                     f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
                     f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
                 )
@@ -426,10 +449,10 @@ class DaytonaMachine:
                     raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
                 if command.stdin:
                     stdin = command.stdin
-                    await _reconnecting(lambda: self.sandbox.fs.upload_file_stream(stdin, stdin_path))
+                    await _retry_transient(lambda: self.sandbox.fs.upload_file_stream(stdin, stdin_path))
                 # Nested shell quoting can exceed execve's single-argument limit
                 # even when every original command argument fits.
-                await _reconnecting(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
+                await _retry_transient(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
                 started = True
 
                 def request():
@@ -443,9 +466,11 @@ class DaytonaMachine:
                 try:
                     response = await request()
                     exit_code, diagnostic = response.exit_code, response.result or ""
-                except DaytonaConnectionError:
-                    logger.warning("Reattaching to a Daytona command whose request lost its connection")
-                    exit_code = await self._exit_code_after_lost_connection(request, completed_path)
+                except DaytonaError as error:
+                    if not is_transient_daytona_error(error):
+                        raise
+                    logger.warning("Reattaching to a Daytona command after %s", type(error).__name__)
+                    exit_code, diagnostic = await self._response_after_lost_request(request, pidfile, completed_path)
             async with asyncio.timeout(self.output_collection_timeout):
                 try:
                     return await self._command_result(exit_code, stdout_path, stderr_path, command.output_limit_bytes)
@@ -507,7 +532,7 @@ class DaytonaMachine:
         if self._closed:
             raise RuntimeError("Machine is closed")
         # Each transfer rewrites its target, so a transfer that lost its connection starts over.
-        await _reconnecting(lambda: self._upload(source, target))
+        await _retry_transient(lambda: self._upload(source, target))
 
     async def _upload(self, source: Path, target: str) -> None:
         if source.is_dir():
@@ -541,7 +566,7 @@ class DaytonaMachine:
     async def download(self, source: str, target: Path) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
-        await _reconnecting(lambda: self._download(source, target))
+        await _retry_transient(lambda: self._download(source, target))
 
     async def _download(self, source: str, target: Path) -> None:
         probe = await self.sandbox.process.exec(_control_command(f"test -d {shlex.quote(source)}"), cwd=CONTROL_CWD)

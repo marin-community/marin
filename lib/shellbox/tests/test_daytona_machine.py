@@ -749,14 +749,19 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
     asyncio.run(scenario())
 
 
-class LostConnection(LocalProcess):
-    """Drop the connection of each request whose script contains ``marker``, at most ``losses`` times."""
+CONNECTION_RESET = DaytonaConnectionError("Failed to execute command: [Errno 104] Connection reset by peer")
+BAD_GATEWAY = DaytonaError("Failed to execute command: 502 Bad Gateway", status_code=502)
 
-    def __init__(self, marker: str, *, losses: int, runs_first: bool):
+
+class LostConnection(LocalProcess):
+    """Fail each request whose script contains ``marker`` in transit, at most ``losses`` times."""
+
+    def __init__(self, marker: str, *, losses: int, runs_first: bool, error: DaytonaError = CONNECTION_RESET):
         super().__init__()
         self.marker = marker
         self.losses = losses
         self.runs_first = runs_first
+        self.error = error
 
     async def exec(self, command, **kwargs):
         if self.marker not in command_script(command) or not self.losses:
@@ -764,7 +769,7 @@ class LostConnection(LocalProcess):
         self.losses -= 1
         if self.runs_first:
             await super().exec(command, **kwargs)
-        raise DaytonaConnectionError("Failed to execute command: [Errno 104] Connection reset by peer")
+        raise self.error
 
 
 class LostDownload(LocalFiles):
@@ -785,12 +790,13 @@ def no_retry_wait(monkeypatch):
     monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
 
 
+@pytest.mark.parametrize("error", [CONNECTION_RESET, BAD_GATEWAY], ids=["reset", "502"])
 @pytest.mark.parametrize("command_ran", [False, True])
 @pytest.mark.requires_host_setsid
-def test_daytona_command_runs_once_when_its_request_loses_the_connection(tmp_path, no_retry_wait, command_ran):
+def test_daytona_command_runs_once_when_its_request_fails_in_transit(tmp_path, no_retry_wait, command_ran, error):
     async def scenario():
         client = LocalDaytona()
-        client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=command_ran)
+        client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=command_ran, error=error)
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
@@ -818,6 +824,48 @@ def test_daytona_command_fails_when_its_request_keeps_losing_the_connection(tmp_
         finally:
             await machine.close()
         assert not (tmp_path / "runs").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_repeated_command_request_keeps_its_provider_failure(tmp_path, no_retry_wait):
+    class FailedStart(LostConnection):
+        async def exec(self, command, **kwargs):
+            if self.marker in command_script(command) and not self.losses:
+                return SimpleNamespace(exit_code=-1, result="fork/exec /usr/bin/zsh: no such file or directory")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = FailedStart("candidate-run", losses=1, runs_first=False)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(RuntimeError, match="Failed to measure command output") as caught:
+                await machine.run(Command(("sh", "-c", "echo candidate-run >> runs")))
+        finally:
+            await machine.close()
+        assert any("fork/exec /usr/bin/zsh" in note for note in caught.value.__notes__)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_command_fails_when_its_shell_dies_after_a_lost_connection(tmp_path, no_retry_wait):
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=True)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            # The command kills the shell that holds the exit trap, so no exit code is recorded.
+            with pytest.raises(RuntimeError, match="without an exit code"):
+                await machine.run(Command(("sh", "-c", "echo candidate-run >> runs; kill -9 $PPID")))
+        finally:
+            await machine.close()
 
     asyncio.run(scenario())
 
