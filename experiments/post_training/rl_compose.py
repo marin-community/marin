@@ -19,6 +19,7 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
+from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name, validate_path_segment
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -209,6 +210,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     if preset.gated:
         owned_keys |= _GATED_KEYS
     owners = {
+        "Harbor evaluation requires generator.enable_http_endpoint": (
+            preset.harbor is not None and generator.get("enable_http_endpoint") is False
+        ),
         "use the preset's declared owned keys": any(has(path) for path in owned_keys),
         "network transport is fixed by the preset recipe": any(
             key.startswith("NCCL_") for key in values.get("extra_env", {})
@@ -595,9 +599,10 @@ def run_step(
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
-    if preset.harbor is not None or get_path(config, "terminal_bench.installed_agent") is not MISSING:
-        # The submitter selects the Daytona target for the run.
-        required_env += ("DAYTONA_TARGET",)
+    if preset.harbor is not None:
+        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
+    elif get_path(config, "terminal_bench.installed_agent") is not MISSING:
+        required_env += (DAYTONA_TARGET_ENV,)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,

@@ -345,12 +345,10 @@ class Trial(ABC):
                                 cleanup_failure = cleanup_error
                                 continue
                             self._environment_cleanup_failed = True
-                            verifier = self.result.verifier_result
                             preserve_reward = (
                                 isinstance(cleanup_error, Exception)
                                 and not isinstance(cleanup_error, ArtifactPersistenceError)
-                                and verifier is not None
-                                and bool(verifier.rewards)
+                                and self.result.has_verifier_rewards
                             )
                             if primary is None and cleanup_failure is None and not preserve_reward:
                                 cleanup_failure = cleanup_error
@@ -445,12 +443,10 @@ class Trial(ABC):
             or self._pending_cleanup_tasks
         ):
             self.result.completion = None
-            verifier = self.result.verifier_result
             if (
                 self._artifact_persistence_failure is not None
                 or not self._environment_cleanup_failed
-                or verifier is None
-                or not verifier.rewards
+                or not self.result.has_verifier_rewards
             ):
                 self.result.verifier_result = None
                 prior = self.result.exception_info

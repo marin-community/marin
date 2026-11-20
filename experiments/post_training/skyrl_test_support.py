@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -49,7 +50,13 @@ def native_json(*uv_options: str):
     def execute(script, paths):
         source = str(find_project_root(Path(__file__)) / "vendor/skyrl")
         program = gate._native_program(source, ("cloud.iris.launch_config", "skyrl_train"), script)
-        return gate._native_json(program, *paths, timeout=170, uv_options=uv_options)
+        try:
+            return gate._native_json(*uv_options, "python", "-c", program, *paths, timeout=170)
+        except gate.InvalidComparison as error:
+            cause = error.__cause__
+            if isinstance(cause, subprocess.CalledProcessError) and cause.stderr:
+                raise AssertionError(cause.stderr.strip()) from error
+            raise
 
     return execute
 

@@ -75,7 +75,7 @@ def start_telemetry(
     job_uid: UUID,
     job_name: str,
 ) -> TelemetryRuntime | None:
-    """Acquire a job's lease on a compatible Harbor exporter."""
+    """Acquire a compatible exporter lease, or return None if unavailable."""
     global _EXPORTER
     if config is None:
         return None

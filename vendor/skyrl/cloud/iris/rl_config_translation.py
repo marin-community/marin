@@ -124,10 +124,9 @@ def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> D
             continue
         for cohort in callback["cohorts"]:
             for agent in cohort["job"].get("agents", ()):
-                model_info = agent.get("kwargs", {}).get("model_info", {})
-                if "max_output_tokens" not in model_info:
-                    continue
-                if model_info["max_output_tokens"] >= serving_window_tokens:
+                model_info = agent.setdefault("kwargs", {}).setdefault("model_info", {})
+                max_output_tokens = model_info.get("max_output_tokens")
+                if max_output_tokens is not None and max_output_tokens >= serving_window_tokens:
                     raise ValueError("Harbor output tokens must leave room for input in the serving window")
                 # Harbor counts both prompt and reply tokens in max_input_tokens.
                 model_info["max_input_tokens"] = serving_window_tokens

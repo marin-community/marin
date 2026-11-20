@@ -16,6 +16,7 @@ from typing import Annotated, ClassVar, Literal
 
 import yaml
 from finestore.rl.rl_progress import Invariant
+from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -35,6 +36,7 @@ from skyrlrecipe.declared import (
     EvaluationCallback,
     EvaluationProfile,
     HarborEvaluationCallback,
+    HarborEvaluationCohort,
     HFModelSaveCallback,
 )
 from skyrlrecipe.locality import RoleTopologyMode
@@ -61,14 +63,14 @@ def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
             }
             for task_path in cohort["paths"]
         ]
-        cohorts.append({"name": cohort["name"], "job": job, "reward_key": "reward"})
+        cohorts.append(HarborEvaluationCohort(name=cohort["name"], job=job, reward_key="reward"))
     return HarborEvaluationCallback(
         type="harbor_evaluation",
         cohorts=tuple(cohorts),
         timeout=config["timeout"],
         minimum_coverage=config["minimum_coverage"],
         minimum_native_coverage=MINIMUM_TASK_COVERAGE,
-        daytona_api_key_env="DAYTONA_EVAL_API_KEY",
+        daytona_api_key_env=DAYTONA_EVAL_API_KEY_ENV,
     )
 
 
@@ -195,7 +197,7 @@ class Training:
         if preset.harbor is not None:
             callbacks.append(preset.harbor)
             for cohort in preset.harbor.cohorts:
-                count = len(cohort["job"]["tasks"])
+                count = len(cohort.job["tasks"])
                 expected_tasks += count
                 minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
         if preset.checkpoints == "best":
@@ -415,6 +417,12 @@ class Preset:
             if every and every % cadence:
                 raise ValueError('scheduled evaluations for checkpoints="best" must fall on checkpoint steps')
         validate_agentic_recipe(self.recipe.config)
+        if self.harbor is not None:
+            if not isinstance(self.recipe.layout.workload, Training) or not self.evaluations:
+                raise ValueError("Harbor evaluation requires a training preset with an evaluation")
+            generator = self.recipe.config.generator
+            if generator is not None and generator.to_skyrl().get("enable_http_endpoint") is False:
+                raise ValueError("Harbor evaluation requires generator.enable_http_endpoint")
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")

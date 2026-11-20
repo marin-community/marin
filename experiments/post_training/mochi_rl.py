@@ -272,7 +272,7 @@ MOCHI = ModelPresets(
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
-        replace(agentic(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS), harbor=None),
+        agentic(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
         _TRAIN_LONG_AGENTIC,
         replace(
             agentic(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),

@@ -297,23 +297,30 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
 
 def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
-    preset = replace(snowball_model.SNOWBALL.by_name["train-long-harbor"], checkpoints="best", export="best")
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["train-long-harbor"]
+    with pytest.raises(click.BadParameter, match=r"Harbor evaluation requires generator\.enable_http_endpoint"):
+        snowball.build_experiment(preset, table=table, settings=("generator.enable_http_endpoint=false",))
+
+    wider_window = ("context_budget.serving_window_tokens=28672",)
     paths = []
-    for index, settings in enumerate(((), ("context_budget.serving_window_tokens=28672",))):
-        step = snowball.build_experiment(preset, table=snowball_model.SNOWBALL, settings=settings).runs[0]
+    for index, (settings, output_cap) in enumerate((((), None), (wider_window, 4096), (wider_window, 28672))):
+        step = snowball.build_experiment(preset, table=table, settings=settings).runs[0]
         path = tmp_path / f"harbor-{index}.yaml"
         document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
-        if index:
+        if output_cap is not None:
             callback = next(
                 row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "harbor_evaluation"
             )
             for cohort in callback["cohorts"]:
-                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = 4096
+                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = output_cap
+            if index == 1:
+                del callback["cohorts"][-1]["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"]
         path.write_text(yaml.safe_dump(document))
         paths.append(str(path))
     selected = native_json("--isolated", "--group", "harbor-test")(
         """
-import asyncio, json, sys
+import asyncio, json, os, sys
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
@@ -321,7 +328,16 @@ from harbor.models.job.config import JobConfig
 from omegaconf import OmegaConf
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
 from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
-config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:]))
+from skyrl_train.evaluation_pool import EvaluationPool
+
+config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:3]))
+try:
+    load_launch_config(Path(sys.argv[3]))
+except ValueError as error:
+    assert "Harbor output tokens must leave room for input" in str(error), str(error)
+else:
+    raise AssertionError("Harbor accepted a reply cap equal to the serving window")
+
 windows = []
 for launch in (config, changed):
     window = launch.skyrl.generator.engine_init_kwargs.max_model_len
@@ -331,7 +347,7 @@ for launch in (config, changed):
         job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
         model_info = job.agents[0].kwargs["model_info"]
         assert model_info["max_input_tokens"] == window, model_info
-        assert model_info["max_output_tokens"] < window
+        assert model_info.get("max_output_tokens", 0) < window, (model_info, window)
         agent = job.agents[0]
         verifier_budget = job.verifier.override_timeout_sec or job.verifier.max_timeout_sec
         assert verifier_budget is not None
@@ -340,6 +356,16 @@ for launch in (config, changed):
         attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
         assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
 assert windows[0] != windows[1]
+
+changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
+changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
+try:
+    create_callbacks_from_config(changed.skyrl)
+except ValueError as error:
+    assert "unrecognized-build" in str(error), str(error)
+else:
+    raise AssertionError("Harbor accepted an unknown Daytona image build")
+
 selected = []
 for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
     directory = Path(sys.argv[1]).parent / f"coverage-{index}"
@@ -354,29 +380,6 @@ for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)
     asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
                                        trainer=SimpleNamespace(cfg=config.skyrl)))
     selected.append((directory / "best_checkpoint.json").exists())
-
-from contextlib import nullcontext
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
-from iris.client.client import IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
-from iris.cluster.types import JobName
-from cloud.iris.skyrl_entrypoint import run_config
-from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
-from skyrl_train.evaluation_pool import EvaluationPool
-
-native_configs = []
-module_name = registered_rl_entrypoint_module(str(config.runtime.entrypoint))
-original_module = sys.modules.get(module_name)
-sys.modules[module_name] = SimpleNamespace(run=native_configs.append)
-try:
-    run_config(Path(sys.argv[1]))
-finally:
-    if original_module is None:
-        del sys.modules[module_name]
-    else:
-        sys.modules[module_name] = original_module
 
 worker = r'''
 import json, socket, sys, traceback
@@ -406,27 +409,16 @@ with connection.makefile("rwb") as stream:
         stream.flush()
 '''
 
-class EndpointClient:
-    def __init__(self, missing):
-        self.missing = missing
-
-    def resolve_endpoint(self, name):
-        assert name == LOG_SERVER_ENDPOINT_NAME
-        if self.missing:
-            raise ConnectError(Code.NOT_FOUND, "endpoint unavailable")
-        return "http://127.0.0.1:4318/iris-capability/"
-
 async def check_runtime_handoff():
     callback = next(item for item in create_callbacks_from_config(config.skyrl)
                     if isinstance(item, HarborEvaluationCallback))
     trainer = SimpleNamespace(
-        cfg=native_configs[0],
+        cfg=config.skyrl,
         inference_engine_client=SimpleNamespace(
             enable_http_endpoint=True, model_name="policy", http_endpoint_host="127.0.0.1", http_endpoint_port=8000,
         ),
     )
     original_exec = asyncio.create_subprocess_exec
-    previous = get_job_info()
     expected = None
 
     async def start_worker(*args, **kwargs):
@@ -434,29 +426,29 @@ async def check_runtime_handoff():
 
     asyncio.create_subprocess_exec = start_worker
     try:
-        for attempt in (1, 2, None, "missing"):
-            trainer.cfg = native_configs[0] if attempt is not None else config.skyrl
-            info = JobInfo(task_id=JobName.from_wire(f"/test/native-{attempt}/0"), attempt_uid=f"uid-{attempt}")
-            set_job_info(info if attempt is not None else None)
+        endpoint = "http://127.0.0.1:4318/iris-capability/v1/telemetry"
+        os.environ.update(
+            SKYRL_RUN_ID=str(config.run.id),
+            SKYRL_EXECUTION_UID="iris:uid-native",
+            IRIS_TASK_ID="/test/native/0:1",
+        )
+        for enabled in (True, False):
+            if enabled:
+                os.environ["SKYRL_TELEMETRY_ENDPOINT"] = endpoint
+            else:
+                os.environ.pop("SKYRL_TELEMETRY_ENDPOINT", None)
             expected = {
-                "endpoint": "http://127.0.0.1:4318/iris-capability" + TELEMETRY_ENDPOINT_PATH,
+                "endpoint": endpoint,
                 "root_run_uid": str(config.run.id),
-                "execution_uid": f"iris:uid-{attempt}",
-                "serving_job_id": f"/test/native-{attempt}",
-            } if attempt not in (None, "missing") else None
-            context = IrisContext(job_id=info.job_id, task_attempt=info.task_attempt,
-                                  client=EndpointClient(missing=attempt == "missing"))
-            scope = iris_ctx_scope(context) if attempt is not None else nullcontext()
-            with scope:
-                async with EvaluationPool(3) as pool:
-                    metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
-                assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
-                           for cohort in callback.cohorts)
+                "execution_uid": "iris:uid-native",
+                "serving_job_id": "/test/native",
+            } if enabled else None
+            async with EvaluationPool(3) as pool:
+                metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
+            assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
+                       for cohort in callback.cohorts), metrics
     finally:
         asyncio.create_subprocess_exec = original_exec
-        set_job_info(previous)
-
-import os
 os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
 asyncio.run(check_runtime_handoff())
 print(json.dumps(selected))
@@ -571,7 +563,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.2": "b4ff4b10",
             "2026.11.20.3": "52b4bece",
             "2026.11.20.4": "90aefa3b",
-            "2026.11.20.5": "1ae544db",
+            "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "5707ee45",
         },
         "eval-short": {
