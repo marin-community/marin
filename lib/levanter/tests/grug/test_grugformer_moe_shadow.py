@@ -188,39 +188,41 @@ def test_ragged_shadow_experts_keep_the_modelled_assignments_with_their_function
             argnums=(0, 1, 2, 3),
         )(x, weights, w13, w2)
 
-        tokens_spec = NamedSharding(expert_mesh, P(("data", "expert"), None))
-        valid_spec = NamedSharding(expert_mesh, P(("data", "expert")))
-        experts_spec = NamedSharding(expert_mesh, P("expert", None, None))
-        args = [jax.device_put(a, tokens_spec) for a in (x.astype(dtype), selected, weights.astype(dtype))]
-        args += [jax.device_put(a.astype(dtype), experts_spec) for a in (w13, w2)]
-        token_valid = jax.device_put(jnp.asarray(valid_np), valid_spec)
-        cotangent_sharded = jax.device_put(cotangent.astype(dtype), tokens_spec)
+    tokens_spec = NamedSharding(expert_mesh, P(("data", "expert"), None))
+    valid_spec = NamedSharding(expert_mesh, P(("data", "expert")))
+    experts_spec = NamedSharding(expert_mesh, P("expert", None, None))
+    args = [jax.device_put(a, tokens_spec) for a in (x.astype(dtype), selected, weights.astype(dtype))]
+    args += [jax.device_put(a.astype(dtype), experts_spec) for a in (w13, w2)]
+    token_valid = jax.device_put(jnp.asarray(valid_np), valid_spec)
+    cotangent_sharded = jax.device_put(cotangent.astype(dtype), tokens_spec)
 
-        def backend(x, selected, weights, w13, w2):
-            return moe_mlp(
-                x,
-                selected,
-                weights,
-                w13,
-                w2,
-                token_valid=token_valid,
-                implementation="ragged_all_to_all",
-                mesh=expert_mesh,
-                capacity_factor=capacity_factor,
-                report_capacity_overflow=True,
-                shadow_experts=shadow,
+    def backend(x, selected, weights, w13, w2):
+        return moe_mlp(
+            x,
+            selected,
+            weights,
+            w13,
+            w2,
+            token_valid=token_valid,
+            implementation="ragged_all_to_all",
+            mesh=expert_mesh,
+            capacity_factor=capacity_factor,
+            report_capacity_overflow=True,
+            shadow_experts=shadow,
+        )
+
+    # TPU megablox rejects "highest" on bf16 operands.
+    backend_precision = "highest" if dtype == jnp.float32 else "default"
+    with jax.set_mesh(expert_mesh), jax.default_matmul_precision(backend_precision):
+        actual, counts = jax.jit(backend)(*args)
+        actual_grads = jax.jit(
+            jax.grad(
+                lambda x, w, w13, w2: jnp.sum(
+                    (backend(x, args[1], w, w13, w2)[0] * cotangent_sharded).astype(jnp.float32)
+                ),
+                argnums=(0, 1, 2, 3),
             )
-
-        with jax.set_mesh(expert_mesh):
-            actual, counts = jax.jit(backend)(*args)
-            actual_grads = jax.jit(
-                jax.grad(
-                    lambda x, w, w13, w2: jnp.sum(
-                        (backend(x, args[1], w, w13, w2)[0] * cotangent_sharded).astype(jnp.float32)
-                    ),
-                    argnums=(0, 1, 2, 3),
-                )
-            )(args[0], args[2], args[3], args[4])
+        )(args[0], args[2], args[3], args[4])
 
     assert int(counts.dropped) == expected_drops
     assert _relative_error(actual, expected) < tolerance
