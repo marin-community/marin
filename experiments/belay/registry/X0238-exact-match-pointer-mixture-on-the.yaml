@@ -125,8 +125,8 @@ trials:
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
-  rationale: −0.0123 equal data, −0.0096 equal time; ladder shrinks (d512 −0.007, d768 −0.0044), d1024 and d1280 killed; MFU
-    not run → 7
+  rationale: −0.0123 equal data, −0.0096 equal time; ladder d512 −0.007, d768 −0.0044, d1024/d1280 still running (overdue);
+    MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-20'
   inputs_digest: c60da3b6cb9e
