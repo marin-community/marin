@@ -55,6 +55,8 @@ EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 # A task without tools ends at its first reply, so the limit only bounds tool-using tasks.
 MAX_TURNS = 16
+TASK_MACHINE_STARTUP_TIMEOUT = 600
+TASK_MACHINE_CLEANUP_TIMEOUT = 60
 # Agentic tasks run their shell on a machine that matches the task's command semantics.
 TASK_MACHINES = {
     # ShellSim has no guest network.
@@ -66,8 +68,8 @@ TASK_MACHINES = {
         storage_mb=None,
         gpus=0,
         user=None,
-        startup_timeout=600,
-        cleanup_timeout=60,
+        startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
+        cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
     ),
     CommandSemantics.LINUX_PROCESS: MachineRuntimeSpec(
         backend=Backend.DAYTONA,
@@ -77,8 +79,8 @@ TASK_MACHINES = {
         storage_mb=10240,
         gpus=0,
         user=None,
-        startup_timeout=600,
-        cleanup_timeout=60,
+        startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
+        cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
     ),
 }
 
