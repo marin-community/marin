@@ -72,15 +72,12 @@ def test_adopted_round_lowers_to_eval_with_pinned_model_and_standard_ep_placemen
     assert config["generator"]["engine_init_kwargs"]["compilation_config"]["cudagraph_mode"] == "PIECEWISE"
     assert run.evaluation.model.uri == adopted_round.adopted_model.uri
     assert run.evaluation.model.identity == "sha256:" + adopted_round.adopted_model.export_manifest_sha256
-    assert run.model_manifest_filename == "export-manifest.json"
+    assert run.model_manifest_filename == profile.model_manifest_filename == "export-manifest.json"
     frozen = json.loads(Path(policy_fixture_reference().uri).read_text())["evaluation"]
     for field in ("sampling_params", "eval_sampling_params"):
         assert config["generator"][field] == frozen["config"]["generator"][field]
     assert config["context_budget"] == frozen["config"]["context_budget"]
-    assert config["terminal_bench"]["installed_agent"] == {
-        **frozen["config"]["terminal_bench"]["installed_agent"],
-        "judge_model": frozen["judge"]["model"],
-    }
+    assert config["terminal_bench"]["installed_agent"] == frozen["config"]["terminal_bench"]["installed_agent"]
     protocol = json.loads(Path(policy_fixture_reference().uri).read_text())
     data = next(step for step in stages if step.name == "evaluation/micro210/prepared")
     assert data.adopt_config["sha256"] == protocol["prepared_rollouts_sha256"]

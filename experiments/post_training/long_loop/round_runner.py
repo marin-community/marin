@@ -442,7 +442,6 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
         name=f"{spec.name}/eval",
         version=spec.version,
         model_binding=binding,
-        model_manifest_filename="export-manifest.json",
         serving_profile=Micro210ServingProfile(
             gpu_variant=serving.gpu_variant,
             role_plan=roles,
@@ -452,6 +451,7 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             cuda_allocator_config=serving.cuda_allocator_config,
             nccl_env=serving.nccl_env,
             nccl_buffer_size_bytes=serving.nccl_buffer_size_bytes,
+            model_manifest_filename="export-manifest.json",
         ),
     )
 

@@ -7,27 +7,41 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
+from iris.client.client import IrisClient
+from marin.execution.lazy import StepContext
 
+from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.evaluation.micro210 import micro210_step
+from experiments.evaluation.micro210_policy import Micro210Model
 from experiments.post_training.long_loop import launch_validation
 from experiments.post_training.long_loop.eval_runtime import judge
 from experiments.post_training.long_loop.serving import serving_release
+from tests.rl.micro210_fixture import policy_fixture_reference
 
 
 @pytest.mark.timeout(120)
-def test_invalid_launch_fails_before_judge_allocation(monkeypatch):
+def test_invalid_launch_fails_before_judge_allocation(tmp_path, monkeypatch):
     allocated = []
 
     def allocate(*args, **kwargs):
         allocated.append(True)
         raise AssertionError("Invalid config reached judge allocation")
 
-    monkeypatch.setattr(judge, "resolve_secret_spec", allocate)
-    config = SimpleNamespace(skyrl=SimpleNamespace(launch_config_yaml="unexpected_root_field: true\n"))
+    monkeypatch.setattr(judge, "run_skyrl", allocate)
+    credential = tmp_path / "judge-key"
+    credential.write_text("configured-key")
+    config = SimpleNamespace(
+        skyrl=SimpleNamespace(launch_config_yaml="unexpected_root_field: true\n"),
+        judge=replace(MICRO210_JUDGE, credential=f"file:{credential}"),
+    )
     with pytest.raises(ValueError, match="Strict SkyRL composition failed"):
         judge.run_judged(config)
     assert not allocated
@@ -124,3 +138,40 @@ def test_selected_context_subprocess_is_independent_of_marin_installation(tmp_pa
     assert evidence["vllm_commit"] == release["source"]["fork_commit"]
     assert evidence["vllm_version"] == expected_version
     assert evidence["accepted"] and evidence["max_model_len"] == 65536
+
+
+def test_regional_preflight_rejects_unreadable_prepared_inputs(tmp_path):
+    policy = tmp_path / "policy.json"
+    policy.write_text("{}")
+    document = yaml.safe_dump(
+        {"inputs": {"validation_data": [{"uri": str(tmp_path / "unreadable"), "relative_path": "rollouts.parquet"}]}}
+    )
+    with pytest.raises(FileNotFoundError):
+        launch_validation.regional_preflight(document, (str(policy),))
+
+
+@pytest.mark.timeout(120)
+def test_judged_evaluation_forwards_configured_key_without_ambient_credentials(tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", policy_fixture_reference())
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    monkeypatch.delenv("JUDGE_API_KEY", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "empty-secret-bundle"))
+    credential = tmp_path / "judge-key"
+    credential.write_text("configured-judge-key")
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/judged-eval",
+        version="2026.11.20",
+    )
+    context = StepContext.for_run(
+        str(tmp_path / "output"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+    )
+    config = step.build_config(replace(context, is_fingerprint=True))
+    client = MagicMock(spec=IrisClient)
+    client.submit.side_effect = RuntimeError("CPU scheduler unavailable")
+    monkeypatch.setattr(launch_validation, "open_iris_client", lambda **kwargs: nullcontext(client))
+    with pytest.raises(RuntimeError, match="CPU scheduler unavailable"):
+        judge.run_judged(judge.JudgedEvaluation(config.skyrl, replace(MICRO210_JUDGE, credential=f"file:{credential}")))
+    environment = client.submit.call_args.kwargs["environment"]
+    assert environment.secrets["JUDGE_API_KEY"] == "configured-judge-key"
+    assert "JUDGE_API_KEY" not in environment.env_vars

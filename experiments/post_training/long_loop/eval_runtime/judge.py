@@ -36,7 +36,8 @@ def run_with_existing_judge(config: SkyRLRunConfig, *, openai_api_key: str, judg
 
 
 def run_judged(config: JudgedEvaluation) -> SkyRLRun:
-    validation = validate_before_allocation(config.skyrl.launch_config_yaml)
+    api_key = resolve_secret_spec((config.judge.credential,)).value
+    validation = validate_before_allocation(config.skyrl.launch_config_yaml, secrets={"JUDGE_API_KEY": api_key})
     context_started = time.monotonic()
     validation["selected_context"] = validate_selected_context(config.skyrl.launch_config_yaml)
     validation["selected_context_seconds"] = time.monotonic() - context_started
@@ -45,7 +46,6 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
         str(StoragePath(launch["artifacts"]["terminal_manifest_uri"]).parent / "preallocation-validation.json")
     )
     validation_fs.pipe_file(validation_key, json.dumps(validation, indent=2).encode())
-    api_key = resolve_secret_spec((config.judge.credential,)).value
     attempt = uuid4().hex
     destination = str(StoragePath(launch["artifacts"]["terminal_manifest_uri"]).parent)
     fs, key = filesystem_for(prefix_join(destination, f"timing/judge-{attempt}.jsonl"))
