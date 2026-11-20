@@ -1373,3 +1373,86 @@ def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monke
     after_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
     assert after_files == before_files
     assert _get_checkpoint_steps(temporary_path) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "cp_url,plain_path",
+    [
+        ("s3://bucket/run/step-1", "bucket/run/step-1"),
+        ("gs://bucket/run/step-1", "bucket/run/step-1"),
+    ],
+)
+def test_prune_uses_delete_prefix_after_removing_object_store_metadata(tmp_path, monkeypatch, cp_url, plain_path):
+    events: list[tuple[str, str]] = []
+    metadata_path = os.path.join(plain_path, checkpoint_module.CHECKPOINT_METADATA_FILENAME)
+
+    class FakeObjectStoreFs:
+        def __init__(self):
+            self.metadata_present = True
+
+        def exists(self, path):
+            if path == metadata_path:
+                return self.metadata_present
+            return True
+
+        def rm(self, path, recursive=False):
+            assert not recursive, "object-store payload removal should delegate to delete_prefix"
+            events.append(("rm", path))
+            if path == metadata_path:
+                self.metadata_present = False
+
+        def invalidate_cache(self, path=None):
+            events.append(("invalidate_cache", path))
+
+    checkpointer = Checkpointer(tmp_path, None, [])
+    fake_fs = FakeObjectStoreFs()
+    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", lambda path, fs=None: (fake_fs, plain_path))
+
+    def fake_delete_prefix(url):
+        assert not fake_fs.metadata_present, "metadata.json must be removed before delete_prefix runs"
+        events.append(("delete_prefix", url))
+
+    monkeypatch.setattr(checkpoint_module, "delete_prefix", fake_delete_prefix)
+
+    checkpointer._do_rm_checkpoint(cp_url)
+
+    assert events == [
+        ("rm", metadata_path),
+        ("delete_prefix", cp_url),
+        ("invalidate_cache", plain_path),
+    ]
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
+def test_prune_skips_delete_prefix_when_object_store_metadata_delete_fails(tmp_path, monkeypatch, failure_mode):
+    cp_url = "s3://bucket/run/step-1"
+    plain_path = "bucket/run/step-1"
+    metadata_path = os.path.join(plain_path, checkpoint_module.CHECKPOINT_METADATA_FILENAME)
+    delete_prefix_called = False
+
+    class FailingObjectStoreFs:
+        def exists(self, path):
+            return path in (metadata_path, plain_path)
+
+        def rm(self, path, recursive=False):
+            assert not recursive
+            if failure_mode == "raise":
+                raise PermissionError("metadata delete denied")
+
+        def invalidate_cache(self, path=None):
+            pass
+
+    checkpointer = Checkpointer(tmp_path, None, [])
+    monkeypatch.setattr(
+        checkpoint_module, "_get_fs_and_plain_path", lambda path, fs=None: (FailingObjectStoreFs(), plain_path)
+    )
+
+    def fake_delete_prefix(_url):
+        nonlocal delete_prefix_called
+        delete_prefix_called = True
+
+    monkeypatch.setattr(checkpoint_module, "delete_prefix", fake_delete_prefix)
+
+    checkpointer._do_rm_checkpoint(cp_url)
+
+    assert not delete_prefix_called

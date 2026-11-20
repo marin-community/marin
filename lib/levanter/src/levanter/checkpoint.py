@@ -37,6 +37,7 @@ from jaxtyping import PyTree
 from rigging import telemetry
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.deletion import delete_prefix
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
@@ -50,6 +51,7 @@ from levanter.utils.types import FilterSpec
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_METADATA_FILENAME = "metadata.json"
+_OBJECT_STORE_SCHEMES = frozenset({"s3", "s3a", "gs", "gcs"})
 
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
@@ -769,6 +771,7 @@ class Checkpointer:
             self._async_checkpoint_remover_queue.put(checkpoint)
 
     def _do_rm_checkpoint(self, cp_path):
+        cp_url = str(cp_path)
         # have to strip protocol from path because fsspec filesystems don't like them
         fs, plain_path = _get_fs_and_plain_path(cp_path)
         metadata_path = os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)
@@ -785,7 +788,13 @@ class Checkpointer:
                     pass
                 if fs.exists(metadata_path):
                     raise RuntimeError(f"Checkpoint metadata marker still exists after removal: {metadata_path}")
-            if fs.exists(plain_path):
+            if StoragePath(cp_url).scheme in _OBJECT_STORE_SCHEMES:
+                try:
+                    delete_prefix(cp_url)
+                except FileNotFoundError:
+                    pass
+                fs.invalidate_cache(plain_path)
+            elif fs.exists(plain_path):
                 try:
                     fs.rm(plain_path, recursive=True)
                 except FileNotFoundError:
