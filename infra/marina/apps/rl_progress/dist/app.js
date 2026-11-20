@@ -23,7 +23,8 @@ const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
 const hardwareLabel = (run) => run.hardware ? `${run.hardware.count} × ${run.hardware.gpu}` : 'Not recorded';
 const color = (run) => hardwareColors.get(hardwareLabel(run)) ?? '#6d6a60';
 const formatNumber = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
-const hours = (run) => run.elapsed_seconds / 3600;
+const coverage = (result) => result ? `${result.scored}/${result.attempted}` : '—';
+const hours = (run) => Number.isFinite(run.elapsed_seconds) ? run.elapsed_seconds / 3600 : null;
 const timingLabel = (scope) => ({
   trainer_elapsed_excluding_eval: 'Trainer setup to shutdown, excluding evaluation',
   coordinator_wall_minus_validation: 'Coordinator wall time minus validation',
@@ -35,12 +36,35 @@ const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_
 function runsInPreset() {
   return runs.filter((run) => run.preset === $('preset').value);
 }
+function runsInRevision() {
+  return runsInPreset().filter((run) => (run.preset_revision ?? '') === $('revision').value);
+}
 const presetLabel = (preset) => ({ 'quick-rl': 'Quick RL', unspecified: 'Unspecified preset' })[preset] ?? preset;
+
+function fillRevisions() {
+  const select = $('revision');
+  const current = select.value;
+  const byRevision = new Map();
+  for (const run of runsInPreset()) {
+    const revision = run.preset_revision ?? '';
+    if (!byRevision.has(revision)) byRevision.set(revision, new Set());
+    if (Number.isFinite(run.evaluation.task_count)) byRevision.get(revision).add(run.evaluation.task_count);
+  }
+  const versions = [...byRevision.keys()].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  select.replaceChildren(...versions.map((version) => {
+    const counts = byRevision.get(version);
+    const tasks = counts.size === 1 ? ` · ${[...counts][0].toLocaleString()} tasks` : '';
+    return new Option(`${version || 'Unversioned'}${tasks}`, version);
+  }));
+  select.value = versions.includes(current) ? current : (versions[0] ?? '');
+  $('revision-filter').hidden = versions.every((version) => version === '');
+  fillHardware();
+}
 
 function fillHardware() {
   const select = $('hardware');
   const current = select.value;
-  const labels = [...new Set(runsInPreset().map(hardwareLabel))].sort();
+  const labels = [...new Set(runsInRevision().map(hardwareLabel))].sort();
   select.replaceChildren(new Option('All hardware', ''), ...labels.map((label) => new Option(label, label)));
   select.value = labels.includes(current) ? current : '';
   select.disabled = labels.length === 0;
@@ -54,7 +78,7 @@ function fillPresets(catalog, defaultPreset) {
   const presets = [...new Set([...catalog, ...counts.keys()])];
   select.replaceChildren(...presets.map((preset) => new Option(`${presetLabel(preset)} · ${counts.get(preset) ?? 0}`, preset)));
   select.value = presets.includes(current) ? current : defaultPreset;
-  fillHardware();
+  fillRevisions();
 }
 function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
 function graderPage(run) {
@@ -72,6 +96,7 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
     if (baseline && run.baseline) entries.unshift({ run, x: xValue(run), y: run.baseline.reward, phase: 'baseline' });
     return entries.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
   });
+  host.classList.toggle('chart-empty', !points.length);
   if (!points.length) { host.append(element('p', 'No complete measurements for this view.', { class: 'note' })); return; }
   const width = Math.max(330, host.clientWidth || 700), height = id === 'pareto' ? 350 : 285;
   const margin = { left: 55, right: 30, top: 30, bottom: 55 };
@@ -119,7 +144,8 @@ function renderControlRewards(hardware) {
   const host = $('control-rewards');
   host.replaceChildren();
   const groups = controlRewards.filter((group) => (
-    group.preset === $('preset').value && (!hardware || hardwareLabel(group) === hardware)
+    group.preset === $('preset').value && (group.preset_revision ?? '') === $('revision').value
+      && (!hardware || hardwareLabel(group) === hardware)
   ));
   if (!groups.length) {
     host.append(element('p', 'No comparable control runs recorded for this view.', { class: 'note' }));
@@ -136,7 +162,8 @@ function renderControlRewards(hardware) {
       ? '1 control run · sample SD needs at least 2 comparable runs'
       : `${points.length} control runs · mean ${formatNumber(mean)} · sample SD ${formatNumber(sd)}`;
     const configuration = group.hardware ? hardwareLabel(group) : 'Hardware not recorded';
-    host.append(element('p', `${group.eval_set} · ${configuration}`, { class: 'note' }));
+    const basis = group.score_basis ? ` · ${group.score_basis.replaceAll('_', ' ')}` : '';
+    host.append(element('p', `${group.eval_set}${basis} · ${configuration}`, { class: 'note' }));
     host.append(element('p', summary, { class: 'control-summary' }));
     const low = Math.min(mean - (sd ?? 0), ...points.map((point) => point.reward));
     const high = Math.max(mean + (sd ?? 0), ...points.map((point) => point.reward));
@@ -172,7 +199,9 @@ function renderControlRewards(hardware) {
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
-  const warning = run.partial_coverage ? 'Incomplete evaluation: this attempt is excluded from comparison. Training completion and evaluation validity are separate.' : run.provisional ? 'Descriptive result. Runtime evaluation protocol is unknown, so this run is unranked.' : 'Complete comparison metadata.';
+  const warning = run.provisional
+    ? 'Descriptive result. Frontier ranking requires verified timing, an evaluation protocol, and full final coverage.'
+    : 'Complete comparison metadata.';
   body.append(element('p', warning, { class: run.partial_coverage ? 'warning' : 'note' }));
   const links = element('div', null, { class: 'links' });
   const explicitWandb = run.wandb_url ?? run.links?.wandb;
@@ -182,20 +211,29 @@ function showDetails(run) {
     links.append(element('span', 'Exact W&B run URL was not recorded.', { class: 'note' }));
   }
   links.append(element('a', 'Grader stats', { href: graderPage(run) }), element('a', 'Link to this run', { href: route(run) }));
+  if (run.gate_report_uri?.startsWith('s3://')) {
+    links.append(element('a', 'Gate report', { href: 'https://filer.marina.oa.dev/#' + encodeURIComponent(run.gate_report_uri), target: '_blank', rel: 'noopener noreferrer' }));
+  }
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Preset', presetLabel(run.preset)], ['Base model', run.model_label], ['Eval set', run.eval_set_label], ['Hardware', hardwareLabel(run)],
+    ['Preset', presetLabel(run.preset)], ['Preset revision', run.preset_revision],
+    ['Base model', run.model_label], ['Eval set', run.eval_set_label], ['Hardware', hardwareLabel(run)],
     ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
     ['Reward', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`],
-    ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
-    ['Elapsed', `${formatNumber(hours(run), 2)} hours (${formatNumber(run.elapsed_seconds, 1)} seconds)`],
-    ['Timing scope', timingLabel(run.timing_scope)], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
+    ['Coverage', `Baseline ${coverage(run.baseline)} · Final ${coverage(run.final)}`],
+    ['Elapsed', hours(run) === null ? null : `${formatNumber(hours(run), 2)} hours (${formatNumber(run.elapsed_seconds, 1)} seconds)`],
+    ['Timing scope', timingLabel(run.timing_scope)],
+    [run.date_basis === 'first_metrics_write' ? 'First metrics write' : 'Submission date', run.run_date],
+    ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
     ['Evaluation protocol', run.evaluation.protocol_sha256 ?? 'Unknown · unranked'], ['Artifact location', run.artifact_uri],
   ];
+  if (run.evaluation.score_basis) facts.push(['Score basis', run.evaluation.score_basis.replaceAll('_', ' ')]);
+  if (run.verdict) facts.push(['Gate verdict', run.verdict.toUpperCase()]);
+  if (Number.isFinite(run.gate_family_mean)) facts.push(['Gate equal-family reward', formatNumber(run.gate_family_mean)]);
   for (const [title, value] of facts) addField(fields, title, value);
   body.append(fields, element('h3', 'Evidence and caveats'));
   const evidence = element('ul', null, { class: 'evidence' });
@@ -211,7 +249,7 @@ function followHash() {
 
 function render() {
   const hardware = $('hardware').value;
-  const selected = runsInPreset().filter((run) => !hardware || hardwareLabel(run) === hardware);
+  const selected = runsInRevision().filter((run) => !hardware || hardwareLabel(run) === hardware);
   $('no-runs').hidden = selected.length > 0;
   $('preset-runs').hidden = selected.length === 0;
   if (!selected.length) {
@@ -225,7 +263,9 @@ function render() {
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
   chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.gain_per_hour, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
-  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each matching evaluation protocol, timing definition, and hardware configuration.' : 'These points are descriptive. A verified evaluation protocol and timing definition are required for frontier ranking.';
+  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible)
+    ? 'Rings mark the frontier within each matching evaluation protocol, timing definition, and hardware configuration.'
+    : 'A verified evaluation protocol and elapsed time are required for frontier ranking.';
   const hardwareRuns = new Map(selected.map((run) => [hardwareLabel(run), run]));
   $('legend').replaceChildren(...[...hardwareRuns.values()].map((run) => {
     const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${color(run)}` }), document.createTextNode(hardwareLabel(run))); return item;
@@ -234,7 +274,8 @@ function render() {
     const tr = element('tr');
     const name = element('td');
     name.append(element('a', run.label, { href: graderPage(run) }));
-    tr.append(name, element('td', run.model_label), element('td', run.eval_set_label), element('td', hardwareLabel(run)), element('td', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`), element('td', `${formatNumber(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
+    const evidence = run.provisional ? 'Provisional · unranked' : run.partial_coverage ? 'Incomplete' : 'Complete';
+    tr.append(name, element('td', run.model_label), element('td', run.eval_set_label), element('td', hardwareLabel(run)), element('td', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`), element('td', hours(run) === null ? '—' : `${formatNumber(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${coverage(run.baseline)} → ${coverage(run.final)}`), element('td', evidence));
     return tr;
   }));
 }
@@ -250,7 +291,8 @@ async function refresh() {
   finally { $('refresh').disabled = false; }
 }
 $('refresh').onclick = refresh;
-$('preset').onchange = () => { fillHardware(); render(); };
+$('preset').onchange = () => { fillRevisions(); render(); };
+$('revision').onchange = () => { fillHardware(); render(); };
 $('hardware').onchange = render;
 $('close-detail').onclick = () => $('run-detail').close();
 $('run-detail').addEventListener('click', (event) => {

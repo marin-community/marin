@@ -90,3 +90,32 @@ def test_control_sd_excludes_candidates_and_counts_a_retried_control_once():
     assert shared["mean"] == pytest.approx(0.62)
     assert shared["sample_sd"] == pytest.approx(math.sqrt(0.0002))
     assert other["sample_sd"] is None
+
+
+def test_archived_control_scores_keep_their_preset_revision_and_can_omit_timing():
+    def control(revision, run_number, reward):
+        run = {
+            "run_id": f"control-{run_number}",
+            "attempt_id": str(run_number),
+            "label": "control",
+            "is_control": True,
+            "preset": "learning-medium",
+            "preset_revision": revision,
+            "control_reward_cohort": "archived-controls",
+            "evaluation": {"name": "panel-910", "task_count": 910, "score_basis": "task_weighted_mean"},
+            "status": "succeeded",
+            "elapsed_seconds": None,
+            "final": {"reward": reward, "attempted": 910, "scored": 910},
+        }
+        return run | run_metadata(run) | comparison_fields(run)
+
+    first, second = control("old", 0, 0.3), control("old", 1, 0.4)
+    newest = control("new", 2, 0.6)
+    archived, current = control_reward_summaries([first, second, newest])
+
+    assert archived["preset_revision"] == "old"
+    assert archived["mean"] == pytest.approx(0.35)
+    assert archived["sample_sd"] == pytest.approx(math.sqrt(0.005))
+    assert current["sample_sd"] is None
+    assert first["pareto_eligible"] is False
+    assert first["gain_per_hour"] is None

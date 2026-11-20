@@ -37,6 +37,7 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
         "validation_identity": "validation",
         "initializer_identity": "checkpoint",
         "preset": "quick-rl",
+        "preset_revision": "2026.11.19",
         "base_model": "model",
         "hardware": {"gpu": "H100", "count": 40},
     }
@@ -76,6 +77,7 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     assert result["validation_seconds"] == {"baseline": 8.0, "final": 12.0}
     assert result["grader_report"] == report
     assert result["final"]["reward"] == 0.75
+    assert result["preset_revision"] == "2026.11.19"
     assert comparison_fields(result)["pareto_eligible"] is True
 
     timing_path = f"exports/grader_reports/{entry['attempt_id']}/trainer_timing.json"

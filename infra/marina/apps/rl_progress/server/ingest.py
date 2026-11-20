@@ -173,6 +173,7 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         "data_identity": entry["data_identity"],
         "initializer_identity": entry["initializer_identity"],
         "preset": entry.get("preset") or "quick-rl",
+        "preset_revision": entry.get("preset_revision"),
         "base_model": entry.get("base_model"),
         "hardware": entry.get("hardware"),
         "evaluation": {

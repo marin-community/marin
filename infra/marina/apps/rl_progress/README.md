@@ -21,8 +21,11 @@ CREATE TABLE rl_runs (
 );
 ```
 
-The app creates this table on first release. A disposable local preview can load
-synthetic records through the Marina data commands against the printed local origin.
+The app creates this table on first release. Historical backfills go into
+`rl_archived_runs` with the same keys. The dashboard reads both stores through
+`rl_dashboard_runs` and uses the live record when an attempt appears in both.
+A disposable local preview can load synthetic records through the Marina data
+commands against the printed local origin.
 
 Each record retains its run/attempt identity, label, status, UTC submission/start/
 completion timestamps, timing scope, elapsed seconds, optimizer count, source/data/
@@ -38,7 +41,14 @@ The picker also shows the historical Snowball presets. Historical rows with
 a recognized series use it as their preset. GPU type and count narrow the
 view and distinguish frontiers within it.
 
-The overview opens on `learning-medium`. The control chart plots one completed,
+The overview opens on `learning-medium` and selects its latest recorded preset
+revision. The revision filter keeps the 910-task development panel and the
+1,500-task held-out panel in separate views. Historical records preserve their
+score basis and can omit elapsed time when native timing is unavailable.
+Set `preset_revision` on the run registration when publishing a new preset
+revision. The importer carries it into the stored attempt.
+
+The control chart plots one completed,
 fully scored attempt per control run, grouped by matching evaluation, training,
 and runtime evidence. Its shaded band spans one sample standard deviation on
 either side of the mean when the group has two or more repeats.
