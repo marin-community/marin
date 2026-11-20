@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-docstring-contradicts-impl
+lane: prose
+title: Docstring promises behavior the code doesn't deliver
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A `run_corpus_mode()` documented "read-only" but opening
+  a live `DuckDBLogStore` is not passive — callers relying on the contract
+  get data corruption or surprise side effects. This is the most expensive
+  form of stale docs.
+
+  **When allowed:** Never.
+
+  **Bad example:**
+  ```python
+  def run_corpus_mode(path: str) -> None:
+      """Read-only: inspect the corpus without mutating state."""
+      store = DuckDBLogStore.open(path, mode="rw")   # opens for write.
+      ...
+  ```

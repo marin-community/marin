@@ -5,7 +5,7 @@ import logging
 import os
 
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.store.cache import CacheMetadata, CacheOptions, TreeCache, build_or_load_cache
+from levanter.store.cache import CacheLedger, CacheMetadata, CacheOptions, TreeCache, build_or_load_cache
 from levanter.tokenizers import MarinTokenizer
 
 from .formats import LmDatasetFormatBase, preprocessor_for_format
@@ -53,3 +53,20 @@ def load_lm_dataset_cache(
         options=CacheMetadata(preprocessor_metadata=processor.metadata),
     )
     return cache
+
+
+def load_lm_dataset_cache_from_ledger(
+    cache_dir: str,
+    ledger: CacheLedger,
+    format: LmDatasetFormatBase,
+    tokenizer: MarinTokenizer,
+    enforce_eos: bool = True,
+) -> TreeCache[dict]:
+    """Load an existing cache without reading its standalone ledger."""
+    processor = preprocessor_for_format(format, tokenizer, enforce_bos=True, enforce_eos=enforce_eos)
+    return TreeCache.load_from_ledger(
+        cache_dir,
+        exemplar=processor.output_exemplar,
+        ledger=ledger,
+        options=CacheMetadata(preprocessor_metadata=processor.metadata),
+    )

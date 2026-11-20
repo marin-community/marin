@@ -1,0 +1,296 @@
+# Frozen from the 2026-10-09 tracker; each source is the exact sealed FineStore result.
+models:
+  - model: "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
+    benchmarks:
+      math500:
+        tracker_score: 0.950
+        source: "s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-math500-e233/results"
+      aime24:
+        tracker_score: 0.763
+        source: "s3://marin-us-east-02a/marin/evals/20261003-123011-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-aime24-aec8/results"
+      olympiadbench:
+        tracker_score: 0.273
+        source: "s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-olympiadbench-ccf4/results"
+      financebench:
+        tracker_score: 0.620
+        source: "s3://marin-us-east-02a/marin/evals/20261003-123111-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-financebench-c109/results"
+  - model: "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom"
+    benchmarks:
+      math500:
+        tracker_score: 0.850
+        source: "s3://marin-us-east-02a/marin/evals/20261003-114418-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-math500-e33a/results"
+      aime24:
+        tracker_score: 0.590
+        source: "s3://marin-us-east-02a/marin/evals/20261003-132242-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-aime24-46f7/results"
+      olympiadbench:
+        tracker_score: 0.160
+        source: "s3://marin-us-east-02a/marin/evals/20261003-150503-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-olympiadbench-9fed/results"
+      financebench:
+        tracker_score: 0.600
+        source: "s3://marin-us-east-02a/marin/evals/20261003-135836-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-financebench-5af6/results"
+  - model: "Qwen/Qwen3.6-35B-A3B"
+    benchmarks:
+      math500:
+        tracker_score: 0.984
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-math500-1fa9/results"
+      aime24:
+        tracker_score: 0.950
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-aime24-6b31/results"
+      olympiadbench:
+        tracker_score: 0.333
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-olympiadbench-c938/results"
+      financebench:
+        tracker_score: 0.700
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-financebench-d419/results"
+  - model: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    benchmarks:
+      math500:
+        tracker_score: 0.890
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-math500-1346/results"
+      aime24:
+        tracker_score: 0.290
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-aime24-1fd8/results"
+      olympiadbench:
+        tracker_score: 0.427
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-olympiadbench-a1e6/results"
+      financebench:
+        tracker_score: 0.680
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-financebench-8da0/results"
+  - model: "Qwen/Qwen3-Next-80B-A3B-Instruct"
+    benchmarks:
+      math500:
+        tracker_score: 0.968
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-math500-f46a/results"
+      aime24:
+        tracker_score: 0.803
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-aime24-7eb2/results"
+      olympiadbench:
+        tracker_score: 0.543
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-olympiadbench-27ba/results"
+      financebench:
+        tracker_score: 0.620
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-financebench-651f/results"
+  - model: "inclusionAI/Ling-lite-1.5"
+    benchmarks:
+      math500:
+        tracker_score: 0.850
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-math500-c541/results"
+      aime24:
+        tracker_score: 0.193
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-aime24-4dea/results"
+      olympiadbench:
+        tracker_score: 0.343
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-olympiadbench-ea92/results"
+      financebench:
+        tracker_score: 0.480
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-financebench-7ab3/results"
+  - model: "google/gemma-4-26B-A4B-it"
+    benchmarks:
+      math500:
+        tracker_score: 0.980
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-math500-70ba/results"
+      aime24:
+        tracker_score: 0.887
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-aime24-b03f/results"
+      olympiadbench:
+        tracker_score: 0.653
+        source: "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-olympiadbench-9492/results"
+      financebench:
+        tracker_score: 0.660
+        source: "s3://marin-us-east-02a/marin/evals/20260928-103844-google-gemma-4-26B-A4B-it-financebench-ce76/results"
+  - model: "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+    benchmarks:
+      math500:
+        tracker_score: 0.970
+        source: "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-math500-c6d2/results"
+      aime24:
+        tracker_score: 0.893
+        source: "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-aime24-e2b4/results"
+      olympiadbench:
+        tracker_score: 0.173
+        source: "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-olympiadbench-0aeb/results"
+      financebench:
+        tracker_score: 0.553
+        source: "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-financebench-14a0/results"
+  - model: "openai/gpt-oss-20b"
+    benchmarks:
+      math500:
+        tracker_score: 0.946
+        source: "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-math500-8f8f/results"
+      aime24:
+        tracker_score: 0.783
+        source: "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-aime24-8b4f/results"
+      olympiadbench:
+        tracker_score: 0.527
+        source: "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-olympiadbench-e90e/results"
+      financebench:
+        tracker_score: 0.680
+        source: "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-financebench-083c/results"
+  - model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    benchmarks:
+      math500:
+        tracker_score: 0.974
+        source: "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-math500-0aa1/results"
+      aime24:
+        tracker_score: 0.913
+        source: "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-aime24-c43d/results"
+      olympiadbench:
+        tracker_score: 0.357
+        source: "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-olympiadbench-83ce/results"
+      financebench:
+        tracker_score: 0.560
+        source: "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-financebench-370c/results"
+  - model: "moonshotai/Kimi-Linear-48B-A3B-Instruct"
+    benchmarks:
+      math500:
+        tracker_score: 0.912
+        source: "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-math500-5677/results"
+      aime24:
+        tracker_score: 0.753
+        source: "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-aime24-64c3/results"
+      olympiadbench:
+        tracker_score: 0.293
+        source: "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-olympiadbench-8d48/results"
+      financebench:
+        tracker_score: 0.520
+        source: "s3://marin-us-east-02a/marin/evals/20260928-212034-moonshotai-Kimi-Linear-48B-A3B-Instruct-financebench-9ee2/results"
+  - model: "arcee-ai/Trinity-Mini"
+    benchmarks:
+      math500:
+        tracker_score: 0.950
+        source: "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-math500-0fab/results"
+      aime24:
+        tracker_score: 0.617
+        source: "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-aime24-40b0/results"
+      olympiadbench:
+        tracker_score: 0.157
+        source: "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-olympiadbench-74cb/results"
+      financebench:
+        tracker_score: 0.640
+        source: "s3://marin-us-east-02a/marin/evals/20260928-205813-arcee-ai-Trinity-Mini-financebench-edee/results"
+  - model: "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+    benchmarks:
+      math500:
+        tracker_score: 0.896
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131730-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-math500-6a56/results"
+      aime24:
+        tracker_score: 0.470
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131730-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-aime24-7d36/results"
+      olympiadbench:
+        tracker_score: 0.427
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131730-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-olympiadbench-6144/results"
+      financebench:
+        tracker_score: 0.660
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131730-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-financebench-2b10/results"
+  - model: "open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
+    benchmarks:
+      math500:
+        tracker_score: 0.906
+        source: "s3://marin-us-east-02a/marin/evals/20260927-135700-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-math500-9249/results"
+      aime24:
+        tracker_score: 0.467
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131658-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-aime24-47df/results"
+      olympiadbench:
+        tracker_score: 0.350
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131658-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-olympiadbench-d60a/results"
+      financebench:
+        tracker_score: 0.660
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131658-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-financebench-8102/results"
+  - model: "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
+    benchmarks:
+      math500:
+        tracker_score: 0.932
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131914-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-math500-83bf/results"
+      aime24:
+        tracker_score: 0.717
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131914-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-aime24-027f/results"
+      olympiadbench:
+        tracker_score: 0.193
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131914-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-olympiadbench-0955/results"
+      financebench:
+        tracker_score: 0.510
+        source: "s3://marin-us-east-02a/marin/evals/20260927-131914-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-financebench-fc0c/results"
+  - model: "laion/snowball-67b-a2b-relay-sft-allkimi-step1203"
+    benchmarks:
+      math500:
+        tracker_score: 0.944
+        source: "s3://marin-us-east-02a/marin/evals/20261001-090850-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-math500-f420/results"
+      aime24:
+        tracker_score: 0.750
+        source: "s3://marin-us-east-02a/marin/evals/20261001-090850-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-aime24-f7a9/results"
+      olympiadbench:
+        tracker_score: 0.383
+        source: "s3://marin-us-east-02a/marin/evals/20261001-090850-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-olympiadbench-d703/results"
+      financebench:
+        tracker_score: 0.580
+        source: "s3://marin-us-east-02a/marin/evals/20261002-002707-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-financebench-8073/results"
+  - model: "laion/snowball-67b-a2b-relay-sft-acont-step999"
+    benchmarks:
+      math500:
+        tracker_score: 0.910
+        source: "s3://marin-us-east-02a/marin/evals/20261001-092542-laion-snowball-67b-a2b-relay-sft-acont-step999-math500-773e/results"
+      aime24:
+        tracker_score: 0.717
+        source: "s3://marin-us-east-02a/marin/evals/20261001-091917-laion-snowball-67b-a2b-relay-sft-acont-step999-aime24-73ee/results"
+      olympiadbench:
+        tracker_score: 0.393
+        source: "s3://marin-us-east-02a/marin/evals/20261001-094747-laion-snowball-67b-a2b-relay-sft-acont-step999-olympiadbench-dd48/results"
+      financebench:
+        tracker_score: 0.580
+        source: "s3://marin-us-east-02a/marin/evals/20261001-092347-laion-snowball-67b-a2b-relay-sft-acont-step999-financebench-a61d/results"
+  - model: "IFM/K2-Horizon-MoVA-36B-A4B"
+    benchmarks:
+      math500:
+        tracker_score: 0.972
+        source: "s3://marin-us-east-02a/marin/evals/20261003-174538-K2-Horizon-campaign-math500-2403/results"
+      aime24:
+        tracker_score: 0.927
+        source: "s3://marin-us-east-02a/marin/evals/20261006-083453-K2-Horizon-campaign-aime24-edcf/results"
+      olympiadbench:
+        tracker_score: 0.363
+        source: "s3://marin-us-east-02a/marin/evals/20261006-112031-K2-Horizon-campaign-olympiadbench-991c/results"
+      financebench:
+        tracker_score: 0.720
+        source: "s3://marin-us-east-02a/marin/evals/20261004-154941-K2-Horizon-campaign-financebench-2eb6/results"
+  - model: "zai-org/GLM-4.7-Flash"
+    benchmarks:
+      math500:
+        tracker_score: 0.962
+        source: "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-math500-c8c4/results"
+      aime24:
+        tracker_score: 0.587
+        source: "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-aime24-3ff8/results"
+      olympiadbench:
+        tracker_score: 0.030
+        source: "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-olympiadbench-212e/results"
+      financebench:
+        tracker_score: 0.460
+        source: "s3://marin-us-east-02a/marin/evals/20261005-155409-zai-org-GLM-4.7-Flash-financebench-c58f/results"
+  - model: "Aleph-Alpha/Kolibri-1"
+    benchmarks:
+      math500:
+        tracker_score: 0.992
+        source: "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-math500-c260/results"
+      aime24:
+        tracker_score: 0.933
+        source: "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-aime24-a200/results"
+      olympiadbench:
+        tracker_score: 0.207
+        source: "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-olympiadbench-d6e8/results"
+      financebench:
+        tracker_score: 0.560
+        source: "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-financebench-39b3/results"
+  - model: "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04"
+    benchmarks:
+      math500:
+        tracker_score: 0.926
+        source: "s3://marin-us-east-02a/marin/evals/20261004-165735-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-math500-54df/results"
+      aime24:
+        tracker_score: 0.687
+        source: "s3://marin-us-east-02a/marin/evals/20261004-165735-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-aime24-efa4/results"
+      olympiadbench:
+        tracker_score: 0.393
+        source: "s3://marin-us-east-02a/marin/evals/20261004-165735-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-olympiadbench-acd7/results"
+      financebench:
+        tracker_score: 0.620
+        source: "s3://marin-us-east-02a/marin/evals/20261004-165735-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-financebench-1467/results"

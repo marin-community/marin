@@ -29,7 +29,9 @@ from typing import Self, TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
@@ -287,14 +289,15 @@ def read_record(output_path: str) -> ArtifactRecord | None:
     """The record at ``{output_path}/.artifact.json``, else ``None``.
 
     Falls back to a genuine legacy Ray executor ``.executor_info`` sidecar when no record file is
-    present, so caches built before the record file existed still resolve their config. A
+    present, or when it holds the bare ``null`` an older executor wrote for a step that returned
+    ``None``, so caches built before the record file existed still resolve their config. A
     schedule-time ``StepRunner`` stub (see :data:`STEP_RUNNER_EXECUTOR_VERSION`) is *not* honored:
     it carries no materialized config, so such an output reads back as having no record. A
     corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
     text = _read_text(output_path, RECORD_FILENAME)
-    if text is not None:
+    if text is not None and text.strip() != "null":
         return _parse_record(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:

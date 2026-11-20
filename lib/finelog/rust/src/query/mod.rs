@@ -2,7 +2,7 @@
 //!
 //! `make_ctx()` builds a `SessionContext` configured to match DuckDB's result
 //! shape (Utf8 strings, DuckDB parsing dialect) with the scalar UDFs registered.
-//! `run_query_over()` registers every live namespace as a `TableProvider`, runs
+//! `run_query_over()` registers the selected namespaces as `TableProvider`s, runs
 //! the user SQL under a SELECT-only gate (see `read_only_sql_options`), collects
 //! the result, and deregisters — the body of the `StatsService::Query` handler.
 //!
@@ -14,15 +14,18 @@ pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
 pub mod group_extrema;
-pub mod index_cache;
+pub(crate) mod indexed_scan;
+pub(crate) mod object_reader;
 pub mod optimizer;
 pub(crate) mod predicate;
 pub mod provider;
+pub(crate) mod read_scope;
 pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -36,7 +39,8 @@ use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{DataFrame, SQLOptions, SessionConfig, SessionContext};
+use futures::TryStreamExt;
 
 use crate::query::provider::NamespaceProvider;
 use crate::query::string_values::StringValues;
@@ -46,6 +50,53 @@ use crate::query::string_values::StringValues;
 pub struct RegisteredProvider {
     pub name: String,
     pub provider: NamespaceProvider,
+}
+
+pub(crate) fn snapshot_deadline(providers: &[RegisteredProvider]) -> Option<tokio::time::Instant> {
+    providers
+        .iter()
+        .filter_map(|provider| provider.provider.read_deadline())
+        .min()
+}
+
+pub(crate) fn bind_read_deadline(
+    ctx: &SessionContext,
+    deadline: Option<tokio::time::Instant>,
+) -> Option<tokio::time::Instant> {
+    if let Some(scope) = ctx.copied_config().get_extension::<read_scope::ReadScope>() {
+        scope.constrain(deadline);
+        return scope.deadline();
+    }
+    deadline
+}
+
+pub(crate) async fn run_before_deadline<T>(
+    deadline: Option<tokio::time::Instant>,
+    read: impl Future<Output = DFResult<T>>,
+) -> DFResult<T> {
+    let Some(deadline) = deadline else {
+        return read.await;
+    };
+    let expired = || {
+        datafusion::error::DataFusionError::External(Box::new(
+            crate::errors::StatsError::DeadlineExceeded("snapshot read deadline exceeded".into()),
+        ))
+    };
+    if tokio::time::Instant::now() >= deadline {
+        return Err(expired());
+    }
+    let result = tokio::time::timeout_at(deadline, read)
+        .await
+        .map_err(|_| expired())?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(expired());
+    }
+    result
+}
+
+pub(crate) fn is_read_deadline(error: &datafusion::error::DataFusionError) -> bool {
+    matches!(error.find_root(), datafusion::error::DataFusionError::External(error)
+        if matches!(error.downcast_ref::<crate::errors::StatsError>(), Some(crate::errors::StatsError::DeadlineExceeded(_))))
 }
 
 /// Floor for the query memory pool so a tiny/misreported cgroup can't strangle
@@ -65,6 +116,15 @@ const MEBIBYTE: usize = 1024 * 1024;
 /// narrow covering projections used by dashboard queries, even when they
 /// represented hundreds of thousands of rows across several files.
 const PARQUET_REPARTITION_FILE_MIN_BYTES: usize = MEBIBYTE;
+
+/// Floor for the session's scan/exec parallelism. DataFusion defaults
+/// `target_partitions` to the CPU count, which also caps how many files a scan
+/// reads concurrently — the right bound for CPU work, but a remote cold scan
+/// is round-trip bound, and on a small host it serializes into
+/// `files / cpus` sequential footer+page fetches. Measured on a 4-CPU host:
+/// a 36-object, 3 MB table cost ~10 s cold at 4-way. The floor buys I/O
+/// overlap; extra partitions cost only smaller per-partition work locally.
+const MIN_TARGET_PARTITIONS: usize = 16;
 
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
@@ -162,6 +222,20 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
         .clone()
 }
 
+/// Register a remote object store so scans can read `base_url` objects
+/// directly. Called once at store construction for a bucket-backed provider;
+/// local-directory providers scan through the default file store.
+pub fn register_scan_object_store(
+    base_url: &str,
+    store: Arc<dyn object_store::ObjectStore>,
+) -> Result<(), crate::errors::StatsError> {
+    let url = url::Url::parse(base_url).map_err(|error| {
+        crate::errors::StatsError::Internal(format!("parse scan store URL {base_url:?}: {error}"))
+    })?;
+    shared_runtime_env().register_object_store(&url, store);
+    Ok(())
+}
+
 /// Occupancy of the process-wide parquet metadata cache.
 ///
 /// The cache holds decoded footers, so it is what stands between a query and a
@@ -225,12 +299,18 @@ fn cache_stats_of(runtime: &RuntimeEnv) -> MetadataCacheStats {
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
 /// OOM-killing the server.
 pub fn make_ctx() -> SessionContext {
-    let mut cfg = SessionConfig::new();
+    let mut cfg = SessionConfig::new()
+        .with_extension(Arc::new(
+            crate::store::object_store::QueryCacheAdmission::default(),
+        ))
+        .with_extension(Arc::new(read_scope::ReadScope::default()));
     cfg.options_mut().sql_parser.map_string_types_to_utf8view = false;
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
     cfg.options_mut().optimizer.repartition_file_min_size = PARQUET_REPARTITION_FILE_MIN_BYTES;
+    let default_partitions = cfg.options().execution.target_partitions;
+    cfg = cfg.with_target_partitions(default_partitions.max(MIN_TARGET_PARTITIONS));
     let state = SessionStateBuilder::new_with_default_features()
         .with_config(cfg)
         .with_runtime_env(shared_runtime_env())
@@ -248,6 +328,72 @@ pub fn make_ctx() -> SessionContext {
 pub struct QueryResult {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
+    pub(crate) timings: QueryTimings,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct QueryTimings {
+    pub logical_plan: Duration,
+    pub physical_plan: Duration,
+    pub execution: Duration,
+    pub normalize: Duration,
+}
+
+struct CollectedQuery {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    timings: QueryTimings,
+}
+
+async fn plan_and_collect<F>(ctx: &SessionContext, dataframe: F) -> DFResult<CollectedQuery>
+where
+    F: Future<Output = DFResult<DataFrame>>,
+{
+    let scope = ctx.copied_config().get_extension::<read_scope::ReadScope>();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::LogicalPlan);
+    }
+    let logical_started = Instant::now();
+    let dataframe = dataframe.await?;
+    let logical_plan = logical_started.elapsed();
+    let schema = Arc::new(dataframe.schema().as_arrow().clone());
+
+    let physical_started = Instant::now();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::PhysicalPlan);
+    }
+    let plan = dataframe.create_physical_plan().await?;
+    let physical_plan = physical_started.elapsed();
+
+    let execution_started = Instant::now();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::Execution);
+    }
+    let batches = datafusion::physical_plan::execute_stream(plan, ctx.task_ctx())?
+        .inspect_ok(|batch| {
+            if batch.num_rows() > 0 {
+                if let Some(scope) = &scope {
+                    scope.first_batch();
+                }
+            }
+        })
+        .try_collect()
+        .await?;
+    let execution = execution_started.elapsed();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::Normalize);
+    }
+
+    Ok(CollectedQuery {
+        schema,
+        batches,
+        timings: QueryTimings {
+            logical_plan,
+            physical_plan,
+            execution,
+            normalize: Duration::ZERO,
+        },
+    })
 }
 
 /// Normalize a result for the wire: every field nullable, and every `Utf8View`
@@ -306,7 +452,7 @@ fn normalize_result(
 /// RPC warn ([`crate::server::interceptors::DEFAULT_SLOW_RPC_THRESHOLD_MS`]);
 /// `FINELOG_SLOW_QUERY_LOG_MS` overrides it (set it low to capture more while
 /// debugging a specific slow shape).
-fn slow_query_log_ms() -> u128 {
+pub(crate) fn slow_query_log_ms() -> u128 {
     static MS: OnceLock<u128> = OnceLock::new();
     *MS.get_or_init(|| {
         std::env::var("FINELOG_SLOW_QUERY_LOG_MS")
@@ -322,7 +468,7 @@ fn slow_query_log_ms() -> u128 {
 /// pathological query can no longer run unbounded and crash-loop the hub on
 /// memory. This bounds the SERVER independently of any client deadline, which
 /// a caller may set huge or omit entirely.
-const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Parse the `FINELOG_QUERY_TIMEOUT_MS` override: an integer millisecond budget,
 /// `0` to disable the deadline entirely (ops escape hatch for a known-heavy
@@ -349,17 +495,64 @@ fn earliest_timeout(
     }
 }
 
-/// The earlier of the server Query deadline and the caller's remaining budget.
+/// The wall-clock bound one server read runs under.
 ///
-/// `FINELOG_QUERY_TIMEOUT_MS` configures the server deadline (see
-/// [`parse_query_timeout`]); `0` disables only that ceiling, so a caller's
-/// shorter deadline still cancels its scan.
-pub(crate) fn query_timeout(request_timeout: Option<Duration>) -> Option<Duration> {
+/// Three budgets fold into one: the configured server ceiling
+/// (`FINELOG_QUERY_TIMEOUT_MS`, see [`parse_query_timeout`]), the caller's
+/// remaining deadline, and `table_bound` — the tightest `max_query_time` among
+/// the object-backed tables this read plans over.
+///
+/// `table_bound` is not disableable. A table promises that a retired object
+/// stays readable for `max_query_time` after the last state that referenced it,
+/// so a read allowed to outlive that window could scan bytes the table no
+/// longer promises. `FINELOG_QUERY_TIMEOUT_MS=0` therefore removes only the
+/// environment ceiling; a read over an object-backed table is still bounded.
+pub(crate) fn query_timeout(
+    request_timeout: Option<Duration>,
+    table_bound: Option<Duration>,
+) -> Option<Duration> {
     static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
     let server_timeout = *TIMEOUT.get_or_init(|| {
         parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
     });
-    earliest_timeout(server_timeout, request_timeout)
+    effective_query_timeout(server_timeout, request_timeout, table_bound)
+}
+
+fn effective_query_timeout(
+    server_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+    table_bound: Option<Duration>,
+) -> Option<Duration> {
+    match (
+        table_bound,
+        earliest_timeout(server_timeout, request_timeout),
+    ) {
+        (Some(bound), Some(configured)) => Some(bound.min(configured)),
+        (Some(bound), None) => Some(bound),
+        (None, configured) => configured,
+    }
+}
+
+/// Await one server read under `timeout`, folding both failure modes into the
+/// caller's error type.
+///
+/// `timeout` is the budget from [`query_timeout`]; `None` runs the read
+/// unbounded. On elapse the read future is dropped, aborting its scan, and
+/// `on_elapsed` builds the error from the budget that was exceeded. A read that
+/// finishes but fails goes through `on_error`.
+pub(crate) async fn run_within_query_timeout<T, ReadError, Error>(
+    timeout: Option<Duration>,
+    read: impl Future<Output = Result<T, ReadError>>,
+    on_elapsed: impl FnOnce(Duration) -> Error,
+    on_error: impl FnOnce(ReadError) -> Error,
+) -> Result<T, Error> {
+    let Some(timeout) = timeout else {
+        return read.await.map_err(on_error);
+    };
+    match tokio::time::timeout(timeout, read).await {
+        Ok(result) => result.map_err(on_error),
+        Err(_elapsed) => Err(on_elapsed(timeout)),
+    }
 }
 
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
@@ -386,6 +579,7 @@ fn log_slow_query(
     kind: &str,
     sql: &str,
     rows: Option<usize>,
+    timings: Option<QueryTimings>,
 ) {
     let elapsed_ms = elapsed.as_millis();
     if elapsed_ms < slow_query_log_ms() {
@@ -394,6 +588,7 @@ fn log_slow_query(
     let preview = truncate_sql_for_log(sql);
     let rows_str = rows.map_or_else(|| "ERR".to_string(), |n| n.to_string());
     let cache = cache_stats_of(&ctx.runtime_env());
+    let timings = timings.unwrap_or_default();
     tracing::warn!(
         kind,
         elapsed_ms = elapsed_ms as u64,
@@ -402,6 +597,10 @@ fn log_slow_query(
         metadata_cache_size_bytes = cache.size_bytes,
         metadata_cache_entries = cache.entries,
         metadata_cache_hits = cache.hits,
+        logical_plan_ms = timings.logical_plan.as_millis() as u64,
+        physical_plan_ms = timings.physical_plan.as_millis() as u64,
+        execution_ms = timings.execution.as_millis() as u64,
+        normalize_ms = timings.normalize.as_millis() as u64,
         sql = %preview,
         "slow {kind}: {elapsed_ms}ms rows={rows_str} sql={preview}",
     );
@@ -427,6 +626,18 @@ fn read_only_sql_options() -> SQLOptions {
         .with_allow_statements(false)
 }
 
+/// Resolve source namespaces with the same parser and identifier rules as execution.
+/// CTE aliases are excluded; quoted dotted names remain one namespace.
+pub fn query_namespaces(ctx: &SessionContext, sql: &str) -> DFResult<Vec<String>> {
+    let state = ctx.state();
+    let statement = state.sql_to_statement(sql, &state.config_options().sql_parser.dialect)?;
+    Ok(state
+        .resolve_table_references(&statement)?
+        .into_iter()
+        .map(|reference| reference.table().to_owned())
+        .collect())
+}
+
 /// Register every namespace in `providers`, run `sql` (SELECT-only, see
 /// [`read_only_sql_options`]), collect, and deregister. Returns the result
 /// schema + batches.
@@ -442,6 +653,11 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
+    let deadline = bind_read_deadline(ctx, snapshot_deadline(&providers));
+    let scope = ctx.copied_config().get_extension::<read_scope::ReadScope>();
+    let mut trace = scope
+        .clone()
+        .map(|scope| read_scope::ReadTrace::new(scope, sql, "Query"));
     let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
         .iter()
         .map(|provider| {
@@ -449,7 +665,8 @@ pub async fn run_query_over(
                 provider.name.clone(),
                 exact_aggregate::AggregateSource {
                     segment_paths: provider.provider.segment_paths().to_vec(),
-                    index_cache: Arc::clone(provider.provider.index_cache()),
+                    indices: Arc::clone(provider.provider.indices()),
+                    artifacts: Arc::clone(provider.provider.segment_artifacts()),
                     schema: provider.provider.schema(),
                 },
             )
@@ -469,15 +686,23 @@ pub async fn run_query_over(
         aggregate_sources,
     )));
     let started = Instant::now();
-    let result = async {
-        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
-        let schema = Arc::new(df.schema().as_arrow().clone());
-        let batches = df.collect().await?;
+    let result = run_before_deadline(deadline, async {
+        let collected =
+            plan_and_collect(ctx, ctx.sql_with_options(sql, read_only_sql_options())).await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
         // keeps source non-nullability that DuckDB would have dropped).
-        let (schema, batches) = normalize_result(&schema, batches)?;
-        Ok(QueryResult { schema, batches })
-    }
+        let normalize_started = Instant::now();
+        let (schema, batches) = normalize_result(&collected.schema, collected.batches)?;
+        let normalize = normalize_started.elapsed();
+        Ok(QueryResult {
+            schema,
+            batches,
+            timings: QueryTimings {
+                normalize,
+                ..collected.timings
+            },
+        })
+    })
     .await;
     let elapsed = started.elapsed();
     for name in &names {
@@ -489,7 +714,16 @@ pub async fn run_query_over(
         .as_ref()
         .ok()
         .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
-    log_slow_query(ctx, elapsed, "Query", sql, rows);
+    let timings = result.as_ref().ok().map(|result| result.timings);
+    log_slow_query(ctx, elapsed, "Query", sql, rows, timings);
+    if let Some(trace) = &mut trace {
+        trace.finish(&result);
+    }
+    if result.is_ok() {
+        if let Some(scope) = &scope {
+            scope.phase(read_scope::ReadPhase::Complete);
+        }
+    }
     result
 }
 
@@ -508,9 +742,8 @@ pub async fn fetch_log_rows(
     tail: bool,
     max_lines: i32,
 ) -> DFResult<Vec<crate::store::log_read::LogRow>> {
-    use datafusion::arrow::array::{Int32Array, Int64Array};
-
     const LOG_TABLE: &str = "__finelog_log";
+    let deadline = bind_read_deadline(ctx, provider.read_deadline());
     ctx.register_table(TableReference::bare(LOG_TABLE), Arc::new(provider))?;
 
     let select_cols = if include_key {
@@ -535,24 +768,41 @@ pub async fn fetch_log_rows(
     };
     let sql =
         format!("SELECT {select_cols} FROM \"{LOG_TABLE}\" WHERE {where_clause} {order} {limit}");
+    let scope = ctx.copied_config().get_extension::<read_scope::ReadScope>();
+    let mut trace = scope
+        .clone()
+        .map(|scope| read_scope::ReadTrace::new(scope, &sql, "FetchLogs"));
 
     let started = Instant::now();
-    let collected = async {
-        let df = ctx.sql(&sql).await?;
-        df.collect().await
-    }
-    .await;
+    let collected = run_before_deadline(deadline, plan_and_collect(ctx, ctx.sql(&sql))).await;
     let elapsed = started.elapsed();
     let _ = ctx.deregister_table(TableReference::bare(LOG_TABLE));
     let rows = collected
         .as_ref()
         .ok()
-        .map(|b| b.iter().map(|x| x.num_rows()).sum());
-    log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows);
-    let batches = collected?;
+        .map(|result| result.batches.iter().map(|batch| batch.num_rows()).sum());
+    let timings = collected.as_ref().ok().map(|result| result.timings);
+    log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows, timings);
+    let result = collected.and_then(|collected| decode_log_rows(&collected.batches, include_key));
+    if let Some(trace) = &mut trace {
+        trace.finish(&result);
+    }
+    if result.is_ok() {
+        if let Some(scope) = &scope {
+            scope.phase(read_scope::ReadPhase::Complete);
+        }
+    }
+    result
+}
+
+fn decode_log_rows(
+    batches: &[RecordBatch],
+    include_key: bool,
+) -> DFResult<Vec<crate::store::log_read::LogRow>> {
+    use datafusion::arrow::array::{Int32Array, Int64Array};
 
     let mut rows = Vec::new();
-    for b in &batches {
+    for b in batches {
         let seq = b
             .column_by_name("seq")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
@@ -598,6 +848,37 @@ mod tests {
     use datafusion::arrow::array::Int64Array;
 
     #[test]
+    fn query_namespaces_resolves_joins_ctes_and_explain_without_decoys() {
+        let ctx = make_ctx();
+        for (sql, expected) in [
+            ("SELECT 1", vec![]),
+            (
+                r#"SELECT * FROM "levanter.metrics""#,
+                vec!["levanter.metrics"],
+            ),
+            (
+                r#"WITH metrics AS (SELECT * FROM "levanter.metrics")
+                   SELECT * FROM metrics JOIN "iris.task_state" ON true"#,
+                vec!["iris.task_state", "levanter.metrics"],
+            ),
+            (
+                r#"EXPLAIN ANALYZE WITH "iris.task_state" AS (SELECT 1 AS x)
+                   SELECT * FROM "iris.task_state", "levanter.metrics""#,
+                vec!["levanter.metrics"],
+            ),
+            (
+                r#"SELECT * FROM (SELECT * FROM "Mixed.Case") nested
+                   WHERE EXISTS (SELECT 1 FROM "log")"#,
+                vec!["Mixed.Case", "log"],
+            ),
+        ] {
+            let mut names = query_namespaces(&ctx, sql).unwrap();
+            names.sort();
+            assert_eq!(names, expected, "{sql}");
+        }
+    }
+
+    #[test]
     fn truncate_sql_caps_on_char_boundary() {
         // Short SQL is returned unchanged.
         let short = "SELECT 1";
@@ -616,8 +897,8 @@ mod tests {
         // Absent, unparseable, and negative-ish garbage all fall back to the default.
         assert_eq!(
             parse_query_timeout(None),
-            Some(Duration::from_secs(10)),
-            "the default must shed work before dashboard clients retry"
+            Some(Duration::from_secs(30)),
+            "the default bounds clients that send no deadline; dashboards send their own"
         );
         assert_eq!(
             parse_query_timeout(Some("nonsense")),
@@ -635,6 +916,35 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    /// A table's maximum query time is a contract about how long retired
+    /// objects stay readable, so neither a disabled server ceiling nor a longer
+    /// caller deadline may lift it.
+    #[test]
+    fn a_table_bound_survives_a_disabled_server_ceiling() {
+        let bound = Some(Duration::from_secs(30));
+        assert_eq!(effective_query_timeout(None, None, bound), bound);
+        assert_eq!(
+            effective_query_timeout(None, Some(Duration::from_secs(600)), bound),
+            bound,
+            "a longer caller deadline cannot lift the table bound"
+        );
+        assert_eq!(
+            effective_query_timeout(None, Some(Duration::from_secs(5)), bound),
+            Some(Duration::from_secs(5)),
+            "a shorter caller deadline still applies"
+        );
+        assert_eq!(
+            effective_query_timeout(Some(Duration::from_secs(10)), None, bound),
+            Some(Duration::from_secs(10)),
+            "the server ceiling still applies when it is tighter"
+        );
+        assert_eq!(
+            effective_query_timeout(None, None, None),
+            None,
+            "a read over no object-backed table keeps the configured ceiling"
+        );
     }
 
     #[test]
@@ -826,12 +1136,7 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(
-            schema,
-            &paths,
-            crate::query::index_cache::test_index_cache(),
-        )
-        .unwrap();
+        let provider = NamespaceProvider::build_with_local_artifacts(schema, &paths).unwrap();
         let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         let ctx = make_ctx();
         let rows = fetch_log_rows(
@@ -931,13 +1236,9 @@ mod tests {
             let mut preds =
                 build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
             add_cluster_filter(&mut preds.where_parts, cluster);
-            NamespaceProvider::build(
-                Arc::clone(&full),
-                &paths,
-                crate::query::index_cache::test_index_cache(),
-            )
-            .map(|provider| (provider, preds))
-            .unwrap()
+            NamespaceProvider::build_with_local_artifacts(Arc::clone(&full), &paths)
+                .map(|provider| (provider, preds))
+                .unwrap()
         };
         let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
             rows.sort_by(|a, b| a.key.cmp(&b.key));

@@ -6,8 +6,6 @@ config:
   xprof:memory: 64GB
   xprof:disk: 80GB
   xprof:deploy_generation: "0"
-  xprof:env:
-    XPROF_GRPC_PORT: "50051"
   xprof:secret_env:
     CW_KEY_ID: env:CW_KEY_ID
     CW_KEY_SECRET: env:CW_KEY_SECRET

@@ -1,0 +1,28 @@
+# The pinned MiniMax chat template supports thinking_mode=disabled. For a
+# label-only equivalence judge, this leaves the grader's 128/512/2048-token
+# response budgets for the required final label rather than hidden reasoning.
+name: minimax-m3-mxfp8-olympiadbench-judge-131k-no-thinking
+location: MiniMaxAI/MiniMax-M3-MXFP8
+revision: c5454eb03678d8710e54a4e0fc681b9f3b4a3dba
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  cpu: 64
+  memory: 512g
+  disk: 600g
+serve:
+  tensor_parallel_size: 8
+  max_model_len: 131072
+  max_num_batched_tokens: 8192
+  max_num_seqs: 16
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: minimax_m3
+  object_store_load_mode: stage_local
+  vllm_extra_args:
+    - --block-size
+    - '128'
+    - --language-model-only
+    - --enable-prefix-caching
+    - --default-chat-template-kwargs
+    - '{"thinking_mode":"disabled"}'

@@ -13,6 +13,7 @@ resolves against the already-initialized package).
 import logging
 
 from finelog.client.log_client import Table
+from rigging.auth import TokenProvider
 
 from iris.cluster.config import (
     AutoscalerConfig,
@@ -38,6 +39,7 @@ def create_autoscaler(
     scale_groups: dict[str, ScaleGroupConfig],
     label_prefix: str,
     base_worker_config: WorkerConfig | None = None,
+    worker_token_provider: TokenProvider | None = None,
     provisioning_table: Table | None = None,
 ) -> Autoscaler:
     """Create autoscaler from WorkerInfraProvider and explicit config.
@@ -49,6 +51,7 @@ def create_autoscaler(
         label_prefix: Prefix for labels on managed resources
         base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
+        worker_token_provider: Supplies current credentials when provisioning workers.
         provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning
             outcomes. None disables emission (test/local mode without finelog).
 
@@ -109,6 +112,7 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         base_worker_config=base_worker_config,
+        worker_token_provider=worker_token_provider,
         make_draining_group=make_draining_group,
         provisioning_table=provisioning_table,
     )

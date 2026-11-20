@@ -8,18 +8,14 @@ from typing import NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
+from haliax import jax_utils
 from jaxtyping import Array, Float, Int
 
-from .config import BlockSizes
+from .config import BlockSizes, max_weight_tile_bytes_for_device
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-# Empirical launch guardrails from Triton shared-memory launch failures.
-# H100 has 232,448 bytes per-SM shared memory; kernel overhead (input tiles,
-# accumulators, Triton metadata) consumes ~131 KB, leaving 101,376 bytes for
-# the weight tile.  Same limit applies to all NVIDIA GPUs including GB10.
-_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 # Compile-time safety cap observed to avoid pathological GB10 H-tiling compile behavior.
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
@@ -29,6 +25,7 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _LARGE_VOCAB_THRESHOLD = 65536
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
+_AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 4096
 _GPU_MIN_B_BLOCK_SIZE = 128
 _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
 _H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
@@ -49,15 +46,7 @@ def _is_power_of_two(n: int) -> bool:
 
 
 def _device_kind() -> str:
-    if not jax.devices():
-        return ""
-    return jax.devices()[0].device_kind.lower()
-
-
-def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
-    if "nvidia" in device_kind:
-        return _NVIDIA_WEIGHT_TILE_BYTES_LIMIT
-    return None
+    return jax_utils.device_kind().lower()
 
 
 def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:
@@ -189,7 +178,7 @@ def _validate_launch_feasibility(
         )
 
     device_kind = _device_kind()
-    max_weight_tile_bytes = _max_weight_tile_bytes_for_device(device_kind)
+    max_weight_tile_bytes = max_weight_tile_bytes_for_device(device_kind)
     if max_weight_tile_bytes is not None:
         requested = h_block_size * v_block_size * jnp.dtype(w_dtype).itemsize
         if requested > max_weight_tile_bytes:
@@ -543,6 +532,11 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
+    if w.shape[1] >= _LARGE_VOCAB_THRESHOLD and "amd instinct" in _device_kind():
+        # Each vocab block adds one full pass over the f32 [B, H] input-gradient accumulator, so the backward
+        # takes fewer, larger blocks than the forward, whose autotuned block is 1024 on MI350X and MI355X.
+        forward_v_block = block_sizes.v_block_size if block_sizes is not None else 0
+        return max(forward_v_block, _AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB)
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size

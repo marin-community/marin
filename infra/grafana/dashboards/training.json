@@ -1,0 +1,2501 @@
+{
+  "uid": "marin-training",
+  "title": "Training run",
+  "description": "The status of one training run. The run selector lists Levanter runs active in the last 12 hours. Hero runs come first. The current hero run is the initial selection. Run identity uses run_id, so a run keeps one series set across clusters. A run supplied in the dashboard URL remains selectable for older graph windows. Use the Runs dashboard to compare runs.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "description": "Levanter runs active in the last 12 hours, hero runs first and newest first within each group. A run supplied in the dashboard URL remains selectable for older graph windows. Sorting is left to the query, so the default selection is the newest hero run. Refreshed on dashboard load; reload to discover newly started runs.",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "definition": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE name = 'phase' AND process_index = 0 AND step IS NOT NULL",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-run",
+          "infinityQuery": {
+            "refId": "variable-run",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE name = 'phase' AND process_index = 0 AND step IS NOT NULL AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '12 hours') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) GROUP BY run_id ORDER BY CASE WHEN run_id LIKE 'hero-%' THEN 0 ELSE 1 END, MAX(timestamp_ms) DESC"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "sort": 0,
+        "regex": "",
+        "hide": 0
+      }
+    ]
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "linkRef": "fleet_accelerators"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "linkRef": "fleet_health"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Run status",
+      "description": "Where the run is right now, and when it reaches the end of its schedule. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile from the semantic Levanter metrics table. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any metric from the run, so the two together separate a stalled trainer from a broken metrics path. Active execution and active share come from W&B, not from finelog: W&B counts the seconds each attempt was alive and carries that count across every restart, thus the total covers the whole run and no Finelog eviction truncates it. Active share divides that total by the time from the creation of the run to its last heartbeat, so the remainder is time with no live process. A live process that makes no progress, such as a hung collective or steps redone after a rollback, still counts as active; progress efficiency is the tile that shows it. The total holds while an attempt restarts, because W&B advances it when the attempt logs its first step. Progress efficiency is stricter: it divides the tokens this run has produced, cumulative tokens less the count it started from, by what it would have reached had it held its mean token rate with no downtime, so it also counts the throughput lost to checkpoints, evals, and steps redone after a rollback, not only downtime. Subtracting the starting count keeps a run resumed under a fresh id from a mid-schedule checkpoint from being credited the tokens it inherited. Projected finish extrapolates this run's recent step rate to the stop step: its last 1,000 logged steps (the bridge's _RATE_WINDOW_STEPS), over the wall clock between the first and last of them, carried forward from the last to the step the run stops at, which is step over run_progress. Checkpoints, evals, and restarts inside those 1,000 steps slow the rate; an outage the run has trained past no longer does, and a throughput change shows within hours. The window never reaches into a fork's inherited history. A stall, or a resumed run replaying steps it had already logged, logs no new step, so it moves the date only once the run logs one. Blank unless the run is running, until the window spans two logged steps, and for a run not configured with a total step count, which is what makes it report run_progress.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "${__field.name}",
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "phase"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "initializing",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "training",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "finished",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "progress"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "since last step"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 300
+                    },
+                    {
+                      "color": "red",
+                      "value": 900
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sample age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 300
+                    },
+                    {
+                      "color": "red",
+                      "value": 900
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MFU"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "train loss"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 4
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "active execution"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "active share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "progress efficiency"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "projected finish"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "status"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "number"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "progress",
+              "text": "progress",
+              "type": "number"
+            },
+            {
+              "selector": "since_last_step",
+              "text": "since last step",
+              "type": "number"
+            },
+            {
+              "selector": "step_time",
+              "text": "step time",
+              "type": "number"
+            },
+            {
+              "selector": "mfu",
+              "text": "MFU",
+              "type": "number"
+            },
+            {
+              "selector": "tokens_per_second",
+              "text": "tokens/s",
+              "type": "number"
+            },
+            {
+              "selector": "total_tokens",
+              "text": "tokens seen",
+              "type": "number"
+            },
+            {
+              "selector": "train_loss",
+              "text": "train loss",
+              "type": "number"
+            },
+            {
+              "selector": "sample_age_seconds",
+              "text": "sample age",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          }
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "wandb"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/activity",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "active_seconds",
+              "text": "active execution",
+              "type": "number"
+            },
+            {
+              "selector": "active_share",
+              "text": "active share",
+              "type": "number"
+            },
+            {
+              "selector": "progress_efficiency",
+              "text": "progress efficiency",
+              "type": "number"
+            },
+            {
+              "selector": "projected_finish_ms",
+              "text": "projected finish",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "timeFrom": "15m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Training loss by attempt",
+      "description": "Wall-clock loss for each Iris execution. Grafana disconnects a series after five minutes without data. A new series identifies a restart. Compare the endpoints to find a resume loss change.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "insertNulls": 300000
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "loss"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "attempt",
+              "type": "string"
+            },
+            {
+              "selector": "train_loss",
+              "text": "train loss",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 10,
+      "type": "trend",
+      "title": "Training loss by step",
+      "description": "Training loss against Levanter step for the whole run, read from W&B rather than finelog. Finelog evicts telemetry segments once the namespace passes its storage policy, so a finelog query starts at the oldest retained step; the W&B run spans every restart back to step 0. The series is sampled server-side and the bridge caches it for a minute, so it lags the attempt panel. This panel ignores the Grafana time range. Use it for the continuous curve, and the attempt panel for outages and restarts.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "wandb"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "step",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/history",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "metric",
+                "value": "train/loss"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "train loss",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Loss spikes and skipped steps",
+      "description": "Peak loss against the optimizer's own rejection threshold, and how many steps the optimizer skipped. Levanter's skip-step rule rejects a step whose loss exceeds the trailing mean plus six standard deviations, so a peak crossing the threshold line with a matching skip is a spike the run absorbed. Both series are empty when the optimizer runs without skip-step; the loss-spike alert reads train_loss directly and covers that case.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "skipped steps"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "bars"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 60
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reject threshold"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "loss_health"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "peak_loss",
+              "text": "peak loss",
+              "type": "number"
+            },
+            {
+              "selector": "reject_threshold",
+              "text": "reject threshold",
+              "type": "number"
+            },
+            {
+              "selector": "skipped_steps",
+              "text": "skipped steps",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Step time",
+      "description": "Mean and slowest seconds per step in each bucket, and how much of the mean was data loading and hooks. The slowest-step series is where a periodic cost shows: a checkpoint write or an eval lands on one step, lifting the maximum while the mean holds. Loading time growing into step time is an input-pipeline stall, which appears here well before it appears in loss.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "slowest step"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "step_time"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "slowest",
+              "text": "slowest step",
+              "type": "number"
+            },
+            {
+              "selector": "loading",
+              "text": "loading",
+              "type": "number"
+            },
+            {
+              "selector": "hooks",
+              "text": "hooks",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Throughput",
+      "description": "Model FLOP utilization on the left axis and token rate on the right. MFU is the throughput-regression signal that moves before loss does; tokens per second falls with it on a slowdown and without it on a smaller job.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tokens/s"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "throughput"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "mfu",
+              "text": "MFU",
+              "type": "number"
+            },
+            {
+              "selector": "tokens_per_second",
+              "text": "tokens/s",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Run progress",
+      "description": "Fraction of the configured schedule completed on the left axis, tokens consumed on the right. The slope of the progress line is what a completion estimate rests on; it goes flat during a stall and steps backward when a restart resumes from an older checkpoint. Progress is only reported by a run configured with a total step count.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tokens seen"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "progress"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "progress",
+              "text": "progress",
+              "type": "number"
+            },
+            {
+              "selector": "total_tokens",
+              "text": "tokens seen",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Optimizer",
+      "description": "Global gradient norm on the left axis and learning rate on the right. A gradient norm climbing while the schedule holds the learning rate flat is the shape that precedes a loss spike; a learning rate that moves without a schedule boundary means the run resumed with a different config.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "learning rate"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "optimizer"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "grad_norm",
+              "text": "gradient norm",
+              "type": "number"
+            },
+            {
+              "selector": "learning_rate",
+              "text": "learning rate",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Evaluation loss",
+      "description": "Held-out and Paloma macro loss, one series per metric. Sparse by design -- evals run on a cadence, so points rather than lines.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 0,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "evaluation_loss"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Device memory",
+      "description": "HBM in use and peak against the allocator limit, from JAX's memory stats on the trainer's local device. Peak approaching the limit is what flips rematerialization on and costs throughput, so read it beside MFU. Only the hero trainers log this.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gbytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "limit"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "device_memory"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "in_use",
+              "text": "in use",
+              "type": "number"
+            },
+            {
+              "selector": "peak",
+              "text": "peak",
+              "type": "number"
+            },
+            {
+              "selector": "limit_gib",
+              "text": "limit",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Execution health",
+      "description": "Attempt age starts at the first phase sample for the current execution. Initialization age appears only before training progress. Orange marks the 45-minute initialization alert. Red marks the 60-minute startup-supervisor deadline. Task counts and retry events match the current execution cluster and job root.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "timeFrom": "90m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "attempt age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "initialization age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 2700
+                    },
+                    {
+                      "color": "red",
+                      "value": 3600
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "task state age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 300
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "since last retry"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "execution_attempt"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "attempt_age_seconds",
+              "text": "attempt age",
+              "type": "number"
+            },
+            {
+              "selector": "initialization_age_seconds",
+              "text": "initialization age",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "execution_tasks"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "active_tasks",
+              "text": "active tasks",
+              "type": "number"
+            },
+            {
+              "selector": "running",
+              "text": "running",
+              "type": "number"
+            },
+            {
+              "selector": "pending",
+              "text": "pending",
+              "type": "number"
+            },
+            {
+              "selector": "assigned",
+              "text": "assigned",
+              "type": "number"
+            },
+            {
+              "selector": "building",
+              "text": "building",
+              "type": "number"
+            },
+            {
+              "selector": "task_state_age_seconds",
+              "text": "task state age",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "C",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "execution_retries"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "retry_events",
+              "text": "retry events (7d)",
+              "type": "number"
+            },
+            {
+              "selector": "since_last_retry",
+              "text": "since last retry",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Token drops",
+      "description": "The total, sender, and receiver token-drop fractions. The run-health limit is 7%, above intermittent 5% spikes.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "7% limit"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "token_drops"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "drop_fraction",
+              "text": "total drop",
+              "type": "number"
+            },
+            {
+              "selector": "sender_drop_fraction",
+              "text": "sender drop",
+              "type": "number"
+            },
+            {
+              "selector": "receiver_drop_fraction",
+              "text": "receiver drop",
+              "type": "number"
+            },
+            {
+              "selector": "alert_threshold",
+              "text": "7% limit",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Router health",
+      "description": "Routing entropy, router margins, and router-bias bounds. The hero monitor warns below 5.92 entropy or above a bias magnitude of 400.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bias max"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bias min"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "margin max"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "margin min"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5.92 minimum"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "+400 limit"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "-400 limit"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "router_health"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "routing_entropy",
+              "text": "routing entropy",
+              "type": "number"
+            },
+            {
+              "selector": "router_bias_max",
+              "text": "bias max",
+              "type": "number"
+            },
+            {
+              "selector": "router_bias_min",
+              "text": "bias min",
+              "type": "number"
+            },
+            {
+              "selector": "margin_max",
+              "text": "margin max",
+              "type": "number"
+            },
+            {
+              "selector": "margin_min",
+              "text": "margin min",
+              "type": "number"
+            },
+            {
+              "selector": "entropy_minimum",
+              "text": "5.92 minimum",
+              "type": "number"
+            },
+            {
+              "selector": "bias_upper_limit",
+              "text": "+400 limit",
+              "type": "number"
+            },
+            {
+              "selector": "bias_lower_limit",
+              "text": "-400 limit",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Parameter norms",
+      "description": "The total parameter norm and the router-bias parameter norm.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "router bias norm"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "parameter_norms"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "total_norm",
+              "text": "total norm",
+              "type": "number"
+            },
+            {
+              "selector": "router_bias_norm",
+              "text": "router bias norm",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Attempts",
+      "description": "One row for each Iris execution of this run in the last seven days, newest first, whether it is running or not: the top row stays the last attempt after that attempt fails. Active is the time from the first phase sample of the attempt to the last one, at process index zero. This is the recent detail behind the whole-run totals in the status strip, which W&B supplies and finelog eviction cannot reach. Select a job to open that attempt in the Iris dashboard.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "active"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "job"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "Open in Iris",
+                    "url": "https://iris.oa.dev/#/job/${__data.fields.job}?cluster=${__data.fields.iris_cluster}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "iris_cluster"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/training/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "attempts"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "started_ms",
+              "text": "started",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "job",
+              "text": "job",
+              "type": "string"
+            },
+            {
+              "selector": "active_seconds",
+              "text": "active",
+              "type": "number"
+            },
+            {
+              "selector": "iris_cluster",
+              "text": "iris_cluster",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    }
+  ]
+}

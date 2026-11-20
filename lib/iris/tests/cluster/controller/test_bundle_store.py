@@ -3,11 +3,18 @@
 
 """Tests for controller-side BundleStore behavior."""
 
+import asyncio
+import concurrent.futures
 import hashlib
+import threading
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import BundleStore, BundleUploadError
+from rigging.timing import Duration
+
+_THREAD_TIMEOUT = 5
 
 
 @pytest.fixture
@@ -29,13 +36,6 @@ def test_write_is_idempotent(store):
     id1 = store.write(blob)
     id2 = store.write(blob)
     assert id1 == id2
-
-
-def test_get_reads_stored_bytes(store):
-    blob = b"bundle data"
-
-    bundle_id = store.write(blob)
-    assert store.get(bundle_id) == blob
 
 
 def test_get_missing_raises_not_found(store):
@@ -105,3 +105,107 @@ def test_write_when_cached_file_is_missing_restores_persistent_content(tmp_path)
     # Fresh store (cold cache) should still load from disk.
     store2 = BundleStore(storage_dir=storage_dir)
     assert store2.get(cid) == data
+
+
+def test_blocked_write_does_not_delay_unrelated_content(tmp_path, monkeypatch):
+    store = BundleStore(storage_dir=str(tmp_path / "bundles"))
+    blocked_data = b"blocked bundle"
+    ready_data = b"unrelated bundle"
+    blocked_id = hashlib.sha256(blocked_data).hexdigest()
+    blocked_opened = threading.Event()
+    release_blocked = threading.Event()
+    ready_opened = threading.Event()
+    original_open = LocalFileSystem.open
+
+    def blocking_open(filesystem, path, mode="rb", *args, **kwargs):
+        if "w" in mode and path.endswith(blocked_id):
+            blocked_opened.set()
+            assert release_blocked.wait(timeout=_THREAD_TIMEOUT)
+        elif "w" in mode:
+            ready_opened.set()
+        return original_open(filesystem, path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(LocalFileSystem, "open", blocking_open)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        blocked = pool.submit(store.write, blocked_data)
+        assert blocked_opened.wait(timeout=_THREAD_TIMEOUT)
+        ready = pool.submit(store.write, ready_data)
+        try:
+            assert ready_opened.wait(timeout=_THREAD_TIMEOUT)
+            assert ready.result(timeout=_THREAD_TIMEOUT) == hashlib.sha256(ready_data).hexdigest()
+        finally:
+            release_blocked.set()
+        assert blocked.result(timeout=_THREAD_TIMEOUT) == blocked_id
+
+
+def test_concurrent_writes_of_same_content_persist_once(tmp_path, monkeypatch):
+    store = BundleStore(storage_dir=str(tmp_path / "bundles"))
+    data = b"shared bundle"
+    content_hash = hashlib.sha256(data).hexdigest()
+    first_opened = threading.Event()
+    release_first = threading.Event()
+    original_open = LocalFileSystem.open
+    write_count = 0
+
+    def blocking_open(filesystem, path, mode="rb", *args, **kwargs):
+        nonlocal write_count
+        if "w" in mode and path.endswith(content_hash):
+            write_count += 1
+            if write_count == 1:
+                first_opened.set()
+                assert release_first.wait(timeout=_THREAD_TIMEOUT)
+        return original_open(filesystem, path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(LocalFileSystem, "open", blocking_open)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(store.write, data)
+        assert first_opened.wait(timeout=_THREAD_TIMEOUT)
+        second = pool.submit(store.write, data)
+        release_first.set()
+        assert first.result(timeout=_THREAD_TIMEOUT) == content_hash
+        assert second.result(timeout=_THREAD_TIMEOUT) == content_hash
+
+    assert write_count == 1
+
+
+class StalledUploadFileSystem(AsyncFileSystem):
+    """Object storage that accepts metadata reads but can stall an upload."""
+
+    def __init__(self):
+        super().__init__()
+        self.block_uploads = True
+        self.cancelled = threading.Event()
+        self.files: dict[str, bytes] = {}
+
+    async def _makedirs(self, path, exist_ok=False):
+        pass
+
+    async def _info(self, path, **kwargs):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return {"name": path, "type": "file", "size": len(self.files[path])}
+
+    async def _pipe_file(self, path, value, **kwargs):
+        if self.block_uploads:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.cancelled.set()
+        self.files[path] = value
+
+
+def test_stalled_upload_is_cancelled_and_same_content_can_be_retried(monkeypatch):
+    filesystem = StalledUploadFileSystem()
+    monkeypatch.setattr("fsspec.core.url_to_fs", lambda *args, **kwargs: (filesystem, "bundles"))
+    store = BundleStore("s3://bundles", upload_timeout=Duration.from_ms(50))
+    data = b"retry after an upload stalls"
+
+    with pytest.raises(BundleUploadError):
+        store.write(data)
+
+    assert filesystem.cancelled.wait(timeout=_THREAD_TIMEOUT)
+    assert not filesystem.files
+    filesystem.block_uploads = False
+    bundle_id = store.write(data)
+    assert filesystem.files[f"bundles/{bundle_id}"] == data
+    assert store.get(bundle_id) == data

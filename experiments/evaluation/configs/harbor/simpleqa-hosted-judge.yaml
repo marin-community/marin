@@ -1,0 +1,19 @@
+n_concurrent_trials: 4
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 3
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+  exclude_exceptions: []
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: simpleqa
+    version: "1.0"

@@ -24,14 +24,16 @@ _CUDA_13_TEST_PACKAGES = (
 )
 
 
-def _add_cuda_toolchain(site_packages: Path, *, cuda_major: str, with_ptxas: bool, with_libdevice: bool) -> None:
+def _add_cuda_toolchain(
+    site_packages: Path, *, cuda_major: str, with_ptxas: bool, with_libdevice: bool, tool_mode: int = 0o755
+) -> None:
     cuda = site_packages / "nvidia" / cuda_major
     (cuda / "bin").mkdir(parents=True)
     if with_ptxas:
         for tool in ("ptxas", "nvlink"):
             tool_path = cuda / "bin" / tool
             tool_path.write_text("#!/bin/sh\n")
-            tool_path.chmod(0o755)
+            tool_path.chmod(tool_mode)
     if with_libdevice:
         libdevice = cuda / "nvvm" / "libdevice"
         libdevice.mkdir(parents=True)
@@ -144,6 +146,27 @@ def test_noop_when_ptxas_missing(tmp_path):
     assert not (workdir / "libdevice.10.bc").exists()
 
 
+def test_fails_when_ptxas_is_not_executable(tmp_path):
+    # An install that drops file modes leaves ptxas unrunnable; staging it would
+    # only move the failure to the first kernel compile.
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    _add_cuda_toolchain(
+        venv / "lib" / "python3.12" / "site-packages",
+        cuda_major="cu13",
+        with_ptxas=True,
+        with_libdevice=True,
+        tool_mode=0o644,
+    )
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_setup(venv, workdir)
+
+    assert not (venv / "bin" / "ptxas").exists()
+
+
 def test_stages_when_libdevice_missing(tmp_path):
     # ptxas present but libdevice absent: still symlink the toolchain, skip copies.
     venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=False)
@@ -156,12 +179,16 @@ def test_stages_when_libdevice_missing(tmp_path):
     assert not (workdir / "libdevice.10.bc").exists()
 
 
+# The restore must not depend on staging: a venv without a usable toolchain still
+# needs the CUDA 13 NCCL, or its processes can load different NCCL builds.
+@pytest.mark.parametrize("with_toolchain", [True, False])
 @pytest.mark.parametrize(("package", "version", "library_path"), _CUDA_13_TEST_PACKAGES)
-def test_restores_cuda13_shared_library_package_when_present(tmp_path, package, version, library_path):
+def test_restores_cuda13_shared_library_package_when_present(tmp_path, package, version, library_path, with_toolchain):
     venv = tmp_path / "venv"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(venv)], capture_output=True, text=True, check=True)
     site_packages = _site_packages(venv)
-    _add_cuda_toolchain(site_packages, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
+    if with_toolchain:
+        _add_cuda_toolchain(site_packages, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
 
     wheelhouse = tmp_path / "wheelhouse"
     _write_cuda13_library_wheel(wheelhouse, package, version, library_path)

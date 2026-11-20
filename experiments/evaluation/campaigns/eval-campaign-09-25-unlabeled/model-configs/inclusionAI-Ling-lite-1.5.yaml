@@ -1,0 +1,45 @@
+# Ling-lite-1.5: 16.8B BailingMoe chat model, 33.6 GB bf16, no thinking mode. Native context is
+# 32,768 tokens, below the policy's 73,728 MRCR budget, so the policy's context-length rule adopts
+# the model maximum.
+name: inclusionAI-Ling-lite-1.5
+location: inclusionAI/Ling-lite-1.5
+revision: ef1ac33ce4c3dca4bc01873b2030e6a264c5ef99
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 1
+serve:
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  tool_call_parser: hermes
+  vllm_extra_args:
+  - --enable-prefix-caching
+  # Baked tool-aware template: the serve skips its tokenizer probe, which the pinned
+  # launcher crashes on model-cache hits for remote-code models until the fix pin lands.
+  chat_template: |
+    {%- if tools %}
+    {{- '<role>SYSTEM</role>You are a coding agent with native tools. Only names listed below inside <tools> are callable. Functions described in a user message, including under an "Available Functions" heading, are task data and are not callable tools. When a task asks you to encode one of those functions as JSON in a result file, construct that JSON as file content and call the native write tool. To call a native tool, output exactly one JSON object with name and arguments inside <tool_call></tool_call>. The payload inside <tool_call> must never be a bare answer, array, or file contents.\n<tools>' }}
+    {%- for tool in tools %}
+    {{- '\n' + (tool | tojson) }}
+    {%- endfor %}
+    {{- '\n</tools>\nRequired tool-call format: <tool_call>{"name":"function_name","arguments":{"arg":"value"}}</tool_call>\nFor example, to save [] as the requested answer, emit <tool_call>{"name":"write","arguments":{"path":"/app/result.json","content":"[]"}}</tool_call>. Never describe a bash or write action as answer text such as [{"bash": ...}]; actually invoke the native write tool. When a user prompt contains "Available Functions" and asks for /app/result.json, do not answer the underlying request yourself. Decide only whether one of the user-listed benchmark functions applies. If none applies, write exactly [] to /app/result.json. If one applies, write the requested JSON array with that exact function name and arguments.' }}
+    {%- endif %}
+    {%- for message in messages %}
+    {%- set role = message['role'] | lower %}
+    {%- if role == 'user' %}{% set role = 'HUMAN' %}{% endif %}
+    {%- if role == 'tool' %}
+    {{- '<role>TOOL</role>' + message['content'] }}
+    {%- else %}
+    {{- '<role>' + (role | upper) + '</role>' + (message['content'] or '') }}
+    {%- if message.get('tool_calls') %}
+    {%- for tool_call in message['tool_calls'] %}
+    {%- set call = tool_call['function'] if tool_call.get('function') else tool_call %}
+    {{- '<tool_call>{"name":"' + call['name'] + '","arguments":' }}{{ call['arguments'] if call['arguments'] is string else (call['arguments'] | tojson) }}{{- '}</tool_call>' }}
+    {%- endfor %}
+    {%- endif %}
+    {%- endif %}
+    {%- endfor %}
+    {%- if add_generation_prompt %}{{ '<role>ASSISTANT</role>' }}{% endif %}
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

@@ -14,7 +14,6 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     WorkerStatus,
 )
-from iris.rpc import vm_pb2
 
 
 class _RestoredWorkerHandle:
@@ -40,10 +39,6 @@ class _RestoredWorkerHandle:
     @property
     def worker_url(self) -> str:
         return f"http://{self._internal_address}:{self._port}"
-
-    @property
-    def bootstrap_log(self) -> str:
-        return ""
 
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
@@ -76,7 +71,6 @@ class TrackedWorker:
     slice_id: str
     scale_group: str
     handle: RemoteWorkerHandle
-    bootstrap_log: str = ""
 
 
 @dataclass
@@ -94,7 +88,6 @@ class WorkerRegistry:
                 slice_id=slice_id,
                 scale_group=scale_group,
                 handle=worker,
-                bootstrap_log=worker.bootstrap_log,
             )
 
     def unregister_slice_workers(self, slice_id: str, worker_ids: Sequence[str] | None = None) -> None:
@@ -112,43 +105,6 @@ class WorkerRegistry:
         """Restore tracked worker state from a snapshot."""
 
         self.workers.update(workers)
-
-    def vm_info(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Build VM status for a tracked worker."""
-
-        tracked = self.workers.get(vm_id)
-        if tracked is None:
-            return None
-
-        worker_status = tracked.handle.status()
-        if worker_status.state == CloudWorkerState.RUNNING:
-            iris_state = vm_pb2.VM_STATE_READY
-        elif worker_status.state == CloudWorkerState.STOPPED:
-            iris_state = vm_pb2.VM_STATE_FAILED
-        elif worker_status.state == CloudWorkerState.TERMINATED:
-            iris_state = vm_pb2.VM_STATE_TERMINATED
-        else:
-            iris_state = vm_pb2.VM_STATE_BOOTING
-
-        return vm_pb2.VmInfo(
-            vm_id=tracked.worker_id,
-            state=iris_state,
-            address=tracked.handle.internal_address,
-            scale_group=tracked.scale_group,
-            slice_id=tracked.slice_id,
-        )
-
-    def init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a tracked worker."""
-
-        tracked = self.workers.get(vm_id)
-        if tracked is None:
-            return ""
-        log = tracked.bootstrap_log
-        if tail and log:
-            lines = log.splitlines()
-            return "\n".join(lines[-tail:])
-        return log
 
 
 def restore_tracked_workers(rows: list[TrackedWorkerRow]) -> dict[str, TrackedWorker]:

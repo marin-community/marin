@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
+import contextlib
 import dataclasses
 import functools
 import json
@@ -13,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -21,28 +23,50 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import requests
+from iris.cluster.log_highlights import extract_failure_highlights
 from iris.runtime import telemetry as runtime_telemetry
+from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
-from rigging.filesystem import marin_prefix
-from rigging.telemetry.metrics import MetricSnapshotPublisher
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.telemetry.metrics import MetricPublishResult, MetricSnapshot, MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
-from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
+from marin.external_dependencies import (
+    CUDA_TOOLCHAIN_VERSION_BY_BACKEND,
+    TPU_INFERENCE_FORK_REQUIREMENT,
+    VLLM_FORK_REQUIREMENT,
+    VLLM_GPU_RELEASE,
+    VllmGpuRelease,
+)
+from marin.inference.backend import OPENAI_API_SUFFIX
+from marin.inference.config import (
+    STANDARD_VLLM_METRIC_FAMILIES,
+    VLLM_DATA_PARALLEL_SIZE_FLAGS,
+    VLLM_METRIC_PREFIX,
+    WORKER_PYTHON_VERSION,
+    InferenceModelConfig,
+    VllmCompilationCacheMode,
+    VllmRouterConfig,
+    normalize_vllm_option,
+    vllm_option_flags,
+)
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
     current_vllm_gpu_wheel,
     vllm_gpu_wheel_provenance,
     vllm_gpu_wheel_requirement,
 )
+from marin.inference.vllm_router import RunningVllmRouter, vllm_router
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
 # this is only a convenience snapshot, capped because vLLM logs can be large.
 _NATIVE_LOG_TAIL_LINES = 1000
 _DEFAULT_VLLM_PORT = 8000
+_VLLM_EAGER_ACKNOWLEDGEMENT = "--i-know-i-am-making-vllm-slow"
+_VLLM_EAGER_GUIDE = "experiments/evaluation/serve/models/README.md"
 _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
@@ -51,20 +75,23 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
+_PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
+_NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
+_NATIVE_ERROR_SUMMARY_LINES = 40
+_NATIVE_STDOUT_LOG = "stdout.log"
+_NATIVE_STDERR_LOG = "stderr.log"
+_CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_REQUIREMENTS = (
-    "nvidia-cuda-nvcc==13.0.88",
-    "nvidia-cuda-crt==13.0.88",
-    "nvidia-nvvm==13.0.88",
-)
-_CUDA_NVCC_BOOTSTRAP = """\
+# CUDA torch's cuda-toolkit dependency selects NVRTC for both vLLM variants.
+_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-nvvm")
+_CUDA_NVCC_BOOTSTRAP = f"""\
 import importlib.metadata
 import os
 from pathlib import Path
 import sys
 
-distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
+distribution = importlib.metadata.distribution({_CUDA_NVCC_DISTRIBUTION!r})
 nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
 nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
 cuda_home = nvcc.parent.parent
@@ -76,6 +103,10 @@ cudart = cuda_lib / "libcudart.so.13"
 cudart_link = cuda_lib / "libcudart.so"
 if cudart.is_file() and not cudart_link.exists():
     cudart_link.symlink_to(cudart.name)
+nvrtc = cuda_lib / "libnvrtc.so.13"
+nvrtc_link = cuda_lib / "libnvrtc.so"
+if nvrtc.is_file() and not nvrtc_link.exists():
+    nvrtc_link.symlink_to(nvrtc.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp(sys.argv[1], sys.argv[1:])
@@ -88,13 +119,21 @@ entrypoint = sys.argv.pop(1)
 runpy.run_path(entrypoint, run_name="__main__")
 """
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
-# libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
-_RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
+# The AWS error is terminal in RunAI Streamer 0.16.1: a failed ranged GET fails the whole read.
+# Detect it directly instead of waiting for the Python worker to emit the later libstreamer wrapper error.
+_RUNAI_STREAMER_READ_MARKERS = (
+    "could not receive runai_response",
+    "aws_error_http_channel_throughput_failure",
+)
 _LINUX_PROC_ROOT = "/proc"
+# Captured at import so tests can drive the /proc parser on non-Linux hosts, as they already do for
+# _LINUX_PROC_ROOT.
+_HOST_PLATFORM = sys.platform
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
-_VLLM_METRIC_PREFIX = "vllm:"
-_MAX_VLLM_METRIC_SNAPSHOTS = 1024
+# The representative eight-engine standard contract contains 1,024 samples. Keep
+# optional additions bounded by the same post-selection envelope.
+_VLLM_METRIC_SAMPLE_LIMIT = 2048
 
 
 class _ProcessGroupStatus(StrEnum):
@@ -170,6 +209,8 @@ class VllmType(StrEnum):
 class _CudaVllmInstall:
     requirement: str
     torch_backend: str
+    toolchain_version: str
+    torch_install_args: tuple[str, ...]
     executable: str
     executable_args: tuple[str, ...] = ()
 
@@ -185,8 +226,12 @@ class IsolatedCudaVllm:
     source: VllmType = VllmType.UPSTREAM
     version: str | None = None
     """Exact PyPI pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
+    extra_requirements: tuple[str, ...] = ()
+    """Pinned vLLM plugins installed into the same isolated CUDA environment."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
+    release: VllmGpuRelease = VLLM_GPU_RELEASE
+    """Verified Marin fork release; callers may pin a profile without changing shared defaults."""
 
     def __post_init__(self) -> None:
         if self.source is VllmType.UPSTREAM and not self.version:
@@ -194,13 +239,20 @@ class IsolatedCudaVllm:
 
     def _install(self) -> _CudaVllmInstall:
         if self.source is VllmType.MARIN_FORK:
-            wheel = current_vllm_gpu_wheel(VLLM_GPU_RELEASE)
-            provenance = json.dumps(
-                dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel)), sort_keys=True
-            )
+            wheel = current_vllm_gpu_wheel(self.release)
+            provenance = json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(self.release, wheel)), sort_keys=True)
             return _CudaVllmInstall(
                 requirement=vllm_gpu_wheel_requirement(wheel),
-                torch_backend=VLLM_GPU_RELEASE.torch_backend,
+                torch_backend=self.release.torch_backend,
+                toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[self.release.torch_backend],
+                torch_install_args=(
+                    "--index",
+                    f"{_PYTORCH_WHEEL_INDEX_BASE}/{self.release.torch_backend}",
+                    "--index",
+                    f"{_PYTORCH_WHEEL_INDEX_BASE}/cpu",
+                    "--index-strategy",
+                    "unsafe-best-match",
+                ),
                 executable="python",
                 executable_args=(
                     "-c",
@@ -212,6 +264,8 @@ class IsolatedCudaVllm:
         return _CudaVllmInstall(
             requirement=f"vllm[runai]=={self.version}",
             torch_backend=_UPSTREAM_CUDA_TORCH_BACKEND,
+            toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[_UPSTREAM_CUDA_TORCH_BACKEND],
+            torch_install_args=("--torch-backend", _UPSTREAM_CUDA_TORCH_BACKEND),
             executable="vllm",
         )
 
@@ -224,14 +278,18 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
-        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
+        if self.source is VllmType.MARIN_FORK:
+            # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
+            command.extend(("--with", f"torch=={self.release.torch_version}"))
+        for package in _CUDA_TOOLCHAIN_PACKAGES:
+            requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
+        for requirement in self.extra_requirements:
+            command.extend(("--with", requirement))
+        command.extend(("--python", self.python_version))
+        command.extend(install.torch_install_args)
         command.extend(
             (
-                "--python",
-                self.python_version,
-                "--torch-backend",
-                install.torch_backend,
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
@@ -251,8 +309,12 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         install = self._install()
-        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        toolchain_version = install.toolchain_version
+        torch_identity = self.release.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
+        identity = f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
+        if self.extra_requirements:
+            return f"{identity}:{self.extra_requirements}"
+        return identity
 
 
 def _write_virtual_hosted_s3_config() -> str:
@@ -476,7 +538,7 @@ class VllmServerHandle:
 
 def _linux_process_group_status(process_group_id: int) -> _ProcessGroupStatus:
     """Return the observable liveness state for a Linux process group."""
-    if sys.platform != "linux":
+    if _HOST_PLATFORM != "linux":
         return _ProcessGroupStatus.UNKNOWN
     try:
         entries = os.scandir(_LINUX_PROC_ROOT)
@@ -560,25 +622,49 @@ def _read_file(path: str) -> str:
         return f.read()
 
 
-def _native_logs(log_dir: str | None) -> str:
+@dataclass(frozen=True)
+class _NativeLogPaths:
+    stdout: str
+    stderr: str
+
+
+def _native_log_paths(log_dir: str | None) -> _NativeLogPaths | None:
     if not log_dir:
-        return "<no log directory available for native vLLM server>"
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
-    return f"--- stdout ---\n{_read_file(stdout_path)}\n--- stderr ---\n{_read_file(stderr_path)}"
+        return None
+    return _NativeLogPaths(
+        stdout=os.path.join(log_dir, _NATIVE_STDOUT_LOG),
+        stderr=os.path.join(log_dir, _NATIVE_STDERR_LOG),
+    )
+
+
+def _native_logs(log_dir: str | None) -> str:
+    paths = _native_log_paths(log_dir)
+    if paths is None:
+        return _NO_NATIVE_LOG_DIRECTORY
+    return f"--- stdout ---\n{_read_file(paths.stdout)}\n--- stderr ---\n{_read_file(paths.stderr)}"
 
 
 def _native_logs_tail(log_dir: str | None, *, max_lines: int = _NATIVE_LOG_TAIL_LINES) -> str:
-    if not log_dir:
-        return "<no log directory available for native vLLM server>"
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
+    paths = _native_log_paths(log_dir)
+    if paths is None:
+        return _NO_NATIVE_LOG_DIRECTORY
     return (
         "--- stdout (tail) ---\n"
-        f"{_tail_file(stdout_path, max_lines)}\n"
+        f"{_tail_file(paths.stdout, max_lines)}\n"
         "--- stderr (tail) ---\n"
-        f"{_tail_file(stderr_path, max_lines)}"
+        f"{_tail_file(paths.stderr, max_lines)}"
     )
+
+
+def _native_error_summary(log_dir: str | None) -> str:
+    """Return the most useful native server failure lines."""
+    paths = _native_log_paths(log_dir)
+    if paths is None:
+        return _NO_NATIVE_LOG_DIRECTORY
+    lines = []
+    for path in (paths.stdout, paths.stderr):
+        lines.extend(_read_file(path).splitlines())
+    return "\n".join(extract_failure_highlights(lines, max_lines=_NATIVE_ERROR_SUMMARY_LINES))
 
 
 def validate_vllm_mode_env() -> None:
@@ -692,8 +778,52 @@ def _get_first_model_id(server_url: str) -> str:
     return str(model_id)
 
 
+def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
+    """Return configured global DP size; reject balancing modes that hide ranks."""
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=1)
+    parser.add_argument(*vllm_option_flags("--data-parallel-size-local"), type=int)
+    parser.add_argument(*vllm_option_flags("--data-parallel-rank"), type=int)
+    parser.add_argument(*vllm_option_flags("--data-parallel-start-rank"), type=int)
+    parser.add_argument(*vllm_option_flags("--nnodes"), type=int, default=1)
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument(*vllm_option_flags("--data-parallel-hybrid-lb"), action=argparse.BooleanOptionalAction)
+    parser.add_argument(*vllm_option_flags("--data-parallel-external-lb"), action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        *vllm_option_flags("--data-parallel-multi-port-external-lb"), action=argparse.BooleanOptionalAction
+    )
+    native_args = []
+    for arg in extra_cli_args:
+        option, equals, value = arg.partition("=")
+        native_args.append(f"{normalize_vllm_option(option)}{equals}{value}")
+    topology, _ = parser.parse_known_args(native_args)
+    local_dp = topology.data_parallel_size_local
+    if local_dp is None and topology.nnodes > 1:
+        local_dp = max(topology.data_parallel_size // topology.nnodes, 1)
+    # A rank selects external balancing; a partial local group with a start rank
+    # selects hybrid balancing even without an explicit load-balancer flag.
+    if (
+        topology.data_parallel_hybrid_lb
+        or topology.data_parallel_external_lb
+        or topology.data_parallel_multi_port_external_lb
+        or topology.data_parallel_rank is not None
+        or (
+            not topology.headless
+            and topology.data_parallel_start_rank is not None
+            and local_dp is not None
+            and local_dp != topology.data_parallel_size
+        )
+    ):
+        raise ValueError("session routing requires vLLM's global internal DP load balancer")
+    return topology.data_parallel_size
+
+
 class VllmEnvironment:
-    """Manage vLLM server lifecycle and eval-client configuration."""
+    """Manage native vLLM and an optional router.
+
+    With ``wait_for_ready=False``, call ``wait_until_ready()`` before using ``server_url``.
+    Router rank count comes from the final native arguments.
+    """
 
     def __init__(
         self,
@@ -705,6 +835,9 @@ class VllmEnvironment:
         extra_args: list[str] | None = None,
         launcher: VllmLauncher | None = None,
         compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+        extra_metric_families: frozenset[str] = frozenset(),
+        router: VllmRouterConfig | None = None,
+        router_port: int | None = None,
         wait_for_ready: bool = True,
     ) -> None:
         validate_vllm_mode_env()
@@ -713,10 +846,16 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        self._router_data_parallel_size = _router_data_parallel_size(self.extra_cli_args) if router is not None else 1
         # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
+        self.extra_metric_families = extra_metric_families
+        self.router_config = router
+        self.router_port = router_port
+        self.router: RunningVllmRouter | None = None
+        self._router_context = contextlib.ExitStack()
         self._ready_on_enter = wait_for_ready
 
         self.vllm_server: VllmServerHandle | None = None
@@ -746,9 +885,13 @@ class VllmEnvironment:
         self.close()
 
     def close(self) -> None:
-        if self.vllm_server is not None:
-            self.vllm_server.stop()
-            self.vllm_server = None
+        try:
+            self._router_context.close()
+        finally:
+            self.router = None
+            if self.vllm_server is not None:
+                self.vllm_server.stop()
+                self.vllm_server = None
         self.model_id = None
         self._command = None
 
@@ -757,7 +900,7 @@ class VllmEnvironment:
         *,
         poll_interval_seconds: float = 5,
     ) -> None:
-        """Wait once for the running vLLM process to become HTTP-ready."""
+        """Wait for native vLLM and the optional router to become HTTP-ready."""
         if self.model_id is not None:
             return
         if self.vllm_server is None:
@@ -778,8 +921,21 @@ class VllmEnvironment:
                 handle,
                 host=self.host,
                 launcher=self.launcher,
+                extra_metric_families=self.extra_metric_families,
             )
             self.model_id = _get_first_model_id(self.vllm_server.server_url)
+            if self.router_config is not None:
+                self.router = self._router_context.enter_context(
+                    vllm_router(
+                        self.router_config,
+                        self.worker_server_url.removesuffix(OPENAI_API_SUFFIX),
+                        data_parallel_size=self._router_data_parallel_size,
+                        host=self.host,
+                        port=self.router_port,
+                        startup_timeout_seconds=self.timeout_seconds,
+                        check_dependencies=self.check_alive,
+                    )
+                )
         except Exception:
             self._report_failure_and_close("Failed to make vLLM environment ready")
             raise
@@ -818,10 +974,30 @@ class VllmEnvironment:
             logger.warning("vLLM teardown failed after a startup failure", exc_info=True)
 
     @property
+    def command(self) -> tuple[str, ...]:
+        """Return the effective argv used to launch the native vLLM process."""
+        if self._command is None:
+            raise RuntimeError("vLLM server is not running in this environment.")
+        return tuple(self._command)
+
+    @property
     def server_url(self) -> str:
+        """OpenAI URL, including ``/v1``; routed after readiness when enabled."""
+        if self.router is not None:
+            return self.router.server_url
+        return self.worker_server_url
+
+    @property
+    def worker_server_url(self) -> str:
+        """Direct native OpenAI URL, including ``/v1``."""
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return self.vllm_server.server_url
+
+    @property
+    def metrics_url(self) -> str:
+        """Native worker metrics URL, including ``/metrics``, with or without routing."""
+        return f"{self.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics"
 
     def debug_snapshot(self) -> dict[str, str | int | None]:
         return {
@@ -846,6 +1022,8 @@ class VllmEnvironment:
     def check_alive(self) -> None:
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
+        if self.router is not None:
+            self.router.check_alive()
         return_code = self.vllm_server.process.poll()
         if return_code is None:
             return
@@ -891,6 +1069,10 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # RunAI otherwise writes no internal logs. WARNING is its default level, so this exposes the
     # final S3 exception without enabling per-request debug output.
     ("RUNAI_STREAMER_LOG_TO_STDERR", "1"),
+    # Large object-store checkpoints can legitimately take longer than vLLM's 600-second default
+    # to stream on a busy cluster. Keep the frontend alive through load and initialization; Marin's
+    # outer inference readiness timeout remains the whole-server failure boundary.
+    ("VLLM_ENGINE_READY_TIMEOUT_S", "1500"),
 )
 
 
@@ -936,8 +1118,8 @@ def _launch_vllm_process(
     log_dir: str,
     compilation_cache: VllmCompilationCache,
 ) -> VllmServerHandle:
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
+    log_paths = _native_log_paths(log_dir)
+    assert log_paths is not None
     try:
         process = subprocess.Popen(
             command,
@@ -954,7 +1136,7 @@ def _launch_vllm_process(
         compilation_cache.close()
         raise
 
-    log_pump = _LogPump(process, stdout_path, stderr_path)
+    log_pump = _LogPump(process, log_paths.stdout, log_paths.stderr)
     log_pump.start()
     try:
         process_group_id = os.getpgid(process.pid)
@@ -985,7 +1167,8 @@ def _wait_for_vllm_server(
         # A distributed loader worker can report this fault while the API parent stays alive and
         # waits forever for the other ranks. Fail the task from the complete local logs so Iris
         # can retry it without waiting for the parent to exit or the readiness timeout to expire.
-        has_streamer_fault = _RUNAI_STREAMER_READ_MARKER in _native_logs(handle.log_dir).lower()
+        logs = _native_logs(handle.log_dir).lower()
+        has_streamer_fault = any(marker in logs for marker in _RUNAI_STREAMER_READ_MARKERS)
         if process.poll() is None:
             if not has_streamer_fault:
                 return
@@ -1002,7 +1185,9 @@ def _wait_for_vllm_server(
             f"Command: {command}\n"
             f"Exit code: {process.returncode}\n"
             f"Logs: {handle.log_dir}\n"
-            f"{_native_logs_tail(handle.log_dir)}"
+            f"{_native_logs_tail(handle.log_dir)}\n"
+            "--- exception summary ---\n"
+            f"{_native_error_summary(handle.log_dir)}"
         )
         raise RuntimeError(message)
 
@@ -1037,6 +1222,39 @@ def _vllm_serve_command(
     ]
 
 
+def _guard_vllm_eager_args(extra_cli_args: list[str] | None) -> list[str]:
+    """Require an explicit acknowledgement before starting vLLM in eager mode."""
+    args = list(extra_cli_args or ())
+    acknowledged = _VLLM_EAGER_ACKNOWLEDGEMENT in args
+    args = [arg for arg in args if arg != _VLLM_EAGER_ACKNOWLEDGEMENT]
+
+    if any(arg == "--config" or arg.startswith("--config=") for arg in args):
+        raise ValueError("Pass vLLM options as explicit flags; Marin does not support --config")
+
+    eager = False
+    for arg in args:
+        if arg.startswith("--enf") and arg != "--enforce-eager":
+            raise ValueError("Use the exact --enforce-eager flag with Marin")
+        if arg.startswith("--no-enf") and arg != "--no-enforce-eager":
+            raise ValueError("Use the exact --no-enforce-eager flag with Marin")
+        if arg == "--enforce-eager":
+            eager = True
+        elif arg == "--no-enforce-eager":
+            eager = False
+
+    if eager and not acknowledged:
+        raise ValueError(
+            "vLLM eager execution requires the separate Marin flag "
+            f"{_VLLM_EAGER_ACKNOWLEDGEMENT}. See {_VLLM_EAGER_GUIDE}."
+        )
+    if eager:
+        logger.warning(
+            "vLLM eager execution disables torch.compile and CUDA graphs and can materially reduce "
+            "steady-state throughput. See https://github.com/marin-community/marin/issues/9339."
+        )
+    return args
+
+
 def _start_vllm_native_process(
     *,
     model_name_or_path: str,
@@ -1048,6 +1266,7 @@ def _start_vllm_native_process(
     log_prefix: str,
 ) -> tuple[VllmServerHandle, list[str]]:
     """Start ``vllm serve`` without imposing an HTTP readiness policy."""
+    extra_cli_args = _guard_vllm_eager_args(extra_cli_args)
     command = _vllm_serve_command(
         launcher=launcher,
         model_name_or_path=model_name_or_path,
@@ -1055,6 +1274,7 @@ def _start_vllm_native_process(
         port=port,
         extra_cli_args=extra_cli_args,
     )
+    logger.info("vLLM runtime: %s", launcher.cache_identity())
     log_dir = tempfile.mkdtemp(prefix=log_prefix)
     cache, native_env = _prepare_vllm_compilation_cache(
         model_name_or_path=model_name_or_path,
@@ -1067,7 +1287,7 @@ def _start_vllm_native_process(
             _launch_vllm_process(
                 command=command,
                 environment=native_env,
-                server_url=f"http://{host}:{port}/v1",
+                server_url=f"http://{host}:{port}{OPENAI_API_SUFFIX}",
                 port=port,
                 log_dir=log_dir,
                 compilation_cache=cache,
@@ -1079,11 +1299,59 @@ def _start_vllm_native_process(
         raise
 
 
+def _vllm_metric_snapshots(
+    families: tuple[PrometheusMetric, ...],
+    *,
+    family_names: frozenset[str],
+) -> tuple[MetricSnapshot, ...]:
+    selected_families = tuple(family for family in families if family.name in family_names)
+    return prefixed_metric_snapshots(selected_families, metric_prefix=VLLM_METRIC_PREFIX)
+
+
+class _VllmMetricSnapshotPublisher(MetricSnapshotPublisher):
+    """Reject an over-limit selected vLLM batch instead of publishing a prefix.
+
+    First-N admission makes dashboard data depend on exposition order. Collector
+    health reports the dropped batch while serving and later scrapes continue.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_records: int,
+        attributes: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(max_records=max_records, attributes=attributes)
+        self._overflow_active = False
+
+    def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
+        runtime = telemetry._runtime
+        if runtime is None:
+            return MetricPublishResult(False, 0, 0, 0)
+        if len(snapshots) > self._max_records:
+            if not self._overflow_active:
+                logger.warning(
+                    "Rejecting oversized vLLM metric batch with %d samples; limit is %d",
+                    len(snapshots),
+                    self._max_records,
+                )
+            self._overflow_active = True
+            return MetricPublishResult(
+                configured=True,
+                enqueued_records=0,
+                sample_limit_dropped_records=len(snapshots),
+                telemetry_lost_records=0,
+            )
+        self._overflow_active = False
+        return super().publish(snapshots)
+
+
 def _configure_vllm_telemetry(
     handle: VllmServerHandle,
     *,
     host: str,
     launcher: VllmLauncher,
+    extra_metric_families: frozenset[str],
 ) -> VllmServerHandle:
     """Attach telemetry collectors after a native vLLM server is ready."""
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
@@ -1098,14 +1366,17 @@ def _configure_vllm_telemetry(
     metrics_collector = PrometheusCollector(
         metric_source=_VLLM_METRICS_SERVICE,
         scraper=PrometheusScraper(metrics_url),
-        processor=functools.partial(prefixed_metric_snapshots, metric_prefix=_VLLM_METRIC_PREFIX),
-        publisher=MetricSnapshotPublisher(
-            max_records=_MAX_VLLM_METRIC_SNAPSHOTS,
+        processor=functools.partial(
+            _vllm_metric_snapshots,
+            family_names=STANDARD_VLLM_METRIC_FAMILIES | extra_metric_families,
+        ),
+        publisher=_VllmMetricSnapshotPublisher(
+            max_records=_VLLM_METRIC_SAMPLE_LIMIT,
             attributes={"metric_source": _VLLM_METRICS_SERVICE},
         ),
     )
     metrics_collector.start()
-    logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
+    logger.info("Forwarding vLLM metrics from %s to Finelog telemetry", metrics_url)
     nccl_probe = nccl.start() if _starts_nccl_ras_probe(launcher) else None
     return dataclasses.replace(
         handle,

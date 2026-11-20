@@ -7,6 +7,7 @@ from .api import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from .grad_in_forward import linear_softmax_cross_entropy_weighted_sum
 from .tuned_block_sizes import (
     DEFAULT_DEVICE_KEY,
     SHAPE_BUCKETS,
@@ -25,4 +26,5 @@ __all__ = [
     "TUNED_BLOCK_SIZES",
     "fused_cross_entropy_loss_and_logsumexp_penalty",
     "infer_block_sizes",
+    "linear_softmax_cross_entropy_weighted_sum",
 ]

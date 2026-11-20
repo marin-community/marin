@@ -1,0 +1,3 @@
+repository = "https://github.com/marin-community/harbor"
+commit = "9d099696a567f489a111dc7e3c61183c98f007f0"
+version = "0.8.1"

@@ -8,6 +8,55 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 
+def _tpu_exp(x: jax.Array) -> jax.Array:
+    return jax.lax.exp(x, accuracy=jax.lax.AccuracyMode.HIGHEST)
+
+
+def _cross_entropy_exp(x: jax.Array) -> jax.Array:
+    return jax.lax.platform_dependent(x, tpu=_tpu_exp, default=jnp.exp)
+
+
+def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
+    # Default TPU logarithms can introduce ~1e-4 errors in FP32 cross-entropy.
+    maximum = jnp.max(logits, axis=-1)
+    maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
+    total = jnp.sum(_tpu_exp(logits - maximum[..., None]), axis=-1)
+    return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
+
+
+def _default_logsumexp(logits: jax.Array) -> jax.Array:
+    return jax.nn.logsumexp(logits, axis=-1)
+
+
+def _cross_entropy_logsumexp(logits: jax.Array) -> jax.Array:
+    return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
+
+
+@jax.custom_jvp
+def _tpu_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
+    maximum = jnp.maximum(left, right)
+    delta = left - right
+    correction = jax.lax.log1p(_tpu_exp(-jnp.abs(delta)), accuracy=jax.lax.AccuracyMode.HIGHEST)
+    return jnp.where(jnp.isnan(delta), left + right, maximum + correction)
+
+
+@_tpu_logaddexp.defjvp
+def _tpu_logaddexp_jvp(primals, tangents):
+    left, right = primals
+    left_dot, right_dot = tangents
+    result = _tpu_logaddexp(left, right)
+    # Preserve JAX logaddexp's derivative convention at positive infinity.
+    left = jnp.where(jnp.isposinf(left), 0, left)
+    right = jnp.where(jnp.isposinf(right), 0, right)
+    finite_result = jnp.where(jnp.isposinf(result), 0, result)
+    tangent = left_dot * _tpu_exp(left - finite_result) + right_dot * _tpu_exp(right - finite_result)
+    return result, tangent
+
+
+def _cross_entropy_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
+    return jax.lax.platform_dependent(left, right, tpu=_tpu_logaddexp, default=jnp.logaddexp)
+
+
 def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[float]) -> Float[Array, "B V"]:
     if logit_soft_cap is None:
         return logits
@@ -46,12 +95,13 @@ def linear_softmax_cross_entropy_loss_reference(
         w,
         (((1,), (0,)), ((), ())),
         precision=precision,
+        preferred_element_type=jnp.float32,
     )
     if dtype is not None:
         logits = logits.astype(dtype)
 
     logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-    lse = jax.nn.logsumexp(logits, axis=-1)
+    lse = _cross_entropy_logsumexp(logits)
     label_logits = logits[jnp.arange(logits.shape[0]), labels]
     loss = lse - label_logits
     if return_argmax:
@@ -78,7 +128,7 @@ def linear_softmax_cross_entropy_loss_streaming(
 
     b_dim = x.shape[0]
     v_dim = w.shape[1]
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
 
     pad = (-v_dim) % block_size
     if pad:
@@ -104,6 +154,7 @@ def linear_softmax_cross_entropy_loss_streaming(
             w_block,
             (((1,), (0,)), ((), ())),
             precision=precision,
+            preferred_element_type=jnp.float32,
         )
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -112,8 +163,8 @@ def linear_softmax_cross_entropy_loss_streaming(
         valid = (start + jnp.arange(block_size)) < v_dim
         logits = jnp.where(valid, logits, -jnp.inf)
 
-        block_lse = jax.nn.logsumexp(logits, axis=-1)
-        logsumexp = jnp.logaddexp(logsumexp, block_lse)
+        block_lse = _cross_entropy_logsumexp(logits)
+        logsumexp = _cross_entropy_logaddexp(logsumexp, block_lse)
 
         in_block = (labels >= start) & (labels < start + block_size)
         label_idx = labels - start

@@ -31,12 +31,3 @@ WIKI_BLACKLISTED_SELECTORS = [
     "ol.references",
     "div#mw-indicator-coordinates",
 ]
-
-# Selectors to remove from arXiv DOM tree. These mostly contain reference sections,
-# authors, and title sections (prepended manually to avoid duplication).
-ARXIV_BLACKLISTED_SELECTORS = [
-    "h2.ltx_title_bibliography",
-    "div.ltx_classification",
-    "span.ltx_role_author",
-    "h1.ltx_title",
-]

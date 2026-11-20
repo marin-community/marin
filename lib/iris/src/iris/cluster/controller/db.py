@@ -49,9 +49,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
 
-import fsspec.core
 from finelog.client.log_client import Table
-from rigging.filesystem import StoragePath
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
@@ -613,9 +613,8 @@ class ControllerDB:
         The backup runs through a dedicated read-only source connection,
         so writers on the write engine proceed concurrently under SQLite's
         WAL semantics -- no controller-level lock is held for the
-        duration of the copy.  Batched page copying (``pages=500``)
-        yields between steps so a sustained write stream cannot starve
-        the backup.
+        duration of the copy.  The backup captures a fixed snapshot despite
+        concurrent writes; WAL reclamation is delayed only during the copy.
         """
         destination.parent.mkdir(parents=True, exist_ok=True)
         src = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -628,7 +627,14 @@ class ControllerDB:
             src.execute("PRAGMA query_only = ON")
             dest = sqlite3.connect(str(destination))
             try:
-                src.backup(dest, pages=500, sleep=0)
+                src.execute("BEGIN")
+                try:
+                    # Pin the snapshot across batches so concurrent commits cannot
+                    # restart the copy. BEGIN is deferred until the first read.
+                    src.execute("SELECT rootpage FROM sqlite_schema LIMIT 1").fetchall()
+                    src.backup(dest, pages=500, sleep=0)
+                finally:
+                    src.rollback()
                 dest.execute("PRAGMA journal_mode = DELETE")
                 dest.execute("PRAGMA auto_vacuum = INCREMENTAL")
                 dest.execute("PRAGMA incremental_vacuum")
@@ -666,7 +672,7 @@ class ControllerDB:
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
             tmp_path = self._db_path.with_suffix(".tmp")
-            with fsspec.core.open(main_source, "rb") as src, open(tmp_path, "wb") as dst:
+            with open_url(main_source, "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
             self._remove_sidecars(self._db_path)
             tmp_path.rename(self._db_path)
@@ -675,7 +681,7 @@ class ControllerDB:
             auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
             if StoragePath(auth_source).exists():
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
-                with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
+                with open_url(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())
                 self._remove_sidecars(self._auth_db_path)
                 auth_tmp.rename(self._auth_db_path)

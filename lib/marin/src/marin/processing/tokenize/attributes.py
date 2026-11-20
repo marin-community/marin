@@ -5,14 +5,16 @@
 
 Reads one or more :class:`~marin.datakit.normalize.NormalizedData` sources, runs
 the shared tokenization core, and writes co-partitioned attribute parquet shards
-with columns ``id`` and ``input_ids`` (one row per input document).
+with columns ``id``, ``chunk_index`` and ``input_ids``.
 
 Each output shard mirrors the basename of its source shard, which ensures the
 datakit invariants hold by construction:
 
 * Same shard count as source (co-partitioned).
 * Sorted by ``id`` within each shard (sources are already sorted; the
-  tokenize pipeline preserves order).
+  tokenize pipeline preserves order). A document above the token limit of one
+  Parquet row occupies several adjacent rows that share its ``id``, in
+  ``chunk_index`` order, so the sort by ``id`` holds.
 
 Downstream:
 
@@ -20,40 +22,58 @@ Downstream:
   one or more :class:`TokenizedAttrData` artifacts to produce a Levanter cache
   per split (sharded layout).
 * Other datakit attribute consumers (joins, mixing) can use the ``id`` column to
-  align tokens with quality scores, dedup flags, etc.
+  align tokens with quality scores, dedup flags, etc. :func:`iter_tokenized_documents`
+  regroups a shard's chunk rows into one token array per document for them.
 """
 import dataclasses
 import logging
 import os
+from collections.abc import Iterator
 
+import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize._core import resolve_window_and_batch, tokenize_batches_with_id, tokenize_pipeline
+from marin.processing.tokenize._core import (
+    CHUNK_INDEX_FIELD,
+    resolve_window_and_batch,
+    tokenize_batches_with_id,
+    tokenize_pipeline,
+)
 
 logger = logging.getLogger(__name__)
-TOKENIZED_ATTR_DATA_VERSION = 3
+TOKENIZED_ATTR_DATA_VERSION = 4
 
 
 class TokenizedAttrData(BaseModel):
     """Per-split datakit attribute datasets produced by :func:`tokenize_attributes`.
 
     Each split's attribute parquet shards live under ``output_dirs[split]/`` with
-    columns ``id: string`` and ``input_ids: list<int>``. Shards mirror their source
+    columns ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int>``.
+    Shards mirror their source
     :class:`~marin.datakit.normalize.NormalizedData` partitions 1:1 (same basename,
-    same row order, same id range), so the dataset is sorted by ``id`` per partition
-    and co-partitioned with the source — both datakit invariants.
+    same source order, same id range), so the dataset is sorted by ``id`` per
+    partition and co-partitioned with the source — both datakit invariants.
+
+    ``id`` is the source document id, and is the join key against the other datakit
+    attribute datasets. A document with more tokens than one Parquet row can hold
+    occupies several adjacent rows that share that id, in zero-based
+    ``chunk_index`` order. An unsplit document is a single row with
+    ``chunk_index == 0``. A consumer that needs one row per document must group by
+    ``id``. A consumer that walks this dataset positionally against a
+    one-row-per-document dataset must not: the row counts differ.
 
     Persisted as the step's ``.artifact``. Load via
     ``Artifact.from_path(step, TokenizedAttrData)``.
@@ -85,6 +105,59 @@ class TokenizedAttrData(BaseModel):
         return sorted(str(m) for m in StoragePath(prefix_join(d, "*.parquet")).glob())
 
 
+# Rows read from a tokenized shard at once during the positional join.
+_TOKENIZE_BATCH_SIZE = 8192
+
+
+def iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
+    """Yield ``(doc_id, input_ids)`` per document from one tokenized shard.
+
+    A document above the token limit of one Parquet row occupies several adjacent
+    rows that share its ``id``, ordered by ``chunk_index`` (see
+    :class:`TokenizedAttrData`). Those rows are joined back into one token array
+    here, so this shard yields one document per source document and the
+    positional join against the dense per-document tables holds.
+
+    ``chunk_index == 0`` marks the first row of a document. A rule that instead
+    started a document on a change of ``id`` would merge two adjacent documents
+    that share an id, which some sources produce.
+
+    Raises ``RuntimeError`` on a shard with no ``chunk_index`` column (written
+    before the column existed) and on rows that do not run 0, 1, 2 ... within one
+    id. Concatenating out-of-order rows would corrupt the token stream silently.
+    """
+    with StoragePath(path).open("rb") as fh:
+        parquet = pq.ParquetFile(fh)
+        if CHUNK_INDEX_FIELD not in parquet.schema_arrow.names:
+            raise RuntimeError(
+                f"{path}: tokenize shard has no {CHUNK_INDEX_FIELD} column. It predates the column, "
+                "so its step identity does not match this code. Re-run tokenize for this source."
+            )
+        doc_id: str | None = None
+        chunks: list[np.ndarray] = []
+        for batch in parquet.iter_batches(
+            batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", CHUNK_INDEX_FIELD, "input_ids"]
+        ):
+            row_ids = batch.column("id").to_pylist()
+            chunk_indices = batch.column(CHUNK_INDEX_FIELD).to_pylist()
+            input_ids = batch.column("input_ids")
+            for i, row_id in enumerate(row_ids):
+                if chunk_indices[i] == 0:
+                    if chunks:
+                        assert doc_id is not None
+                        yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+                    doc_id, chunks = row_id, []
+                elif row_id != doc_id or chunk_indices[i] != len(chunks):
+                    raise RuntimeError(
+                        f"{path}: row {i} is chunk {chunk_indices[i]} of {row_id}, but chunk "
+                        f"{len(chunks)} of {doc_id} must come next"
+                    )
+                chunks.append(input_ids[i].values.to_numpy())
+        if chunks:
+            assert doc_id is not None
+            yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class TokenizeAttributesConfig:
     """Config for :func:`tokenize_attributes`.
@@ -114,6 +187,7 @@ class TokenizeAttributesConfig:
 _ATTRIBUTE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
+        pa.field(CHUNK_INDEX_FIELD, pa.int32()),
         pa.field("input_ids", pa.list_(pa.int32())),
     ]
 )
@@ -211,7 +285,7 @@ def _process_split(
 def _attribute_schema(data_format: LmDatasetFormatBase) -> pa.Schema | None:
     """Return the parquet schema for attribute output, or ``None`` to let zephyr infer.
 
-    For text formats we pin ``id: string`` and ``input_ids: list<int32>`` to keep
+    For text formats we pin ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int32>`` to keep
     files compact and stable across workers. For chat or other multi-output formats,
     we let zephyr infer from the first record so additional columns like
     ``assistant_masks`` flow through unchanged.
@@ -225,7 +299,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """Tokenize :class:`NormalizedData` source(s) into datakit attribute parquet.
 
     Each split's source shards become co-partitioned attribute parquet files
-    sharing basenames with the source. Output records carry ``{id, input_ids}``
+    sharing basenames with the source. Output rows carry ``{id, chunk_index, input_ids}``
     (plus any extra fields produced by the format processor for non-text formats).
 
     Args:
@@ -274,6 +348,7 @@ def tokenize_attributes_step(
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that tokenizes :class:`NormalizedData` source(s) into attribute parquet.
@@ -301,6 +376,7 @@ def tokenize_attributes_step(
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
         zephyr_context: Optional shared Zephyr context.
+        output_path_prefix: Optional output root in place of ``MARIN_PREFIX``.
         override_output_path: Optional explicit output path.
     """
     if train_normalize is None and validation_normalize is None:
@@ -345,5 +421,6 @@ def tokenize_attributes_step(
         deps=deps,
         fn=_fn,
         hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

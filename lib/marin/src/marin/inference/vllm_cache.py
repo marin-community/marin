@@ -19,7 +19,8 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, BinaryIO, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
-from rigging.filesystem import StoragePath, marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.execution.fingerprint import canonical_json
 from marin.inference.config import VllmCompilationCacheMode

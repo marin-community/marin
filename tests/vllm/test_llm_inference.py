@@ -8,7 +8,7 @@ import pytest
 from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
 
-from tests.test_utils import skip_if_no_tpu
+from tests.vllm.tpu_availability import skip_if_no_tpu
 
 try:
     from vllm import LLM, SamplingParams
@@ -37,7 +37,7 @@ def test_local_llm_inference():
     config = InferenceModelConfig(
         name="test-llama-200m",
         path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
-        engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
+        engine_kwargs={"max_model_len": 1024},
     )
     model_name_or_path, config = resolve_model_name_or_path(config)
     generated_texts = run_vllm_inference(model_name_or_path, **config.engine_kwargs)

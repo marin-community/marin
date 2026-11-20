@@ -18,7 +18,7 @@ from rigging import telemetry
 from iris.cluster.controller.native_proxy import NativeProxy
 
 IN_FLIGHT_METRIC_NAME = "rpc_in_flight"
-DEFAULT_POLL_INTERVAL = 15.0
+DEFAULT_POLL_INTERVAL = 60.0
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +175,7 @@ class NativeProxyTelemetry:
                 self.flush()
             except Exception:
                 # Native metrics remain best-effort and must not affect controller service.
-                try:
-                    logger.warning("could not read native proxy telemetry snapshot", exc_info=True)
-                except Exception:
-                    pass
+                logger.warning("could not read native proxy telemetry snapshot", exc_info=True)
             if stop.wait(self._interval):
                 return
 

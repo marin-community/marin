@@ -12,7 +12,7 @@ The subset holds three upstream components; two are ingested:
 as the ``finepdfs`` source (``finepdfs.py``).
 """
 
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.datakit.download.dolma3_5 import (
     DATA_FILE_EXTENSION,

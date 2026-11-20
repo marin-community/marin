@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-bare-any
+lane: interfaces
+title: '`Any` where the concrete type is known'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Bare `Any` defeats the type checker exactly at the points
+  where it would have caught the next refactor. Use a `Protocol` or the concrete
+  type instead.
+
+  **When allowed:** Boundary code that legitimately handles unrelated types
+  (generic cache value, ad-hoc JSON blob). Document the reason in a brief
+  comment.
+
+  **Bad example:**
+  ```python
+  def send_entries(payloads: list[Any]) -> None:
+      # only ever called with list[logging_pb2.LogEntry]. Type it.
+      ...
+  ```

@@ -14,7 +14,7 @@
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health              (200 always; body says `ok` or why ingest is degraded)
 //!   /v1/telemetry       (authenticated bounded JSON ingestion)
-//!   /api/*              (build + segment introspection)
+//!   /api/*              (build, segment, and forwarding introspection)
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
 //!   .fallback_service(connect)            (RPC POSTs land here)
@@ -26,35 +26,40 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
+use axum::http::{Method, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 
 use crate::proto::finelog::logging::LogServiceExt;
 use crate::proto::finelog::stats::StatsServiceExt;
+use crate::read_executor::ReadExecutor;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
+use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::IngestHealth;
 use crate::server::interceptors::{
-    ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
+    read_procedure, ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
 use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
 use crate::store::Store;
 
-use super::log_service::LogServiceImpl;
+use super::compression::compression_registry;
+use super::log_service::{LogServiceImpl, LogTailCache};
 use super::stats_service::StatsServiceImpl;
 use super::MAX_MESSAGE_BYTES;
 
-/// Server-shell tuning. The interceptor caps + slow threshold are fields so a
-/// cargo/parity test can lower them; production uses [`ServerConfig::default`].
+/// Server HTTP and telemetry tuning; production uses [`ServerConfig::default`].
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Mount the non-proto `--debug-admin` `/debug/*` routes.
     pub debug_admin: bool,
-    /// Concurrent FetchLogs cap.
+    /// Concurrent FetchLogs working-set cap.
     pub max_concurrent_fetch_logs: usize,
-    /// Concurrent Query cap.
+    /// Concurrent Query working-set cap.
     pub max_concurrent_query: usize,
     /// Concurrent telemetry request cap; excess requests receive HTTP 429.
     pub max_concurrent_telemetry: usize,
@@ -62,6 +67,9 @@ pub struct ServerConfig {
     pub telemetry_dedupe_capacity: usize,
     /// Default per-method slow-RPC threshold (ms); `<= 0` disables.
     pub slow_rpc_threshold_ms: i64,
+    /// Downstream forwarding target exposed by the authenticated operator
+    /// introspection routes.
+    pub forwarding: Option<ForwardingConfig>,
     /// The authenticated-ingress policy. Always enforced — the
     /// interceptor gates every RPC and the policy is default-deny. The default
     /// ([`AuthPolicy::allow_localhost`]) admits loopback only, so a bare finelog
@@ -79,6 +87,7 @@ impl Default for ServerConfig {
             max_concurrent_telemetry: telemetry::DEFAULT_MAX_CONCURRENT_REQUESTS,
             telemetry_dedupe_capacity: telemetry::DEFAULT_DEDUPE_CAPACITY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
+            forwarding: None,
             auth: Arc::new(AuthPolicy::allow_localhost()),
         }
     }
@@ -99,6 +108,12 @@ impl ServerConfig {
         self.auth = Arc::new(policy);
         self
     }
+
+    /// Add a configured downstream target to operator introspection.
+    pub fn with_forwarding(mut self, forwarding: ForwardingConfig) -> Self {
+        self.forwarding = Some(forwarding);
+        self
+    }
 }
 
 /// Build the connect `ConnectRpcService`: both services on one Router (via
@@ -107,14 +122,16 @@ impl ServerConfig {
 fn build_connect_service(
     store: Arc<Store>,
     config: &ServerConfig,
+    tail_cache: Arc<LogTailCache>,
 ) -> ConnectRpcService<ConnectRouter> {
     let connect_router = {
         let r = ConnectRouter::new();
         let r = Arc::new(StatsServiceImpl::new(Arc::clone(&store))).register(r);
-        Arc::new(LogServiceImpl::new(Arc::clone(&store))).register(r)
+        Arc::new(LogServiceImpl::new(Arc::clone(&store), tail_cache)).register(r)
     };
 
     ConnectRpcService::new(connect_router)
+        .with_compression(compression_registry())
         .with_limits(
             Limits::default()
                 .max_message_size(MAX_MESSAGE_BYTES)
@@ -131,14 +148,14 @@ fn build_connect_service(
             config.max_concurrent_fetch_logs,
             config.max_concurrent_query,
         ))
-    // gzip + zstd are already active via the default CompressionRegistry the
-    // crate's `gzip`/`zstd` features install in ConnectRpcService::new.
 }
 
 /// Build the full axum app for `store` with `config`. See the module doc for
 /// the route precedence. Re-exported as `server::build_app_with_config`.
-pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
-    let connect_service = build_connect_service(Arc::clone(&store), &config);
+pub fn build_app(store: Arc<Store>, config: ServerConfig, reads: Arc<ReadExecutor>) -> Router {
+    let tail_cache = Arc::new(LogTailCache::new());
+    let connect_service =
+        build_connect_service(Arc::clone(&store), &config, Arc::clone(&tail_cache));
     let health = Arc::new(IngestHealth::new());
 
     let telemetry = telemetry::router(
@@ -150,10 +167,17 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     );
     // The introspection routes bypass the Connect interceptor chain, so they
     // carry the same default-deny auth policy the RPCs do.
-    let introspection =
-        introspection::introspection_router(Arc::clone(&store), Arc::clone(&health)).layer(
-            axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
-        );
+    let introspection = introspection::introspection_router(
+        Arc::clone(&store),
+        Arc::clone(&health),
+        config.forwarding.clone(),
+        tail_cache,
+        Arc::clone(&reads),
+    )
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&config.auth),
+        auth_gate,
+    ));
     // `/health` answers 200 whether or not ingest is wedged and puts the verdict
     // in the body, which the deploy gates read. It is also the Kubernetes
     // liveness, readiness, and startup probe, and a registration that disagrees
@@ -184,6 +208,7 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     app = spa::spa_routes(app, spa::vue_dist_dir(), connect_service.clone());
 
     app.fallback_service(connect_service)
+        .layer(axum::middleware::from_fn_with_state(reads, dispatch_reads))
         // Transport layer: rewrite legacy /iris.logging.LogService/* onto
         // /finelog.logging.LogService/* before routing.
         .layer(axum::middleware::from_fn(
@@ -196,4 +221,25 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         .layer(axum::middleware::from_fn(
             forwarded_prefix::strip_forwarded_prefix,
         ))
+}
+
+async fn dispatch_reads(
+    State(reads): State<Arc<ReadExecutor>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method() != Method::POST || read_procedure(request.uri().path()).is_none() {
+        return next.run(request).await;
+    }
+    match reads.run(async move { next.run(request).await }).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(%error, "read request task failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "read request task failed",
+            )
+                .into_response()
+        }
+    }
 }

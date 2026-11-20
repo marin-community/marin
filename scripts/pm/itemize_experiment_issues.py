@@ -62,10 +62,7 @@ def get_existing_reports():
         content = f.read()
 
     # Extract report URLs using regex
-    report_urls = set(
-        # TODO: move this once we replace
-        re.findall(r"https://(?:marin\.community/data-browser/|wandb\.ai/[^)]+|api\.wandb\.ai/links/[^)]+)", content)
-    )
+    report_urls = set(re.findall(r"https://(?:wandb\.ai/[^)]+|api\.wandb\.ai/links/[^)]+)", content))
     return report_urls
 
 
@@ -83,13 +80,9 @@ def get_github_issues():
         # Look for experiment links in the description
         description = issue.body or ""
 
-        # Find all experiment URLs
-        urls = {
-            "wandb": re.findall(r"https://(?:wandb\.ai/[^\s)]+|api\.wandb\.ai/links/[^\s)]+)", description),
-            "data_browser": re.findall(r"https://marin\.community/data-browser/[^\s)]+", description),
-        }
+        urls = re.findall(r"https://(?:wandb\.ai/[^\s)]+|api\.wandb\.ai/links/[^\s)]+)", description)
 
-        if any(urls.values()):  # If we found any experiment links
+        if urls:
             badge_url = f"https://img.shields.io/github/issues/detail/state/marin-community/marin/{issue.number}"
             experiment_links.append(
                 {"title": clean_title(issue.title), "issue_num": issue.number, "badge_url": badge_url, "urls": urls}
@@ -121,7 +114,7 @@ def update_reports_md(new_reports):
         title = report["title"].replace("[", r"\[").replace("]", r"\]")
 
         # Check if any of the URLs are already in the content
-        if any(url in existing_content for urls in report["urls"].values() for url in urls):
+        if any(url in existing_content for url in report["urls"]):
             continue
 
         # Add the main experiment entry
@@ -133,7 +126,7 @@ def update_reports_md(new_reports):
         new_content += f"    - [GitHub Issue #{report['issue_num']}]({issue_url}) {badge_link}\n"
 
         # Add WandB links if present
-        for url in report["urls"]["wandb"]:
+        for url in report["urls"]:
             if "/runs/" in url:
                 link_text = get_run_name(url)
             elif "api.wandb.ai/links" in url:
@@ -141,10 +134,6 @@ def update_reports_md(new_reports):
             else:
                 link_text = "WandB Report"
             new_content += f"    - [{link_text}]({url})\n"
-
-        # Add Data Browser links if present
-        for url in report["urls"]["data_browser"]:
-            new_content += f"    - [Data Browser]({url})\n"
 
     # Write new content
     with open(reports_path, "w") as f:
@@ -162,7 +151,7 @@ def main():
     new_reports = []
     for report in github_reports:
         # Check if any of the URLs are already in existing_reports
-        if not any(url in existing_reports for urls in report["urls"].values() for url in urls):
+        if not any(url in existing_reports for url in report["urls"]):
             new_reports.append(report)
 
     if new_reports:

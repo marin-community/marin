@@ -1,0 +1,15 @@
+/* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
+.assessment-page { max-width: 1200px; padding-bottom: 60px; }
+.assessment-page h1 { overflow-wrap: anywhere; }
+.assessment-page p { line-height: 1.7; }
+.assessment-page pre { max-height: 65vh; overflow: auto; font: 12px/1.65 ui-monospace, monospace; background: #eef2ee; padding: 16px; border-radius: 5px; }
+.assessment-page details { margin: 14px 0; }
+.assessment-page summary { overflow-wrap: anywhere; }
+.assessment-note { font-size: 13px; color: var(--muted); margin: 0 0 22px; }
+.assessment-card { border: 1px solid var(--line); border-radius: 7px; background: #fff; padding: 18px 22px; margin: 16px 0; font-size: 13px; }
+.assessment-card h2 { font-size: 17px; margin-top: 0; }
+.assessment-card > div { padding-top: 12px; }
+#reviews { margin-top: 20px; }
+#reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+#selected { font-size: 13px; }
+@media (max-width: 650px) { .assessment-card { padding: 16px; } }

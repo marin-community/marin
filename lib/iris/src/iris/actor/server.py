@@ -19,7 +19,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, NewType
+from typing import Any, NewType, Protocol, runtime_checkable
 
 import cloudpickle
 import uvicorn
@@ -29,6 +29,7 @@ from connectrpc.request import RequestContext
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from starlette.applications import Starlette
 from starlette.routing import Mount
+from starlette.types import ASGIApp
 
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
@@ -38,9 +39,23 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 logger = logging.getLogger(__name__)
 
 ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
+DEFAULT_ACTOR_MAX_CONCURRENCY = 32
 
 # Type aliases
 ActorId = NewType("ActorId", str)
+
+
+def _connect_error_response(error: ConnectError) -> actor_pb2.ActorResponse:
+    actor_error = actor_pb2.ActorError(error_type=error.code.value, message=error.message)
+    return actor_pb2.ActorResponse(error=actor_error)
+
+
+@runtime_checkable
+class ActorWebApplication(Protocol):
+    """Actor that supplies an HTTP application on its registered endpoint."""
+
+    @property
+    def web_application(self) -> ASGIApp: ...
 
 
 @dataclass
@@ -91,13 +106,21 @@ class OperationState:
 
 
 class ActorServer:
-    """Server for hosting actor instances and handling RPC calls."""
+    """Host actors for peers trusted to execute Python code in this process.
+
+    RPC arguments use cloudpickle and can execute code during deserialization.
+    This listener has no authentication middleware; restrict network access to
+    trusted peers or route external calls through a controller endpoint proxy
+    configured to enforce authentication. Null-auth proxies are permissive and
+    must stay on trusted networks. Sharing an actor endpoint delegates the same trust.
+    """
 
     def __init__(
         self,
         host: str = "0.0.0.0",
         port: int | None = None,
         threads: ThreadContainer | None = None,
+        max_concurrency: int = DEFAULT_ACTOR_MAX_CONCURRENCY,
     ):
         """Initialize the actor server.
 
@@ -105,17 +128,19 @@ class ActorServer:
             host: Host address to bind to
             port: Port to bind to. If None or 0, auto-assigns a free port.
             threads: ThreadContainer for managing server threads. If None, uses the default registry.
+            max_concurrency: Maximum number of actor methods that may run concurrently.
         """
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
+        self._web_application: ASGIApp | None = None
         self._app: Starlette | None = None
         self._actual_port: int | None = None
         self._threads = threads if threads is not None else get_thread_container()
         self._server: uvicorn.Server | None = None
         # Create dedicated executor for running actor methods
         # This avoids relying on asyncio's default executor which can be shut down prematurely
-        self._executor = self._threads.spawn_executor(max_workers=32, prefix="actor-method")
+        self._executor = self._threads.spawn_executor(max_workers=max_concurrency, prefix="actor-method")
         self._operations: dict[str, OperationState] = {}
         self._operations_lock = threading.Lock()
 
@@ -136,8 +161,21 @@ class ActorServer:
         """
         if name in self._actors:
             raise ValueError(f"Actor '{name}' is already registered")
+        if isinstance(actor, ActorWebApplication):
+            if self._app is not None:
+                raise RuntimeError("Register actor web applications before the actor server starts")
+            if self._web_application is not None:
+                raise ValueError("ActorServer supports one actor web application")
+            self._web_application = actor.web_application
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
-        methods = {m: getattr(actor, m) for m in dir(actor) if not m.startswith("_") and callable(getattr(actor, m))}
+        methods = {
+            method_name: getattr(actor, method_name)
+            for method_name in dir(actor)
+            # The dashboard property supplies an ASGI app; it is not an actor RPC.
+            if method_name != "web_application"
+            and not method_name.startswith("_")
+            and callable(getattr(actor, method_name))
+        }
         self._actors[name] = RegisteredActor(
             name=name,
             actor_id=actor_id,
@@ -151,8 +189,7 @@ class ActorServer:
         try:
             method, args, kwargs = self._resolve_method(request)
         except ConnectError as e:
-            error = actor_pb2.ActorError(error_type=e.code.value, message=e.message)
-            return actor_pb2.ActorResponse(error=error)
+            return _connect_error_response(e)
 
         try:
             # Run the method in our dedicated thread pool to avoid blocking the event loop.
@@ -164,6 +201,8 @@ class ActorServer:
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
+        except ConnectError as e:
+            return _connect_error_response(e)
         except Exception as e:
             error = actor_pb2.ActorError(
                 error_type=type(e).__name__,
@@ -306,7 +345,10 @@ class ActorServer:
 
     def _create_app(self) -> Starlette:
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
-        return Starlette(routes=[Mount(rpc_app.path, app=rpc_app)])
+        routes = [Mount(rpc_app.path, app=rpc_app)]
+        if self._web_application is not None:
+            routes.append(Mount("/", app=self._web_application))
+        return Starlette(routes=routes)
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

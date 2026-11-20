@@ -7,6 +7,7 @@ import os
 
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.client.client import get_iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Namespace
 from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -53,9 +54,12 @@ class ClusterResolver:
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
         self._explicit_namespace = namespace
+        job_info = get_job_info()
+        credentials = job_info.credentials if job_info is not None else None
         self._client = EndpointServiceClientSync(
             address=self._address,
             timeout_ms=int(timeout * 1000),
+            interceptors=credentials.interceptors() if credentials is not None else (),
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
         )

@@ -1,0 +1,17 @@
+schema_version: 1
+code: ml-restating-comment
+lane: prose
+title: Comment paraphrases the line below
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Comments are for subtle logic, not for restating code. A
+  comment that says what the next line says is pure noise and rots first.
+
+  **When allowed:** Never. If you cannot articulate what would be lost by
+  deleting the comment, delete it.
+
+  **Bad example:**
+  ```python
+  # Increment the counter
+  counter += 1
+  ```

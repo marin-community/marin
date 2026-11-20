@@ -4,8 +4,7 @@
 """Kubernetes scheduling messages observed at the provider boundary."""
 
 from iris.rpc import job_pb2
-
-from .conftest import (
+from iris.testing.k8s import (
     gated_pod,
     imagepull_pod,
     observe_pod_update,

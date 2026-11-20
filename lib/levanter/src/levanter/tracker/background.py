@@ -224,6 +224,11 @@ class BackgroundTracker(Tracker):
         # Stage the bytes on the producer thread so the caller may delete the source
         # the moment this returns (callers often build it in a TemporaryDirectory).
         try:
+            self.wrapped.validate_artifact(artifact_path, name=name, type=type)
+        except (OSError, ValueError):
+            logger.exception("Background tracker '%s': refusing artifact %s before staging.", self.name, artifact_path)
+            return
+        try:
             staged = _StagedArtifact.stage(artifact_path)
         except OSError:
             logger.exception(

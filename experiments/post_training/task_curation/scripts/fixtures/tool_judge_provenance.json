@@ -1,0 +1,10 @@
+{
+  "bundle_sha256": "01c2648a63e4b416159852b386015c83e5dec33f870e05bf22f9e798a590f281",
+  "job": "/benfeuer/nemotron-rlvr1-judge-calibration-v7-20261013",
+  "model": "glm-5.3",
+  "original_normalized_path": "experiments/post_training/task_curation/datasets/nemotron_ultra/.calibration_tasks.b64",
+  "original_normalized_sha256": "b3a1e2fada5717fc161d35e1758e9fa20714e3793d49d1f0f00210785c27b249",
+  "repeats": 3,
+  "source_dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+  "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4"
+}

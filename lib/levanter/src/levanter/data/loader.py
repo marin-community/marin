@@ -11,6 +11,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import batched
 from typing import Generic, TypeVar
 
 import haliax.partitioning
@@ -31,7 +32,6 @@ from haliax._src.util import index_where
 from haliax.partitioning import ResourceMapping
 
 from levanter.data.dataset import AsyncDataset
-from levanter.data.utils import batched
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
@@ -77,7 +77,7 @@ class DataLoader(Iterable[Ex]):
         max_buffered_batches: int | None = 64,
         mesh: Mesh | None = None,
         axis_resources: ResourceMapping | None = None,
-        prefetch_size: int = 32,
+        fetch_batch_size: int = 32,
         pad_final_batch: bool = True,
         allow_nondivisible_batch_size: bool = False,
     ):
@@ -93,16 +93,19 @@ class DataLoader(Iterable[Ex]):
             batch_size (int | IntSchedule | None): The size of the batch or a schedule for the size of the batch
             data (AsyncDataset[Ex]): The dataset to load from
             max_buffered_batches (Optional[int]): The maximum number of batches to buffer. If None, the buffer is unbounded.
-             If <0, the buffer is disabled and single threaded operation is used.
+             If <=0, batches are fetched on demand without prefetching.
             axis_resources (Optional[ResourceMapping]): axis mapping
-            prefetch_size (int): The number of batches to prefetch at once
+            fetch_batch_size (int): The number of batches to retrieve in each background storage request
             mesh (Mesh): The mesh to use
             batch_axis_name (str | None): The name of the batch axis. If None, defaults to "batch" unless batch_size is an Axis.
             pad_final_batch (bool): If True, the final batch will be padded to the size of the previous batch.
             allow_nondivisible_batch_size (bool): All the batch size to be non-divisible by the data axis size (typically the number of devices).
         """
+        if fetch_batch_size < 1:
+            raise ValueError("fetch_batch_size must be at least 1")
+
         self.max_buffered_batches = max_buffered_batches
-        self.prefetch_size = prefetch_size
+        self.fetch_batch_size = fetch_batch_size
         self.axis_resources = axis_resources
         self.data_store = data
 
@@ -137,7 +140,7 @@ class DataLoader(Iterable[Ex]):
                         "finite dataset."
                     )
 
-            initial_example = blocking_wait(self.data_store.getitem_async(0))
+            initial_example = blocking_wait(self.data_store.getitem_async(self.data_store.first_readable_index()))
             self._ex_leaves, self._ex_structure = jax.tree.flatten(initial_example, is_leaf=is_named_array)
             self._padding_example = _make_padding_example(initial_example)
 
@@ -240,38 +243,50 @@ class DataLoaderIterator(Iterator[Ex]):
             self.mapping = hax.partitioning.current_thread_local_mapping()
 
         buffered_batches = self.dl.max_buffered_batches
-        self._batches: Iterator[Ex]
-        if buffered_batches == 0:
+        self._batches: AsyncIteratorWrapper | BackgroundIterator[Ex] | None
+        if buffered_batches is not None and buffered_batches <= 0:
             self._batches = AsyncIteratorWrapper(self._produce_batches())
         else:
             self._batches = _JaxCpuBackgroundIterator(self._produce_batches, max_capacity=buffered_batches)
 
     def __next__(self):
+        if self._batches is None:
+            raise StopIteration
         time_start = time.time()
         batch = next(self._batches)
         elapsed = time.time() - time_start
         if elapsed > 0.5:
             qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
             logger.warning(
-                "Data loader stalled %.3fs. queue_size=%s prefetch_size=%d max_buffered=%s",
+                "Data loader stalled %.3fs. queue_size=%s fetch_batch_size=%d max_buffered=%s",
                 elapsed,
                 qsize,
-                self.dl.prefetch_size,
+                self.dl.fetch_batch_size,
                 self.dl.max_buffered_batches,
             )
         return batch
 
     def __del__(self):
-        if hasattr(self, "_batches") and hasattr(self._batches, "stop"):
-            self._batches.stop()
+        if hasattr(self, "_batches"):
+            self.close()
+
+    def close(self) -> None:
+        """Stop batch production and release prefetched batches before returning."""
+        batches = self._batches
+        if batches is None:
+            return
+        self._batches = None
+        if isinstance(batches, BackgroundIterator):
+            batches.stop()
+        else:
+            batches.close()
 
     async def _produce_batches(self):
         with local_cpu_mesh():
             batch_number = self._start_from_batch or 0
             done = False
             while not done:
-                # we try to prefetch multiple batches at a time
-                target_next_batch_number = batch_number + self.dl.prefetch_size
+                target_next_batch_number = batch_number + self.dl.fetch_batch_size
                 max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
                     target_next_batch_number
                 )
@@ -526,7 +541,8 @@ def stack_batches(example_iterator, Pos, Batch):
     """
     # add timer here as well and profile
     with local_cpu_mesh():
-        for batch in batched(example_iterator, Batch.size):
+        for chunk in batched(example_iterator, Batch.size):
+            batch = list(chunk)
             if len(batch) < Batch.size:
                 dummy_instance = _make_dummy_instance(batch, Pos)
                 batch.extend([dummy_instance] * (Batch.size - len(batch)))

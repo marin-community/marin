@@ -1,0 +1,12 @@
+{
+  "task_id": "e550e75e54cd2ff4e0de02f43e2242020edbeb920f1fac87e6291866e77d4f51",
+  "quality": "bad",
+  "confidence": "high",
+  "reference_status": "conflict",
+  "defects": [
+    "ambiguity",
+    "missing_context",
+    "rubric_mismatch"
+  ],
+  "evidence": "The hidden tests assert exact, arbitrary ID sequences (e.g. l1_ids=[6,21,11,13,1,...] and the SP ids lists) and an exact vocab_size (32) derived from the unseen data/smol.txt. The public spec never defines the vocabulary ordering or ID assignment (\"The exact internal ID mappings are part of what you must implement to satisfy the tests\"), and the test file has visibility=verifier, so the solver cannot see the expected sequences. Many valid, deterministic tokenizers satisfy every stated behavioral requirement yet produce different ID mappings; the grader accepts only one. This is a concrete rubric mismatch: valid public answers fail the private tests. Additionally, the resource manifest lists only /tests/test_solution.py (count=1, omitted=0); the required fixture /tests/data/smol.txt that tests read is not provided as a resource, and its contents (which determine total_vocab_size==32 and whether 'Once upon' exceeds a 10-token vocab) are unknown to the actor — missing context/fixture. Without knowing smol.txt, even the vocab-size expectations cannot be reproduced from the public description."
+}

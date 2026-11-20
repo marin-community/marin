@@ -6,6 +6,7 @@ import functools as ft
 import typing
 import warnings
 import zlib
+from enum import StrEnum
 from typing import Any, Callable, Sequence
 
 import equinox as eqx
@@ -245,6 +246,55 @@ def ensure_scalar(x, *, name: str = "value"):
 
 def is_on_mac_metal():
     return jax.devices()[0].platform.lower() == "metal"
+
+
+class GpuFamily(StrEnum):
+    AMD_INSTINCT = "amd_instinct"
+    # Data-center Blackwell: sm_100 and sm_103 (B200, GB200, B300).
+    NVIDIA_BLACKWELL = "nvidia_blackwell"
+    # sm_90 (H100, H200, GH200).
+    NVIDIA_HOPPER = "nvidia_hopper"
+    # Any other GPU, or no GPU (the CPU interpreter). Earlier NVIDIA GPUs such as A100 and consumer
+    # Blackwell (sm_120) have too little shared memory per block for the Hopper and Blackwell configs.
+    OTHER = "other"
+
+
+@ft.cache
+def gpu_family() -> GpuFamily:
+    """Family of the default backend's first GPU, for picking kernels and tile configs.
+
+    Cached for the whole process after the first call. Call it at trace or run time, never at import time.
+    Tests that stub ``jax.default_backend`` or ``jax.devices`` must call ``gpu_family.cache_clear()`` before
+    and after, or they see a family left over from an earlier test.
+    """
+    if jax.default_backend() != "gpu":
+        return GpuFamily.OTHER
+    device = jax.devices("gpu")[0]
+    if "Instinct" in device.device_kind:
+        return GpuFamily.AMD_INSTINCT
+    if "NVIDIA" not in device.device_kind:
+        return GpuFamily.OTHER
+    major = device.compute_capability.split(".")[0]
+    if major == "9":
+        return GpuFamily.NVIDIA_HOPPER
+    if major == "10":
+        return GpuFamily.NVIDIA_BLACKWELL
+    return GpuFamily.OTHER
+
+
+def is_amd_instinct() -> bool:
+    """Whether the default backend is an AMD Instinct GPU (MI300X, MI350X, MI355X, ...)."""
+    return gpu_family() is GpuFamily.AMD_INSTINCT
+
+
+@ft.cache
+def device_kind() -> str:
+    """``device_kind`` of the default backend's first device.
+
+    Cached for the whole process after the first call. Tests that stub ``jax.devices`` must call
+    ``device_kind.cache_clear()`` before and after, or they see a kind left over from an earlier test.
+    """
+    return jax.devices()[0].device_kind
 
 
 def _jittable_dg_einsum(

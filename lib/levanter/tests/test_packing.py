@@ -5,7 +5,6 @@ import tempfile
 from typing import Generator
 
 import haliax as hax
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -13,9 +12,8 @@ import pytest
 from levanter.data.packing import (
     GreedyPrepackedDataset,
     PromptCompletion,
-    SequencePacker,
     greedy_pack_prompt_completions,
-    pack_prompt_completions,
+    pack_documents,
     per_segment_correct,
     per_segment_loss,
 )
@@ -25,19 +23,14 @@ from levanter.store.jagged_array import JaggedArrayStore
 
 
 def test_per_segment_loss():
+    # Two segments of 3 and 2 tokens, followed by padding
     Pos = hax.Axis("pos", size=10)
-    packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)
+    tokens = hax.named(jnp.array([1, 2, 3, 4, 5, 0, 0, 0, 0, 0]), Pos)
+    segment_ids = hax.named(jnp.array([0, 0, 0, 1, 1, -1, -1, -1, -1, -1]), Pos)
+    loss_weight = hax.named(jnp.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0]), Pos)
 
-    # Add two sequences
-    packer.add_example(ids=[1, 2, 3], loss_weight=[1, 1, 1], segment_id=None)
-    packer.add_example(ids=[4, 5], loss_weight=[1, 1], segment_id=None)
-
-    # Pack into LmExample (creates arrays on CPU via local_cpu_mesh)
-    packed = packer.pack()
-
-    # Transfer packed to default device (TPU) to avoid device mismatch
-    # when per_segment_loss creates internal jit contexts
-    packed = jax.tree_util.tree_map(lambda x: jax.device_put(x) if isinstance(x, jax.Array) else x, packed)
+    attn_mask = AttentionMask.causal().with_segment_ids(segment_ids=segment_ids)
+    packed = LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     losses = hax.named(jnp.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0]), Pos)
 
@@ -47,166 +40,6 @@ def test_per_segment_loss():
 
     assert list(unique_ids.array) == [-1, 0, 1]
     assert list(segment_losses.array) == [0.0, 0.6, 0.9]
-
-
-def test_can_pack_simple_case():
-    Pos = hax.Axis("pos", size=10)
-    packer = SequencePacker(Pos=Pos, max_pack_size=2, pad_token=0)
-
-    assert packer.can_pack([1, 2, 3]) is True
-    packer.add_example(ids=[1, 2, 3], loss_weight=[1, 1, 1])
-    assert packer.can_pack([4, 5]) is True
-    assert packer.can_pack(list(range(6, 16))) is False  # Exceeds Pos size
-
-
-def test_add_example_and_pack():
-    Pos = hax.Axis("pos", size=10)
-    packer = SequencePacker(Pos=Pos, max_pack_size=2, pad_token=0)
-
-    packer.add_example([1, 2, 3], [1, 1, 1])
-    packed = packer.pack()
-
-    expected_tokens = [1, 2, 3, 0, 0, 0, 0, 0, 0, 0]
-    expected_segment_ids = [0, 0, 0, -1, -1, -1, -1, -1, -1, -1]
-    expected_loss_weight = [1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
-    np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
-    np.testing.assert_array_equal(packed.loss_weight.array, expected_loss_weight)
-
-
-def test_exceed_max_pack_size():
-    Pos = hax.Axis("pos", size=10)
-    packer = SequencePacker(Pos=Pos, max_pack_size=2, pad_token=0)
-
-    packer.add_example([1, 2, 3], [1, 1, 1])
-    packer.add_example([4, 5, 6], [1, 1, 1])
-
-    with pytest.raises(ValueError, match="Too many segments"):
-        packer.add_example([7, 8], [1, 1])  # Exceeds max pack size
-
-
-def test_empty_sequence():
-    Pos = hax.Axis("pos", size=10)
-    packer = SequencePacker(Pos=Pos, max_pack_size=2, pad_token=0)
-
-    with pytest.raises(ValueError, match="ids and loss_weight must have the same length"):
-        packer.add_example([], [1])  # Mismatched lengths
-
-    packer.add_example([], [])  # Adding an empty sequence is allowed but does nothing
-    packed = packer.pack()
-
-    expected_tokens = [0] * 10
-    expected_segment_ids = [-1] * 10
-    expected_loss_weight = [0] * 10
-
-    np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
-    np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
-    np.testing.assert_array_equal(packed.loss_weight.array, expected_loss_weight)
-
-
-def test_packing_multiple_examples():
-    Pos = hax.Axis("pos", size=10)
-    packer = SequencePacker(Pos=Pos, max_pack_size=2, pad_token=0)
-
-    # First example
-    packer.add_example([1, 2], [1, 1])
-    # Second example
-    packer.add_example([3, 4, 5], [1, 1, 1])
-
-    packed = packer.pack()
-
-    expected_tokens = [1, 2, 3, 4, 5, 0, 0, 0, 0, 0]
-    expected_segment_ids = [0, 0, 1, 1, 1, -1, -1, -1, -1, -1]
-    expected_loss_weight = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
-    np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
-    np.testing.assert_array_equal(packed.loss_weight.array, expected_loss_weight)
-
-
-def test_pack_prompt_completions_simple():
-    Pos = hax.Axis("pos", size=10)
-    pad_token = 0
-    max_pack_size = 2
-    max_buffered_examples = 2
-
-    sequences = [
-        PromptCompletion(ids=[1, 2, 3], prompt_length=2),
-        PromptCompletion(ids=[4, 5], prompt_length=1),
-        PromptCompletion(ids=[6, 7, 8], prompt_length=1),
-    ]
-
-    results = list(pack_prompt_completions(Pos, sequences, pad_token, max_pack_size, max_buffered_examples))
-
-    assert len(results) == 2  # Expect two packed LmExamples
-
-    # Check the first packed example
-    packed_1 = results[0]
-    expected_tokens_1 = [1, 2, 3, 4, 5, 0, 0, 0, 0, 0]
-    expected_segment_ids_1 = [0, 0, 0, 1, 1, -1, -1, -1, -1, -1]
-    expected_loss_weight_1 = [0, 1, 0, 1, 0, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
-    np.testing.assert_array_equal(packed_1.loss_weight.array, expected_loss_weight_1)
-
-    # Check the second packed example
-    packed_2 = results[1]
-    expected_tokens_2 = [6, 7, 8, 0, 0, 0, 0, 0, 0, 0]
-    expected_segment_ids_2 = [0, 0, 0, -1, -1, -1, -1, -1, -1, -1]
-    expected_loss_weight_2 = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
-    np.testing.assert_array_equal(packed_2.loss_weight.array, expected_loss_weight_2)
-
-
-def test_pack_prompt_completions_exceed_max_buffered_examples():
-    Pos = hax.Axis("pos", size=10)
-    pad_token = 0
-    max_pack_size = 1
-    max_buffered_examples = 1
-
-    sequences = [
-        PromptCompletion(ids=[1, 2, 3], prompt_length=2),
-        PromptCompletion(ids=[4, 5], prompt_length=1),
-        PromptCompletion(ids=[6, 7, 8], prompt_length=1),
-    ]
-
-    results = list(pack_prompt_completions(Pos, sequences, pad_token, max_pack_size, max_buffered_examples))
-
-    assert len(results) == 3
-
-    # Check the first packed example
-    packed_1 = results[0]
-    expected_tokens_1 = [1, 2, 3, 0, 0, 0, 0, 0, 0, 0]
-    expected_segment_ids_1 = [0, 0, 0, -1, -1, -1, -1, -1, -1, -1]
-    expected_loss_weight_1 = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
-    np.testing.assert_array_equal(packed_1.loss_weight.array, expected_loss_weight_1)
-
-    # Check the second packed example
-    packed_2 = results[1]
-    expected_tokens_2 = [4, 5, 0, 0, 0, 0, 0, 0, 0, 0]
-    expected_segment_ids_2 = [0, 0, -1, -1, -1, -1, -1, -1, -1, -1]
-    expected_loss_weight_2 = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
-    np.testing.assert_array_equal(packed_2.loss_weight.array, expected_loss_weight_2)
-
-    # Check the third packed example
-    packed_3 = results[2]
-    expected_tokens_3 = [6, 7, 8, 0, 0, 0, 0, 0, 0, 0]
-    expected_segment_ids_3 = [0, 0, 0, -1, -1, -1, -1, -1, -1, -1]
-    expected_loss_weight_3 = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
-
-    np.testing.assert_array_equal(packed_3.tokens.array, expected_tokens_3)
-    np.testing.assert_array_equal(packed_3.attn_mask.segment_ids[0].array, expected_segment_ids_3)
-    np.testing.assert_array_equal(packed_3.loss_weight.array, expected_loss_weight_3)
 
 
 def test_segment_correct():
@@ -885,6 +718,155 @@ def test_greedy_pack_prompt_completions_empty():
                 Pos, [PromptCompletion(ids=[], prompt_length=0)], pad_token, max_segments_per_example
             )
         )
+
+
+####################################
+# tests for lookahead packing      #
+####################################
+
+
+def test_pack_documents_lookahead_basic():
+    # docs [200, 160, 100, 150], budget 350: the sequential packer wastes the tail of the
+    # first pack (160 does not fit after 200), while a window-2 lookahead pairs 100 with 200.
+    lengths = {"store": np.array([200, 160, 100, 150])}
+    sequential = pack_documents(lengths, {"store": 350})
+    assert [list(p) for p in sequential] == [[0], [1, 2], [3]]
+
+    # window 1 is equivalent to the sequential packer
+    assert [list(p) for p in pack_documents(lengths, {"store": 350}, lookahead_window=1)] == [
+        list(p) for p in sequential
+    ]
+
+    lookahead = pack_documents(lengths, {"store": 350}, lookahead_window=2)
+    assert [list(p) for p in lookahead] == [[0, 2], [1, 3]]
+
+
+def test_pack_documents_lookahead_refills_after_each_take():
+    lengths = np.array([6, 9, 3, 1, 8, 2])
+    # Doc 3 starts beyond the window, but enters it when doc 2 joins the first pack.
+    packs = pack_documents(lengths, 10, lookahead_window=2)
+    assert packs == [[0, 2, 3], [1], [4, 5]]
+
+
+def test_pack_documents_lookahead_default_is_sequential():
+    # Without a lookahead the results are contiguous ranges, identical to the packer's
+    # historical behavior.
+    lengths = {"store": np.array([100, 200, 150, 150])}
+    packs = pack_documents(lengths, {"store": 300})
+    assert packs == [range(0, 2), range(2, 4)]
+
+
+def test_pack_documents_lookahead_respects_max_segments():
+    lengths = {"store": np.ones(10, dtype=np.int64)}
+    packs = pack_documents(lengths, {"store": 100}, max_segments_per_example=2, lookahead_window=3)
+    assert all(len(p) == 2 for p in packs)
+    assert sorted(d for p in packs for d in p) == list(range(10))
+
+
+def test_pack_documents_lookahead_partitions_documents():
+    rng = np.random.default_rng(0)
+    capacity = 2000
+    for trial in range(50):
+        n = int(rng.integers(1, 60))
+        if trial % 3 == 0:
+            lengths = {"store": rng.integers(1, 5000, size=n).astype(np.int64)}
+        else:
+            lengths = {"store": rng.integers(1, 1000, size=n).astype(np.int64)}
+        window = int(rng.integers(1, 10))
+        lookahead = pack_documents(
+            lengths, {"store": capacity}, max_segments_per_example=64, slice_strategy="left", lookahead_window=window
+        )
+        sequential = pack_documents(lengths, {"store": capacity}, max_segments_per_example=64, slice_strategy="left")
+        # exact partition
+        assert sorted(d for p in lookahead for d in p) == list(range(n))
+        # every multi-document pack fits by raw token sum
+        for p in lookahead:
+            assert len(p) >= 1
+            if len(p) > 1:
+                assert int(lengths["store"][p].sum()) <= capacity
+        # lookahead never needs more packs than the sequential packer
+        assert len(lookahead) <= len(sequential)
+
+
+def test_pack_documents_lookahead_multi_leaf():
+    # Leaf b constrains the pack: doc 1 fits leaf a alone but not leaf b, while doc 2 fits
+    # with doc 0 in both leaves; the window-2 lookahead pairs doc 2 with doc 0.
+    lengths = {"a": np.array([100, 200, 150]), "b": np.array([100, 250, 100])}
+    sequential = pack_documents(lengths, {"a": 300, "b": 250})
+    assert [list(p) for p in sequential] == [[0], [1], [2]]
+    lookahead = pack_documents(lengths, {"a": 300, "b": 250}, lookahead_window=2)
+    assert [list(p) for p in lookahead] == [[0, 2], [1]]
+
+
+def test_pack_documents_lookahead_multi_leaf_checks_remaining_capacity():
+    lengths = {"a": np.array([100, 200, 100, 100]), "b": np.array([100, 250, 100, 100])}
+    sequential = pack_documents(lengths, {"a": 300, "b": 250})
+    assert [list(p) for p in sequential] == [[0], [1], [2, 3]]
+    # After doc 2 joins doc 0, leaf b prevents doc 3 from joining the same pack.
+    lookahead = pack_documents(lengths, {"a": 300, "b": 250}, lookahead_window=3)
+    assert [list(p) for p in lookahead] == [[0, 2], [1], [3]]
+
+
+def test_pack_documents_lookahead_drop_and_raise():
+    lengths = {"store": np.array([50, 3000, 40, 40])}
+    # drop: over-long doc 1 is skipped entirely
+    packs = pack_documents(lengths, {"store": 100}, slice_strategy="drop", lookahead_window=2)
+    assert sorted(d for p in packs for d in p) == [0, 2, 3]
+    # raise: over-long doc raises
+    with pytest.raises(ValueError):
+        pack_documents(lengths, {"store": 100}, slice_strategy="raise", lookahead_window=2)
+    # left/right: over-long doc is a singleton pack
+    for strategy in ("left", "right"):
+        packs = pack_documents(lengths, {"store": 100}, slice_strategy=strategy, lookahead_window=2)
+        assert sorted(d for p in packs for d in p) == [0, 1, 2, 3]
+        assert any(list(p) == [1] for p in packs)
+
+
+def test_greedy_prepacked_dataset_lookahead():
+    # docs [200, 160, 100, 140], budget 350, window 2 -> packs [[0, 2], [1, 3]]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        offsets = np.array([0, 200, 360, 460, 600])
+        store = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
+        for i in range(len(offsets) - 1):
+            store.append(np.arange(offsets[i], offsets[i + 1]))
+        dataset = {"store": store}
+        max_length = {"store": 350}
+        tester = GreedyPrepackedDataset(dataset, max_length, pad_with_zeros=False, lookahead_window=2)
+
+        batch = tester.as_sync_dataset()[0]
+        data, segment_ids = batch
+        expected_data = np.concatenate([np.arange(0, 200), np.arange(360, 460)])
+        expected_segment_ids = np.concatenate([np.full(200, 0), np.full(100, 2)])
+        assert np.array_equal(data["store"], expected_data)
+        assert np.array_equal(segment_ids["store"], expected_segment_ids)
+
+        batch = tester.as_sync_dataset()[1]
+        data, segment_ids = batch
+        expected_data = np.concatenate([np.arange(200, 360), np.arange(460, 600)])
+        expected_segment_ids = np.concatenate([np.full(160, 1), np.full(140, 3)])
+        assert np.array_equal(data["store"], expected_data)
+        assert np.array_equal(segment_ids["store"], expected_segment_ids)
+
+
+def test_greedy_prepacked_dataset_lookahead_padded_and_sliced():
+    # Over-long doc handled with slice_strategy="left" inside a lookahead pack; padding to allowed.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
+        store.append(np.arange(100))  # doc 0: length 100 > allowed 50 -> singleton, sliced
+        store.append(np.arange(100, 130))  # doc 1: length 30
+        dataset = {"store": store}
+        max_length = {"store": 50}
+        tester = GreedyPrepackedDataset(dataset, max_length, slice_strategy="left", lookahead_window=4)
+
+        batch = tester.as_sync_dataset()[0]
+        data, segment_ids = batch
+        assert np.array_equal(data["store"], np.arange(0, 50))
+        assert np.array_equal(segment_ids["store"], np.full(50, 0))
+
+        batch = tester.as_sync_dataset()[1]
+        data, segment_ids = batch
+        assert np.array_equal(data["store"], np.pad(np.arange(100, 130), (0, 20)))
+        assert np.array_equal(segment_ids["store"], np.pad(np.full(30, 1), (0, 20), constant_values=-1))
 
 
 if __name__ == "__main__":

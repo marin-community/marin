@@ -57,7 +57,7 @@ class RecoveryRunConfig:
     learning_rate: float = 1e-4
     seed: int = 0
 
-    # Mesh: default (replica=1, expert=1, model=model_axis) so params shard FSDP
+    # Mesh: default (replica=1, context=1, expert=1, model=model_axis) so params shard FSDP
     # over the data axis (all local GPUs) with optional tensor-parallel width.
     replica_axis_size: int | None = None
     model_axis_size: int = 1

@@ -242,7 +242,7 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
 
         if has_cross:
             encoder_attn_ln = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
-            encoder_attn = WhisperAttention.init(Heads, HeadSize, config, key=k_attn)
+            encoder_attn = WhisperAttention.init(Heads, HeadSize, config, key=k_cross)
         else:
             encoder_attn_ln = None
             encoder_attn = None
