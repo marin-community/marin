@@ -10,7 +10,6 @@ import pwd
 import re
 import signal
 import subprocess
-import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
@@ -544,29 +543,7 @@ def test_command_exec_carries_the_command_deadline(tmp_path):
     asyncio.run(machine.close())
 
 
-def test_process_cleanup_preserves_supervisor_and_current_exec_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    # PID 2 was recycled: matching its old PID alone must not preserve the leaked process.
-    # The active Python reset (92), timeout wrapper (91), and exec shell (90)
-    # are all ancestors of the cleanup command and must survive it.
-    processes = {1: (0, "100"), 2: (1, "999"), 3: (1, "300"), 90: (1, "900"), 91: (90, "910"), 92: (91, "920")}
-    killed = []
-
-    def stat(path: Path, *args: object, **kwargs: object) -> str:
-        pid = int(path.parent.name)
-        parent, started = processes[pid]
-        fields = ["S", str(parent), *(["0"] * 17), started]
-        return f"{pid} (command with spaces) " + " ".join(fields)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Path, "glob", lambda path, pattern: iter(Path(f"/proc/{pid}/stat") for pid in processes))
-        patch.setattr(Path, "read_text", stat)
-        patch.setattr(os, "getpid", lambda: 92)
-        patch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
-        patch.setattr(sys, "argv", ["reset", json.dumps([{"1": ["0", "100"], "2": ["1", "200"]}, []])])
-        exec(iris_backend.RESET.split("task_roots =", 1)[0], {})
-    assert killed == [(2, signal.SIGKILL), (3, signal.SIGKILL)]
-
-
+@pytest.mark.requires_linux_procfs
 def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
     # Rewrite Python literals before run() shell-quotes the script.
     reset = iris_backend.RESET.replace("Path('/proc')", f"Path({str(tmp_path / 'proc')!r})")
@@ -603,6 +580,19 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
             for name in inodes:
                 (tmp_path / name / "residue").write_text("old candidate")
             (tmp_path / "new-file").write_text("old candidate")
+            child = subprocess.Popen(("sleep", "60"))
+            proc_stat = tmp_path / "proc" / str(child.pid) / "stat"
+            try:
+                proc_stat.parent.mkdir()
+                proc_stat.write_text(Path(f"/proc/{child.pid}/stat").read_text())
+                await machine.reset()
+                assert child.wait(timeout=5) == -signal.SIGKILL
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+                proc_stat.unlink(missing_ok=True)
+                proc_stat.parent.rmdir()
             for _ in range(2):
                 await machine.reset()
                 assert (await machine.run(Command(("printf", "after reset")))).stdout == b"after reset"
@@ -663,7 +653,6 @@ def test_controller_wire_errors(tmp_path, field, message, kind, detail):
         (Code.INTERNAL, "Cannot submit job: parent job /user/pilot has terminated (state=JOB_STATE_KILLED)", False),
     ],
 )
-# Pilot m-w4: only the parent-terminated submit response is cancellation.
 def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, message, cancelled):
     error = ConnectError(code, message)
     cleaned = []

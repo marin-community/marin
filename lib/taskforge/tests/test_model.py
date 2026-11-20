@@ -96,7 +96,6 @@ def test_policy_overlay_changes_digest_and_preserves_original() -> None:
     assert updated.setting("author.tags", tuple) == ("b",)
 
 
-# Pilots 20261106i / 20261107j: abandoned records had no reason; reject both construction and persisted malformed data.
 @pytest.mark.parametrize("reasons", [(), ("",), (" ",)])
 def test_abandon_requires_a_reason(workpiece: Workpiece, reasons: tuple[str, ...]) -> None:
     with pytest.raises(ValueError, match="non-empty reasons"):
