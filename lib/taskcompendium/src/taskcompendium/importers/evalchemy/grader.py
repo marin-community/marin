@@ -36,6 +36,7 @@ DEPENDENCIES = {
     "amc": ("amc.py",),
     "olympiad": ("olympiad.py", "minerva.py", "relations.py"),
     "facts_grounding": ("facts_grounding.py",),
+    "facts_parametric": ("facts_parametric.py",),
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
     "zeroeval_mcqa": ("zeroeval.py",),

@@ -21,6 +21,9 @@ evaluations:
   facts-grounding-v2:
     benchmark: facts-grounding-v2
     run: *together_judge
+  facts-parametric:
+    benchmark: facts-parametric
+    run: *together_judge
   frontierscience-olympiad:
     benchmark: frontierscience-olympiad
     run: *together_judge
