@@ -245,6 +245,7 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
         "missing_suite",
         "changed_content",
         "wrong_mask",
+        "unmeasured_row",
         "contaminated_row",
         "dropped_clean",
     ],
@@ -259,6 +260,12 @@ def test_incomplete_or_changed_preparation_never_writes_receipt(registration, de
         plan = plan.model_copy(update={"evals": {k: v for k, v in plan.evals.items() if k != "uncheatable"}})
     elif defect == "changed_content":
         Path(json.loads(Path(plan.input_manifest.uri).read_text())["files"][0]["uri"]).write_bytes(b"changed input")
+    elif defect == "contaminated_row":
+        path = root / "decontam/outputs/main/part-000.parquet"
+        rows = pq.read_table(path).to_pylist()
+        for row in rows:
+            row["contaminated"] = True
+        parquet(path, rows)
     elif defect == "dropped_clean":
         path = root / "decontam/outputs/main/part-000.parquet"
         rows = pq.read_table(path).to_pylist()

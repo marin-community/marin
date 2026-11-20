@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+REQUIRED_SFT_EVAL_FAMILIES = frozenset({"aa", "lm_eval", "uncheatable", "atlas_references"})
 
 
 class SftRecord(BaseModel):
@@ -68,7 +69,7 @@ class SftPreparationReceipt(SftRecord):
     def _complete_population(self) -> Self:
         if set(self.stages) != set(SftStage):
             raise ValueError("SFT registration requires every completed Datakit stage")
-        if set(self.eval_manifests) != {"aa", "lm_eval", "uncheatable", "atlas_references"}:
+        if set(self.eval_manifests) != REQUIRED_SFT_EVAL_FAMILIES:
             raise ValueError("SFT registration requires core, Uncheatable and Atlas reference coverage")
         if self.training_rows + self.filtered_rows != self.input_rows:
             raise ValueError("SFT registration must account for the complete input population")

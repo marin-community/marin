@@ -298,32 +298,38 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 
 Chat sources use the existing [chat registration workflow](../../docs/tutorials/add-chat-dataset.md)
 and `marin.datakit.sft_sources.all_sft_sources`. After full preparation,
-`register_sft.py` adds a terminal check to that source's normalization graph:
+`register_sft.py` adds a final check to that source's normalization graph:
 
 ```bash
 uv run python -m experiments.datakit.register_sft --plan registration-plan.json
 uv run python -m experiments.datakit.register_sft --plan registration-plan.json --run
 ```
 
+Without `--run`, the command prints the planned output path. With `--run`,
+StepRunner builds missing registered normalization dependencies and checks the
+other completed preparation artifacts pinned by the plan.
+
 `SftRegistrationPlan` pins the input and training file manifests, completed stage
 records, eval manifests, tokenizer files and chat template. Each file manifest
-contains `files` (URI/SHA-256 references) and the complete `rows` count. The
-filtering artifact records the variant `input`, `input_rows`, `filtered_rows`
+contains `files` (URI/SHA-256 references) and the total `rows` count across those files. The
+filtering artifact records the variant `input` (`DatasetVariantInput`),
+`input_rows`, the number of removed rows in `filtered_rows`
 and the `output_manifest` reference. The prepared training Parquet retains
 canonical `messages`, `chat_template_kwargs`, `id`, `normalized_id`, `input_ids`
 and `assistant_masks`. `normalized_id` joins the conversation to its measured
 Datakit text and decontamination rows.
 
-The terminal check reads every selected training row. It checks original chat
-identity, applied decontamination, exact token-sequence duplicates, and tokens
+The final check reads every selected training row. It compares messages and
+template arguments with the original normalized chats, checks the measured
+decontamination marks, rejects duplicate token-and-mask pairs, and checks tokens
 and assistant masks from the pinned tokenizer/template. All required stages
 must have successful StepRunner status and belong to the preparation's lineage.
 Every removed normalized conversation must be eval-contaminated or have the
 same token sequence and mask as a retained conversation.
-The eval policy uses the required AA, lm-eval, Uncheatable and Atlas-reference
+The eval policy uses the required Artificial Analysis (AA), lm-eval, Uncheatable and Atlas-reference
 manifests; the SFT Bloom and marks must use the same five-word policy.
-Success writes `receipt.json` as `finestore.sft.SftPreparationReceipt`; a failed
-check writes no receipt. Run the check in the data's region.
+Success writes `<printed output>/receipt.json` as `finestore.sft.SftPreparationReceipt`; a failed
+check writes no receipt. Run the check in the region of the bucket holding the source and prepared training data.
 
 Prepare an RL-to-SFT conversion as a separate workflow that emits a new dataset
 variant and its lineage receipt. Registration consumes that variant; it does

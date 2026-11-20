@@ -7,7 +7,6 @@ import argparse
 import hashlib
 from functools import partial
 
-import fsspec
 from finestore.sft import SftEvidenceReference, SftPreparationReceipt, SftStage
 from marin.datakit.sft_registration import (
     SftEvalRequirement,
@@ -19,7 +18,7 @@ from marin.datakit.sft_sources import all_sft_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datakit.decontam.pinned_references import (
     COVERAGE_MANIFEST,
@@ -41,7 +40,7 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
 
 
 def _pin(uri: str) -> SftEvidenceReference:
-    with fsspec.open(uri, "rb") as stream:
+    with StoragePath(uri).open("rb") as stream:
         return SftEvidenceReference(uri=uri, sha256=hashlib.file_digest(stream, "sha256").hexdigest())
 
 
@@ -108,7 +107,7 @@ def main() -> None:
     parser.add_argument("--output-prefix")
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
-    with fsspec.open(args.plan) as stream:
+    with StoragePath(args.plan).open() as stream:
         plan = SftRegistrationPlan.model_validate_json(stream.read())
     step = registration_step(plan, output_prefix=args.output_prefix)
     print(step.output_path)
