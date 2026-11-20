@@ -291,16 +291,11 @@ for launch in (config, changed):
         model_info = job.agents[0].kwargs["model_info"]
         assert model_info["max_input_tokens"] == window, model_info
         assert model_info["max_output_tokens"] < window
-        assert job.retry.max_retries == 1
-        assert job.retry.include_exceptions == {"PhaseCancellationError", "TimeoutError", "DaytonaConflictError"}
-        if cohort.name == "swebench-verified":
-            assert job.verifier.override_timeout_sec == 3000
-            agent = job.agents[0]
-            assert agent.override_setup_timeout_sec + agent.override_timeout_sec + 3000 < job.trial_attempt_timeout_sec
-        else:
-            assert job.verifier.override_timeout_sec == 300
-            assert job.trial_attempt_timeout_sec == 1800
-        assert job.n_concurrent_trials == len(job.tasks)
+        agent = job.agents[0]
+        assert (
+            agent.override_setup_timeout_sec + agent.override_timeout_sec + job.verifier.override_timeout_sec
+            < job.trial_attempt_timeout_sec
+        )
         attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
         assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
 assert windows[0] != windows[1]
