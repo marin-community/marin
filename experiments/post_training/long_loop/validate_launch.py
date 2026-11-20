@@ -15,6 +15,7 @@ from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
 from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
+from cloud.iris.task_runtime import prepare_policy_tokenizer
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
@@ -30,8 +31,20 @@ from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuil
 from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
 
 
-async def validate_rollout_worker(config) -> dict:
+async def validate_rollout_worker(launch) -> dict:
     """Build and close the production worker without starting inference engines."""
+    config = launch.skyrl
+    prepared = prepare_policy_tokenizer(
+        argparse.Namespace(
+            policy_tokenizer=str(launch.inputs.model.tokenizer_uri),
+            policy_tokenizer_revision=str(launch.inputs.model.tokenizer_revision),
+        )
+    )
+    assert prepared is not None
+    tokenizer_config = OmegaConf.merge(
+        config,
+        {"trainer": {"policy": {"model": {"tokenizer_path": prepared.local_path, "tokenizer_revision": None}}}},
+    )
     sessions = config.environment.task_sessions
     for settings in (
         sessions.get("remote_judge") or {},
@@ -42,7 +55,7 @@ async def validate_rollout_worker(config) -> dict:
             if key.endswith("api_key_env") and name is not None and (value := get_secret(name)) is not None:
                 os.environ[name] = value
     worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=config.terminal_bench_config).build(
-        tokenizer_from_config(config), WorkerShard(0, 1)
+        tokenizer_from_config(tokenizer_config), WorkerShard(0, 1)
     )
     try:
         return {
@@ -121,7 +134,7 @@ def main(source: Path, destination: Path, model_config: Path | None = None, *, b
         engine = config.skyrl.generator.engine_init_kwargs
         if not engine.get("enable_auto_tool_choice") or not engine.get("tool_call_parser"):
             raise ValueError("Installed-agent tool requests require automatic tool choice and a tool parser")
-    worker = asyncio.run(validate_rollout_worker(config.skyrl)) if build_worker else None
+    worker = asyncio.run(validate_rollout_worker(config)) if build_worker else None
     compiled = OmegaConf.to_yaml(config, resolve=True)
     destination.write_text(compiled)
     print(
