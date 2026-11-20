@@ -15,6 +15,7 @@ from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from shellbox.backends.daytona.machine import SandboxCapacityError
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -282,7 +283,7 @@ def _failed_rollout(
         exception_type = "TemplateError"
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
-        exception_type = "TaskMachineError"
+        exception_type = "SandboxCapacityError" if isinstance(error.__cause__, SandboxCapacityError) else "TaskMachineError"
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"

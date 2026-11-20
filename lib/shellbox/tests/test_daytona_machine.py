@@ -34,6 +34,7 @@ from daytona import (
     DaytonaConflictError,
     DaytonaError,
     DaytonaNotFoundError,
+    DaytonaValidationError,
     Image,
     Resources,
 )
@@ -46,6 +47,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
+    SandboxCapacityError,
     _create_sandbox,
     _delete_named_sandbox,
 )
@@ -140,14 +142,15 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             ) as client:
                 params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
                 if failure in {"rejected_post", "prolonged_throttle"}:
-                    sandbox = await _create_sandbox(client, params, 60)
+                    async with asyncio.timeout(60) as deadline:
+                        sandbox = await _create_sandbox(client, params, 60, deadline)
                     assert sandbox.id == "created-once"
                     attempts = 2 if failure == "rejected_post" else 10
                     assert requests == ["POST"] * attempts
                     assert len(delays) == attempts - 1 and all(delay >= 17 for delay in delays)
                 elif failure == "deadline":
                     with pytest.raises(TimeoutError):
-                        async with asyncio.timeout(None) as deadline:
+                        async with asyncio.timeout(60) as deadline:
 
                             async def expire_when_waiting():
                                 await waiting.wait()
@@ -155,22 +158,93 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
 
                             expiration = asyncio.create_task(expire_when_waiting())
                             try:
-                                await _create_sandbox(client, params, 60)
+                                await _create_sandbox(client, params, 60, deadline)
                             finally:
                                 await expiration
                     assert requests == ["POST"]
                 elif failure == "cancelled":
-                    task = asyncio.create_task(_create_sandbox(client, params, 60))
+                    async with asyncio.timeout(60) as deadline:
+                        task = asyncio.create_task(_create_sandbox(client, params, 60, deadline))
                     await waiting.wait()
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
                         await task
                     assert requests == ["POST"]
                 else:
-                    sandbox = await _create_sandbox(client, params, 60)
+                    async with asyncio.timeout(60) as deadline:
+                        sandbox = await _create_sandbox(client, params, 60, deadline)
                     assert sandbox.id == "created-once"
                     assert requests == ["POST", "GET", "POST", "GET"]
                     assert len(delays) == 1 and delays[0] >= 17
+
+    asyncio.run(scenario())
+
+
+def test_daytona_creation_retries_cpu_capacity_with_fake_client(monkeypatch):
+    class Client:
+        def __init__(self):
+            self.attempts = 0
+            self.sandbox = object()
+
+        async def create(self, params, *, timeout):
+            self.attempts += 1
+            if self.attempts < 3:
+                raise DaytonaValidationError("Total CPU limit exceeded. Maximum allowed: 2500.", status_code=400)
+            return self.sandbox
+
+    async def scenario():
+        delays = []
+
+        async def wait(delay):
+            delays.append(delay)
+
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+        client = Client()
+        params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+        async with asyncio.timeout(60) as deadline:
+            sandbox = await _create_sandbox(client, params, 60, deadline)
+        assert sandbox is client.sandbox
+        assert client.attempts == 3
+        assert len(delays) == 2 and all(0 < delay <= 30 for delay in delays)
+
+    asyncio.run(scenario())
+
+
+def test_daytona_creation_reports_capacity_when_deadline_expires(monkeypatch):
+    class Client:
+        async def create(self, params, *, timeout):
+            raise DaytonaValidationError("Total CPU limit exceeded. Maximum allowed: 2500.", status_code=400)
+
+    async def scenario():
+        async def wait(delay):
+            deadline.reschedule(asyncio.get_running_loop().time())
+            await asyncio.Future()
+
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+        params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+        with pytest.raises(SandboxCapacityError):
+            async with asyncio.timeout(60) as deadline:
+                await _create_sandbox(Client(), params, 60, deadline)
+
+    asyncio.run(scenario())
+
+
+def test_daytona_creation_rejects_non_capacity_validation_without_retry():
+    class Client:
+        def __init__(self):
+            self.attempts = 0
+
+        async def create(self, params, *, timeout):
+            self.attempts += 1
+            raise DaytonaValidationError("Invalid sandbox resources", status_code=400)
+
+    async def scenario():
+        client = Client()
+        params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+        with pytest.raises(DaytonaValidationError):
+            async with asyncio.timeout(60) as deadline:
+                await _create_sandbox(client, params, 60, deadline)
+        assert client.attempts == 1
 
     asyncio.run(scenario())
 
