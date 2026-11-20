@@ -373,9 +373,9 @@ Stage bulk content in the artifact's S3 region with
 `python -m infra.marina.apps.rl_data_catalog.stage_browse_evidence` and an explicit
 manifest URI/SHA, shard and output root. The manifest pins frozen declarations,
 review artifacts or complete difficulty observations and the producer code hashes.
-Keep the generated shard indexes and readback hashes. PRIVATE_ALWAYS and
-license-excluded content is refused before artifact reads; derived staging
-records carry the restriction.
+Keep the generated shard indexes and readback hashes. PRIVATE_ALWAYS content is
+refused before artifact reads. Review and rollout imports also reject
+license-excluded content.
 
 For a single selected panel or observation, the maintained loader commands are:
 
