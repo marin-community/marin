@@ -26,20 +26,20 @@ from rigging.auth import BearerTokenInjector, TokenProvider
 from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
-    JOB_CONFIG_NAMESPACE,
-    JOB_CONFIG_STORAGE_POLICY,
-    JOB_NAMESPACE,
-    JOB_STORAGE_POLICY,
+    CONTROLLER_JOB_CONFIG_NAMESPACE,
+    CONTROLLER_JOB_CONFIG_STORAGE_POLICY,
+    CONTROLLER_JOB_NAMESPACE,
+    CONTROLLER_JOB_STORAGE_POLICY,
+    CONTROLLER_TASK_ATTEMPT_NAMESPACE,
+    CONTROLLER_TASK_ATTEMPT_STORAGE_POLICY,
+    CONTROLLER_TASK_NAMESPACE,
+    CONTROLLER_TASK_STORAGE_POLICY,
     PROFILE_NAMESPACE,
     PROVISIONING_NAMESPACE,
-    TASK_ATTEMPT_NAMESPACE,
-    TASK_ATTEMPT_STORAGE_POLICY,
     TASK_EVENT_NAMESPACE,
     TASK_EVENT_STORAGE_POLICY,
-    TASK_NAMESPACE,
     TASK_STATE_NAMESPACE,
     TASK_STATS_NAMESPACE,
-    TASK_STORAGE_POLICY,
     WORKER_STATS_NAMESPACE,
     IrisJob,
     IrisJobConfig,
@@ -137,11 +137,13 @@ def build_log_stack(
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
         worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
         task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
-        job_table=client.get_table(JOB_NAMESPACE, IrisJob, storage_policy=JOB_STORAGE_POLICY),
-        job_config_table=client.get_table(JOB_CONFIG_NAMESPACE, IrisJobConfig, storage_policy=JOB_CONFIG_STORAGE_POLICY),
-        task_table=client.get_table(TASK_NAMESPACE, IrisTask, storage_policy=TASK_STORAGE_POLICY),
+        job_table=client.get_table(CONTROLLER_JOB_NAMESPACE, IrisJob, storage_policy=CONTROLLER_JOB_STORAGE_POLICY),
+        job_config_table=client.get_table(
+            CONTROLLER_JOB_CONFIG_NAMESPACE, IrisJobConfig, storage_policy=CONTROLLER_JOB_CONFIG_STORAGE_POLICY
+        ),
+        task_table=client.get_table(CONTROLLER_TASK_NAMESPACE, IrisTask, storage_policy=CONTROLLER_TASK_STORAGE_POLICY),
         task_attempt_table=client.get_table(
-            TASK_ATTEMPT_NAMESPACE, IrisTaskAttempt, storage_policy=TASK_ATTEMPT_STORAGE_POLICY
+            CONTROLLER_TASK_ATTEMPT_NAMESPACE, IrisTaskAttempt, storage_policy=CONTROLLER_TASK_ATTEMPT_STORAGE_POLICY
         ),
         server=server,
     )

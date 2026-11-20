@@ -65,9 +65,11 @@ Copied columns that differ from the controller DB:
 tables as COPIED (with its Finelog field) or EXCLUDED (with a reason), and fails
 on a column it does not list. A new DB column needs a one-line decision there by
 the rule above; copying it also adds a nullable field to the row dataclass. A
-dropped DB column that was copied moves to RETIRED: its Finelog field stays,
-becomes `| None = None`, and reads NULL from then on; add its name and the date
-to a list of retired columns here. Finelog columns are never removed or renamed.
+dropped DB column that was copied keeps its Finelog field, which becomes
+`| None = None` and reads NULL from then on: that change adds a retired
+classification to the test, which checks the field defaults to None, and lists
+the column and the date here. Finelog columns
+are never removed or renamed.
 
 **Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as
@@ -91,7 +93,10 @@ worker, error or exit code changes. A change to any other column alone
 (`status_message`, `container_id`, `backend_id`)
 writes no row, because Kubernetes rewrites the pending reason on every
 reconcile. So those columns hold their value as of the row's change, and
-pending-reason history is kept only at those trigger points.
+pending-reason history is kept only at those trigger points. Likewise, a worker
+observation writes an `iris.controller_db__task_attempts` row only when it
+changes the attempt row; repeating the attempt's state, as a status-message
+refresh does, writes none.
 
 Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
 submitted_at_ms)`, because job ids are reused after a job ends, and a live
@@ -187,3 +192,78 @@ History is kept in the archive (remote retention is `retain_forever`). The
 storage policies (5 years; 8 GiB each for `tasks` and `task_attempts`, 4 GiB
 each for `jobs` and `job_config`) bound only the hub's local copy; older segments are read back from
 the archive.
+
+## Cost to the controller, and turning the copy off
+
+The rows are read just before each write transaction commits and enqueued just
+after, both under the controller's write lock, so every other writer waits for
+them. The controller emits to `telemetry_v1.iris` (`service = 'iris-controller'`),
+always after releasing the lock:
+
+| Name | Kind | Meaning |
+| --- | --- | --- |
+| `iris_observability_rows_transaction` | event, one per transaction that copies rows | `body_json` holds `job_rows`, `job_config_rows`, `task_rows`, `attempt_rows`, their total `rows`, `snapshot_seconds`, `enqueue_seconds` and their total `seconds` |
+| `iris_controller_write_lock_held_seconds` | delta counter, once a minute | Time write transactions held the lock (not maintenance such as WAL checkpoints) |
+| `iris_controller_write_lock_wait_seconds` | delta counter, once a minute | Time write transactions waited to acquire it |
+
+The event holds counts and durations only: no job ids, users or names. One event
+per transaction pairs each burst's row count with its time, so the per-row cost
+and the fixed cost per transaction can be read off, and so can how close a table
+gets to the Finelog client's 10,000-row buffer. Expect at most one event per
+reconcile tick that changes rows, plus one per submit: on the order of 10,000 a
+day on `marin`. The controller's RPC telemetry in
+`telemetry_v1.iris.rpc` writes about 9 million rows a day.
+
+The lock counters are summed in a window that closes with the first write
+transaction ending 60 s or more after it opened, so a quiet controller emits
+longer windows, and the last window before shutdown is not emitted. A
+transaction that rolls back after its snapshot emits no row event, though its
+lock time is counted. The wait is timed around `acquire()`; it is near zero for
+a re-entrant acquire by the thread already holding the lock.
+
+A transaction whose rows take over 100 ms also logs `observability rows: N rows
+took M ms under the write lock`, at most once a minute.
+
+Row time against rows, per hour (the slope is the per-row cost):
+
+```sql
+SELECT date_trunc('hour', to_timestamp_millis(timestamp_ms)) AS hour,
+       count(*) AS transactions,
+       max(CAST(json_get(body_json, 'rows') AS BIGINT)) AS max_rows,
+       max(CAST(json_get(body_json, 'seconds') AS DOUBLE)) AS max_seconds,
+       sum(CAST(json_get(body_json, 'seconds') AS DOUBLE)) AS row_seconds
+FROM "telemetry_v1.iris"
+WHERE service = 'iris-controller' AND name = 'iris_observability_rows_transaction'
+  AND timestamp_ms >= <start_ms> AND timestamp_ms < <end_ms>
+GROUP BY 1
+ORDER BY 1;
+```
+
+Lock time per hour, to compare `row_seconds` against:
+
+```sql
+SELECT date_trunc('hour', to_timestamp_millis(timestamp_ms)) AS hour, name, sum(value) AS seconds
+FROM "telemetry_v1.iris"
+WHERE service = 'iris-controller'
+  AND name IN ('iris_controller_write_lock_held_seconds', 'iris_controller_write_lock_wait_seconds')
+  AND timestamp_ms >= <start_ms> AND timestamp_ms < <end_ms>
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+`telemetry_v1.iris` has no rows before this change ships, so check after the
+first deploy that both queries return data.
+
+To turn the copy off, set it in the cluster config and restart the controller:
+
+```yaml
+finelog:
+  config: marin
+  controller_rows: false
+```
+
+The controller then attaches no row tables: write transactions mark, read and
+write no rows, and the controller logs `observability rows are off` at start.
+It still emits the lock counters, so lock time before and after the switch can
+be compared. Rows for changes made while it is off are not
+written later.

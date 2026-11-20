@@ -46,10 +46,10 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
-JOB_NAMESPACE = "iris.controller_db__jobs"
-JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
-TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
-TASK_NAMESPACE = "iris.controller_db__tasks"
+CONTROLLER_JOB_NAMESPACE = "iris.controller_db__jobs"
+CONTROLLER_JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
+CONTROLLER_TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
+CONTROLLER_TASK_NAMESPACE = "iris.controller_db__tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -82,10 +82,12 @@ TASK_EVENT_STORAGE_POLICY = StoragePolicy(
 # these policies only bound the hub's local copy, and older segments are read
 # back from the archive.
 _OBSERVABILITY_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
-JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
-JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
-TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
-TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+CONTROLLER_JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+CONTROLLER_JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+CONTROLLER_TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(
+    max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE
+)
+CONTROLLER_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:

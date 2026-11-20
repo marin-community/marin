@@ -5,7 +5,9 @@
 
 import dataclasses
 import json
+import logging
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,12 +15,13 @@ from pathlib import Path
 import pytest
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import load_config
-from iris.cluster.controller import observability_rows, ops, writes
+from iris.cluster.controller import observability_rows, ops, write_lock_cost, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.write_lock_cost import PendingCost
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt
 from iris.cluster.types import JobName
@@ -38,7 +41,7 @@ from iris.testing.controller import (
 )
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
-from rigging.timing import Timestamp
+from rigging.timing import RateLimiter, Timestamp
 
 
 @dataclass
@@ -492,17 +495,22 @@ def test_job_config_redacts_a_token_in_the_launch_branch(state):
     ["made-up-not-json", "[" * 100_000, _provenance_json(dirty="yes")],
     ids=["not-json", "deeply-nested", "string-dirty"],
 )
-def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw):
+def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw, monkeypatch, caplog):
+    monkeypatch.setattr(observability_rows, "_malformed_provenance_log", RateLimiter(interval_seconds=0))
     rows = _attach(state, "marin")
     request = make_job_request("train")
     request.environment.env_vars["MARIN_PROVENANCE"] = raw
 
-    submit_job(state, "train", request)
+    with caplog.at_level(logging.WARNING, logger=observability_rows.__name__):
+        submit_job(state, "train", request)
 
     config = rows.job_configs[0]
     assert (config.provenance_base_commit, config.provenance_tree_hash, config.provenance_dirty) == (None, None, None)
     assert len(rows.jobs) == 1
     assert rows.tasks
+    (warning,) = [r.getMessage() for r in caplog.records if "malformed MARIN_PROVENANCE" in r.getMessage()]
+    assert "/test-user/train" in warning
+    assert raw[:20] not in warning
 
 
 @dataclass(frozen=True)
@@ -519,9 +527,6 @@ class _Classified:
     # Finelog fields not copied from a DB column: the keys from the job, the
     # writing cluster, the snapshot time and values derived in the copy.
     derived: frozenset[str]
-    # DB column that was copied and no longer exists -> its Finelog field,
-    # which stays and reads NULL.
-    retired: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 _JOB_KEY = frozenset({"cluster", "ts", "root_job_id", "root_submitted_at_ms", "submitted_at_ms"})
@@ -655,7 +660,7 @@ _RULE = 'lib/iris/docs/observability-rows.md, "Which columns are copied"'
 @pytest.mark.parametrize("table", sorted(_COLUMNS))
 def test_every_controller_db_column_is_classified(tmp_path, table):
     classified = _COLUMNS[table]
-    copied, excluded, retired = classified.copied, classified.excluded, classified.retired
+    copied, excluded = classified.copied, classified.excluded
     ControllerDB(db_dir=tmp_path).close()
     with closing(sqlite3.connect(tmp_path / ControllerDB.DB_FILENAME)) as conn:
         db_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -667,9 +672,9 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
     )
     gone = sorted((copied.keys() | excluded.keys()) - db_columns)
     assert not gone, (
-        f"controller DB table {table!r} no longer has column(s) {gone}: drop an EXCLUDED one, and move a "
-        f"COPIED one to RETIRED (column -> field) with its field made `| None = None` and a doc line, in "
-        f"{_THIS_TEST}; see {_RULE}"
+        f"controller DB table {table!r} no longer has column(s) {gone}: drop an EXCLUDED one; a COPIED one "
+        f"keeps its Finelog field, made `| None = None`, so classify that field as retired in {_THIS_TEST}; "
+        f"see {_RULE}"
     )
     fields = {field.name: field for field in dataclasses.fields(classified.row_class)}
     copied_here = {target for target in copied.values() if "." not in target} | {
@@ -678,18 +683,12 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
         for target in other.copied.values()
         if target.startswith(f"{table}.")
     }
-    sources = copied_here | set(retired.values()) | classified.derived
+    sources = copied_here | classified.derived
     # Exact, so an EXCLUDED column copied anyway, or under a new name, fails too.
     assert fields.keys() == sources, (
         f"{classified.row_class.__name__} fields without a classified source: {sorted(fields.keys() - sources)}; "
         f"classified sources without a field: {sorted(sources - fields.keys())}; see {_RULE}"
     )
-    assert not set(retired.values()) & (copied_here | classified.derived), "a retired field is still live"
-    for column, field in retired.items():
-        assert column not in db_columns
-        assert (
-            fields[field].default is None
-        ), f"retired field {classified.row_class.__name__}.{field} must default to None"
 
 
 def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
@@ -742,3 +741,114 @@ def test_removing_a_worker_writes_the_task_rows_that_pointed_at_it(state):
     assert [(t.task_id, t.state, t.current_worker_id) for t in new] == [
         (task.task_id.to_wire(), "TASK_STATE_RUNNING", None)
     ]
+
+
+def test_a_controller_with_observability_rows_off_attaches_no_row_tables(make_controller, tmp_path):
+    on = make_controller(local_state_dir=tmp_path / "on")
+    off = make_controller(observability_rows=False, local_state_dir=tmp_path / "off")
+
+    with on._db.transaction() as tx:
+        assert tx.observability_rows is not None
+    with off._db.transaction() as tx:
+        assert tx.observability_rows is None
+
+
+def test_slow_rows_are_logged_and_counted_in_the_dbs_lock_cost(state, monkeypatch, caplog):
+    monkeypatch.setattr(observability_rows, "SLOW_ROWS_SECONDS", 0.0)
+    monkeypatch.setattr(observability_rows, "_slow_rows_log", RateLimiter(interval_seconds=0))
+    _attach(state, "marin")
+
+    with caplog.at_level(logging.WARNING, logger=observability_rows.__name__):
+        submit_job(state, "train", make_job_request("train"))
+
+    (warning,) = [r.getMessage() for r in caplog.records if "under the write lock" in r.getMessage()]
+    assert "finelog.controller_rows: false" in warning
+
+
+def _emitted(monkeypatch, state) -> list[PendingCost]:
+    """Capture what each write transaction emits, checking the write lock is already released."""
+    lock = state._db._lock
+    emitted: list[PendingCost] = []
+
+    def emit(pending: PendingCost) -> None:
+        free: list[bool] = []
+
+        def probe() -> None:
+            acquired = lock.acquire(blocking=False)
+            free.append(acquired)
+            if acquired:
+                lock.release()
+
+        thread = threading.Thread(target=probe)
+        thread.start()
+        thread.join()
+        assert free == [True], "emitted while the write lock was held"
+        emitted.append(pending)
+
+    monkeypatch.setattr(write_lock_cost, "emit", emit)
+    return emitted
+
+
+def test_a_submit_emits_one_row_record_after_releasing_the_lock(state, monkeypatch):
+    emitted = _emitted(monkeypatch, state)
+    _attach(state, "marin")
+
+    submit_job(state, "train", make_job_request("train", replicas=3))
+
+    (record,) = [r for pending in emitted for r in pending.row_transactions]
+    assert (record.job_rows, record.job_config_rows, record.task_rows) == (1, 1, 3)
+    assert record.snapshot_seconds > 0 and record.enqueue_seconds > 0
+
+
+def test_a_rolled_back_transaction_emits_no_row_record(state, monkeypatch):
+    submit_job(state, "train", make_job_request("train"))
+    emitted = _emitted(monkeypatch, state)
+    _attach(state, "marin")
+
+    def fail_after_the_snapshot() -> None:
+        raise RuntimeError("made-up failure after the snapshot")
+
+    with pytest.raises(RuntimeError, match="made-up failure"):
+        with state._db.transaction() as cur:
+            observability_rows.record_job_changes(cur, [JobName.root("test-user", "train")])
+            cur.register_pre_commit(fail_after_the_snapshot)
+
+    assert [r for pending in emitted for r in pending.row_transactions] == []
+    assert emitted, "the rolled-back transaction still reports its lock time"
+
+
+def test_a_status_message_refresh_writes_no_attempt_row_and_no_row_event(state, monkeypatch):
+    # A same-state observation with a new status message builds an attempt delta that
+    # changes nothing on the attempt row, so it must not copy one.
+    worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    (task,) = submit_job(state, "train", make_job_request("train"))
+    _run_on_node(state, task, worker, "gpu-node-7")
+    rows = _attach(state, "marin")
+    emitted = _emitted(monkeypatch, state)
+
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=query_task(state, task.task_id).current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            pod_name="pod-a",
+                            node_name="gpu-node-7",
+                            topology={"rack": "rack-3"},
+                            status_message="made-up pending reason",
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+
+    assert rows.attempts == []
+    assert rows.tasks == []
+    assert [r for pending in emitted for r in pending.row_transactions] == []

@@ -524,14 +524,16 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
     """
     changed: list[JobName] = []
     for chunk in batched(job_ids, _ID_CHUNK_SIZE):
-        changed.extend(
-            tx.execute(
-                select(jobs_table.c.job_id).where(
-                    jobs_table.c.job_id.in_(chunk),
-                    or_(jobs_table.c.state == job_pb2.JOB_STATE_PENDING, jobs_table.c.started_at_ms.is_(None)),
-                )
-            ).scalars()
-        )
+        # Only the observability rows need to know which jobs this changes.
+        if tx.observability_rows is not None:
+            changed.extend(
+                tx.execute(
+                    select(jobs_table.c.job_id).where(
+                        jobs_table.c.job_id.in_(chunk),
+                        or_(jobs_table.c.state == job_pb2.JOB_STATE_PENDING, jobs_table.c.started_at_ms.is_(None)),
+                    )
+                ).scalars()
+            )
         tx.execute(
             update(jobs_table)
             .where(jobs_table.c.job_id.in_(chunk))
