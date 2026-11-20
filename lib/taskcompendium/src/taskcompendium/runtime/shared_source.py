@@ -21,6 +21,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import stat
@@ -30,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 NATIVE_SCRIPTS = "native_scripts.py"
+HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
 def shared_controller():
@@ -57,16 +59,31 @@ def patch_paths(diff: str) -> list[str]:
     """Workspace-relative paths a unified diff touches, in first-seen order."""
     selected: list[str] = []
     seen: set[str] = set()
-    for line in diff.splitlines():
-        if not line.startswith(("--- ", "+++ ")):
+    lines = diff.splitlines()
+    old_remaining = new_remaining = 0
+    for index, line in enumerate(lines):
+        if old_remaining or new_remaining:
+            if line.startswith((" ", "-")):
+                old_remaining -= 1
+            if line.startswith((" ", "+")):
+                new_remaining -= 1
             continue
-        path = line[4:].partition("\t")[0].strip('"')
-        if path == "/dev/null":
+        hunk = HUNK_HEADER.match(line)
+        if hunk:
+            old_remaining, new_remaining = (int(count) if count is not None else 1 for count in hunk.groups())
             continue
-        path = PurePosixPath(path.removeprefix("a/").removeprefix("b/")).as_posix()
-        if path not in seen:
-            seen.add(path)
-            selected.append(path)
+        if not line.startswith("--- ") or index + 1 == len(lines) or not lines[index + 1].startswith("+++ "):
+            continue
+        for header in (line, lines[index + 1]):
+            path = header[4:].partition("\t")[0].strip('"')
+            if path == "/dev/null":
+                continue
+            path = PurePosixPath(path.removeprefix("a/").removeprefix("b/")).as_posix()
+            if path == "." or PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts:
+                raise ValueError(f"Invalid patch path: {path}")
+            if path not in seen:
+                seen.add(path)
+                selected.append(path)
     return selected
 
 
@@ -288,18 +305,6 @@ def restore_git(common, root: Path, workspace: Path) -> None:
         shutil.copy2(pin, target)
 
 
-def ensure_verifier_directory(common, contract: dict) -> None:
-    """Give the grading UID a controlled report directory without losing captures."""
-    reports = Path(contract["report_directory"])
-    if reports.is_symlink() or not reports.is_dir():
-        common.remove_path(reports)
-        reports.mkdir(mode=0o770, parents=True)
-    os.chown(reports, 0, contract["grader_uid"])
-    reports.chmod(0o770)
-    for name in common.REPORT_FILES:
-        common.remove_path(reports / name)
-
-
 def restore_tests(common, contract: dict, payload: dict) -> None:
     """Rebuild /tests with the original private scorer material, root-owned."""
     tests = Path("/tests")
@@ -395,7 +400,7 @@ def prepare_grading(contract: dict, payload: dict) -> None:
     common.stop_agent_processes(contract["grader_uid"])
     root, workspace = Path(contract["protected_root"]), Path(contract["workspace"])
     reports = Path(contract["report_directory"])
-    ensure_verifier_directory(common, contract)
+    common.reset_report_directory(contract, 0o770)
     dependencies = [path for path in contract["native"]["dependency_paths"] if Path(path).exists()]
     baseline = json.loads((root / "dependency-baseline.json").read_text())
     inventory = common.inventory(dependencies)
@@ -470,39 +475,33 @@ def grade(contract_path: Path) -> None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             common.stop_agent_processes(contract["grader_uid"])
-            common.write_json(
-                reports / "verdict.json", {"status": "scored", "reward": 0, "detail": {"reason": "timeout"}}
-            )
-            _write_canonical_reward(reports, 0, contract)
+            common.publish_verdict(contract, {"status": "scored", "reward": 0, "detail": {"reason": "timeout"}})
             return
     common.stop_agent_processes(contract["grader_uid"])
     reward_file = Path(contract["report_directory"]) / "reward.txt"
     if code != 0:
         # An aborted scorer cannot vouch for a reward its same-UID children may
         # have written before dying; fail closed instead of trusting the file.
-        common.write_json(
-            reports / "verdict.json",
+        common.publish_verdict(
+            contract,
             {"status": "scored", "reward": 0, "detail": {"exit_code": code, "reason": "scorer_aborted"}},
         )
-        _write_canonical_reward(reports, 0, contract)
         return
     reward = parse_source_reward(reward_file)
     if reward is None:
-        common.write_json(
-            reports / "verdict.json",
+        common.publish_verdict(
+            contract,
             {
                 "status": "scored",
                 "reward": 0,
                 "detail": {"exit_code": code, "reason": "invalid_reward", "exists": reward_file.is_file()},
             },
         )
-        _write_canonical_reward(reports, 0, contract)
         return
-    common.write_json(
-        reports / "verdict.json",
+    common.publish_verdict(
+        contract,
         {"status": "scored", "reward": reward, "detail": {"exit_code": code}},
     )
-    _write_canonical_reward(reports, reward, contract)
 
 
 def parse_source_reward(reward_file: Path) -> float | None:
@@ -517,13 +516,6 @@ def parse_source_reward(reward_file: Path) -> float | None:
     if not math.isfinite(reward) or reward < 0.0 or reward > 1.0:
         return None
     return reward
-
-
-def _write_canonical_reward(reports: Path, reward: float, contract: dict) -> None:
-    reward_file = reports / "reward.txt"
-    reward_file.write_text(f"{reward}\n")
-    os.chown(reward_file, 0, contract["grader_uid"])
-    reward_file.chmod(0o640)
 
 
 def contract_tests(contract: dict) -> dict[str, str]:

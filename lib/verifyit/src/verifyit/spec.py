@@ -353,7 +353,7 @@ class JudgeSpec:
     model: str = ""
     exact_gate: bool = True
     request_timeout: float = 120.0
-    transport_attempts: int = field(default=1, kw_only=True)
+    transport_attempts: int = field(default=3, kw_only=True)
     transport_budget: float = field(default=180.0, kw_only=True)
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)

@@ -252,6 +252,32 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def reset_report_directory(contract: dict, mode: int) -> Path:
+    """Discard untrusted report entries before the controller writes audit files."""
+    reports = Path(contract["report_directory"])
+    if reports.is_symlink() or not reports.is_dir():
+        remove_path(reports)
+        reports.mkdir(mode=mode, parents=True)
+    os.chown(reports, 0, contract["grader_uid"])
+    reports.chmod(mode)
+    for entry in reports.iterdir():
+        remove_path(entry)
+    return reports
+
+
+def publish_verdict(contract: dict, verdict: dict) -> None:
+    """Replace scorer-owned result names with the controller's canonical reward."""
+    reports = Path(contract["report_directory"])
+    reports.chmod(0o750)
+    for name in ("verdict.json", "reward.json", "reward.txt"):
+        remove_path(reports / name)
+    write_json(reports / "verdict.json", verdict)
+    reward = reports / "reward.txt"
+    reward.write_text(f"{verdict['reward']}\n")
+    os.chown(reward, 0, contract["grader_uid"])
+    reward.chmod(0o640)
+
+
 def remove_workspace_path(workspace: Path, relative: str) -> None:
     """Remove an untrusted path without traversing a symlink ancestor."""
     target = workspace / relative
@@ -273,7 +299,9 @@ def restore_path(workspace: Path, relative: str, reference: Path) -> None:
             remove_path(parent)
         parent.mkdir(exist_ok=True)
     remove_path(target)
-    if reference.is_dir():
+    if reference.is_symlink():
+        target.symlink_to(os.readlink(reference), target_is_directory=reference.is_dir())
+    elif reference.is_dir():
         shutil.copytree(reference, target, symlinks=True)
     else:
         shutil.copy2(reference, target)
@@ -548,11 +576,7 @@ def prepare_grading(contract: dict) -> None:
     runtime = json.loads((root / "runtime.json").read_text())
     before = json.loads((root / "site-packages-baseline.json").read_text())
     after = inventory(runtime["sites"])
-    reports = Path(contract["report_directory"])
-    reports.mkdir(mode=0o750, parents=True, exist_ok=True)
-    if reports.is_symlink() or reports.stat().st_uid != 0:
-        raise ValueError("The structured report directory must be owned by root")
-    reports.chmod(0o750)
+    reports = reset_report_directory(contract, 0o750)
     write_json(reports / contract["audit_probes"][0], inventory_diff(before, after))
     write_json(reports / contract["audit_probes"][1], inventory_diff(hook_inventory(before), hook_inventory(after)))
     write_json(reports / "source-environment.json", runtime["source_environment"])

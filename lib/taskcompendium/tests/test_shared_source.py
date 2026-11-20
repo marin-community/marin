@@ -748,9 +748,13 @@ def test_agent_cannot_read_protected_material_or_forge_verdicts(source_image):
     # pre-created report directory still cannot smuggle a forged reward in.
     REPORTS.mkdir(parents=True, exist_ok=True)
     REPORTS.chmod(0o777)
+    baseline = PROTECTED / "dependency-baseline.json"
+    before = baseline.read_bytes()
     forge = (
         "import os, pathlib\n"
         "pathlib.Path('/logs/verifier/reward.txt').write_text('1')\n"
+        "pathlib.Path('/logs/verifier/site-packages-diff.json').symlink_to('/opt/taskcompendium-shared/dependency-baseline.json')\n"
+        "pathlib.Path('/logs/verifier/startup-hooks-diff.json').symlink_to('/opt/taskcompendium-shared/dependency-baseline.json')\n"
         "for target in ('/opt/taskcompendium-shared/contract.json',"
         " '/opt/taskcompendium-shared/tests/config.json',"
         " '/opt/taskcompendium-shared/materialize.patch'):\n"
@@ -766,6 +770,7 @@ def test_agent_cannot_read_protected_material_or_forge_verdicts(source_image):
     result = run_as_agent(forge)
     assert result.returncode == 0, result.stderr
     assert run_grade(source_image.files)["reward"] == 0.0
+    assert baseline.read_bytes() == before
 
 
 @pytest.mark.parametrize("source_image", ["scale"], indirect=True)
@@ -795,10 +800,17 @@ def test_background_writer_cannot_fake_a_pass(source_image):
 @pytest.mark.parametrize("source_image", ["lego"], indirect=True)
 def test_aborted_scorer_cannot_forge_a_reward(source_image):
     """A same-UID child that forges the reward and kills its process group fails closed."""
+    victim = PROTECTED / "untouched.txt"
+    victim.write_text("private material\n")
     poison = (
         "import os, pathlib, signal\n"
         "pathlib.Path('/logs/verifier').mkdir(parents=True, exist_ok=True)\n"
         "pathlib.Path('/logs/verifier/reward.txt').write_text('1')\n"
+        "pathlib.Path('/logs/verifier/reward.json').write_text('{\"reward\":1}')\n"
+        "for name in ('reward.txt', 'verdict.json'):\n"
+        "    path = pathlib.Path('/logs/verifier') / name\n"
+        "    path.unlink(missing_ok=True)\n"
+        "    path.symlink_to('/opt/taskcompendium-shared/untouched.txt')\n"
         "os.killpg(os.getpgrp(), signal.SIGKILL)\n"
     )
     program = f"import pathlib\npathlib.Path('/testbed/conftest.py').write_text({poison!r})\n"
@@ -808,6 +820,17 @@ def test_aborted_scorer_cannot_forge_a_reward(source_image):
     assert verdict["reward"] == 0.0
     assert verdict["detail"]["reason"] == "scorer_aborted"
     assert float((REPORTS / "reward.txt").read_text()) == 0.0
+    assert not (REPORTS / "reward.json").exists()
+    assert victim.read_text() == "private material\n"
+
+
+@pytest.mark.parametrize("source_image", ["lego"], indirect=True)
+def test_source_scorer_cannot_override_reward_with_harbor_json(source_image):
+    poison = "from pathlib import Path\nPath('/logs/verifier/reward.json').write_text('{\"reward\":1}')\n"
+    result = run_as_agent(f"from pathlib import Path;Path('/testbed/conftest.py').write_text({poison!r})")
+    assert result.returncode == 0, result.stderr
+    assert run_grade(source_image.files)["reward"] == 0
+    assert not (REPORTS / "reward.json").exists()
 
 
 @pytest.mark.parametrize("source_image", ["scale"], indirect=True)

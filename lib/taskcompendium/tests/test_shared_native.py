@@ -203,6 +203,22 @@ def test_native_grading_uses_live_dependencies_and_audits_changes(native_runtime
 def test_native_cleanup_preserves_files_behind_actor_symlink(native_runtime, destination):
     contract, _, _ = native_runtime
     expected_reward = native_verdict(contract)["reward"]
+    baseline = Path(contract.protected_root) / "dependency-baseline.json"
+    before = baseline.read_bytes()
+    reports = Path(contract.report_directory)
+    reports.chmod(0o777)
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.unlink();p.symlink_to(sys.argv[2])",
+            str(reports / contract.audit_probes[0]),
+            str(baseline),
+        ],
+        user=contract.agent_uid,
+        group=contract.agent_uid,
+        check=True,
+    )
     workspace = Path(contract.workspace)
     target = (
         Path(contract.protected_root) / "hidden-extra" if destination == "protected" else workspace.parent / "external"
@@ -228,6 +244,55 @@ def test_native_cleanup_preserves_files_behind_actor_symlink(native_runtime, des
     assert victim.read_text() == "private material\n"
     assert not (workspace / "tests").is_symlink()
     assert verdict["reward"] == expected_reward
+    assert baseline.read_bytes() == before
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_native_startup_cleanup_unlinks_entry_without_deleting_target(native_runtime, pinned):
+    contract, _, _ = native_runtime
+    root = Path(contract.protected_root)
+    runtime_path = root / "runtime.json"
+    original = runtime_path.read_text()
+    runtime = json.loads(original)
+    startup = root.parent / "actor-startup"
+    startup.mkdir(exist_ok=True)
+    cargo = startup / ".cargo"
+    cargo.mkdir(exist_ok=True)
+    os.chown(cargo, contract.agent_uid, contract.agent_uid)
+    victim = root.parent / "untouched-startup-target"
+    victim.mkdir(exist_ok=True)
+    (victim / "private.txt").write_text("private material\n")
+    trusted = root.parent / "trusted-startup.txt"
+    if pinned:
+        trusted.write_text("trusted config\n")
+        (cargo / "config").symlink_to(trusted)
+        shared_native.freeze_path(cargo / "config", root / "pins", runtime["pins"])
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.unlink(missing_ok=True);p.symlink_to(sys.argv[2])",
+            str(cargo / "config"),
+            str(victim),
+        ],
+        user=contract.agent_uid,
+        group=contract.agent_uid,
+        check=True,
+    )
+    runtime["startup_roots"] = [str(startup)]
+    runtime_path.write_text(json.dumps(runtime))
+    grading = contract.model_dump(mode="json")
+    grading["native"]["startup_patterns"].append("**/.cargo/config*")
+    try:
+        shared_native.prepare_grading(grading)
+        assert (victim / "private.txt").read_text() == "private material\n"
+        if pinned:
+            assert (cargo / "config").resolve() == trusted
+            assert (cargo / "config").read_text() == "trusted config\n"
+        else:
+            assert not (cargo / "config").is_symlink()
+    finally:
+        runtime_path.write_text(original)
 
 
 def test_native_actor_cannot_read_hidden_grading_material(native_runtime):
