@@ -88,6 +88,7 @@ def build_run_request(
         container_profile=row.container_profile,
         egress_policy=row.egress_policy,
         egress_allow_json=row.egress_allow_json,
+        submitting_prefix=row.submitting_prefix,
     )
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:

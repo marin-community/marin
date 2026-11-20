@@ -254,6 +254,7 @@ def insert_job_and_config(
         job_id=job_id,
         user_id=job_id.user,
         submitting_user=submitting_user,
+        submitting_prefix=request.submitting_prefix,
         parent_job_id=parent_job_id,
         root_job_id=job_id.root_job.to_wire(),
         depth=job_id.depth,

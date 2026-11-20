@@ -3,6 +3,7 @@
 
 """Controller operations for users, roles, and budgets."""
 
+import secrets
 from dataclasses import dataclass, field
 
 from connectrpc.code import Code
@@ -13,15 +14,22 @@ from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func, select
 
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.auth import (
+    ADMIN_ROLE,
+    DEFAULT_SCOPED_TOKEN_TTL_SECONDS,
+    MAX_SCOPED_TOKEN_TTL_SECONDS,
+    ControllerAuth,
+    clamped_mint_ttl,
+)
 from iris.cluster.controller.budget import compute_user_spend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.schema import jobs_table, tasks_table, user_budgets_table
 from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthzAction, authorize
+from iris.rpc.auth import AuthzAction, authorize, job_prefix_user, validate_job_prefix
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
+from iris.time_proto import timestamp_to_proto
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +105,59 @@ def get_current_user(
     if identity is None:
         return job_pb2.GetCurrentUserResponse(user_id="anonymous", role="")
     return job_pb2.GetCurrentUserResponse(user_id=identity.user_id, role=identity.role)
+
+
+def mint_scoped_token(
+    dependencies: AccountDependencies,
+    request: controller_pb2.Controller.MintScopedTokenRequest,
+    context: RequestContext,
+) -> controller_pb2.Controller.MintScopedTokenResponse:
+    """Mint a job-prefix-scoped bearer token for the calling user.
+
+    The token's claims carry the prefix, so owner-gated RPCs additionally
+    require the target job to sit under it (see iris.rpc.auth). The caller must
+    own the prefix's user — an admin may mint for any user; everyone else only
+    for a prefix under their own name. Not revocable: the TTL is clamped to the
+    controller's ceiling and the default stays short.
+    """
+    del context
+    identity = require_identity()
+    jwt_manager = dependencies.auth.jwt_manager
+    if jwt_manager is None:
+        raise ConnectError(Code.INTERNAL, "JWT manager not configured")
+    try:
+        prefix = validate_job_prefix(request.prefix)
+    except ValueError as error:
+        raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid prefix: {error}") from error
+
+    owner = job_prefix_user(prefix)
+    if identity.role == ADMIN_ROLE:
+        pass  # An admin may mint for any user and any prefix.
+    elif identity.user_id != owner:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"User '{identity.user_id}' cannot mint a token scoped to '{prefix}': the prefix's user is '{owner}'",
+        )
+    elif identity.prefix and not prefix.startswith(identity.prefix):
+        # Delegation only narrows: a prefix-scoped token cannot mint a sibling
+        # or wider prefix under the same user, or the scope would be escapable.
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Token is scoped to jobs under '{identity.prefix}'; it cannot mint a token "
+            f"scoped to '{prefix}', which is outside that prefix",
+        )
+
+    ttl = clamped_mint_ttl(
+        request, default_seconds=DEFAULT_SCOPED_TOKEN_TTL_SECONDS, max_seconds=MAX_SCOPED_TOKEN_TTL_SECONDS
+    )
+    now = Timestamp.now()
+    expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
+    token = jwt_manager.create_scoped_token(owner, prefix, f"iris_scoped_{secrets.token_urlsafe(8)}", ttl_seconds=ttl)
+    return controller_pb2.Controller.MintScopedTokenResponse(
+        token=token,
+        expires_at=timestamp_to_proto(expires_at),
+        prefix=prefix,
+    )
 
 
 def set_user_budget(

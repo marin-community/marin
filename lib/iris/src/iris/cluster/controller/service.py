@@ -265,6 +265,13 @@ class ControllerServiceImpl:
     ) -> job_pb2.GetCurrentUserResponse:
         return accounts.get_current_user(request, ctx)
 
+    def mint_scoped_token(
+        self,
+        request: controller_pb2.Controller.MintScopedTokenRequest,
+        ctx: RequestContext,
+    ) -> controller_pb2.Controller.MintScopedTokenResponse:
+        return accounts.mint_scoped_token(self._accounts, request, ctx)
+
     def exec_in_container(
         self,
         request: controller_pb2.Controller.ExecInContainerRequest,

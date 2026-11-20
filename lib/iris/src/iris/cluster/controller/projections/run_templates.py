@@ -61,6 +61,7 @@ def build_run_request_fields(
     container_profile: int = 0,
     egress_policy: int = 0,
     egress_allow_json: list[str] | None = None,
+    submitting_prefix: str = "",
 ) -> job_pb2.RunTaskRequest:
     """Build a RunTaskRequest carrying the per-job fields shared by the template
     and per-attempt construction paths.
@@ -90,6 +91,7 @@ def build_run_request_fields(
         container_profile=container_profile,
         egress_policy=egress_policy,
         egress_allow=parse_egress_rules(egress_allow_json or []),
+        submitting_prefix=submitting_prefix,
     )
     request.termination_grace.milliseconds = termination_grace_ms
     for filename, data in workdir_files.items():
@@ -162,6 +164,7 @@ class RunTemplatesProjection(Projection):
             container_profile=job.container_profile,
             egress_policy=job.egress_policy,
             egress_allow_json=job.egress_allow_json,
+            submitting_prefix=str(job.submitting_prefix),
         )
 
         with self._lock:

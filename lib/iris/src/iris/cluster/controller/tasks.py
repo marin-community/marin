@@ -18,7 +18,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import func, select, tuple_
 
 from iris.cluster.controller import reads
-from iris.cluster.controller.auth import ControllerAuth, authorize_owner_if_configured
+from iris.cluster.controller.auth import ControllerAuth, authorize_job_owner
 from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.codec import proto_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import ControllerDB, Tx
@@ -441,7 +441,7 @@ def _resolve_kick_target(
         if handoff is None or handoff.requester_id != identity.user_id:
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {name.root_job}")
     else:
-        authorize_owner_if_configured(dependencies.auth, name.user)
+        authorize_job_owner(dependencies.auth, name)
     if not name.is_task and task_attempt.attempt_id is not None:
         reject("a job target cannot carry an ':attempt' suffix")
         return

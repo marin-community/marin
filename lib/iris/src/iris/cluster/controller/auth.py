@@ -36,6 +36,7 @@ from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from urllib.parse import unquote
 
+from google.protobuf.message import Message
 from rigging.auth import RefreshingTokenProvider, TokenProvider
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
@@ -59,7 +60,15 @@ from rigging.token_authority import (
 
 from iris.cluster.config import AuthConfig, PeerConfig
 from iris.cluster.types import JobName
-from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
+from iris.rpc.auth import (
+    FEDERATION_PEER_ROLE,
+    JOB_PREFIX_CLAIM,
+    SESSION_COOKIE,
+    authorize_job_prefix,
+    authorize_resource_owner,
+    validate_job_prefix,
+)
+from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +102,16 @@ WORKER_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 # so a retried or rescheduled attempt starts a new lifetime. It must outlive one
 # attempt of a long training task.
 TASK_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
+
+# Default lifetime for a minted job-prefix-scoped user token. Short by default —
+# the token is non-revocable — while still outliving a working session; callers
+# opt into longer lifetimes explicitly.
+DEFAULT_SCOPED_TOKEN_TTL_SECONDS = 86400  # 1 day
+# Ceiling on a requested scoped-token TTL. Matches the task-token lifetime, so an
+# agent can hold one token across a longest-run job. The token stays narrower
+# than its user's full identity — owner-gated targets must sit under the
+# prefix — so a leak exposes only the prefix subtree until it ages out.
+MAX_SCOPED_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 
 # Provider name when trusted_cidrs alone enables auth: in-network callers get
 # identity by location, everything else needs a token.
@@ -211,9 +230,19 @@ class NativeProxyIdentityAuthenticator:
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         if job_id is not None and not isinstance(job_id, str):
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        # The stamp's prefix claim comes from the signature-verified token; still
+        # fail closed on a malformed one rather than trusting the wire value.
+        prefix = payload.get("prefix")
+        if prefix is not None:
+            if not isinstance(prefix, str):
+                return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+            try:
+                prefix = validate_job_prefix(prefix)
+            except ValueError:
+                return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         return AuthOutcome(
             AuthDecision.AUTHENTICATED,
-            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience, job_id=job_id),
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience, job_id=job_id, prefix=prefix),
         )
 
 
@@ -287,21 +316,49 @@ class JwtTokenManager:
             ttl_seconds=ttl_seconds,
         )
 
-    def create_task_token(self, job_id: JobName) -> str:
+    def create_task_token(self, job_id: JobName, prefix: str | None = None) -> str:
         """Mint the control-plane token a task of ``job_id`` presents as its owner.
 
         The ``job_id`` claim binds the token to ``job_id``, so the controller lets
         it pass the parent's elevated band or profile only to ``job_id``'s children.
+        ``prefix`` inherits a scoped submitter's job-name prefix: a job submitted
+        under a prefix-scoped token cannot act outside that prefix, so its tasks
+        are minted with the same claim. ``None`` mints no prefix claim, so the
+        token carries no prefix scope.
         """
+        claims = {
+            "sub": job_id.user,
+            "role": TASK_ROLE,
+            "jti": f"iris_task_{secrets.token_urlsafe(8)}",
+            "job_id": job_id.to_wire(),
+        }
+        if prefix:
+            claims[JOB_PREFIX_CLAIM] = prefix
         return self._signer.mint(
-            {
-                "sub": job_id.user,
-                "role": TASK_ROLE,
-                "jti": f"iris_task_{secrets.token_urlsafe(8)}",
-                "job_id": job_id.to_wire(),
-            },
+            claims,
             audience=CONTROL_PLANE_AUDIENCE,
             ttl_seconds=TASK_TOKEN_TTL_SECONDS,
+        )
+
+    def create_scoped_token(
+        self,
+        user_id: str,
+        prefix: str,
+        key_id: str,
+        ttl_seconds: int = DEFAULT_SCOPED_TOKEN_TTL_SECONDS,
+    ) -> str:
+        """Mint a job-prefix-scoped control-plane token for ``user_id``.
+
+        An ordinary ``aud="iris"`` user identity carrying the ``prefix`` claim:
+        owner-gated RPCs additionally require the target job to sit under
+        ``prefix`` (see :func:`~iris.rpc.auth.authorize_job_prefix`). The role is
+        always the plain user role — a scoped token never carries admin
+        authority, even when minted by an admin for another user.
+        """
+        return self._signer.mint(
+            {"sub": user_id, "role": DEFAULT_USER_ROLE, "jti": key_id, JOB_PREFIX_CLAIM: prefix},
+            audience=CONTROL_PLANE_AUDIENCE,
+            ttl_seconds=ttl_seconds,
         )
 
     def create_endpoint_token(
@@ -356,8 +413,11 @@ class JwtTokenManager:
         issuer / an ``aud`` outside :data:`CONTROL_PLANE_AUDIENCES` (the
         cross-plane replay guard) — propagated unchanged. On success it applies
         the aud↔scope binding and surfaces an endpoint-scoped token's bound
-        endpoint as the identity's audience. This is a pure function of the token:
-        it performs NO database access and there is no revocation check.
+        endpoint as the identity's audience. A job-prefix claim is surfaced as
+        the identity's prefix; fail closed, a token carrying a malformed claim
+        (or a proxy-plane token carrying one at all) is rejected. This is a pure
+        function of the token: it performs NO database access and there is no
+        revocation check.
         """
         claims = self._verifier.verify(token)
 
@@ -375,11 +435,21 @@ class JwtTokenManager:
         if is_proxy_scope and not endpoint:
             raise ValueError("Proxy-scoped token is missing its endpoint claim")
 
+        # A job-prefix claim marks a prefix-scoped identity. Fail closed: the
+        # claim must be a well-formed job-name prefix (a malformed one denies the
+        # token outright), and it is out of plane for the proxy surface, whose
+        # identities carry zero RPC authority.
+        raw_prefix = claims.claims.get(JOB_PREFIX_CLAIM)
+        if is_proxy_scope and raw_prefix is not None:
+            raise ValueError("Proxy-scoped token cannot carry a job-prefix claim")
+        prefix = None if raw_prefix is None else validate_job_prefix(raw_prefix)
+
         return VerifiedIdentity(
             user_id=claims.sub,
             role=claims.claims.get("role", "user"),
             audience=endpoint,
             job_id=None if is_proxy_scope else claims.claims.get("job_id"),
+            prefix=prefix,
         )
 
 
@@ -536,6 +606,28 @@ class ControllerAuth:
 def authorize_owner_if_configured(auth: ControllerAuth, owner: str) -> None:
     if auth.provider:
         authorize_resource_owner(owner)
+
+
+def authorize_job_owner(auth: ControllerAuth, job_id: JobName) -> None:
+    """Require the caller owns ``job_id`` (or is admin) and stays inside its prefix.
+
+    The one gate every owner-gated RPC on a job name goes through, so an
+    owner-passing prefix-scoped token cannot reach a job outside its prefix.
+    """
+    authorize_owner_if_configured(auth, job_id.user)
+    authorize_job_prefix(job_id.to_wire())
+
+
+def clamped_mint_ttl(request: Message, *, default_seconds: int, max_seconds: int) -> int:
+    """Resolve a mint request's optional ``ttl`` duration field.
+
+    Returns ``default_seconds`` when unset, else the requested seconds clamped
+    to ``[1, max_seconds]``. Minted tokens are not revocable, so every mint
+    path clamps the caller's requested lifetime to its plane's ceiling.
+    """
+    if not request.HasField("ttl"):
+        return default_seconds
+    return max(1, min(int(duration_from_proto(request.ttl).to_seconds()), max_seconds))
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:

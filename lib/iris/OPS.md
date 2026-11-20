@@ -399,6 +399,42 @@ IAP supplies user identity; controller config supplies roles. See
 [IAP access](docs/iap-gclb.md#controller-access-control), [cluster auth config](config/README.md),
 and [shared budgets](docs/federation.md#shared-budgets). Never print bearer tokens.
 
+### Job-prefix-scoped tokens for agents
+
+Several agents often run as the same Iris user. An unscoped identity can cancel
+any job that user owns, so one misfiring agent can kill another's run. Give each
+agent its own scoped token instead: the token authenticates as the user on every
+RPC, but owner-gated actions (submit, cancel, complete, kick, exec, endpoint
+mint) only reach jobs whose name starts with the token's prefix. A job submitted
+with a scoped token passes the same prefix down to its tasks' own tokens, so the
+whole subtree stays inside it. Admin and unscoped tokens behave exactly as
+before; a scoped token is never an admin token.
+
+Mint one per agent, from an authenticated session (IAP login or admin):
+
+```bash
+iris auth mint-scoped --prefix /benfeuer/exp2- --ttl-hours 168
+```
+
+The prefix must be absolute and include a job component after the user segment
+(`/benfeuer/exp2-`). Matching is plain string-prefix on the wire job name, so
+`exp2-` matches `exp2-foo` but not `exp2foo` and not `exp20-foo`; end the
+component with a delimiter and name experiments consistently. The caller must
+own the prefix's user, and a caller already holding a scoped token can only
+mint tokens inside its own prefix — delegation narrows, never widens. An admin
+may mint for any user. Feed the printed token to the agent's environment:
+
+```bash
+export MARIN_CLUSTER_TOKEN='<token>'
+iris job status /benfeuer/exp2-foo
+```
+
+Operations on a job outside the prefix fail with PERMISSION_DENIED. The token
+expires after `--ttl-hours` (default 24 h, ceiling 30 days) and is not
+revocable — treat it like a password: keep it out of shell history and logs,
+mint a fresh one per agent, and prefer short TTLs. To widen an agent's scope,
+mint a new token; do not share one token across agents.
+
 ### Worker credential renewal
 
 Workers renew JWTs before expiry and cache them at

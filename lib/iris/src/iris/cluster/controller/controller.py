@@ -219,7 +219,10 @@ def with_task_token(
 
     Only an enforcing controller mints one: under null auth every caller is
     already admitted, and a token would only lower the task's role. A profile
-    that withholds the token (SANDBOX) gets ``request`` back unchanged.
+    that withholds the token (SANDBOX) gets ``request`` back unchanged. The
+    token inherits the job's stored submitting prefix (empty for an unscoped
+    submission), so a job submitted under a prefix-scoped token cannot act
+    outside that prefix.
     """
     if auth is None or not auth.provider or auth.jwt_manager is None:
         return request
@@ -227,7 +230,7 @@ def with_task_token(
         return request
     stamped = job_pb2.RunTaskRequest()
     stamped.CopyFrom(request)
-    stamped.task_token = auth.jwt_manager.create_task_token(job_id)
+    stamped.task_token = auth.jwt_manager.create_task_token(job_id, prefix=request.submitting_prefix or None)
     return stamped
 
 

@@ -21,7 +21,8 @@ from iris.cluster.controller.auth import (
     DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
     MAX_ENDPOINT_TOKEN_TTL_SECONDS,
     ControllerAuth,
-    authorize_owner_if_configured,
+    authorize_job_owner,
+    clamped_mint_ttl,
 )
 from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.db import ControllerDB
@@ -39,7 +40,7 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
-from iris.time_proto import duration_from_proto, timestamp_to_proto
+from iris.time_proto import timestamp_to_proto
 
 Response = TypeVar("Response")
 
@@ -217,12 +218,11 @@ def mint_endpoint_token(
     row = dependencies.endpoints.resolve_task_endpoint(request.endpoint_name)
     if row is None:
         raise ConnectError(Code.NOT_FOUND, f"No endpoint '{request.endpoint_name}'")
-    authorize_owner_if_configured(dependencies.auth, row.task_id.user)
+    authorize_job_owner(dependencies.auth, row.task_id)
 
-    if request.HasField("ttl"):
-        ttl = max(1, min(int(duration_from_proto(request.ttl).to_seconds()), MAX_ENDPOINT_TOKEN_TTL_SECONDS))
-    else:
-        ttl = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS
+    ttl = clamped_mint_ttl(
+        request, default_seconds=DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS, max_seconds=MAX_ENDPOINT_TOKEN_TTL_SECONDS
+    )
     now = Timestamp.now()
     expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
     token = jwt_manager.create_endpoint_token(row.name, f"iris_ket_{secrets.token_urlsafe(8)}", ttl_seconds=ttl)
@@ -320,7 +320,7 @@ def _authorize_task_owner(dependencies: AttemptDependencies, task_id: JobName) -
     identity = get_verified_identity()
     if identity is not None and identity.role == FEDERATION_PEER_ROLE:
         return
-    authorize_owner_if_configured(dependencies.auth, task_id.user)
+    authorize_job_owner(dependencies.auth, task_id)
 
 
 def _authorize_federated_debug_target(dependencies: AttemptDependencies, root_job: JobName) -> None:

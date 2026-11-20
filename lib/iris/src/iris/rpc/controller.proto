@@ -138,6 +138,14 @@ message Controller {
     // job back only to that requester) and runs the job in its own DAG on its own
     // backends. Absent for an ordinary local submission.
     FederationHandoff federation = 38;
+
+    // Job-name prefix the submitting token was scoped to (e.g. "/benfeuer/exp2-";
+    // empty when unscoped). Stamped by the controller from the verified
+    // identity on a direct submission and carried on a federated handoff; a
+    // client-supplied value is always overwritten. Persisted on the job row and
+    // inherited by every task token the job's tasks are minted with, so a
+    // scoped job cannot act outside its own subtree.
+    string submitting_prefix = 42;
   }
 
   // Attribution carried on a federated handoff (LaunchJobRequest.federation).
@@ -460,6 +468,27 @@ message Controller {
     // a cluster-tagged parent URL when a public parent is configured, else the
     // local origin. Empty when the controller has no public origin configured.
     string capability_url = 3;
+  }
+
+  // Mint a job-prefix-scoped bearer token for the calling user (or, when an
+  // admin mints, for the prefix's user). The token carries the caller's user
+  // role plus a job-name prefix claim: owner-gated RPCs additionally require
+  // the target job to sit under the prefix, so an agent holding the token can
+  // only reach its own experiment's subtree. Signed by the controller's JWT
+  // key; not revocable — pick the TTL with that in mind.
+  message MintScopedTokenRequest {
+    // Job-name prefix the token may act on, e.g. "/benfeuer/exp2-". Must be
+    // absolute and span the user plus a job component; the caller must own the
+    // prefix's user (admins may mint for any user).
+    string prefix = 1;
+    iris.time.Duration ttl = 2;      // Unset selects the server default, clamped to a max.
+  }
+
+  message MintScopedTokenResponse {
+    string token = 1;
+    iris.time.Timestamp expires_at = 2;
+    // The validated prefix, echoed for the caller's records.
+    string prefix = 3;
   }
 
   message RegisterEndpointResponse {
@@ -922,6 +951,7 @@ service ControllerService {
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
   // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
   rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);
+  rpc MintScopedToken(Controller.MintScopedTokenRequest) returns (Controller.MintScopedTokenResponse);
 
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);

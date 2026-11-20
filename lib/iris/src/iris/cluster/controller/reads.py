@@ -126,6 +126,10 @@ class PendingDispatchRow:
     container_profile: int  # job_pb2.ContainerProfile
     egress_policy: int  # job_pb2.EgressPolicy
     egress_allow_json: list[str]  # rule strings; see iris.cluster.egress
+    # Job-name prefix the submitting token was scoped to ("" when unscoped);
+    # rides the built RunTaskRequest so the controller mints this task's token
+    # with the same prefix claim.
+    submitting_prefix: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -632,6 +636,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.backend_id,
             jobs_table.c.cluster,
             jobs_table.c.submitting_user,
+            jobs_table.c.submitting_prefix,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -1702,6 +1707,7 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.container_profile,
     job_config_table.c.egress_policy,
     job_config_table.c.egress_allow_json,
+    jobs_table.c.submitting_prefix,
 )
 
 
@@ -1734,6 +1740,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         container_profile=int(r.container_profile),
         egress_policy=int(r.egress_policy),
         egress_allow_json=list(r.egress_allow_json),
+        submitting_prefix=str(r.submitting_prefix),
     )
 
 

@@ -16,7 +16,7 @@ from enum import StrEnum
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.server_auth import VerifiedIdentity, require_identity
+from rigging.server_auth import VerifiedIdentity, get_verified_identity, require_identity
 
 # Browser session cookie the dashboard sets; passed to rigging's auth
 # interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
@@ -46,6 +46,11 @@ FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "Feder
 # tasks or its controller. authorize_method admits these; each operation
 # validates ownership against the peer's received handoff.
 FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus", "KickTasks"})
+
+# JWT claim carrying a scoped token's job-name prefix. A token with this claim
+# is a prefix-scoped identity: owner-gated RPCs additionally require the target
+# job to sit under the prefix (authorize_job_prefix). Absent ⇒ unscoped.
+JOB_PREFIX_CLAIM = "prefix"
 
 
 class AuthzAction(StrEnum):
@@ -159,3 +164,54 @@ def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
             f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",
         )
     return identity
+
+
+def validate_job_prefix(prefix: str) -> str:
+    """Validate a job-name prefix, returning it unchanged.
+
+    A prefix is a wire job-name prefix (e.g. ``/benfeuer/exp2-``) that scopes a
+    token: every owner-gated target must be a wire name that starts with it. It
+    must be absolute, whitespace-free, and have no empty segment (no ``//``, no
+    trailing ``/``). It must also span at least two segments — a user segment
+    plus a job segment. A one-segment prefix (``/benfeuer``) would string-match
+    other users' names that extend it (``/benfeuerarchy/...``), so it is
+    rejected: a scoped token always names a job component under its user.
+
+    Raises ``ValueError`` on a malformed prefix. Verify paths call this and
+    propagate the error, so a token with a malformed claim is denied outright.
+    """
+    if not prefix:
+        raise ValueError("prefix is empty")
+    if not prefix.startswith("/"):
+        raise ValueError(f"prefix {prefix!r} must be an absolute job-name prefix starting with '/'")
+    if any(ch.isspace() for ch in prefix):
+        raise ValueError(f"prefix {prefix!r} must not contain whitespace")
+    segments = prefix.split("/")
+    if any(not segment for segment in segments[1:]):  # segments[0] is "" (the leading '/')
+        raise ValueError(f"prefix {prefix!r} must not contain an empty segment ('//' or a trailing '/')")
+    if len(segments) < 3:  # "", user, job — at least two named segments
+        raise ValueError(f"prefix {prefix!r} must name a job component after the user (e.g. '/{segments[1]}/exp-')")
+    return prefix
+
+
+def job_prefix_user(prefix: str) -> str:
+    """Return the user segment of a validated job-name prefix."""
+    return prefix.lstrip("/").split("/", 1)[0]
+
+
+def authorize_job_prefix(job_wire_name: str) -> None:
+    """Refuse the current identity when it is prefix-scoped and ``job_wire_name``
+    falls outside its prefix.
+
+    An identity with no prefix claim — unscoped user, admin, worker, task, or
+    federation peer — passes unchanged. The prefix claim is validated at token
+    verify time, so a scoped identity always carries a well-formed prefix.
+    """
+    identity = get_verified_identity()
+    if identity is None or not identity.prefix:
+        return
+    if not job_wire_name.startswith(identity.prefix):
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Token is scoped to jobs under '{identity.prefix}'; '{job_wire_name}' is outside that prefix",
+        )

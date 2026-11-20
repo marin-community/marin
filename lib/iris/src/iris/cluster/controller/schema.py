@@ -254,6 +254,12 @@ jobs_table = Table(
     # authorization; a child inherits its root's value and
     # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
+    # Job-name prefix the submitting token was scoped to (e.g. "/benfeuer/exp2-";
+    # "" when unscoped). Stamped by the controller from the verified identity —
+    # never taken from the client — and read back when minting the job's task
+    # tokens, so a scoped job's tasks cannot act outside the prefix. See
+    # MintScopedToken and iris.rpc.auth.authorize_job_prefix.
+    Column("submitting_prefix", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
