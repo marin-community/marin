@@ -8,6 +8,7 @@ The system prompt and judge prompt are copied from ``eval/prompts.py`` of ``yale
 renamed ``{candidate}`` and its numeric tolerance is fixed at the harness's 1%.
 """
 
+from collections.abc import Mapping
 from typing import Any
 
 from verifyit.spec import JudgeSpec
@@ -35,7 +36,7 @@ def is_text_only(row: dict[str, Any], _context: ConversionContext) -> bool:
     return not row["figures"]
 
 
-def physics_verified_judge(row: dict[str, Any]) -> JudgeSpec:
+def physics_verified_judge(row: Mapping[str, Any]) -> JudgeSpec:
     return JudgeSpec(
         rubric="answers",
         question=row["questions"],
