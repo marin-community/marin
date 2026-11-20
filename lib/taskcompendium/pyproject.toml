@@ -12,6 +12,8 @@ dependencies = [
     "pydantic>=2.0",
     "marin-verifyit[judge,math,reasoning-gym,schema]",
     "marin-shellbox",
+    # The runtime staging copies tomli's package directory for the 3.10 grader machines.
+    "tomli>=2.0.1",
     "tomlkit>=0.13",
 ]
 

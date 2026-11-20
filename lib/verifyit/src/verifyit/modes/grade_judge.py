@@ -28,7 +28,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -162,6 +162,7 @@ class _LabelCompletion:
     response_id: str | None
     finish_reason: str | None
     transport_attempts: tuple[dict[str, Any], ...] = ()
+    usage: dict[str, Any] | None = None
 
 
 def grade(
@@ -250,6 +251,46 @@ def validate_judge_spec(spec: JudgeSpec) -> None:
     """Validate a complete judge contract before any provider side effects."""
     _validate_spec(spec)
     empty_output_policy(spec)
+
+
+@dataclass(frozen=True)
+class JudgeReply:
+    """A judge's complete chat reply and its transport evidence."""
+
+    text: str
+    detail: dict[str, Any]
+
+
+def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> JudgeReply:
+    """Return the judge's reply to ``messages``, retrying transient transport failures.
+
+    Only the chat completions API with the completed-text policy is supported. An incomplete, empty or
+    refused reply raises ``GradingInfraError``.
+    """
+    _validate_spec(spec)
+    if spec.api != "chat_completions" or spec.completion_policy is not JudgeCompletionPolicy.COMPLETED_TEXT:
+        raise InvalidTask("judge_reply needs the chat_completions API and the completed_text policy")
+    client, model = _client(spec, None)
+    try:
+        with client:
+            completion = _label_completion(
+                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
+            )
+    except GradingInfraError as error:
+        raise GradingInfraError(str(error), model=model, **error.detail) from error
+    except RuntimeError as error:
+        raise GradingInfraError(str(error), model=model) from error
+    detail: dict[str, Any] = {
+        "model": model,
+        "response_model": completion.response_model,
+        "response_id": completion.response_id,
+        "finish_reason": completion.finish_reason,
+        "transport_attempts": completion.transport_attempts,
+        "usage": completion.usage,
+    }
+    if completion.incomplete:
+        raise GradingInfraError("judge completion is incomplete", **detail)
+    return JudgeReply(completion.text, detail)
 
 
 def grade_judge_candidate(
@@ -537,6 +578,7 @@ def _label_completion(
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
             request,
         )
+        usage = response.usage.model_dump(mode="json") if response.usage else None
         if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
             if len(response.choices) != 1:
                 raise GradingInfraError(
@@ -554,14 +596,15 @@ def _label_completion(
                 response.id,
                 choice.finish_reason,
                 attempts,
+                usage,
             )
         choice = _completion_choice(response)
         if choice.finish_reason == "length":
             return _LabelCompletion(
-                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts
+                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts, usage
             )
         return _LabelCompletion(
-            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts
+            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts, usage
         )
     options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     request = {
@@ -612,7 +655,8 @@ def _retry_after(error: openai.APIStatusError) -> float:
         return max(0.0, float(value))
     except ValueError:
         try:
-            return max(0.0, (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds())
+            # datetime.UTC is 3.11+; the grader machines run 3.10.
+            return max(0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())  # noqa: UP017
         except (TypeError, ValueError):
             return 0.0
 

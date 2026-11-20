@@ -159,7 +159,7 @@ verdicts. File grading of `unsolvable` always scores zero because a file cannot 
 ## Install and use
 
 ```bash
-uv tool install --python ">=3.11" "marin-verifyit[math]"
+uv tool install --python ">=3.10" "marin-verifyit[math]"
 ```
 
 The `math` extra installs `math-verify` and `sympy` for symbolic expression grading. Exact,
