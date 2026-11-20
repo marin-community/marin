@@ -15,7 +15,7 @@ from finestore.rl.curation import (
     OracleFiltrationEvidence,
     OraclePendingExclusion,
     OraclePendingExclusionReason,
-    SourceDeclaration,
+    QualifiedSourceDeclaration,
 )
 from pydantic import TypeAdapter
 from taskcompendium.identity import canonical_sha256, task_identity, task_spec_json, task_spec_sha256
@@ -93,10 +93,10 @@ def test_zero_filtered_pin_is_visible_held_and_preserves_prior_retention(zero_re
     assert declaration.daytona_safety is None and declaration.actor_census_input is None
     assert bound.info.oversight is None and bound.info.lexical_contamination is None
     assert any("oracle filtration retained no tasks" in reason for reason in bound.admission_blockers)
-    restored = SourceDeclaration.model_validate_json(declaration.model_dump_json())
+    restored = QualifiedSourceDeclaration.model_validate_json(declaration.model_dump_json())
     assert restored.oracle_filtration == receipt.filtration
     with pytest.raises(ValueError, match="cannot remain admitted"):
-        SourceDeclaration.model_validate({**declaration.model_dump(), "status": "Available"})
+        QualifiedSourceDeclaration.model_validate({**declaration.model_dump(), "status": "Available"})
 
 
 def test_filter_binding_rejects_changed_configured_input(zero_release):
