@@ -32,6 +32,7 @@ DEPENDENCIES = {
     "boxed_math": ("math.py", "amc.py", "minerva.py"),
     "amc": ("amc.py",),
     "olympiad": ("olympiad.py", "minerva.py"),
+    "facts_grounding": ("facts_grounding.py",),
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
     "zeroeval_mcqa": ("zeroeval.py",),
