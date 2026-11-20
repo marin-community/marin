@@ -40,7 +40,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
-from levanter.grug._moe.common import MoeDispatchCounts, _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+from levanter.grug._moe.common import MoeDispatchCounts, _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS, _init_weight
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -54,8 +54,8 @@ from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
     _current_mesh,
+    _current_sharding,
     _mesh_axis_size,
-    _reshard_for_init,
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
@@ -179,10 +179,6 @@ class GrugMoeHfConfig(HfConfig):
     """HF config class for the ``grug_moe`` model type (registered with ``AutoConfig``)."""
 
     model_type = GRUG_MOE_MODEL_TYPE
-
-
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * random.truncated_normal(key, -3, 3, shape)
 
 
 def rms_norm(x: jax.Array, eps: float = _QK_RMS_NORM_EPS) -> jax.Array:
@@ -433,8 +429,8 @@ class GatedNorm(eqx.Module):
     ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
-            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
-            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            w_down=_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std, P(None, None)),
+            w_up=_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std, P(None, None)),
             fp32_activations=fp32_activations,
         )
 
@@ -466,10 +462,10 @@ class SnowballAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return SnowballAttention(
-            w_q=_reshard_for_init(_init_weight(k_q, (d, n * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_k=_reshard_for_init(_init_weight(k_k, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_v=_reshard_for_init(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_o=_reshard_for_init(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
+            w_q=_init_weight(k_q, (d, n * h), cfg.initializer_std, P(_FSDP_AXES, "model")),
+            w_k=_init_weight(k_k, (d, m * h), cfg.initializer_std, P(_FSDP_AXES, "model")),
+            w_v=_init_weight(k_v, (d, m * h), cfg.initializer_std, P(_FSDP_AXES, "model")),
+            w_o=_init_weight(k_o, (n * h, d), cfg.initializer_std, P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
@@ -556,15 +552,9 @@ class DenseMLP(eqx.Module):
     ) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
-            w_gate=_reshard_for_init(
-                _init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")
-            ),
-            w_up=_reshard_for_init(
-                _init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")
-            ),
-            w_down=_reshard_for_init(
-                _init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", _FSDP_AXES)
-            ),
+            w_gate=_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std, P(_FSDP_AXES, "model")),
+            w_up=_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std, P(_FSDP_AXES, "model")),
+            w_down=_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std, P("model", _FSDP_AXES)),
             fp32_activations=fp32_activations,
         )
 
@@ -632,7 +622,7 @@ class SnowballMoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
         d, e = cfg.hidden_dim, cfg.num_experts
         return SnowballMoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=_init_weight(k_router, (d, e), cfg.initializer_std, P(None, None)),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
@@ -813,12 +803,8 @@ class SnowballTransformer(eqx.Module):
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballTransformer":
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
-        token_embed = _reshard_for_init(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
-        )
-        output_proj = _reshard_for_init(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head
-        )
+        token_embed = _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std, Pembed_vocab)
+        output_proj = _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std, Plm_head)
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
             token_embed=token_embed,
@@ -1125,7 +1111,7 @@ def snowball_embeddings_from_state_dict(
     """Load canonical HF embeddings weights into the current mesh."""
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
     m = template
-    m = eqx.tree_at(lambda t: t.token_embed, m, _reshard_for_init(g("model.embed_tokens.weight"), Pembed_vocab))
+    m = eqx.tree_at(lambda t: t.token_embed, m, _reshard(g("model.embed_tokens.weight"), Pembed_vocab))
     m = eqx.tree_at(lambda t: t.embed_norm.weight, m, g("model.embed_norm.weight"))
     m = eqx.tree_at(
         lambda t: t.embed_gated_norm.w_down, m, _reshard_replicated(_T(g("model.embed_gated_norm.down_proj.weight")))
@@ -1149,7 +1135,7 @@ def snowball_final_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.final_gated_norm.w_up, m, _reshard_replicated(_T(g("model.final_gated_norm.up_proj.weight")))
     )
-    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
+    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard(_T(g("lm_head.weight")), Plm_head))
 
     return m
 
@@ -1248,11 +1234,12 @@ _EXPERT_DOWN_SPEC = P("expert", "model", _FSDP_AXES)
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:
-    return _reshard_for_init(arr, P(None, None))
+    return _reshard(arr, P(None, None))
 
 
 def _reshard(arr: jax.Array, spec: P) -> jax.Array:
-    return _reshard_for_init(arr, spec)
+    sharding = _current_sharding(spec)
+    return arr if sharding is None else reshard(arr, sharding)
 
 
 # Register the HF config so ``AutoConfig.from_pretrained`` resolves ``grug_moe`` without remote code.
