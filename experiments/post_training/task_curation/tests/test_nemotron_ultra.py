@@ -457,6 +457,7 @@ def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
     environment = task.environment_requirements
     assert environment.docker_image.endswith("280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104")
     assert environment.working_directory == "/workspace"
+    assert environment.required_backend.value == "local"
     assert not environment.capabilities
 
 

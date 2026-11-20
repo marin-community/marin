@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Derive backend demands from converted specs without treating backend choice as task data."""
+"""Derive backend demands and respect explicit task placement constraints."""
 
 from collections.abc import Mapping
 from enum import StrEnum
