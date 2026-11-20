@@ -264,14 +264,20 @@ def test_export_selection_requires_the_best_initializer_uri(tmp_path: Path) -> N
         selected_export_checkpoint(str(tmp_path), "best", 20)
 
 
-def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["export", "dry-run", "missing", "initializer"])
+def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_path, monkeypatch, capsys, mode):
     checkpoints, exports = tmp_path / "checkpoints", tmp_path / "exports"
     for step in (15, 20):
         checkpoint = checkpoints / f"global_step_{step}"
         checkpoint.mkdir(parents=True)
         (checkpoint / "trainer_state.pt").write_bytes(b"complete")
     (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("20")
-    (checkpoints / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    initial_model = "s3://models/sft/policy"
+    if mode != "missing":
+        selection = {"step": 15, "model_format": "native"}
+        if mode == "initializer":
+            selection = {"step": 0, "model_format": "hf", "model_uri": initial_model}
+        (checkpoints / "best_checkpoint.json").write_text(json.dumps(selection))
     document = raw_launch_config()
     document["artifacts"].update(checkpoint_root=str(checkpoints), export_root=str(exports))
     path = tmp_path / "training.yaml"
@@ -289,10 +295,31 @@ def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_pat
         return 0
 
     monkeypatch.setattr(export_hf_checkpoint.subprocess, "call", child_export)
-    monkeypatch.setattr("sys.argv", ["export_hf_checkpoint", "--launch-config", str(path), "--recover-best"])
-    export_hf_checkpoint.main()
-    assert read_hf_export_request(str(checkpoints / "global_step_15")).status is HFExportStatus.COMPLETE
-    assert not (exports / "global_step_20").exists()
+    argv = ["export_hf_checkpoint", "--launch-config", str(path), "--recover-best"]
+    if mode == "dry-run":
+        argv.append("--dry-run")
+    monkeypatch.setattr("sys.argv", argv)
+    if mode == "missing":
+        with pytest.raises(ValueError, match="No best checkpoint record"):
+            export_hf_checkpoint.main()
+    else:
+        export_hf_checkpoint.main()
+    request = read_hf_export_request(str(checkpoints / "global_step_15"))
+    if mode == "export":
+        assert request.status is HFExportStatus.COMPLETE
+        assert not (exports / "global_step_20").exists()
+        policy = Path(policy_export_path(str(exports), 15))
+        (policy / "model.safetensors").unlink()
+        with pytest.raises(ValueError, match="completed request has no verified policy export"):
+            export_hf_checkpoint.main()
+        assert read_hf_export_request(str(checkpoints / "global_step_15")) == request
+    else:
+        assert not exports.exists()
+        assert request is None
+        if mode == "dry-run":
+            assert "cloud.iris.launch" in capsys.readouterr().out
+        elif mode == "initializer":
+            assert initial_model in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(("selection", "expected_step", "private"), [("best", 15, False), ("latest", 20, True)])

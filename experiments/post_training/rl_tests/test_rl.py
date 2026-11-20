@@ -1260,7 +1260,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
 
     def module(
-        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, then="None"
+        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following="None"
     ):
         path = tmp_path / (name + ".py")
         dependency = ""
@@ -1285,8 +1285,12 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
             "def fail_following():\n    raise RuntimeError('following stage failed')\n"
             + dependency
-            + f"raise SystemExit(rl.main(snowball_rl.SNOWBALL,init={'init' if use_init else 'None'},"
-            f"forward_env={forward_env!r},entry_module={entry_module!r},then={then}))\n"
+            + f"following={following}\n"
+            "table=snowball_rl.SNOWBALL\n"
+            "if following is not None:\n"
+            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
+            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
+            f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None
@@ -1339,7 +1343,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
     mode, coordinator_module = "failed-following", "first_model_entry"
-    module(coordinator_module, then="lambda _: (apply('tests/following', fail_following, version='2026.11.20.1'),)")
+    module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
     result = CliRunner().invoke(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output

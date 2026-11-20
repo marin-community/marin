@@ -4,6 +4,7 @@
 import json
 import runpy
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -16,8 +17,9 @@ from fray.types import ANY_REGION
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materialized_config
-from marin.rl.skyrl import IrisSkyRLExecution
+from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
+from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
@@ -35,13 +37,13 @@ def table(request):
     return {"snowball": SNOWBALL, "mochi": MOCHI}[request.param]
 
 
-def plan(table, name, *options, version=None, then=None, sft_presets=None):
+def plan(table, name, *options, version=None, sft_presets=None):
     preset = table.by_name[name]
     args = ("--preset", name, "--version", version or preset.revision, "--plan")
     if preset.tasks_input == "required":
         args += ("--tasks", SELECTION_IDENTITY)
     args += options
-    return CliRunner().invoke(rl.command(table, argv=args, then=then, sft_presets=sft_presets), args)
+    return CliRunner().invoke(rl.command(table, argv=args, sft_presets=sft_presets), args)
 
 
 @pytest.mark.parametrize("cadence, period", [(None, None), (2, 4)])
@@ -239,11 +241,16 @@ def test_resume_inherits_the_source_runs_initializer(
         start_args = ("--init", f"{model_name}@{preset.revision}")
     runs = []
 
-    def collect(model):
-        runs.append(model.step)
-        return ()
+    def after_rl(run) -> Artifact:
+        return Artifact(path=run.path)
 
-    started = plan(table, preset.name, *start_args, then=collect)
+    def collect(step):
+        runs.append(step)
+        return apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step)
+
+    preset = replace(preset, then=collect)
+    table = replace(table, presets=(preset,))
+    started = plan(table, preset.name, *start_args)
     assert started.exit_code == 0, (started.output, started.exception)
     (source,) = runs
     source_config = materialized_config(source, str(tmp_path))
@@ -267,7 +274,7 @@ def test_resume_inherits_the_source_runs_initializer(
         monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(resume_prefix))
 
     resume_args = ("--resume", f"{source.name}@{source.version}")
-    planned = plan(table, preset.name, *resume_args, then=collect)
+    planned = plan(table, preset.name, *resume_args)
     assert planned.exit_code == 0, (planned.output, planned.exception)
     assert f"  model: {source_model['identity']}\n" in planned.output
     assert f"  starting_checkpoint: {source.name}/resume/step-4@{source.version}:" in planned.output
@@ -277,6 +284,17 @@ def test_resume_inherits_the_source_runs_initializer(
     assert inputs["model"] == source_model
     assert inputs["starting_checkpoint"]["uri"] == str(checkpoint)
     if not explicit_init:
+        launch = tmp_path / "resumed.yaml"
+        launch.write_text(resumed_config.launch_config_yaml)
+        (plan_document,) = rl_gate.compose_configs([str(launch)])
+        worker_document = deepcopy(plan_document)
+        runtime = worker_document["skyrl"].setdefault("runtime", {})
+        runtime["model_source_identity"] = inputs["model"]["identity"]
+        runtime["starting_checkpoint_identity"] = inputs["starting_checkpoint"]["identity"]
+        assert rl_gate.comparison_config(worker_document) == rl_gate.comparison_config(plan_document)
+        runtime["starting_checkpoint_identity"] = "different-checkpoint"
+        with pytest.raises(rl_gate.InvalidComparison, match="starting_checkpoint_identity"):
+            rl_gate.comparison_config(worker_document)
         return
     assert all(dep.name != model_name for dep in resumed.lower().deps)
     monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
@@ -284,7 +302,7 @@ def test_resume_inherits_the_source_runs_initializer(
     inputs = read_run_inputs(str(Path(resumed_config.output.resolved_config_uri).parent))
     assert inputs.options is not None
     assert (inputs.options.checkpoints, inputs.options.checkpoint_every, inputs.options.export) == (
-        ("latest", None, "latest") if table.model == "mochi" else ("best", 10, "best")
+        ("latest", None, "none") if table.model == "mochi" else ("best", 10, "best")
     )
     assert {key: getattr(inputs.resume.model, key) for key in tokenizer} == tokenizer
     assert (inputs.resume.artifact_name, inputs.resume.artifact_version, inputs.resume.step) == (
@@ -294,18 +312,22 @@ def test_resume_inherits_the_source_runs_initializer(
     )
 
 
-@pytest.mark.parametrize("resume", (False, True), ids=("fresh", "resume"))
+@pytest.mark.parametrize("source", (None, "same-root", "temporary"), ids=("fresh", "resume", "resume-temp-source"))
 def test_mochi_plan_refuses_an_incomplete_default_export(
-    selection, stored_checkpoint, resume, mochi_with_incomplete_default, tmp_path, monkeypatch
+    selection, stored_checkpoint, source, mochi_with_incomplete_default, tmp_path, monkeypatch
 ):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     table = mochi_with_incomplete_default
     preset = table.by_name["train-long"]
     model = preset.model
     args = ()
-    if resume:
+    if source is not None:
         (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
         args += ("--resume", "checkpoints/previous@2026.11.19.1", "--checkpoints", "latest")
+    if source == "temporary":
+        monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "destination"))
+        monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path / "durable"))
+        monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(tmp_path))
     result = plan(table, preset.name, *args, sft_presets=lambda: pytest.fail("loaded unused SFT presets"))
     assert result.exit_code == 4, (result.output, result.exception)
     assert f"{model.step.name}@{model.step.version}" in result.output
@@ -346,6 +368,13 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     prefix = durable if override else temporary
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.delenv("GIT_COMMIT", raising=False)
+    if model == "mochi" and override:
+        git_output = rl.git_output
+
+        def checkout_output(args, *other, **kwargs):
+            return "f" * 40 if args == ["rev-parse", "HEAD"] else git_output(args, *other, **kwargs)
+
+        monkeypatch.setattr(rl, "git_output", checkout_output)
     if override:
         monkeypatch.setenv("MARIN_PREFIX", durable)
     else:
@@ -361,6 +390,12 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
         assert env["MARIN_PREFIX"] == prefix
         (run,) = handles
         preset = (MOCHI if model == "mochi" else SNOWBALL).by_name["train-long"]
+        execution = skyrl_execution(run)
+        assert execution is not None
+        layout = preset.recipe.layout
+        sft_hours = 20 if model == "snowball" else 0
+        assert execution.coordinator_timeout_hours == layout.coordinator_timeout_hours + sft_hours
+        assert execution.job_timeout_seconds == layout.job_timeout_seconds
         initializer = sft.model(
             coordinator_cluster=preset.recipe.layout.cluster,
             coordinator_prefix=prefix if model == "mochi" else None,
@@ -391,7 +426,17 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
             assert document["artifacts"]["export_root"] == f"{run.path(prefix)}/exports"
             if override:
                 assert training.output_path_prefix == producer.output_path_prefix == prefix
-                assert materialized_config(producer, prefix)["source_revision"] == "commit-one"
+                standalone = sft.recipe.trained(sft.resources, prefix=prefix)
+                standalone_revision = materialized_config(standalone.step, prefix)["source_revision"]
+                assert env.get("GIT_COMMIT") == standalone_revision
+                assert producer.fingerprint() == standalone.step.fingerprint()
+                from experiments.grug.moe_hero_ep import sft_recipe  # noqa: PLC0415 - only the Mochi case loads SFT
+
+                with monkeypatch.context() as coordinator:
+                    coordinator.setenv("GIT_COMMIT", env["GIT_COMMIT"])
+                    coordinator.setattr(sft_recipe, "get_git_commit", lambda: pytest.fail("coordinator has no checkout"))
+                    replay = sft.model(coordinator_cluster=preset.recipe.layout.cluster, coordinator_prefix=prefix)
+                assert replay.step.fingerprint() == producer.fingerprint()
         submitted.append((run.name, argv))
         return JobName.from_wire("/fixture/sft-then-rl")
 
@@ -407,6 +452,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     ("table", "name", "options", "error", "mode"),
     [
         ("mochi", "train-long", ("--checkpoints", "best"), 'checkpoints="best" requires checkpoint_every', None),
+        ("mochi", "train-long", (), "must use s3 storage", "cross-backend"),
         (
             "mochi",
             "train-long",
@@ -429,7 +475,6 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
             "controls use only the preset's pinned run options",
             None,
         ),
-        ("snowball", "train-long", ("--export", "none"), "requires one ungated run with a model export", "then"),
         ("snowball", "train-long", ("--checkpoint-every", "3"), "fall on checkpoint steps", None),
         ("snowball", "train-long", ("--sft", "unknown", "--init", "model@1"), "--sft requires a fresh candidate", None),
         ("snowball", "train-long", ("--sft", "unknown", "--resume", "run@1"), "--sft requires a fresh candidate", None),
@@ -462,47 +507,29 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     ],
     indirect=["table"],
 )
-def test_command_refusals(selection, table, name, options, error, mode, request):
+def test_command_refusals(selection, table, name, options, error, mode, request, monkeypatch):
     if mode == "expired":
         request.getfixturevalue("stored_checkpoint")
-    then = (lambda _: pytest.fail("planned an export despite the explicit refusal")) if mode == "then" else None
+    if mode == "cross-backend":
+        monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: "s3://marin-us-east-02a/marin")
+        monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/fixture")
+        monkeypatch.setattr(rl, "check_cache", lambda _path: True)
+        monkeypatch.setattr(rl, "read_skyrl_attempt", lambda _path: None)
+        storage_exists = StoragePath.exists
+
+        def check_storage(path):
+            if path.scheme == "gs":
+                raise AssertionError("planning read from an incompatible storage backend")
+            return storage_exists(path)
+
+        monkeypatch.setattr(StoragePath, "exists", check_storage)
     result = plan(
         table,
         name,
         *options,
-        then=then,
         sft_presets=lambda: pytest.fail("loaded refused SFT presets"),
     )
     assert result.exit_code == 4 and error in result.output, (result.output, result.exception)
-
-
-@pytest.mark.parametrize(
-    ("table", "name", "allowed"),
-    [("snowball", "train-long", True), ("snowball", "learning-medium", False), ("mochi", "train-medium", True)],
-    indirect=["table"],
-    ids=("exporting", "gated", "implicit-terminal-export"),
-)
-def test_runner_composes_after_an_export(selection, tmp_path, table, name, allowed, monkeypatch):
-    if table is MOCHI:
-        monkeypatch.setattr(rl, "check_cache", lambda _path: True)
-
-    def read_policy(policy_output):
-        return Artifact(path=policy_output)
-
-    def evaluate(model):
-        if table is MOCHI:
-            document = yaml.safe_load(materialized_config(model.step, str(tmp_path)).launch_config_yaml)
-            assert document["run"]["export_hf"]
-            trainer = document["skyrl"]["trainer"]
-            assert trainer["checkpoint_retention"] == "latest"
-        return (apply("runs/post-rl-evaluation", read_policy, version="2026.11.19", policy_output=model.step),)
-
-    result = CliRunner().invoke(
-        rl.command(table, argv=(), then=evaluate), ["--version", "2026.11.19.1", "--preset", name]
-    )
-    assert result.exit_code == (0 if allowed else 4), (result.output, result.exception)
-    expected = "runs/post-rl-evaluation" if allowed else "requires one ungated run with a model export"
-    assert expected in result.output
 
 
 def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, tmp_path, monkeypatch):

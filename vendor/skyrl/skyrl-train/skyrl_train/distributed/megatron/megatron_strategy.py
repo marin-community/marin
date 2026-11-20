@@ -2,6 +2,7 @@ import os
 import math
 import random
 from datetime import timedelta
+from functools import partial
 from typing import List, Union, Optional
 from loguru import logger
 
@@ -16,6 +17,7 @@ from skyrl_train.distributed.utils import ModelOrModelOptimPair
 from skyrl_train.io import io
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 import megatron.core.parallel_state as mpu
+from megatron.bridge.models.hf_pretrained.state import SafeTensorsStateSource
 from skyrl_train.distributed.megatron.megatron_utils import (
     offload_megatron_model_to_cpu,
     load_megatron_model_to_gpu,
@@ -531,17 +533,15 @@ class MegatronStrategy(DistributedStrategy):
             io.makedirs(output_dir, exist_ok=True)
         dist.barrier()
 
-        weights = bridge.export_hf_weights(model.actor_module, cpu=True)
-        # Every rank exhausts Bridge's collective conversion. Rank zero writes the export.
-        if not rank_zero:
-            for _ in weights:
-                pass
-            return
-
-        with hf_model_io.local_hf_model_dir(output_dir) as work_dir:
-            hf_model_io.write_hf_weight_shards(weights, work_dir)
-            self.log(f"Successfully saved HF safetensors model to {output_dir}")
-            self.save_hf_configs(self.hf_config, work_dir, tokenizer)
-            self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
+        hf_model_io.save_megatron_hf_model(
+            bridge,
+            model.actor_module,
+            output_dir,
+            rank_zero=rank_zero,
+            local_state_source_type=SafeTensorsStateSource,
+            save_configs=partial(self.save_hf_configs, self.hf_config, tokenizer=tokenizer),
+        )
+        if rank_zero:
+            self.log(f"Successfully saved HF model and tokenizer to {output_dir}")
 
         # The Ray caller waits for every rank result; no collective needs to span artifact publication.

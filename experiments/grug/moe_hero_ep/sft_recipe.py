@@ -22,7 +22,6 @@ from marin.rl.skyrl import ArtifactHfModel
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance
 
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.hero_recipe import HeroThroughputResult
@@ -150,9 +149,7 @@ class MochiSFT:
         export_fn: Callable[..., None] = _export_final_sft
         if self.checkpoints == "final":
             try:
-                source_revision = os.environ.get("GIT_COMMIT") or (
-                    Provenance.capture().base_commit if coordinator_cluster is not None else get_git_commit()
-                )
+                source_revision = os.environ.get("GIT_COMMIT") or get_git_commit()
             except (CalledProcessError, OSError) as error:
                 raise ValueError("Set GIT_COMMIT to the source revision when exporting a new Mochi SFT run") from error
             if not source_revision:

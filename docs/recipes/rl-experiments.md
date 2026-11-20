@@ -48,7 +48,7 @@ A preset ending in `-agentic` trains on agent tasks. A preset ending in `-harbor
 
 Mochi saves no checkpoint or HF export by default. Scheduled evaluation scores the live policy.
 Enable checkpointing if you need to resume. The default Mochi run path is under the cluster's
-`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to a durable root for runs that may use the full 96-hour time limit.
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to a durable S3 root for runs that may use the full 96-hour time limit.
 
 Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets evaluate the
 100-task active set as `eval_lite_100`.
@@ -115,13 +115,15 @@ including a failed run, use
 Use `MARIN_PREFIX` if the run used an explicit or temporary storage prefix. The extractor writes
 grades, phases, image and setup digests, and output tails for ungraded attempts to
 `s3://marin-us-east-02a/marin/rl-data/task-health/attempts/<run>/<version>/<attempt-key>/attempts.parquet`.
+The agentic preset's graph writes an `attempts.json` receipt with the snapshot's address below
+`rl-data/task-health/attempts/by-run/<run>/<version>` in the run's storage prefix.
 The extractor snapshots the run's full attempt store, including trial records from earlier retries
 at that location. The key identifies the run location and the stopped native attempt.
 
 From a clean commit, run `skip --selection NAME@VERSION --attempts ADDRESS... --version YYYY.MM.DD.N`
 to publish a skip list. A task qualifies after two attempts with a failed setup command or verifier
-output and no graded attempt. Known service failures do not count. When two distinct qualifying tasks
-share an image and setup, the list includes the other tasks in that environment.
+reward or result error with test output, provided the task has no graded attempt. When two distinct
+qualifying tasks share an image and setup, the list includes the other tasks in that environment.
 `--release FILE` clears entries for tasks whose content has changed.
 Pin the resulting `skip.parquet` under the selection recipe's `exclusions` with format `task_digest`.
 Selection matches the exact task revision and counts these exclusions separately from held-out overlap.

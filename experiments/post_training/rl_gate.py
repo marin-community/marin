@@ -533,6 +533,13 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     runtime = config["skyrl"].get("runtime", {})
     for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
         runtime.pop(field, None)
+    if checkpoint := inputs.get("starting_checkpoint"):
+        for field, identity in (
+            ("model_source_identity", inputs["model"]["identity"]),
+            ("starting_checkpoint_identity", checkpoint["identity"]),
+        ):
+            if field in runtime and runtime.pop(field) != identity:
+                raise InvalidComparison(f"native resume binding differs from declared inputs: skyrl.runtime.{field}")
     if not runtime:
         config["skyrl"].pop("runtime", None)
     for section in ("trainer", "checkpoint_export"):

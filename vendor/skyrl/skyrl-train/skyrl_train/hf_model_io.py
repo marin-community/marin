@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterable
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from loguru import logger
 from marinskyrl.hf_model import (
@@ -32,6 +33,38 @@ from transformers.utils import cached_file
 from skyrl_train.io import io
 
 HF_WEIGHT_FILENAME = "model.safetensors"
+
+
+def save_megatron_hf_model(
+    bridge,
+    model,
+    output_dir: str,
+    *,
+    rank_zero: bool,
+    local_state_source_type: type,
+    save_configs: Callable[[str], None],
+) -> None:
+    """Export a Megatron model and publish its completed HF files on rank zero."""
+    source = getattr(getattr(bridge.hf_pretrained, "state", None), "source", None)
+    use_bridge_writer = isinstance(source, local_state_source_type) and bool(source.key_to_filename_map)
+    weights = None if use_bridge_writer else bridge.export_hf_weights(model, cpu=True)
+    if rank_zero:
+        model_dir = local_hf_model_dir(output_dir)
+    elif weights is None:
+        # Bridge's save is collective even when only rank zero publishes.
+        model_dir = TemporaryDirectory() if io.is_cloud_path(output_dir) else nullcontext(output_dir)
+    else:
+        for _ in weights:
+            pass
+        return
+
+    with model_dir as work_dir:
+        if weights is None:
+            bridge.save_hf_weights(model, work_dir)
+        else:
+            write_hf_weight_shards(weights, work_dir)
+        if rank_zero:
+            save_configs(work_dir)
 
 
 def write_hf_weight_shards(

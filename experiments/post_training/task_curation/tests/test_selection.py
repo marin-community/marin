@@ -510,6 +510,20 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     step = task_selection_step(curated, settings)
     changed = settings.model_copy(update={"released": (release.model_copy(update={"sha256": "0" * 64}),)})
     assert step.fingerprint() != task_selection_step(curated, changed).fingerprint()
+
+    replacement = task_file(tmp_path / "replacement.parquet", [repeated, alias, skipped, source_task("replaced")])
+    open_path = StoragePath.open
+    release_read = False
+
+    def open_release(path, mode="rb", **kwargs):
+        nonlocal release_read
+        if str(path) == release.uri and mode == "rb":
+            if release_read:
+                path = StoragePath(replacement.uri)
+            release_read = True
+        return open_path(path, mode, **kwargs)
+
+    monkeypatch.setattr(StoragePath, "open", open_release)
     root = Path(run(step)[0].path)
     summary = json.loads((root / "summary.json").read_text())
     assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]

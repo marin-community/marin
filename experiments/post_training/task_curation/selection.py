@@ -496,16 +496,22 @@ def with_agentic_tag(task: TaskSpec) -> TaskSpec:
 
 
 def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) -> Iterator[tuple[TaskSpec, str]]:
-    with StoragePath(source.uri).open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != source.sha256:
-            raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
+    contents = StoragePath(source.uri).read_bytes()
+    if hashlib.sha256(contents).hexdigest() != source.sha256:
+        raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
+    parquet = pq.ParquetFile(io.BytesIO(contents))
+    count = parquet.metadata.num_rows
+    if count != source.rows:
+        raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
     released = set()
-    for task in _panel_source_tasks(source, {}):
-        if "agentic" in task.tags and not source.agentic:
-            raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
-        published = with_agentic_tag(task) if source.agentic else task
-        released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
-        yield task, published.model_dump_json()
+    for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
+        for raw in batch.column(0).to_pylist():
+            task = TaskSpec.model_validate_json(raw)
+            if "agentic" in task.tags and not source.agentic:
+                raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
+            published = with_agentic_tag(task) if source.agentic else task
+            released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
+            yield task, published.model_dump_json()
     _check_release_admission(source, released, attempts)
 
 

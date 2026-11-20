@@ -10,6 +10,7 @@ Use the selected model entry's compare command to compare existing results on CP
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -40,7 +41,6 @@ from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactHfModel,
     SkyRLModelSource,
-    SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLRunConfig,
@@ -81,10 +81,13 @@ _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, 
 
 
 class SFTModelPreset(Protocol):
-    """The name and exported model exposed by an SFT preset."""
+    """The recipe and exported model exposed by an SFT preset."""
 
     @property
     def name(self) -> str: ...
+
+    @property
+    def recipe(self) -> object: ...
 
     def model(
         self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
@@ -158,16 +161,11 @@ def _with_run_options(
     checkpoint_every: int | None,
     export: presets.CheckpointPolicy | None,
     priority: str | None,
-    needs_model: bool,
 ) -> presets.Preset:
     if preset.gated and any(value is not None for value in (checkpoints, checkpoint_every, export)):
         raise click.BadParameter("gated presets do not accept --checkpoints, --checkpoint-every, or --export")
     retention = checkpoints if checkpoints is not None else preset.checkpoints
     export_policy = export if export is not None else preset.export
-    if needs_model and export is None and export_policy == "none":
-        if checkpoints is None and retention == "none":
-            retention = "latest"
-        export_policy = retention
     cadence = preset.checkpoint_every if checkpoint_every is None else checkpoint_every or None
     layout = preset.recipe.layout
     try:
@@ -552,6 +550,8 @@ def _run_command(
                 raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
             submitted_at = datetime.now(UTC).isoformat()
             environment = dict(os.environ)
+            if revision := context.meta.get("sft_source_revision"):
+                environment["GIT_COMMIT"] = revision
             if preset.output_ttl_days is not None:
                 environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
             job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
@@ -594,7 +594,6 @@ def command(
     argv: tuple[str, ...],
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
-    then: Callable[[SkyRLPolicyModel], tuple[ArtifactStep, ...]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
@@ -712,11 +711,7 @@ def command(
             checkpoint_every=checkpoint_every,
             export=export,
             priority=priority,
-            needs_model=then is not None,
         )
-        if then is not None and (preset.export == "none" or preset.gated):
-            raise click.UsageError("a stage after RL requires one ungated run with a model export")
-        click.get_current_context().meta["rl_preset"] = preset
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
         initializer = init
@@ -733,13 +728,28 @@ def command(
                 raise click.BadParameter(
                     f"unknown SFT preset {sft_name!r}. Choose from {', '.join(by_name)}.", param_hint="--sft"
                 )
+            from experiments.sft.launcher import HFModel, SFTSpec  # noqa: PLC0415 - load only for --sft
+
+            sft = by_name[sft_name]
             try:
-                initializer = by_name[sft_name].model(
+                initializer = sft.model(
                     coordinator_cluster=preset.recipe.layout.cluster,
                     coordinator_prefix=recipe.run_prefix(preset) if preset.temporary_output else None,
                 )
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
+            export = initializer.step
+            export_config = export.build_config(StepContext.for_fingerprint(export.runtime_args, export.deps))
+            if isinstance(export_config, dict) and (revision := export_config.get("source_revision")):
+                click.get_current_context().meta["sft_source_revision"] = revision
+            sft_recipe = sft.recipe
+            sft_model = sft_recipe.model if isinstance(sft_recipe, SFTSpec) else None
+            if isinstance(sft_model, HFModel) and sft_model.task_timeout_seconds is not None:
+                layout = preset.recipe.layout
+                hours = layout.coordinator_timeout_hours + math.ceil(sft_model.task_timeout_seconds / 3600)
+                layout = replace(layout, coordinator_timeout_hours=hours)
+                preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
+        click.get_current_context().meta["rl_preset"] = preset
         if resume_name is not None:
             _check_resume(preset, has_init=init is not None or init_name is not None)
         missing = [name for name in forward_env if name not in os.environ]
@@ -790,9 +800,8 @@ def command(
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-        following = then(SkyRLPolicyModel(run.runs[0])) if then is not None else ()
-        if after_run := preset.then:
-            following = (*following, *(after_run(step) for step in run.runs))
+        after_run = preset.then
+        following = tuple(after_run(step) for step in run.runs) if after_run is not None else ()
         rl_handles = (*run.runs, *((run.gate,) if run.gate else ()))
         click.get_current_context().meta["rl_handle_count"] = len(rl_handles)
         return (*rl_handles, *following)
@@ -820,7 +829,6 @@ def main(
     argv: Sequence[str] | None = None,
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
-    then: Callable[[SkyRLPolicyModel], tuple[ArtifactStep, ...]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:
@@ -838,7 +846,6 @@ def main(
                 argv=tuple(args),
                 init=init,
                 sft_presets=sft_presets,
-                then=then,
                 entry_module=entry_module,
                 forward_env=forward_env,
             )

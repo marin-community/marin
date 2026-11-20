@@ -251,10 +251,16 @@ def artifact_prefix(cluster: str) -> str:
 
 
 def run_prefix(preset: Preset) -> str:
-    prefix = artifact_prefix(preset.recipe.layout.cluster)
+    cluster = preset.recipe.layout.cluster
+    prefix = artifact_prefix(cluster)
     if preset.output_ttl_days is None:
         return prefix
-    return os.environ.get("MARIN_PREFIX") or marin_temp_bucket(preset.output_ttl_days, source_prefix=prefix)
+    output = os.environ.get("MARIN_PREFIX") or marin_temp_bucket(preset.output_ttl_days, source_prefix=prefix)
+    scheme = StoragePath(prefix).scheme
+    output_scheme = StoragePath(output).scheme
+    if scheme and output_scheme != scheme:
+        raise click.BadParameter(f"run output for {cluster} must use {scheme} storage, got {output_scheme or 'local'}")
+    return output
 
 
 def selection_artifact(value: str) -> ArtifactStep:
@@ -378,10 +384,16 @@ def run_path(preset: Preset, name: str, version: str) -> str:
 
 def _source_run_path(preset: Preset, name: str, version: str, *record_names: str) -> str:
     output = StoragePath(run_path(preset, name, version))
-    if preset.temporary_output and not any((output / record).exists() for record in record_names):
-        durable = StoragePath(artifact_prefix(preset.recipe.layout.cluster)) / name / version
-        if any((durable / record).exists() for record in record_names):
-            return str(durable)
+    ttl = preset.output_ttl_days
+    if ttl is None or any((output / record).exists() for record in record_names):
+        return str(output)
+    durable = artifact_prefix(preset.recipe.layout.cluster)
+    temporary = marin_temp_bucket(ttl, source_prefix=durable)
+    for prefix in dict.fromkeys((durable, temporary)):
+        candidate = StoragePath(prefix) / name / version
+        if candidate != output and candidate.scheme == output.scheme:
+            if any((candidate / record).exists() for record in record_names):
+                return str(candidate)
     return str(output)
 
 

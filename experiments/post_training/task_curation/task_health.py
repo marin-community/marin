@@ -25,7 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.run_records import LaunchState
 from marin.execution.artifact import validate_path_segment
-from marin.execution.lazy import ArtifactStep, apply
+from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import read_skyrl_launch_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -68,8 +68,8 @@ class Phase(StrEnum):
     VERIFIER = "verifier"
 
 
-SERVICE_FAILURES = frozenset(
-    {"AddTestsDirError", "DaytonaCommandError", "DownloadVerifierDirError", "ProviderUnavailable", "RuntimeServiceError"}
+VERIFIER_TASK_FAILURES = frozenset(
+    {"RewardFileNotFoundError", "RewardFileEmptyError", "VerifierOutputParseError", "VerifierRuntimeError"}
 )
 SETUP_COMMAND_FAILURE = re.compile(r"^Declared task setup command \d+ exited -?[1-9]\d*\b")
 # Only ungraded attempts carry the output tails and the attempt's address.
@@ -252,18 +252,18 @@ def publish_skip_list(
     attempted = Counter(row["task_digest"] for row in rows)
     failures: defaultdict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        if (
-            row["outcome"] != Outcome.INFRA_ERROR
-            or row["task_digest"] in graded
-            or row["exception_type"] in SERVICE_FAILURES
-        ):
+        if row["outcome"] != Outcome.INFRA_ERROR or row["task_digest"] in graded:
             continue
         failed_setup = (
             row["phase"] == Phase.TASK_SETUP
             and row["setup_completed"] is False
             and SETUP_COMMAND_FAILURE.match(row["error"] or "") is not None
         )
-        failed_verifier = row["phase"] == Phase.VERIFIER and (row["verifier_stdout"] or row["verifier_stderr"])
+        failed_verifier = (
+            row["phase"] == Phase.VERIFIER
+            and row["exception_type"] in VERIFIER_TASK_FAILURES
+            and (row["verifier_stdout"] or row["verifier_stderr"])
+        )
         if failed_setup or failed_verifier:
             failures[row["task_digest"]].append(row)
     broken = {digest: failed[0] for digest, failed in failures.items() if len(failed) >= MIN_FAILED_ATTEMPTS}
@@ -336,18 +336,20 @@ def _extract_stopped_run(run_output: str, run: str) -> StoragePath:
     return _extract_attempts(attempt.native.config, run, output)
 
 
-def _record_attempts(run_output: str, run: str) -> None:
-    _extract_stopped_run(run_output, run)
+def _record_attempts(run_output: str, run: str, output: str) -> None:
+    snapshot = _extract_stopped_run(run_output, run)
+    publish_once(StoragePath(output), {"attempts.json": json.dumps({"attempts_uri": str(snapshot)}).encode()})
 
 
 def task_health_step(run: ArtifactStep) -> ArtifactStep:
     """Collect one completed run's installed-agent attempts."""
     return apply(
-        f"rl-data/task-health/attempts/{run.name}",
+        f"rl-data/task-health/attempts/by-run/{run.name}",
         _record_attempts,
         version=run.version,
         run_output=run,
         run=f"{run.name}@{run.version}",
+        output=OUT,
     )
 
 
@@ -359,7 +361,7 @@ def main() -> None:
     extract.add_argument("--run", required=True, help="run artifact NAME@VERSION")
     skip = commands.add_parser("skip", help="publish a versioned skip list for a task selection")
     skip.add_argument("--selection", required=True, help="task selection NAME@VERSION")
-    skip.add_argument("--attempts", nargs="+", required=True, help="attempts.parquet addresses written by extract")
+    skip.add_argument("--attempts", nargs="+", required=True, help="attempts.parquet files from completed run snapshots")
     skip.add_argument("--version", required=True, help="skip list version, YYYY.MM.DD.N")
     skip.add_argument("--release", help="fixed task file; a listed task whose digest differs there leaves the list")
     args = parser.parse_args()

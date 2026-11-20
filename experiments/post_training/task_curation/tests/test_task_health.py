@@ -167,9 +167,9 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
     monkeypatch.setattr(task_health, "TASK_HEALTH_ROOT", str(health_root))
 
     artifact = ArtifactStep.adopt("fixture-run", "2026.11.20.1", str(run_output))
-    run(task_health.task_health_step(artifact))
-    version_root = health_root / "attempts/fixture-run/2026.11.20.1"
-    (path,) = map(StoragePath, map(str, version_root.glob(f"*/{task_health.ATTEMPTS_FILENAME}")))
+    (health,) = run(task_health.task_health_step(artifact))
+    snapshot = json.loads((StoragePath(health.path) / "attempts.json").read_text())
+    path = StoragePath(snapshot["attempts_uri"])
     output = path.parent
 
     rows = {row["attempt_id"]: row for row in pq.read_table(str(path)).to_pylist()}
@@ -200,6 +200,7 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
         sys, "argv", ["task_health", "extract", "--cluster", "fixture", "--run", "fixture-run@2026.11.20.1"]
     )
     task_health.main()
+    version_root = health_root / "attempts/fixture-run/2026.11.20.1"
     (retry_snapshot,) = set(version_root.glob(f"*/{task_health.ATTEMPTS_FILENAME}")) - {Path(str(path))}
     assert set(pq.read_table(retry_snapshot)["attempt_id"].to_pylist()) == {*rows, "later"}
     assert set(pq.read_table(str(path))["attempt_id"].to_pylist()) == rows.keys()
@@ -232,6 +233,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
             "outcome": outcome,
             "phase": phase,
             "error": error,
+            "exception_type": "VerifierRuntimeError" if phase == Phase.VERIFIER and error else None,
             "setup_completed": False if phase == Phase.TASK_SETUP and error else None,
             "verifier_stdout": error if phase == Phase.VERIFIER else None,
             "docker_image": image,
@@ -247,6 +249,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         attempt("infrastructure", Phase.ENVIRONMENT, "Sandbox creation failed"),
         attempt("infrastructure", Phase.AGENT, "Agent timed out"),
         {**attempt("infrastructure", Phase.VERIFIER, "Service failed"), "exception_type": "AddTestsDirError"},
+        {**attempt("infrastructure", Phase.VERIFIER, "Partial test output"), "exception_type": "TrialTimeoutError"},
+        {**attempt("infrastructure", Phase.VERIFIER, "Partial test output"), "exception_type": "SandboxDiskFullError"},
         {**attempt("infrastructure", Phase.TASK_SETUP, "Service failed"), "exception_type": "RuntimeServiceError"},
         {**attempt("infrastructure", Phase.TASK_SETUP, "Daytona output lost"), "exception_type": "DaytonaCommandError"},
         attempt("infrastructure", Phase.TASK_SETUP, "Setup process failed to start"),
@@ -266,6 +270,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         attempt("recovered", Phase.VERIFIER, None, Outcome.GRADED),
         attempt("infrastructure", Phase.ENVIRONMENT, "Sandbox creation failed"),
         attempt("infrastructure", Phase.AGENT, "Agent timed out"),
+        {**attempt("infrastructure", Phase.VERIFIER, "Partial test output"), "exception_type": "TrialTimeoutError"},
+        {**attempt("infrastructure", Phase.VERIFIER, "Partial test output"), "exception_type": "SandboxDiskFullError"},
         attempt("shared-1", Phase.TASK_SETUP, SETUP_EXIT),
         attempt("shared-2", Phase.VERIFIER, MISSING_MODULE),
         old_task_failure,
