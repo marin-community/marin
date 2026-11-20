@@ -56,3 +56,31 @@ Size Daytona work from the account-owner file
 `/Users/benfeuer/Documents/experiments/active/DAYTONA-QUOTAS.md` and a fresh,
 complete account inventory covering every lane's sandboxes. Retain about 20%
 headroom and pace organization-wide create requests.
+
+## Native task conversion
+
+`endless.tasks.sources(images_reference, census_reference)` builds intake recipes
+for the kept Endless v2 and v3 tasks. The arguments are SHA-bound
+`ContentEvidenceReference` values for the image publication manifest and the
+native task/file/runtime census report. Each pipeline run records these inputs.
+
+The reader checks each task archive checksum and every regular file's content,
+mode and nanosecond timestamp against that census. It binds the task to the
+published OCI manifest digest of its preserved SIF image. Conversion keeps the
+instruction and oracle bytes, the original image working directory, and the
+source's resource and deadline declarations. Public `setup_files` are delivered
+unchanged; the source oracle invokes its own setup where present. The converter
+adds no setup command beyond the native declaration.
+
+After the actor running as Unix root stops, the
+[native reward-file grader](../../../../../lib/taskcompendium/src/taskcompendium/harbor/root_delivery.py)
+recreates `/tests/test.sh` and `/tests/test_final_state.py` with their original
+bytes and metadata, runs the source verifier, and reads its reward file. The
+actor can modify the image's installed dependencies; the integrity contract
+records that shared state. The archived `task.toml` supplies resource and network
+limits for the separate native runtime binding, whose applied allocations must
+be checked during controls.
+
+This factory supplies converted inputs. Original controls, retained releases,
+SAMPLE review and admission follow the
+[curation pipeline](../../../../../docs/references/task-curation.md).
