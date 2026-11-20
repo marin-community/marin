@@ -20,10 +20,10 @@ from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
-from experiments.post_training import rl, rl_gate, rl_recipe
+from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_scoring import read_gate_inputs
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
 from experiments.post_training.snowball_rl import SNOWBALL
@@ -59,9 +59,9 @@ def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, m
     preset = replace(
         MOCHI.by_name["train-long"], checkpoints=mode, checkpoint_every=cadence, keep_every=period, export="none"
     )
-    spec = rl_recipe.run_spec(preset, name="periodic-retention", model_name=MOCHI.model)
+    spec = rl_compose.run_spec(preset, name="periodic-retention", model_name=MOCHI.model)
     path = tmp_path / "launch.yaml"
-    path.write_text(materialized_config(rl_recipe.run_step(preset, spec), str(tmp_path)).launch_config_yaml)
+    path.write_text(materialized_config(rl_compose.run_step(preset, spec), str(tmp_path)).launch_config_yaml)
     (config,) = rl_gate.compose_configs([str(path)])
     trainer = config["skyrl"]["trainer"]
     assert (trainer.get("checkpoint_retention", "none"), trainer.get("checkpoint_keep_every")) == (mode, period)
@@ -122,12 +122,14 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.20.1": "9c4ea508",
                     "2026.11.20.2": "335aff0c",
                     "2026.11.20.3": "9f1754cd",
+                    "2026.11.20.4": "3a742671",
                 },
                 "train-long-agentic-3rack": {
                     "2026.11.19.1": "87a6ba8f",
                     "2026.11.20.1": "15da2779",
                     "2026.11.20.2": "0fcb3537",
                     "2026.11.20.3": "fbfd8b6a",
+                    "2026.11.20.4": "51b9ced9",
                 },
             },
         ),
@@ -138,11 +140,13 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.19.1": "756f58ef",
                     "2026.11.20.1": "b557a4f0",
                     "2026.11.20.3": "e7e10480",
+                    "2026.11.20.4": "7c99be73",
                 },
                 "train-long-agentic": {
                     "2026.11.19.1": "72ec851f",
                     "2026.11.20.1": "6335c530",
                     "2026.11.20.3": "1cab698a",
+                    "2026.11.20.4": "516de59d",
                 },
             },
         ),
@@ -154,7 +158,7 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, tmp_path,
     if table.model == "mochi":
         produced = request.getfixturevalue("mochi_sft_preset").model()
         for preset in table.presets:
-            model, prefix = preset.model, rl_recipe.artifact_prefix(preset.recipe.layout.cluster)
+            model, prefix = preset.model, rl_compose.artifact_prefix(preset.recipe.layout.cluster)
             assert isinstance(model, ArtifactHfModel)
             assert (model.step.name, model.step.version, model.step.path(prefix)) == (
                 produced.step.name,
@@ -174,7 +178,7 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, tmp_path,
                 (evaluation,) = preset.evaluations
                 (validation,) = documents[preset.name]["inputs"]["validation_data"]
                 assert (evaluation.name, validation["relative_path"]) == ("eval_lite_100", "validation.parquet")
-        docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
+        docs = (rl_compose.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
         fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
         served = rl_gate._config_values(documents["train-long-3rack"]["skyrl"])
         for path, value in rl_gate._config_values(yaml.safe_load(fragment)).items():
@@ -185,7 +189,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
     preset = SNOWBALL.by_name["train-medium-agentic"]
     settings = ("context_budget.max_new_tokens_per_turn=24576", "trainer.train_batch_size=128")
-    run = rl.build_run(preset, table=SNOWBALL, tasks=selection, settings=settings)
+    run = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, settings=settings)
     assert run.inputs is not None
     config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
     buffer = config["trainer"]["rollout_buffer"]
@@ -226,7 +230,9 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
     if case == "owner":
         key, setting = value
         with pytest.raises(click.BadParameter, match=error):
-            rl_recipe.run_spec(preset, name="settings-test", tasks=selection, settings=(f"{key}={json.dumps(setting)}",))
+            rl_compose.run_spec(
+                preset, name="settings-test", tasks=selection, settings=(f"{key}={json.dumps(setting)}",)
+            )
         error = "recipe settings are derived by the runner"
     with pytest.raises((ValueError, click.BadParameter), match=error):
         if case in ("recipe", "owner"):
@@ -234,11 +240,11 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
             patch = {}
             set_path(patch, key, setting)
             config = preset.recipe.config.merge(RecipePatch.from_document(patch))
-            rl_recipe.run_spec(
+            rl_compose.run_spec(
                 replace(preset, recipe=replace(preset.recipe, config=config)), name="recipe-test", tasks=selection
             )
         elif case == "mix":
-            rl_recipe.run_spec(replace(preset, batch_mix=BatchMix(value)), name="mix-test", tasks=selection)
+            rl_compose.run_spec(replace(preset, batch_mix=BatchMix(value)), name="mix-test", tasks=selection)
         elif case == "evaluation":
             replace(preset, evaluations=(replace(preset.evaluations[0], every=value),))
         else:
@@ -249,7 +255,7 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
             monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "other") if case == "prefix" else str(tmp_path))
             init = ArtifactHfModel(apply("models/not-built", export_artifact, version="2026.11.19", path=OUT))
             preset = SNOWBALL.by_name["learning-medium" if case == "gated" else "train-long"]
-            rl.build_run(preset, table=SNOWBALL, init=init)
+            rl.build_experiment(preset, table=SNOWBALL, init=init)
 
 
 @pytest.mark.parametrize(
@@ -302,7 +308,7 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, version
     ],
 )
 def test_plan_requires_harness_grading_mapping(selection, dataset, harness_override, exit_code):
-    summary_path = Path(selection.path()) / rl_recipe.SUMMARY_FILENAME
+    summary_path = Path(selection.path()) / rl_compose.SUMMARY_FILENAME
     summary = json.loads(summary_path.read_text())
     summary["harness_graded_datasets"] = [dataset]
     summary_path.write_text(json.dumps(summary))
@@ -347,9 +353,9 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoin
     assert inputs["model"]["uri"] == preset.model.step.path(str(tmp_path))
     assert inputs["starting_checkpoint"]["uri"] == str(stored_checkpoint)
     assert "step-4@2026.11.19.1" in inputs["starting_checkpoint"]["identity"]
-    resume = rl_recipe.published_checkpoint(args[1], preset=preset)
+    resume = rl_compose.published_checkpoint(args[1], preset=preset)
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
-        rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
+        rl.build_experiment(preset, table=SNOWBALL, resume=resume, init=preset.model)
 
 
 @pytest.fixture
@@ -432,7 +438,7 @@ def test_resume_inherits_the_source_runs_initializer(
     assert all(dep.name != model_name for dep in resumed.lower().deps)
     monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
     resumed.run(resumed_config)
-    inputs = read_gate_inputs(str(Path(resumed_config.output.resolved_config_uri).parent))
+    inputs = read_run_inputs(str(Path(resumed_config.output.resolved_config_uri).parent))
     assert {key: getattr(inputs.resume.model, key) for key in tokenizer} == tokenizer
     assert (inputs.resume.artifact_name, inputs.resume.artifact_version, inputs.resume.step) == (
         source.name,
@@ -467,7 +473,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     argv = ("--preset", "train-long", "--version", "2026.11.19.1", "--run")
     prefix = "s3://fixture-models/shared"
     monkeypatch.setenv("MARIN_PREFIX", prefix)
-    monkeypatch.setattr(rl_recipe, "artifact_prefix", lambda _cluster: prefix)
+    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: prefix)
     monkeypatch.setattr(rl, "_status", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sys, "argv", [module, *argv])
     submitted = []

@@ -16,7 +16,7 @@ class Verdict(StrEnum):
     INVALID = "invalid"
 
 
-class Label(StrEnum):
+class Effect(StrEnum):
     IMPROVES = "improves"
     TRADE_OFF = "trade-off"
     NO_CHANGE = "no change"
@@ -33,7 +33,7 @@ class Change(StrEnum):
 
 class ComparisonRole(StrEnum):
     OBJECTIVE = "objective"
-    CONSTRAINT = "constraint"
+    GUARD = "guard"
     REQUIREMENT = "requirement"
     REPORTED = "reported"
     SLICE = "slice"
@@ -78,13 +78,13 @@ class GateResult(BaseModel):
     comparisons: list[Comparison]
     invariants: list[Invariant]
     verdict: Verdict
-    label: Label | None
+    effect: Effect | None
     reason: str | None
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
 
 
-class RunSummary(BaseModel):
+class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     run_id: Identity
     attempt_id: Identity

@@ -24,7 +24,7 @@ from finestore.rl.strata import (
     SelectionDefinition,
     SelectionParent,
     SelectionTaskRow,
-    read_selection_strata,
+    read_selection_manifest,
 )
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
@@ -39,12 +39,13 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training import rl as snowball
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
-from experiments.post_training import rl_recipe as recipe
+from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     controls,
@@ -67,7 +68,7 @@ pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(
 KL = "policy/mismatch/staleness0/kl_k3"
 
 
-def rescore(preset, *args):
+def compare(preset, *args):
     result = CliRunner().invoke(gate.command(snowball_model.SNOWBALL), ["--preset", preset, *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
     payload = json.loads(result.stdout.splitlines()[-1])
@@ -109,23 +110,23 @@ launch_config.load_launch_config = load
     assert gate.compose_configs(["launch.yaml"]) == [{"path": "launch.yaml"}]
 
 
-def test_rescore_leave_one_out_writes_the_printed_report(recorded_runs):
+def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
     controls(recorded_runs, "speed-medium")
-    report = rescore("speed-medium", "--leave-out", "r0")
-    assert (report["verdict"], report["label"]) == ("pass", "no change"), report
+    report = compare("speed-medium", "--leave-out", "r0")
+    assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
-    assert {row["role"] for row in report["comparisons"]} >= {"objective", "constraint", "reported"}
+    assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}
     assert all(row["comparator"] is not None for row in report["invariants"])
-    for name, speed, kl, verdict, label in (
+    for name, speed, kl, verdict, effect in (
         ("improvement", 90, 0.1, "pass", "improves"),
         ("regression", 150, 0.1, "fail", "regression"),
         ("trade-off", 90, 0.2, "fail", "trade-off"),
     ):
         candidate = "users/test/" + name
         recorded_runs("speed-medium", candidate, speed=speed, metrics={KL: kl})
-        result = rescore("speed-medium", "--candidate", candidate)
-        assert (result["verdict"], result["label"]) == (verdict, label), result
+        result = compare("speed-medium", "--candidate", candidate)
+        assert (result["verdict"], result["effect"]) == (verdict, effect), result
 
 
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
@@ -133,7 +134,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     key = "policy/raw_grad_norm"
     pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
     control_roots = []
-    for index in range(pin.runs):
+    for index in range(pin.replicates):
         root = recorded_runs(
             preset.name,
             gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
@@ -150,7 +151,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         gate.gate_step(
             preset,
             tuple(candidates),
-            inputs=GateInputs(
+            inputs=RunInputs(
                 preset_name=preset.name,
                 requirements=(
                     key + "<=control",
@@ -162,7 +163,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
             table=snowball_model.SNOWBALL,
         )
     )[0]
-    assert report.verdict == "fail" and report.label == "regression"
+    assert report.verdict == "fail" and report.effect == "regression"
     assert next(row for row in report.comparisons if row.metric == "speed/update_seconds").passes is False
     requirement = report.rows(ComparisonRole.REQUIREMENT)
     assert len(requirement) == 1 and requirement[0].passes
@@ -173,16 +174,18 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     ]
 
     table = snowball_model.SNOWBALL
-    pin = table.controls[preset.controls]
+    pin = table.control_pins[preset.control_preset]
     for root in control_roots:
         shutil.copytree(root, root.with_name("stale"))
-    stale_table = replace(table, controls={**table.controls, preset.controls: replace(pin, revision="stale")})
+    stale_table = replace(
+        table, control_pins={**table.control_pins, preset.control_preset: replace(pin, revision="stale")}
+    )
     stale = run(
         gate.gate_step(
             preset,
             tuple(candidates),
             table=stale_table,
-            inputs=GateInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
+            inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
         )
     )[0]
     assert stale.verdict == "invalid" and "recorded control revision=stale" in stale.reason
@@ -215,7 +218,7 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, p
                 metrics[step][KL] = 0.2
         root = recorded_runs(preset.name, "users/test/measured-mismatch-" + case)
         write_metrics(root, {step: {**row, "attempt_id": "recorded-attempt"} for step, row in metrics.items()})
-        values = scoring.load_run(str(root), preset).values
+        values = measurements.read_measurements(str(root), preset).values
         assert values["speed/update_seconds"] == 9
         assert (KL not in values) if expected is None else values[KL] == pytest.approx(expected)
 
@@ -245,7 +248,7 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
         write_metrics(
             root, {step: {**row, **counters, "attempt_id": "recorded-attempt"} for step, row in metrics.items()}
         )
-        facts = {fact.name: fact for fact in scoring.load_run(str(root), preset).invariants}
+        facts = {fact.name: fact for fact in measurements.read_measurements(str(root), preset).invariants}
         expected = (
             "planned_updates"
             if fault == "updates"
@@ -279,9 +282,10 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         )
         write_evaluations(str(root / "exports"), [damaged])
         facts = {
-            fact.name: fact for fact in scoring.load_run(str(root), snowball_model.SNOWBALL.by_name[preset]).invariants
+            fact.name: fact
+            for fact in measurements.read_measurements(str(root), snowball_model.SNOWBALL.by_name[preset]).invariants
         }
-        assert not facts["eval_lite/scored_fraction"].holds and facts["eval_lite/grader_error_fraction"].holds
+        assert not facts["eval_lite/task_coverage"].holds and facts["eval_lite/grader_error_fraction"].holds
         write_evaluations(str(root / "exports"), evaluations)
         export = str(root / "exports")
         profile = snowball_model.SNOWBALL.by_name[preset]
@@ -295,7 +299,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         def fixed_reply_holds():
             return next(
                 fact.holds
-                for fact in scoring.load_run(str(root), profile).invariants
+                for fact in measurements.read_measurements(str(root), profile).invariants
                 if fact.name == "fixed_reply_tokens"
             )
 
@@ -313,16 +317,16 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         write_evaluations(export, primary)
     metrics = read_skyrl_metrics(str(root))
     step = snowball_model.SNOWBALL.by_name[preset].updates
-    report = rescore(preset, "--candidate", "users/test/current-generation")
-    assert (report["verdict"], report["label"]) == ("pass", "no change"), report
+    report = compare(preset, "--candidate", "users/test/current-generation")
+    assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     prefix = "eval/all/outcome/" if preset == "learning-medium" else "eval/eval_lite/all/outcome/"
     metrics[step][prefix + "graded"] = 19
     metrics[step][prefix + "unavailable"] = 1
     write_metrics(root, metrics)
     alias = root.parent.parent / "current-bad-counter" / root.name
     shutil.copytree(root, alias)
-    report = rescore(preset, "--candidate", "users/test/current-bad-counter")
-    assert (report["verdict"], report["label"]) == ("fail", "no change")
+    report = compare(preset, "--candidate", "users/test/current-bad-counter")
+    assert (report["verdict"], report["effect"]) == ("fail", "no change")
     assert any(row["name"] == "eval_lite/grader_error_fraction" and not row["holds"] for row in report["invariants"])
 
 
@@ -335,18 +339,20 @@ def test_best_checkpoint_selection_requires_held_out_grading(recorded_runs, pres
         )
         preset_table(candidate)
         root = recorded_runs(candidate.name, f"users/test/checkpoint-grading-{retention}")
-        facts = {fact.name for fact in scoring.load_run(str(root), candidate).invariants}
-        assert f"{evaluation.name}/batch_finished" in facts
+        facts = {fact.name for fact in measurements.read_measurements(str(root), candidate).invariants}
+        assert f"{evaluation.name}/answers_complete" in facts
         for check in ("scored_fraction", "grader_error_fraction"):
             assert (f"{evaluation.name}/{check}" in facts) == (retention == "best")
 
 
-def test_named_evaluation_protocol_uses_its_recorded_request(recorded_runs):
+def test_additional_evaluation_protocol_uses_its_recorded_request(recorded_runs):
     root = recorded_runs("speed-short", "users/test/recorded-named")
     launch = json.loads((root / "terminal.json").read_text())["config"]
     launch["skyrl"]["generator"]["eval_sampling_params"]["presence_penalty"] = 0.8
     launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] = 7
-    protocol = scoring.evaluation_protocol(RecordedLaunch.from_document(launch, attempt="recorded-attempt"), "eval_lite")
+    protocol = measurements.evaluation_protocol(
+        RecordedLaunch.from_document(launch, attempt="recorded-attempt"), "eval_lite"
+    )
     assert {
         key: protocol["sampling_params"][key] for key in ("temperature", "ignore_eos", "max_generate_length", "logprobs")
     } == {
@@ -420,7 +426,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         )
         definition = SelectionDefinition(name="permuted", version=version, sampling="all", parent=parent)
         _json(root / "summary.json", {"selection_strata": definition.model_dump(mode="json")})
-        return read_selection_strata(str(root))
+        return read_selection_manifest(str(root))
 
     parent = write_panel(selection, "2026.11.17.1", manifest)
     launch["artifacts"]["export_root"] = str(tmp_path / "configured-export")
@@ -432,7 +438,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         row
         for step in (-1, 25)
         for row in evaluation_task_rows(
-            answers, attempt_id=attempt_id, step=step, evaluation="eval/", panel=parent, normalized=normalized
+            answers, attempt_id=attempt_id, step=step, evaluation="eval/", selection=parent, normalized=normalized
         )
     ]
     write_evaluations(export, task_rows)
@@ -448,8 +454,8 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
             for row in task_rows
         ],
     )
-    current = scoring.evaluation_scores(evaluation, str(tmp_path))
-    statistics = scoring.evaluation_statistics(current.filter(pc.equal(current["step"], 25)))
+    current = measurements.read_answers(evaluation, str(tmp_path))
+    statistics = scoring.score_answers(current.filter(pc.equal(current["step"], 25)))
     expected = {
         "mean": 109 / 180,
         "family_mean": 0.595,
@@ -472,9 +478,9 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     unavailable = current.set_column(
         current.schema.get_field_index("scored"),
         "scored",
-        pa.array([row["scored"] and row["item"] != "stem" for row in current.to_pylist()]),
+        pa.array([row["scored"] and row["task_id"] != "stem" for row in current.to_pylist()]),
     ).filter(pc.equal(current["step"], 25))
-    assert "eval_lite_100/aai_weighted_mean" not in scoring.evaluation_statistics(unavailable)
+    assert "eval_lite_100/aai_weighted_mean" not in scoring.score_answers(unavailable)
 
     specs["addition"] = {
         **base,
@@ -501,7 +507,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     )
     assert child.tasks["mixed"].strata.difficulty == "easy"
     version_answers = [_answer(item, float(item != "bounded")) for item in specs for _ in range(2)]
-    complete = evaluation_task_rows(version_answers, attempt_id=attempt_id, step=25, evaluation="eval/", panel=child)
+    complete = evaluation_task_rows(version_answers, attempt_id=attempt_id, step=25, evaluation="eval/", selection=child)
     write_evaluations(export, complete)
     stored = read_evaluations(export, attempt_id=attempt_id, evaluation="eval/", step=25)
     assert scoring.score_eval_lite_version(stored, parent, expected_answers=2) == scoring.EvalLiteVersionScore(
@@ -525,7 +531,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
 
     old_launch = RecordedLaunch.from_document(launch, attempt=attempt_id)
     old_receipt = read_attempt(export, attempt_id)
-    previous = scoring.evaluation_scores(evaluation, str(tmp_path), launch=old_launch, receipt=old_receipt)
+    previous = measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt)
     active_attempt = "active-only"
     launch["run"]["attempt_id"] = native["result"]["attempt_id"] = active_attempt
     source["uri"] = str(child_root)
@@ -540,9 +546,9 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     )
     active = read_evaluations(export, attempt_id=active_attempt, evaluation="eval/", step=25)
     assert scoring.score_eval_lite_version(active, parent, expected_answers=2).missing == ("bounded",)
-    with pytest.raises(scoring.InvalidComparison, match="differs from the selected receipt"):
-        scoring.evaluation_scores(evaluation, str(tmp_path), launch=old_launch)
-    assert scoring.evaluation_scores(evaluation, str(tmp_path), launch=old_launch, receipt=old_receipt).equals(previous)
+    with pytest.raises(measurements.InvalidComparison, match="differs from the selected attempt record"):
+        measurements.read_answers(evaluation, str(tmp_path), launch=old_launch)
+    assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
 @pytest.mark.parametrize(
@@ -584,7 +590,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         )
         else (setting,)
     )
-    inputs = GateInputs(preset_name=preset.name, settings=settings)
+    inputs = RunInputs(preset_name=preset.name, settings=settings)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         root = tmp_path / name / version
@@ -616,7 +622,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             recorded_runs(
                 preset.name, gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL), score=0.5
             )
-            for index in range(pin.runs)
+            for index in range(pin.replicates)
         ]
     if case in ("stale-default", "omitted-current-nondefault"):
         changed = setting if case == "stale-default" else 'generator.chat_template_kwargs={"enable_thinking":false}'
@@ -670,7 +676,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     return original_subprocess(command, *args, **kwargs)
 
                 unavailable.setattr(subprocess, "run", unavailable_defaults)
-                report = rescore(preset.name, "--candidate", name)
+                report = compare(preset.name, "--candidate", name)
                 assert (
                     report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
                 ), report
@@ -708,11 +714,11 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             set_path(receipt, path, value)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
-    report = rescore(preset.name, "--candidate", name)
+    report = compare(preset.name, "--candidate", name)
     if reasons:
         assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), report
     else:
-        assert (report["verdict"], report["label"]) == ("pass", "no change"), report
+        assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
         if case.startswith("initializer"):
             assert "inputs.model.uri" in report["run"]["config_changes"]
     if case == "cached-default":
@@ -724,7 +730,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             ),
         )
         preset_table(promoted)
-        updated = rescore(preset.name, "--candidate", name)
+        updated = compare(preset.name, "--candidate", name)
         assert updated["verdict"] == "invalid" and "weight_decay" in updated["reason"]
         assert updated["report"] != report["report"]
 
@@ -757,13 +763,13 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     pq.write_table(pa.Table.from_pylist([*pool, {"task_spec": json.dumps(inactive)}]), panel_root / pool_filename)
     summary["selection_strata"]["task_files"] = [pool_filename]
     summary_path.write_text(json.dumps(summary))
-    task_set = scoring.read_recorded_task_set(
+    task_set = measurements.read_recorded_task_set(
         RecordedLaunch.from_document(receipt["config"], attempt=receipt["config"]["run"]["attempt_id"]), "eval_lite_100"
     )
     assert set(task_set.task_ids) == {json.loads(row["task_spec"])["id"] for row in rows}
     assert inactive["id"] not in task_set.task_ids
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), original)
-    report = rescore(preset, "--candidate", "users/test/task-content")
+    report = compare(preset, "--candidate", "users/test/task-content")
     assert report["verdict"] == "pass", report
     changed = recorded_runs(preset, "users/test/task-content-edited")
     with edit_receipt(changed) as receipt:
@@ -791,12 +797,12 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
                 if json.loads(row["task_spec"])["id"] == task["id"]:
                     row["task_spec"] = json.dumps(task)
             pq.write_table(pa.Table.from_pylist(pool), copied / filename)
-    report = rescore(preset, "--candidate", "users/test/task-content-edited")
+    report = compare(preset, "--candidate", "users/test/task-content-edited")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
 
 @pytest.mark.parametrize(("preset_name", "gpu"), [("learning-medium", "gb200"), ("data-medium", "h100")])
-def test_python_run_saves_typed_inputs_for_rescoring(
+def test_python_run_saves_typed_inputs_for_comparison(
     preset_table, recorded_runs, selection, tmp_path, monkeypatch, preset_name, gpu
 ):
     preset = snowball_model.SNOWBALL.by_name[preset_name]
@@ -852,7 +858,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(
         if preset.accepts_init
         else None
     )
-    built = snowball.build_run(
+    built = snowball.build_experiment(
         preset,
         settings=settings,
         tasks=tasks,
@@ -869,7 +875,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(
     )
     staged = source.with_name("native-staging")
     source.rename(staged)
-    (staged / GATE_INPUTS_FILENAME).unlink()
+    (staged / RUN_INPUTS_FILENAME).unlink()
 
     def native(config, *, forward_env=()):
         shutil.copytree(staged, source, dirs_exist_ok=True)
@@ -878,7 +884,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(
     monkeypatch.setattr(snowball, "run_skyrl", native)
     monkeypatch.setattr(sys, "argv", ["unrelated-command", "--preset", "train-long", "--require", "unrelated"])
     run(*built.runs)
-    recorded = read_gate_inputs(str(source))
+    recorded = read_run_inputs(str(source))
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
     decoded = dict(item.split("=", 1) for item in recorded.settings)
     assert {key: json.loads(value) for key, value in decoded.items()} == (
@@ -908,7 +914,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(
         newer.mkdir()
         for filename in ("config.json", "tokenizer_config.json"):
             (newer / filename).write_text("{}")
-    report = rescore(preset_name, "--candidate", built.runs[0].name)
+    report = compare(preset_name, "--candidate", built.runs[0].name)
     assert report["verdict"] == "pass", report
     assert report["run"]["requirements"] == list(recorded.requirements)
     assert report["run"]["settings"] == list(recorded.settings)

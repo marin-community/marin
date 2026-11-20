@@ -269,10 +269,10 @@ class RayPPOTrainer:
         eval_dataset: Optional[PromptDataset] = None,
         eval_trajectory_runner: TrajectoryRunner | None = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-        named_eval_datasets: Mapping[str, PromptDataset] | None = None,
+        additional_eval_datasets: Mapping[str, PromptDataset] | None = None,
     ):
-        self.named_eval_dataloaders = {
-            name: build_eval_dataloader(cfg, dataset) for name, dataset in (named_eval_datasets or {}).items()
+        self.additional_eval_dataloaders = {
+            name: build_eval_dataloader(cfg, dataset) for name, dataset in (additional_eval_datasets or {}).items()
         }
         self.cfg = cfg
         self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
@@ -443,7 +443,7 @@ class RayPPOTrainer:
         profile = profile or EvaluationProfile()
         cfg = evaluation_profile_config(self.cfg, profile, val_set_name)
         dataloader = (
-            self.named_eval_dataloaders[val_set_name] if profile.data_files is not None else self.eval_dataloader
+            self.additional_eval_dataloaders[val_set_name] if profile.data_files is not None else self.eval_dataloader
         )
         evaluator = evaluate_step_wise if cfg.trainer.step_wise_training else evaluate
         session = nullcontext(evaluation_pool) if evaluation_pool is not None else self._evaluation_session()

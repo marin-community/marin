@@ -5,8 +5,8 @@ The stable UUID is declared in `applet.toml`. Preserve it when releasing updates
 
 Each run has one row with its attempts in a dropdown, latest first. Failed attempts
 are marked. The selected attempt supplies the run's details.
-The row shows the gate report's climbed metrics (control → run, change and noise),
-constraints and invariants, then verdict and label. Replicate counts identify aggregate
+The row shows the gate report's objectives (control → run, change and noise),
+guards and invariants, then verdict and effect. Replicate counts identify aggregate
 results. Attempts without report details remain descriptive; unknown measurements are explicit.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
@@ -28,13 +28,13 @@ Training grader errors are reported in rollout metrics; they do not fail an unga
 Records carry native identity, source and engine facts, and the launcher's issue.
 The planned update count and measured update indices come from the run's effective configuration;
 the detail view shows them beside the observed optimizer count. Missing stored values are unknown.
-The gate result contains the report's climbed metrics, constraints, invariants, verdict and label; controls and
+The gate result contains the report's objectives, guards, invariants, verdict and effect; controls and
 train-long have no gate verdict. Update counts use stored metrics and checkpoint parents.
 Lineage duration sums those native jobs' stored windows. Missing lineage records leave both
 measurements unknown; a missing window leaves elapsed time unknown with a timing note.
 
 `POST /api/runs` validates each submitted record with the shared
-`finestore.rl.rl_progress.RunSummary`, upserts its native key and returns the stored
+`finestore.rl.rl_progress.AttemptSummary`, upserts its native key and returns the stored
 record. `GET /api/runs` returns stored records and lists malformed historical rows
 in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)

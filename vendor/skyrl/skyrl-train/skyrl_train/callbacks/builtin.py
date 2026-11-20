@@ -41,7 +41,7 @@ from skyrl_train.evaluation_profiles import (
     EvaluationProfile,
     evaluation_profile_due,
     resolve_evaluation_profiles,
-    named_evaluation_metrics,
+    additional_evaluation_metrics,
 )
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
@@ -329,7 +329,7 @@ class HarborEvaluationCallback(TrainerCallback):
             DaytonaImageBuild(kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT))
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
-        self.minimum_native_coverage = minimum_native_coverage
+        self.minimum_primary_coverage = minimum_native_coverage
         self.daytona_api_key_env = daytona_api_key_env
 
     async def collect_evaluation(self, state, *, trainer, pool):
@@ -376,7 +376,7 @@ class HarborEvaluationCallback(TrainerCallback):
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
-        metrics["eval/selection_eligible"] = float(scored >= self.minimum_native_coverage * attempted)
+        metrics["eval/selection_eligible"] = float(scored >= self.minimum_primary_coverage * attempted)
         for cohort in self.cohorts:
             name = cohort["name"]
             prefix = f"eval/harbor/{name}/"
@@ -444,7 +444,7 @@ class EvaluationCallback(TrainerCallback):
                 profile=parameters,
                 evaluation_pool=pool,
             )
-            metrics.update(named_evaluation_metrics(additional, name))
+            metrics.update(additional_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
             for name, parameters in self.additional_evaluations.items():

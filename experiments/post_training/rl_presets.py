@@ -33,7 +33,7 @@ from skyrlrecipe.declared import (
     Callback,
     CheckpointCallback,
     EvaluationCallback,
-    EvaluationSampling,
+    EvaluationProfile,
     HarborEvaluationCallback,
     HFModelSaveCallback,
 )
@@ -43,7 +43,7 @@ from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
-MINIMUM_SCORED_FRACTION = 0.99
+MINIMUM_TASK_COVERAGE = 0.99
 
 
 def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
@@ -67,7 +67,7 @@ def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
         cohorts=tuple(cohorts),
         timeout=config["timeout"],
         minimum_coverage=config["minimum_coverage"],
-        minimum_native_coverage=MINIMUM_SCORED_FRACTION,
+        minimum_native_coverage=MINIMUM_TASK_COVERAGE,
         daytona_api_key_env="DAYTONA_EVAL_API_KEY",
     )
 
@@ -75,7 +75,7 @@ def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
 class WindowStatistic(StrEnum):
     MEAN = "mean"
     PHASE_SUM_MEDIAN = "phase-sum-median"
-    GAIN_PER_GPU_HOUR = "gain-per-h100-hour"
+    GAIN_PER_GPU_HOUR = "gain-per-gpu-hour"
     FIRST = "first"
     SELECTED_TOKEN_WEIGHTED_MEAN = "selected-token-weighted-mean"
 
@@ -84,7 +84,7 @@ class WindowStatistic(StrEnum):
 class Evaluation:
     name: str
     file: str
-    profile: EvaluationSampling
+    profile: EvaluationProfile
     source: Literal["default", "tasks", "held_out"] = "default"
     sample: int | None = None
     every: int | None = None
@@ -111,7 +111,7 @@ class Training:
     plan: SkyRLRolePlan
     completion_metric: ClassVar[str] = "timing/step_wall/unaccounted"
     outcome_prefix: ClassVar[str] = "generate/outcome/"
-    named_schedule: ClassVar[Literal["final"]] = "final"
+    additional_schedule: ClassVar[Literal["final"]] = "final"
     setting_sections: ClassVar[frozenset[str] | None] = None
 
     def update_count(self, max_steps: int) -> int:
@@ -172,7 +172,7 @@ class Training:
         self,
         preset: Preset,
         evaluation: Evaluation | None,
-        profiles: dict[str, EvaluationSampling],
+        profiles: dict[str, EvaluationProfile],
         expected_tasks: int,
         initial_model_uri: str | None,
     ) -> tuple[Callback, ...]:
@@ -189,7 +189,7 @@ class Training:
                     **({"additional_evaluations": profiles} if profiles else {}),
                 )
             )
-        minimum_scored_tasks = math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks)
+        minimum_scored_tasks = math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks)
         if preset.harbor is not None:
             callbacks.append(preset.harbor)
             for cohort in preset.harbor.cohorts:
@@ -223,7 +223,7 @@ class Generation:
     plan: SkyRLGenerationPlan
     completion_metric: ClassVar[str] = GENERATE_WALL_SECONDS_METRIC
     outcome_prefix: ClassVar[str] = "eval/all/outcome/"
-    named_schedule: ClassVar[Literal["every_evaluation"]] = "every_evaluation"
+    additional_schedule: ClassVar[Literal["every_evaluation"]] = "every_evaluation"
     setting_sections: ClassVar[frozenset[str]] = frozenset({"generator"})
 
     def update_count(self, max_steps: int) -> int:
@@ -270,7 +270,7 @@ class Generation:
         self,
         preset: Preset,
         evaluation: Evaluation | None,
-        profiles: dict[str, EvaluationSampling],
+        profiles: dict[str, EvaluationProfile],
         expected_tasks: int,
         initial_model_uri: str | None,
     ) -> tuple[Callback, ...]:
@@ -354,7 +354,7 @@ class Preset:
     accepts_settings: bool = True
     accepts_init: bool = False
     publishes: bool = False
-    controls: str | None = None
+    control_preset: str | None = None
     checkpoint_every: int | None = None
     checkpoints: Literal["none", "latest", "best"] = "best"
     keep_every: int | None = None
@@ -408,7 +408,7 @@ class Preset:
 
     @property
     def gated(self) -> bool:
-        return self.controls is not None
+        return self.control_preset is not None
 
     def with_updates(self, updates: int) -> Preset:
         return replace(
@@ -431,7 +431,7 @@ class ControlPin:
     preset: str
     commit: str
     revision: str
-    runs: int
+    replicates: int
 
 
 @dataclass(frozen=True)
@@ -439,7 +439,7 @@ class ModelPresets:
     model: str
     presets: tuple[Preset, ...]
     namespace: str
-    controls: Mapping[str, ControlPin]
+    control_pins: Mapping[str, ControlPin]
 
     @property
     def by_name(self) -> Mapping[str, Preset]:

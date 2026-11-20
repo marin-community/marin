@@ -57,7 +57,7 @@ function showDetails(run) {
   const facts = [
     ['Model', run.model], ['Issue', run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
-    ['Verdict', run.gate_result?.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
+    ['Verdict', run.gate_result?.verdict], ['Effect', run.gate_result?.effect], ['Gate', run.gate], ['Failed invariants', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
     ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
@@ -119,7 +119,7 @@ function render() {
       }
       for (const row of report.invariants) constraints.append(element('p', invariant(row), { class: row.holds ? 'note' : 'warning' }));
       objectives.append(element('span', `Report across ${report.replicates} replicate(s)`, { class: 'note' }));
-      verdict.append(element('strong', `${report.verdict}${report.label ? ` · ${report.label}` : ''}`));
+      verdict.append(element('strong', `${report.verdict}${report.effect ? ` · ${report.effect}` : ''}`));
       if (report.reason) verdict.append(element('p', report.reason));
     } else {
       objectives.textContent = 'Report details unavailable';

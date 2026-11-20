@@ -14,8 +14,8 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_presets import ModelPresets
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 
@@ -23,7 +23,9 @@ from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 def with_current_control_revisions(table: ModelPresets) -> ModelPresets:
     return replace(
         table,
-        controls={name: replace(pin, revision=table.by_name[name].revision) for name, pin in table.controls.items()},
+        control_pins={
+            name: replace(pin, revision=table.by_name[name].revision) for name, pin in table.control_pins.items()
+        },
     )
 
 

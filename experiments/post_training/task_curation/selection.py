@@ -25,7 +25,7 @@ from finestore.rl.strata import (
     SelectionParent,
     SelectionTaskRow,
     TaskStrata,
-    read_selection_strata,
+    read_selection_manifest,
 )
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
@@ -649,7 +649,7 @@ def _publish_selection(directory: Path, output_path: str, task_files: tuple[str,
     grader_kinds = {name.removesuffix(".parquet"): _grader_counts(directory / name) for name in task_files}
     summary = {**summary, "grader_kind_counts": grader_kinds}
     (directory / SUMMARY_FILENAME).write_text(json.dumps(summary))
-    read_selection_strata(str(directory))
+    read_selection_manifest(str(directory))
     destination = StoragePath(output_path)
     if (destination / SUMMARY_FILENAME).exists():
         raise FileExistsError(f"selection version is already published: {output_path}")
@@ -832,7 +832,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
     raw_tasks, rows = {}, {}
     reference_revisions = set()
     if recipe.parent is not None:
-        parent = read_selection_strata(recipe.parent.root)
+        parent = read_selection_manifest(recipe.parent.root)
         if parent is None or (parent.definition.name, parent.definition.version) != (
             recipe.parent.name,
             recipe.parent.version,

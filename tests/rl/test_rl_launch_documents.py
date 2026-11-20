@@ -11,14 +11,14 @@ import pytest
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from experiments.post_training import rl_recipe
+from experiments.post_training import rl_compose
 from tests.rl.launch_document_census import render_launch_census, runtime_launch
 from tests.rl.test_skyrl import generation_geometry_step
 
 
 def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    monkeypatch.setattr(rl_recipe, "SELECTION_ROOT", str(tmp_path / "selections"))
-    monkeypatch.setattr(rl_recipe, "artifact_prefix", lambda _cluster: str(tmp_path / "artifacts"))
+    monkeypatch.setattr(rl_compose, "SELECTION_ROOT", str(tmp_path / "selections"))
+    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path / "artifacts"))
     producers = set()
     validate = SkyRLSpec.__post_init__
 
@@ -39,7 +39,7 @@ def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
         str(path.relative_to(root)) for path in (root / "experiments").rglob("*.py") if "SkyRLSpec(" in path.read_text()
     }
     # The Snowball preset goldens and override test own the shared runner's documents.
-    separate_owners = {"experiments/post_training/rl_recipe.py"}
+    separate_owners = {"experiments/post_training/rl_compose.py"}
     assert authored <= producers | separate_owners, authored - producers - separate_owners
     return documents
 

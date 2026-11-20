@@ -24,7 +24,7 @@ from experiments.evaluation.micro210 import Micro210Run, micro210_step
 from experiments.evaluation.micro210_policy import Micro210Model
 from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training import mochi_rl as mochi_model
-from experiments.post_training import rl_recipe as recipe
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
@@ -85,7 +85,7 @@ def _mochi_mixed_step() -> ArtifactStep[SkyRLRun]:
             summary["training_family_counts"] = counts
             write_training_families(path.parent, counts)
         path.write_text(json.dumps(summary))
-    return rl.build_run(preset, tasks=selection, table=table).runs[0]
+    return rl.build_experiment(preset, tasks=selection, table=table).runs[0]
 
 
 def _iceball_step() -> ArtifactStep[SkyRLRun]:

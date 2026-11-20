@@ -9,7 +9,7 @@ from pathlib import Path
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
-from skyrlrecipe.declared import EvaluationSampling
+from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
@@ -211,7 +211,7 @@ _EVALUATION = Evaluation(
     name="eval_lite_100",
     file=Path(VALIDATION_FILENAME).stem,
     source="held_out",
-    profile=EvaluationSampling(
+    profile=EvaluationProfile(
         sampling_params=EvalSamplingParams(
             temperature=0.7, top_p=1.0, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
         ),
@@ -238,7 +238,7 @@ _TRAIN_LONG = Preset(
     accepts_settings=True,
     accepts_init=True,
     publishes=False,
-    controls=None,
+    control_preset=None,
     checkpoint_every=2,
     checkpoints="best",
     owned_keys=frozenset({"generator.run_engines_locally"}),
@@ -266,7 +266,7 @@ _TRAIN_MEDIUM = replace(
     export="none",
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.3"
+    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.4"
 )
 
 MOCHI = ModelPresets(
@@ -283,7 +283,7 @@ MOCHI = ModelPresets(
         ),
     ),
     namespace="mochi-rl",
-    controls={},
+    control_pins={},
 )
 
 

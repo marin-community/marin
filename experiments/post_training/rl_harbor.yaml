@@ -1,4 +1,4 @@
-# Pinned benchmark populations sampled proportionally by normalized subcategory.
+# Each Harbor cohort is a pinned sample of one benchmark, stratified by subcategory.
 # BFCL tag; SWE repository; TBLite category (casefold, underscore to hyphen).
 # Selection salt: rl-harbor-subcategories-20261117-v1.
 timeout: 10800
@@ -107,6 +107,11 @@ cohorts:
   - datasets/swebench-verified/pylint-dev__pylint-4604
   - datasets/swebench-verified/scikit-learn__scikit-learn-14983
 - name: openthoughts-tblite
+  job:
+    # Use each pinned task's verifier timeout. The largest is 3,600 seconds.
+    verifier:
+      max_timeout_sec: 3600
+    trial_attempt_timeout_sec: 5200
   git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
   git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
   paths:

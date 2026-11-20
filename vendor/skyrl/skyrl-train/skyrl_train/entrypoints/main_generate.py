@@ -14,7 +14,7 @@ from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
 
 from skyrl_train.evaluation_profiles import (
-    named_evaluation_metrics,
+    additional_evaluation_metrics,
     evaluation_profile_config,
     validate_generation_profiles,
 )
@@ -77,7 +77,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
     async def _evaluate(self) -> dict[str, Any]:
         profiles = self.evaluation_profiles
         validate_generation_profiles(profiles)
-        datasets = self.get_named_eval_datasets()
+        datasets = self.get_additional_eval_datasets()
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
         inference_engine_client = self.create_inference_engine_client(operation=EntrypointOperation.GENERATE)
@@ -148,7 +148,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     records_export_root=str(self.cfg.trainer.export_path),
                     trajectory_sink=trajectory_sink,
                 )
-                results.update(named_evaluation_metrics(profile_results, name))
+                results.update(additional_evaluation_metrics(profile_results, name))
             if local_engines and profiles:
                 await publish_engine_stats()
         finally:

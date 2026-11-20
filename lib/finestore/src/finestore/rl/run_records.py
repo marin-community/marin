@@ -74,7 +74,7 @@ class CheckpointReference(BaseModel):
 
 
 class AttemptRecord(BaseModel):
-    """One execution's native receipt, startup facts and checkpoint ancestry."""
+    """One native attempt with its receipt, startup facts and checkpoint parent."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -171,7 +171,7 @@ _TABLES: dict[str, tuple[type[BaseModel], tuple[str, ...]]] = {
 
 
 @dataclass(frozen=True)
-class AttemptHistory:
+class LineageEntry:
     records_root: str
     record: AttemptRecord
     through_step: int | None
@@ -232,7 +232,7 @@ def read_attempts(export_root: str) -> dict[str, AttemptRecord]:
     return _records(view.iter_rows(ATTEMPTS_TABLE))
 
 
-def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> tuple[AttemptHistory, ...]:
+def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> tuple[LineageEntry, ...]:
     history = []
     seen = set()
     through_step = None
@@ -247,7 +247,7 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
         record = _attempt(views[records_root], attempt_id)
         if record is None:
             return tuple(history)
-        history.append(AttemptHistory(records_root, record, through_step))
+        history.append(LineageEntry(records_root, record, through_step))
         if record.resumed_step is None or record.resumed_step == 0:
             return tuple(history)
         if record.parent is None:
@@ -257,7 +257,7 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
         export_root, attempt_id = record.parent.export_root, record.parent.attempt_id
 
 
-def attempt_lineage(export_root: str, attempt_id: str) -> tuple[AttemptHistory, ...]:
+def attempt_lineage(export_root: str, attempt_id: str) -> tuple[LineageEntry, ...]:
     """Return newest-first checkpoint ancestry with inclusive through_step bounds."""
     return _lineage(export_root, attempt_id, {})
 

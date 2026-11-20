@@ -38,7 +38,7 @@ from skyrl_train.inference_engines.chat_template import assistant_prefix_token_i
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
-from finestore.rl.strata import SelectionStrata, TaskEvaluationIdentity, TaskStrata, read_selection_strata
+from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
@@ -48,11 +48,11 @@ TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=Fal
 PARQUET_BATCH_SIZE = 1024
 
 
-def task_evaluation_identity(task: dict, panel: SelectionStrata | None) -> TaskEvaluationIdentity:
+def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
     digest = canonical_sha256(task)
-    if panel is None:
+    if selection is None:
         return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
-    identity = panel.identity(task["id"])
+    identity = selection.identity(task["id"])
     if identity.task_digest != digest:
         raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
     return identity
@@ -295,20 +295,20 @@ class SourceTaskDataset(TaskDataset):
         identities: dict[str, TaskEvaluationIdentity | None] = {}
 
         def prepare_source(source: str, dataset: Dataset) -> Dataset:
-            panel = read_selection_strata(str(Path(source).parent))
+            selection = read_selection_manifest(str(Path(source).parent))
             column = TASK_SPEC_COLUMN if TASK_SPEC_COLUMN in dataset.column_names else TASK_ROLLOUT_COLUMN
             annotations = []
             for row in dataset:
                 if column not in row:
-                    if panel is not None:
+                    if selection is not None:
                         raise ValueError(f"selection input has no canonical task identity: {source}")
                     annotations.append(None)
                     continue
                 document = json.loads(row[column])
                 task = document if column == TASK_SPEC_COLUMN else document["task"]
                 task_id = task["id"]
-                identity = task_evaluation_identity(task, panel)
-                if panel is not None and TASK_SPEC_COLUMN in row:
+                identity = task_evaluation_identity(task, selection)
+                if selection is not None and TASK_SPEC_COLUMN in row:
                     carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
                     if carried != identity.strata.model_dump(include=set(carried)):
                         raise ValueError(f"training row strata differ from selection manifest: {task_id}")

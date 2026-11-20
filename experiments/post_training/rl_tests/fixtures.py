@@ -36,10 +36,10 @@ from finestore.rl.run_records import (
 from finestore.rl.strata import (
     MembershipState,
     SelectionDefinition,
-    SelectionStrata,
+    SelectionManifest,
     SelectionTaskRow,
     TaskStrata,
-    read_selection_strata,
+    read_selection_manifest,
 )
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
@@ -61,11 +61,11 @@ from verifyit.spec import ExactSpec
 
 from experiments.post_training import rl as runner
 from experiments.post_training import rl_command as command
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
     with_current_control_revisions,
@@ -245,7 +245,7 @@ def controls(write, name, **kwargs):
             score=0.49 + index * 0.01,
             **kwargs,
         )
-        for index in range(pin.runs)
+        for index in range(pin.replicates)
     ]
 
 
@@ -313,7 +313,7 @@ def evaluation_task_rows(
     attempt_id: str,
     step: int,
     evaluation: str,
-    panel: SelectionStrata | None,
+    selection: SelectionManifest | None,
     normalized: Sequence[float | None] | None = None,
 ) -> list[EvaluationTaskRow]:
     by_task = defaultdict(list)
@@ -345,10 +345,10 @@ def evaluation_task_rows(
             evaluation=evaluation,
             task_id=item,
             data_source="fixture",
-            panel_name=panel.definition.name if panel else None,
-            panel_version=panel.definition.version if panel else None,
-            strata=panel.identity(item).strata if panel else TaskStrata(),
-            task_digest=panel.tasks[item].task_digest if panel else None,
+            panel_name=selection.definition.name if selection else None,
+            panel_version=selection.definition.version if selection else None,
+            strata=selection.identity(item).strata if selection else TaskStrata(),
+            task_digest=selection.tasks[item].task_digest if selection else None,
             score=sum(answer.verifier_score or 0.0 for answer in answers) / len(answers),
             outcome=Outcome.GRADED,
             error_type=None,
@@ -455,7 +455,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         preset = snowball_model.SNOWBALL.by_name[preset_name]
         root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
-        inputs = inputs or GateInputs(preset_name=preset.name)
+        inputs = inputs or RunInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
@@ -486,7 +486,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             command_line=["unrelated-command", "--preset", "train-long"],
         )
         write_receipt(root, native)
-        write_json(root / GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
+        write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
             root, name, preset.revision, fingerprint=fingerprint, global_step=0 if generating else max_steps
         )
@@ -570,7 +570,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     attempt_id=attempt,
                     step=step,
                     evaluation=evaluation_name,
-                    panel=read_selection_strata(str(directory)),
+                    selection=read_selection_manifest(str(directory)),
                 )
                 write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
