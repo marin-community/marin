@@ -112,7 +112,7 @@ async def test_malformed_report_and_schema_errors_recover_with_replayable_histor
     client = FakeInference(script)
     environment(ctx)
     result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
-        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task(), 3)}
+        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task())}
     )
     await ctx.drain()
     assert isinstance(result, Returned) and result.payload == AdversaryReport(())
@@ -174,7 +174,7 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
     assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
-    report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)), 3)(
+    report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)))(
         ctx,
         {
             "findings": [
@@ -393,7 +393,7 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
     ctx = Context(log=EventLog())
     environment(ctx)
     task = arithmetic_task()
-    tool = ReportTool(task, 1)
+    tool = ReportTool(task)
     commentary = await tool(ctx, {"findings": ["No grading defect found"]})
     assert isinstance(commentary, ToolResult)
     claim = {
@@ -402,8 +402,6 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
         "expected": {"status": "graded", "reward_min": 1},
     }
     report = await tool(ctx, {"findings": [claim]})
-    excess = await tool(ctx, {"findings": [claim, claim]})
-    assert isinstance(excess, ToolResult)
     assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
     finding = report.payload.findings[0]
     assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
