@@ -27,7 +27,6 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.compat.hf_config import hf_rope_config
 from levanter.data.text.examples import grug_attention_mask_from_named
 from levanter.grug.attention import AttentionMask as RawAttentionMask
-from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.layers.scan_checkpoint import ScanCheckpointPolicy
 from levanter.layers.rotary import (
