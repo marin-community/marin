@@ -100,8 +100,17 @@ def source_reference():
     return files, spec, reference, bundle
 
 
-def test_reference_compilation_preserves_original_setup_oracle_image_and_source_clocks(source_reference):
+@pytest.mark.parametrize("custom_actor", [False, True])
+def test_reference_compilation_preserves_original_setup_oracle_image_and_source_clocks(source_reference, custom_actor):
     files, spec, reference, bundle = source_reference
+    if custom_actor:
+        reference = reference.model_copy(
+            update={
+                "actor_environment": actor_environment_for(
+                    reference.contract, prefix="/opt/custom-actor", source_path="/opt/source/bin:/usr/bin"
+                )
+            }
+        )
     original = dict(files)
     harden_shared_swe_reference(
         files,

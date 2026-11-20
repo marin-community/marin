@@ -301,7 +301,7 @@ def prepare_grading(contract: dict) -> dict:
     patterns = [*contract["protected_test_patterns"], *native["config_patterns"], *native["startup_patterns"]]
     for name in paths_matching(workspace, patterns):
         if name not in paths:
-            common.remove_path(workspace / name)
+            common.remove_workspace_path(workspace, name)
     for name in paths:
         common.restore_path(workspace, name, Path(contract["reference_directory"]) / name)
     for entry in runtime["pins"]:

@@ -252,6 +252,18 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def remove_workspace_path(workspace: Path, relative: str) -> None:
+    """Remove an untrusted path without traversing a symlink ancestor."""
+    target = workspace / relative
+    for parent in reversed(target.parents):
+        if parent == workspace or not parent.is_relative_to(workspace):
+            continue
+        if parent.is_symlink():
+            parent.unlink()
+            return
+    remove_path(target)
+
+
 def restore_path(workspace: Path, relative: str, reference: Path) -> None:
     target = workspace / relative
     for parent in reversed(target.parents):
@@ -563,7 +575,7 @@ def prepare_grading(contract: dict) -> None:
     current.update(local_plugin_paths(workspace, runtime["protected_local_plugins"]))
     # Agent-added tests and package initializers cannot alter reference plugin loading.
     for name in current - set(paths):
-        remove_path(workspace / name)
+        remove_workspace_path(workspace, name)
     for name in paths:
         restore_path(workspace, name, Path(contract["reference_directory"]) / name)
     checked(["chgrp", "-R", str(contract["grader_uid"]), str(workspace)], cwd=root, timeout=120)
