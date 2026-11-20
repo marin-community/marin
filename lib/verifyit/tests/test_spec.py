@@ -12,6 +12,7 @@ from verifyit.spec import (
     MathProfile,
     MathSpec,
     MathType,
+    McqExtraction,
     McqSpec,
     NumericSpec,
     PredictedActionSpec,
@@ -33,6 +34,12 @@ def test_round_trip_every_field_kind():
     specs = [
         UnsolvableSpec(output="/app/final.txt"),
         McqSpec(expected="C", options=5),
+        McqSpec(
+            expected="C",
+            options=4,
+            extraction=McqExtraction.SUPERGPQA_REFERENCE,
+            option_texts=("4", "6", "7", "{9}"),
+        ),
         StructuredExactSpec(expected={"values": [None, True, 1, 1.0, {"text": "value"}]}),
         StructuredExactSpec(expected=None, empty_output=EmptyOutputPolicy.GRADE),
         PredictedActionSpec(
