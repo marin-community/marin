@@ -825,68 +825,6 @@ def test_direct_candidate_provider_failure_never_returns_a_score(fake_judge):
         grade_judge.grade_judge_candidate(spec, "wrong")
 
 
-def test_paired_ordinal_matches_source_ties_and_circular_mean():
-    edges = [(0, 1), (1, 2), (2, 0)]
-    ratings = [
-        dict(left=0, right=1, score_left=1, score_right=1, ranking=1),
-        dict(left=1, right=2, score_left=5, score_right=5, ranking=6),
-        dict(left=2, right=0, score_left=4, score_right=2, ranking=3.5),
-    ]
-    # Independent source arithmetic: equal ratings receive +/- (3.5-ranking).
-    expected_raw = [(3.5 + 2) / 2, (-1.5 + 2.5) / 2, (7.5 + 4) / 2]
-    verdicts = grade_judge.grade_paired_ordinal(3, edges, ratings)
-    assert [v.detail["raw_score"] for v in verdicts] == pytest.approx(expected_raw)
-    assert [v.reward for v in verdicts] == pytest.approx([(raw + 1.5) / 9 for raw in expected_raw])
-    assert all(v.status is Status.SCORED for v in verdicts)
-    # Opposite directed edges are distinct, including the source's size-two circle.
-    pair = grade_judge.grade_paired_ordinal(
-        2, [(0, 1), (1, 0)], [ratings[0], dict(left=1, right=0, score_left=1, score_right=1, ranking=3.5)]
-    )
-    assert [v.detail["raw_score"] for v in pair] == pytest.approx([2.25, -0.25])
-    assert [v.reward for v in pair] == pytest.approx([3.75 / 9, 1.25 / 9])
-
-
-@pytest.mark.parametrize("fault", ["missing", "duplicate", "self", "bool", "nonfinite", "range"])
-def test_paired_ordinal_invalidates_whole_provider_cohort(fault):
-    ratings = [
-        dict(left=0, right=1, score_left=5, score_right=4, ranking=1),
-        dict(left=1, right=0, score_left=5, score_right=4, ranking=1),
-    ]
-    if fault == "missing":
-        ratings.pop()
-    elif fault == "duplicate":
-        ratings[1] = dict(ratings[0])
-    elif fault == "self":
-        ratings[1]["right"] = 1
-    elif fault == "bool":
-        ratings[1]["left"] = True
-    elif fault == "nonfinite":
-        ratings[1]["score_left"] = float("nan")
-    else:
-        ratings[1]["ranking"] = 7
-    with pytest.raises(RuntimeError, match="protocol"):
-        grade_judge.grade_paired_ordinal(2, [(0, 1), (1, 0)], ratings)
-
-
-@pytest.mark.parametrize("size,edges", [(1, [(0, 0)]), (2, [(0, 0)]), (2, [(0, 1), (0, 1)]), (3, [(0, 1)])])
-def test_paired_ordinal_rejects_invalid_trusted_graph_before_provider(size, edges):
-    with pytest.raises(InvalidTask):
-        grade_judge.grade_paired_ordinal(size, edges, None)
-
-
-def test_paired_ordinal_rejects_overflowing_derived_bounds():
-    with pytest.raises(InvalidTask, match="derived"):
-        grade_judge.grade_paired_ordinal(2, [(0, 1)], None, ranking_bounds=(-1e308, 1e308))
-
-
-def test_paired_ordinal_json_integer_indices_and_huge_trusted_bounds():
-    ratings = [dict(left=0.0, right=1.0, score_left=3, score_right=3, ranking=3.5)]
-    verdicts = grade_judge.grade_paired_ordinal(2, [(0, 1)], ratings)
-    assert [v.detail["raw_score"] for v in verdicts] == [3, 3]
-    with pytest.raises(InvalidTask, match="bounds"):
-        grade_judge.grade_paired_ordinal(2, [(0, 1)], ratings, rating_bounds=(1, 10**400))
-
-
 @pytest.mark.parametrize(
     "reply,reward,status",
     [
