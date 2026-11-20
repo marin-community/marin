@@ -43,5 +43,6 @@ uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
   --license-receipts "$WORKDIR/license-receipts.json" \
   --input base_images "$WORKDIR/staged/base_images" \
   --input admission_receipts "$WORKDIR/staged/admission_receipts" \
+  --cache-dir "$WORKDIR/cache" \
   --output-root "$OUTPUT_ROOT" \
   --max-workers 16 --run
