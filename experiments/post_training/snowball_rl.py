@@ -494,6 +494,7 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="eval-short",
+        checkpoints="none",
         recipe=_GENERATING,
         updates=0,
         measured=range(1),

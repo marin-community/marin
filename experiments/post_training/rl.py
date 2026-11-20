@@ -355,8 +355,7 @@ def _status(
         if receipt is not None and launch is not None:
             native = receipt.native.config
             exports_best = (
-                native["run"].get("export_hf")
-                and native["skyrl"]["trainer"].get("hf_export_checkpoint") == "best"
+                native["run"].get("export_hf") and native["skyrl"]["trainer"].get("hf_export_checkpoint") == "best"
             )
             if preset.checkpoints == "best" or exports_best:
                 best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
