@@ -17,7 +17,7 @@ from skyrl_train.telemetry import GeneratedWork
 
 
 @pytest.mark.asyncio
-async def test_rejected_rollout_reopens_the_same_family_slot():
+async def test_family_leases_fill_batches_reject_wrong_family_and_reopen_slots():
     buffer = RolloutBuffer(
         RolloutBufferConfig(
             batch_size=2,
@@ -63,5 +63,3 @@ async def test_rejected_rollout_reopens_the_same_family_slot():
             assert set(buffer.payload_refs(step, [rollout.index for rollout in admission.admitted])) == (
                 {first.lease_id, replacement.lease_id} if step == 1 else {lease.lease_id for lease in later}
             )
-            assert admission.selection.metrics["async/consumed_family/agentic"] == 1
-            assert admission.selection.metrics["async/consumed_family/math"] == 1

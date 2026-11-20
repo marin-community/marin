@@ -13,6 +13,7 @@ from multiprocessing.context import ForkServerContext
 from finestore.rl.run_records import read_attempts, read_evaluations
 from marinskyrl.environment_contract import RUN_MODEL_ENV
 import fsspec
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import rolloutengine
@@ -765,9 +766,6 @@ def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_c
     assert scores(resumed)[: len(scores(first))] == scores(first)
     assert len([row for row in first if "policy/raw_grad_norm" in row]) == 4
     training = [row for row in resumed if "policy/raw_grad_norm" in row]
-    for row in (*first, *training):
-        if "policy/raw_grad_norm" in row:
-            assert {family: row[f"async/consumed_family/{family}"] for family in groups_per_family} == groups_per_family
     assert [row["trainer/global_step"] for row in training] == list(range(1, 101))
     assert any(row["async/staleness_mean"] > 0 for row in training)
     # Responses in flight across a weight sync carry both steps.

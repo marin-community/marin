@@ -32,6 +32,7 @@ from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
+    EntrypointOperation,
     validate_family_pools,
     validate_groups_per_family,
 )
@@ -311,6 +312,11 @@ def load_launch_config(path: Path) -> DictConfig:
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
     normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
+    if is_source_recipe:
+        buffer = config.skyrl.trainer.rollout_buffer
+        if buffer.groups_per_family:
+            inputs = OmegaConf.to_container(config.inputs, resolve=True)
+            _validate_launch_family_pools(inputs, dict(buffer.groups_per_family), buffer.max_staleness_steps)
     profiles = resolve_evaluation_profiles(config.skyrl)
     record_evaluation_profiles(config.skyrl, profiles)
     if config.run.mode == RunMode.TRAIN:
@@ -325,11 +331,6 @@ def load_launch_config(path: Path) -> DictConfig:
             from cloud.iris.export_hf_checkpoint import validate_checkpoint_export  # noqa: PLC0415 - shared loader
 
             validate_checkpoint_export(config)
-    if is_source_recipe:
-        buffer = config.skyrl.trainer.rollout_buffer
-        if buffer.groups_per_family:
-            inputs = OmegaConf.to_container(config.inputs, resolve=True)
-            _validate_launch_family_pools(inputs, dict(buffer.groups_per_family), buffer.max_staleness_steps)
     return config
 
 

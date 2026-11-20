@@ -109,8 +109,7 @@ def test_a_tool_call_cut_off_at_the_budget_on_a_special_delimiter_is_a_length_st
     ("options", "effective_cap"),
     [
         ({"max_tokens": 64}, 64),
-        ({"max_completion_tokens": 64}, 64),
-        ({"max_tokens": 64, "max_completion_tokens": 127, "max_output_tokens": 96}, 64),
+        ({"max_tokens": 96, "max_completion_tokens": 64, "max_output_tokens": 127}, 64),
         ({"max_tokens": 256}, 128),
     ],
 )

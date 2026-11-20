@@ -604,7 +604,7 @@ async def test_agent_harness_replays_exact_tokens_on_later_turns(change):
     # The task's grader reads this chat, so the observation is a user message: the turn makes no tool call.
     observation = {"role": "user", "content": "Done."}
     restart = change != "none"
-    replay = (501, 502) if restart else (10, 11, 20, 90, 91)
+    replay = (501, 502) if change == "compaction" else (10, 11, 20, 90, 91)
     requests = []
 
     async def agent(complete):
