@@ -922,7 +922,7 @@ def _validate_locality_groups(
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
-    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
+    CLUSTER pods do. Legacy GVISOR pods need the CNI-created interface and routes
     for cluster egress.
     """
     if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:

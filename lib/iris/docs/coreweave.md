@@ -735,8 +735,8 @@ reprovisioning. Deploy the updated DaemonSet to enable it. This does not remove
 historical logs or impose retention on the NVMe directory.
 
 Task `/tmp`, workdirs, and outputs use private Kubernetes `emptyDir` volumes.
-CoreWeave puts kubelet/containerd storage on NVMe, including for Shellbox's
-gVisor sandbox profile. Shared caches use the configured NVMe `cache_dir`;
+CoreWeave puts kubelet/containerd storage on NVMe, including for SANDBOX
+pods. Shared caches use the configured NVMe `cache_dir`;
 sandbox tasks never receive those shared caches.
 
 For `NodeRuntimeFilesystemAlmostFull` or runtime ENOSPC, check bytes and inodes
