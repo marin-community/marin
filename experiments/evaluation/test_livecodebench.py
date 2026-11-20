@@ -50,7 +50,7 @@ def converted(row: dict) -> TaskSpec | ImportRejection:
 
 
 def grade(task: TaskSpec, reply: str) -> float:
-    """Run the task's packaged grade script on ``reply`` with its packaged tests and config."""
+    """Score ``reply`` with the grade script's reward function and the task's packaged tests and config."""
     files = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     spec = importlib.util.spec_from_file_location("livecodebench_grade", HERE / "livecodebench_grade.py")
     assert spec is not None and spec.loader is not None
