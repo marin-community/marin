@@ -60,10 +60,8 @@ def cpu_flavor_node_labels(config: IrisClusterConfig, scale_group: str) -> dict[
         or group.slice_template.coreweave is None
     ):
         raise ValueError(f"Kueue CPU flavor requires a CoreWeave CPU scale group, got {scale_group!r}")
-    # The Kueue release bundled by the pinned cks-kueue chart (CKS_KUEUE_VERSION)
-    # matches a Pod's nodeSelector against each flavor's own nodeLabels keys only
-    # (flavorassigner.checkFlavorForPodSets), so the scale-group key alone selects
-    # this pool.
+    # Do not add the managed-label key here: Kueue checks Pod selectors against
+    # the union of flavor keys, and immutable cw-tas does not declare that key.
     return {Labels(config.platform.label_prefix).iris_scale_group: scale_group}
 
 

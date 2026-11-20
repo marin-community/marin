@@ -35,6 +35,4 @@ uv run --package marin-iris --extra controller iris \
   --cluster=<name> cluster controller restart --rollback
 ```
 
-If the deploy added a config key the previous image does not know, run the rollback from the checkout that built the previous image with the operator YAML recorded before the deploy, `iris --config <recorded YAML> cluster controller restart --rollback`; see [First deploy after a config-schema change](../../../../lib/iris/OPS.md#first-deploy-after-a-config-schema-change).
-
 Kueue and CoreWeave NodePool changes are Pulumi-managed and are not applied by a controller restart. Never modify the controller database, mint credentials, add SSH keys, shorten verification, or retry a failed restart speculatively.

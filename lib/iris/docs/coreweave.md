@@ -616,11 +616,9 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 ### Sandbox runtime
 
 SANDBOX pods use the RuntimeClass named by `kubernetes_provider.sandbox_runtime_class`;
-CoreWeave owns these classes and their handlers. All CoreWeave clusters currently use
-CoreWeave's deprecated `gvisor` class. Sandbox starts are known to fail on
-cw-us-east-02a ([#10090](https://github.com/marin-community/marin/issues/10090),
-[#11343](https://github.com/marin-community/marin/issues/11343)) and are not verified
-on the other clusters.
+CoreWeave owns these classes and their handlers. Every CoreWeave cluster uses the
+`gvisor` class, which CoreWeave has deprecated;
+[#11343](https://github.com/marin-community/marin/issues/11343) tracks its replacement.
 
 ## Source map
 

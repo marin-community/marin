@@ -173,10 +173,9 @@ def _grants_cilium_policy_writes(rules: list[dict]) -> bool:
 
 
 class PrerequisitesNotProvisionedError(InfraError):
-    """Raised by verify_prerequisites() when one or more prerequisites are absent.
+    """Raised by verify_prerequisites() when one or more IaC-provisioned prerequisites are absent.
 
-    Message enumerates every missing object, with the `pulumi up` remediation for
-    IaC-provisioned objects and a separate one for the CoreWeave-owned RuntimeClass.
+    Message enumerates every missing object and prints the `pulumi up` remediation.
     """
 
 
@@ -965,7 +964,8 @@ class K8sControllerProvider:
             missing.append(f"RoleBinding/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
 
         runtime_class = config.kubernetes_provider.sandbox_runtime_class
-        runtime_class_missing = self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None
+        if self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None:
+            missing.append(f"RuntimeClass/{runtime_class} (provided by CoreWeave, not by pulumi up)")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():
@@ -994,21 +994,12 @@ class K8sControllerProvider:
         if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:
             missing.append(f"IngressClass/{ingress_class}")
 
-        problems = []
         if missing:
-            problems.append(
+            raise PrerequisitesNotProvisionedError(
                 "IaC-provisioned prerequisites missing: "
                 + ", ".join(missing)
-                + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up."
+                + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up"
             )
-        if runtime_class_missing:
-            # CoreWeave owns the sandbox RuntimeClass; Pulumi cannot create it.
-            problems.append(
-                f"Sandbox RuntimeClass/{runtime_class} not found. CoreWeave provides it: check "
-                "kubernetes_provider.sandbox_runtime_class, or ask CoreWeave to enable the class."
-            )
-        if problems:
-            raise PrerequisitesNotProvisionedError(" ".join(problems))
 
     # -- Kueue ------------------------------------------------------------------
 

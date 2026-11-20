@@ -839,17 +839,12 @@ def test_verify_prerequisites_reports_missing_cluster_queue_flavor():
 def test_verify_prerequisites_reports_missing_configured_runtime_class():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
-    cluster_config.kubernetes_provider.sandbox_runtime_class = "missing-class"
+    cluster_config.kubernetes_provider.sandbox_runtime_class = "iris-gvisor-cpu"
     _seed_prerequisites(k8s, cluster_config)
-    k8s.delete(K8sResource.RUNTIME_CLASSES, "missing-class")
+    k8s.delete(K8sResource.RUNTIME_CLASSES, "iris-gvisor-cpu")
 
-    with pytest.raises(PrerequisitesNotProvisionedError) as exc_info:
+    with pytest.raises(PrerequisitesNotProvisionedError, match="RuntimeClass/iris-gvisor-cpu"):
         provider.verify_prerequisites(cluster_config)
-
-    # Pulumi does not own the class, so its remediation must not be offered.
-    message = str(exc_info.value)
-    assert "RuntimeClass/missing-class" in message
-    assert "pulumi up" not in message
     provider.shutdown()
 
 
