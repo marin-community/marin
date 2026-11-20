@@ -148,7 +148,6 @@ def process_image_cache(directory: Path, authfile: Path | None, policy: Path | N
 
 
 def image_cache_path(directory: Path, manifest_digest: str) -> Path:
-    """Return the cache directory named by a SHA-256 image manifest digest."""
     return directory / manifest_digest.replace(":", "-")
 
 
