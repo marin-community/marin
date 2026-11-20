@@ -23,6 +23,7 @@ from experiments.post_training.long_loop.exp3_production import (
     GEOMETRY,
     INITIALIZER_RECEIPT,
     INITIALIZER_SHA256,
+    REFERENCE_INPUTS,
     DataRelease,
     StoragePin,
     baseline_files,
@@ -143,7 +144,7 @@ def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[Dat
 
 
 def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
-    resolved = production_plan(release, source_revision, baseline_files())
+    resolved = production_plan(release, source_revision, baseline_files(), initial_eval_inputs=REFERENCE_INPUTS)
     sft = resolved["sft"]
     sft["stop_after_steps"] = SFT_UPDATES
     sft["trainer"]["num_train_steps"] = SFT_UPDATES

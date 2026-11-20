@@ -81,7 +81,7 @@ def production_recipe(preview_release, monkeypatch):
     monkeypatch.setattr(exp3_production, "INITIALIZER_RECEIPT", initializer["initializer_receipt"])
     monkeypatch.setattr(exp3_production, "INITIALIZER_SHA256", initializer["initializer_receipt_sha256"])
     release = read_data_release(str(preview_release), require_ready=False)
-    return production_sft_recipe(release)
+    return production_sft_recipe(release, initial_eval_inputs=exp3_production.REFERENCE_INPUTS)
 
 
 @pytest.mark.parametrize("schedule_horizon", [None, 360])

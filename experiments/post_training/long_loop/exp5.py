@@ -18,6 +18,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.exp3_production import StoragePin
 from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model, whole_run_lr_receipt
 from experiments.post_training.long_loop.exp4 import release_artifact
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE
@@ -53,6 +54,17 @@ from experiments.post_training.task_curation.exp5_curriculum import (
 )
 
 DATA_VERSION = "2026.11.20.1"
+INITIAL_EVAL_INPUTS = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5/setup/2026.11.20.2/initial-eval"
+INITIAL_EVAL_FILES = (
+    StoragePin(
+        prefix_join(INITIAL_EVAL_INPUTS, "c4-data.json"),
+        "e512763cfbefaa72dacd18ad40dcb0af7e391257be970e3c07cbdfc82c01fa48",
+    ),
+    StoragePin(
+        prefix_join(INITIAL_EVAL_INPUTS, "c4-reference.json"),
+        "f44c06454e7a44a2d28fc1dd9fd674e6d40d84481724065de22e49cd595a880b",
+    ),
+)
 # The inherited 64-group window apportions the prepared 0.95 to 14 SWE groups.
 # This diagnostic subset remains unlaunchable while the research slot is pending.
 PREPARATION_ROUTE_QUOTAS = {"agentic": 14, "nonagentic": 50}
@@ -129,9 +141,17 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     workspace = Path(__file__).resolve().parents[3]
     require_clean_revision(workspace, source_revision)
     require_permanent_round_storage(spec)
+    for pin in INITIAL_EVAL_FILES:
+        pin.read()
     binding = DATA_RELEASES[spec.data_release]
     release, handle = release_artifact(binding.record, binding.record_sha256, require_ready=False)
-    resolved = round_plan(replace(spec, pools="exp4-regional"), release, source_revision, spec.version)
+    resolved = round_plan(
+        replace(spec, pools="exp4-regional"),
+        release,
+        source_revision,
+        spec.version,
+        initial_eval_inputs=INITIAL_EVAL_INPUTS,
+    )
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     curriculum = prepared_curriculum()
     resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
@@ -148,6 +168,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
             "--run is disabled so the reserved 0.05 cannot be redistributed."
         ),
         "science": "Reuse the exact qualified V7 science components; existing checked repairs are already present",
+        "initial_eval_inputs": {"prefix": INITIAL_EVAL_INPUTS, "files": [asdict(pin) for pin in INITIAL_EVAL_FILES]},
     }
     buffer = resolved["rl"]["config"]["trainer"]["rollout_buffer"]
     buffer["consumed_route_quotas"] = dict(PREPARATION_ROUTE_QUOTAS)

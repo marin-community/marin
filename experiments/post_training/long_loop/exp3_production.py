@@ -169,7 +169,7 @@ def baseline_files() -> dict[str, bytes]:
     return members
 
 
-def production_sft_recipe(release: DataRelease) -> dict:
+def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> dict:
     """Bind the approved full-context SFT controls independently of smoke scale."""
     mesh = MeshConfig(
         axes={"data": 1, "expert": 8, "model": 1, "replica": 1},
@@ -208,16 +208,16 @@ def production_sft_recipe(release: DataRelease) -> dict:
         training_budget=TrainingBudgetConfig(SFT_DURATION, timedelta(minutes=40), timedelta(minutes=10)),
     )
     reference_data = draccus.decode(
-        LmDataConfig, json.loads((StoragePath(REFERENCE_INPUTS) / "c4-data.json").read_text())
+        LmDataConfig, json.loads((StoragePath(initial_eval_inputs) / "c4-data.json").read_text())
     )
     gate = InitialEvalMatchConfig(
         reference_data,
-        prefix_join(REFERENCE_INPUTS, "c4-reference.json"),
+        prefix_join(initial_eval_inputs, "c4-reference.json"),
         262144,
         1,
         TOKEN_IDS,
         0.5,
-        prefix_join(REFERENCE_INPUTS, "c4-reference.json"),
+        prefix_join(initial_eval_inputs, "c4-reference.json"),
     )
     model = draccus.encode(
         SnowballConfig(
@@ -273,7 +273,9 @@ def production_sft_recipe(release: DataRelease) -> dict:
     }
 
 
-def production_plan(release: DataRelease, source_revision: str, files: dict[str, bytes]) -> dict:
+def production_plan(
+    release: DataRelease, source_revision: str, files: dict[str, bytes], *, initial_eval_inputs: str
+) -> dict:
     """Overlay the candidate SFT on pinned Exp1 RL/data and current runtime controls."""
     documents = {name: yaml.safe_load(content) for name, content in files.items() if name.startswith("rl/")}
     spec = copy.deepcopy(documents["rl/round1.yaml"])
@@ -289,7 +291,7 @@ def production_plan(release: DataRelease, source_revision: str, files: dict[str,
     documents["rl/execution.yaml"]["coordinator"]["coordinator_name"] = "long-loop-exp3"
     # Exp1 retained a null Evalchemy option that the native judge no longer accepts.
     documents["rl/evaluation.yaml"]["judge"].pop("evalchemy_num_concurrent")
-    documents["rl/sft.yaml"] = production_sft_recipe(release)
+    documents["rl/sft.yaml"] = production_sft_recipe(release, initial_eval_inputs=initial_eval_inputs)
     documents["rl/execution.yaml"]["task_timeouts"] = {"rl": 3 * 24 * 3600}
     documents["rl/rl.yaml"]["execution"]["job_timeout_seconds"] = 3 * 24 * 3600
     documents["rl/sft-data.yaml"] = {
@@ -398,7 +400,7 @@ def main(data_release: str, source_revision: str, validation_output: Path, throu
     workspace = Path(__file__).resolve().parents[3]
     if get_job_info() is None:
         require_clean_revision(workspace, source_revision)
-    resolved = production_plan(release, source_revision, baseline_files())
+    resolved = production_plan(release, source_revision, baseline_files(), initial_eval_inputs=REFERENCE_INPUTS)
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     os.environ.update(MARIN_PREFIX=OUTPUT_PREFIX, MARIN_TEMP_PREFIX=TEMPORARY_PREFIX)
     validation_output.mkdir(parents=True, exist_ok=True)

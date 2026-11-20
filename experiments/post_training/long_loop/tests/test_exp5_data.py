@@ -99,7 +99,7 @@ def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp
             "--validation-output",
             str(tmp_path),
             "--version",
-            "2026.11.20.85",
+            "2026.11.20.86",
             "--run",
         ],
     )

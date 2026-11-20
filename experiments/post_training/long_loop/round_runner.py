@@ -47,6 +47,7 @@ from experiments.post_training.long_loop.archive import PERMANENT_TMP_SEGMENT
 from experiments.post_training.long_loop.exp3_production import (
     INITIALIZER_RECEIPT,
     INITIALIZER_SHA256,
+    REFERENCE_INPUTS,
     baseline_files,
     production_plan,
 )
@@ -484,10 +485,10 @@ def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict)
     return spec
 
 
-def round_plan(round_spec: RoundSpec, release, source_revision: str, version: str) -> dict:
+def round_plan(round_spec: RoundSpec, release, source_revision: str, version: str, *, initial_eval_inputs: str) -> dict:
     """Derive the round's resolved plan: the shared template plus the round's fields."""
     pools_binding = POOLS[round_spec.pools]
-    resolved = production_plan(release, source_revision, baseline_files())
+    resolved = production_plan(release, source_revision, baseline_files(), initial_eval_inputs=initial_eval_inputs)
     sft = resolved["sft"]
     sft["batch_size"] = round_spec.sft.batch_size
     sft["mesh"] = round_spec.sft.mesh
@@ -719,7 +720,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         binding.record, binding.record_sha256, require_ready=click.get_current_context().params["do_run"]
     )
     version = resolve_version(round_spec.slug, round_spec.version)
-    resolved = round_plan(round_spec, release, source_revision, version)
+    resolved = round_plan(round_spec, release, source_revision, version, initial_eval_inputs=REFERENCE_INPUTS)
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     os.environ.update(
         MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
