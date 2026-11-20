@@ -145,6 +145,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
+    secret_directory = tmp_path / "secrets"
+    secret_directory.mkdir()
+    (secret_directory / "JUDGE_API_KEY").write_text("test-together-key")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(secret_directory))
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
@@ -166,12 +170,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         )
     )
     submitted = []
-
-    def resolve_key(spec):
-        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
-        return SimpleNamespace(value="test-together-key")
-
-    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
         assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
