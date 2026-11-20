@@ -33,6 +33,11 @@ def test_native_model_matches_named_hf_weights_loss_and_all_gradients(kv_heads, 
     )
 
 
+def test_native_sm100_fa4_rejects_fp32_attention_upcast():
+    with pytest.raises(ValueError, match="SM100 FA4 requires BF16 queries and keys"):
+        NativeLlamaConfig(vocab_size=32, attention_implementation="gpu_fa4_cute_sm100", upcast_attn=True)
+
+
 def test_native_bfloat16_reference_attention_upcasts_before_query_scaling():
     # An eight-wide head exposes BF16 rounding in the inverse square root scale.
     config = NativeLlamaConfig(vocab_size=32, hidden_dim=8, num_heads=1, num_kv_heads=1, upcast_attn=True)

@@ -136,6 +136,8 @@ class NativeLlamaConfig:
         self.activation_function.to_jax_fn()
         if self.attention_implementation == "xla_flash":
             raise ValueError("xla_flash still uses named-array operations; select a native attention implementation")
+        if self.upcast_attn and self.attention_implementation == "gpu_fa4_cute_sm100":
+            raise ValueError("SM100 FA4 requires BF16 queries and keys; disable upcast_attn")
         if self.num_heads % self.num_kv_heads:
             raise ValueError("num_heads must be divisible by num_kv_heads")
         if self.head_dim is None and self.hidden_dim % self.num_heads:
