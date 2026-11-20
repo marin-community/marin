@@ -15,6 +15,7 @@ import pytest
 from taskcompendium.grading import grade_remote_judge_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.evalchemy.judge_prompts import SIMPLEQA_VERIFIED_GRADER_TEMPLATE
+from taskcompendium.importers.evalchemy.multichallenge import MULTICHALLENGE_JUDGE_TEMPLATE
 from taskcompendium.models import ConversationTrace, GradingAttempt, TextMessage
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
@@ -167,23 +168,6 @@ def test_simpleqa_verified_publishes_bare_question_and_judges_only_the_final_ans
     )
 
 
-# JUDGE_PROMPT from github.com/ekwinox117/multi-challenge@5ccefcca6a39020d66c1383c4e6a809cb07afa33 src/evaluator.py.
-MULTICHALLENGE_REFERENCE_JUDGE_PROMPT = """You are tasked with evaluating a model response to see if it meets a specific criteria.
-The criteria will always be YES/NO evaluation.
-
-The model response is as follows:
-<MODEL_RESPONSE>
-{}
-</MODEL_RESPONSE>
-
-The criteria that the model response must meet is as follows. Be VERY STRICT!:
-<CRITERIA>
-{}
-</CRITERIA>
-
-Print your reasoning followed by your verdict, either "YES" or "NO"."""  # noqa: E501 - exact source prompt
-
-
 @pytest.mark.parametrize("verdict,reward", [("YES", 1), ("NO", 0)])
 def test_multichallenge_replays_history_and_passes_on_the_expected_verdict(
     tmp_path, monkeypatch, judge_http, verdict, reward
@@ -218,9 +202,6 @@ def test_multichallenge_replays_history_and_passes_on_the_expected_verdict(
     assert state["requests"][-1]["messages"] == [
         {
             "role": "user",
-            "content": (
-                MULTICHALLENGE_REFERENCE_JUDGE_PROMPT.format("Lentil curry.", "Is the dinner vegan?")
-                + " Write the verdict alone on the final line."
-            ),
+            "content": MULTICHALLENGE_JUDGE_TEMPLATE.format(candidate="Lentil curry.", reference="Is the dinner vegan?"),
         }
     ]

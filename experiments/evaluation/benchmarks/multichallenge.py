@@ -3,11 +3,11 @@
 
 """Scale AI's MultiChallenge (arXiv:2501.17399): realistic multi-turn conversations judged YES/NO.
 
-Source: the 266-row public release on Hugging Face (CC-BY-4.0). The judge prompt comes from the
-authors' runner, github.com/ekwinox117/multi-challenge, which the paper says is open-sourced but which
-has no license file. The runner judges with gpt-4o-2024-08-06; runs name their own judge, so scores
-are comparable only under the same judge. The reference headline is the mean of
-the four per-axis accuracies; ``accuracy`` here is the item mean, with each axis reported as a group.
+Source: the 266-row public release on Hugging Face (CC-BY-4.0). The judge prompt is Marin's own, written
+from the paper's description, because the authors' runner prompt carries no license. The runner judges with
+gpt-4o-2024-08-06; runs name their own judge, so scores are comparable only under the same judge. The
+reference headline is the mean of the four per-axis accuracies; ``accuracy`` here is the item mean, with
+each axis reported as a group.
 """
 
 from taskcompendium.evaluation.spec import (
@@ -29,7 +29,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 MULTICHALLENGE_REVISION = "670fd81f270314d0f8f82b34fcfe2187fd28f699"
 MULTICHALLENGE_ROWS = 266
-VERSION = "2026.11.19"
+VERSION = "2026.11.20"
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
