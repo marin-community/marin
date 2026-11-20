@@ -26,11 +26,10 @@ class Notifications:
 
 
 class BusyEnv(FakeEnv):
-    def __init__(self, notes: Notifications) -> None:
+    def __init__(self) -> None:
         super().__init__(
             "image",
             {"build": FakeCommand(CommandResult(0, "done", "", 0, False), {PurePosixPath("/output"): b"done"})},
-            notes,
         )
         self.busy = True
 
@@ -44,7 +43,7 @@ class BusyEnv(FakeEnv):
 
 async def test_command_executor_retries_busy_machine_and_preserves_mutation() -> None:
     notes = Notifications()
-    env = BusyEnv(notes)
+    env = BusyEnv()
     event = RunCommand("build", 5)
     assert (await run_command(event, env, notify=notes)).stdout == "done"
     assert await env.read(PurePosixPath("/output")) == b"done"
@@ -53,7 +52,7 @@ async def test_command_executor_retries_busy_machine_and_preserves_mutation() ->
 
 async def test_command_executor_stops_unresolved_machine_at_retry_bound() -> None:
     notes = Notifications()
-    env = FakeEnv("image", {"build": Transient("busy")}, notes)
+    env = FakeEnv("image", {"build": Transient("busy")})
     initial = env.fingerprint()
     event = RunCommand("build", 5)
     with pytest.raises(Restart):

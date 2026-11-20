@@ -49,7 +49,7 @@ from taskforge.wiring import build_config, install
 
 class RecordingEnv(FakeEnv):
     def __init__(self, commands: Mapping[str, FakeCommand], fail: bool) -> None:
-        super().__init__("workspace", commands, lambda _: None)
+        super().__init__("workspace", commands)
         self.executed: list[str] = []
         self.fail = fail
 

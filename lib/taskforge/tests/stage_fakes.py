@@ -38,7 +38,7 @@ class Environments(EnvFactory):
     @override
     async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
         self.requested.append(requirements)
-        env = FakeEnv(requirements.model_dump_json(), {}, lambda event: None)
+        env = FakeEnv(requirements.model_dump_json(), {})
         self.created.append(env)
         return env
 

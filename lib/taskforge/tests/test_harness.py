@@ -77,7 +77,7 @@ def environment(ctx: Context) -> FakeEnv:
             CommandResult(0, "controls ready", "", 0.1, False), {PurePosixPath("/workspace/controls.json"): b"[]"}
         ),
     }
-    env = FakeEnv("image", scripts, ctx.emit)
+    env = FakeEnv("image", scripts)
     ctx.resource(env, env.fingerprint)
     ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
     ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
@@ -459,7 +459,7 @@ class MissingPathIrisMachine(IrisMachine):
 async def test_reading_a_missing_path_on_iris_is_tool_feedback(tmp_path: Path) -> None:
     # Stack pilot: reading a missing /tests/grade.py raised the shell's RuntimeError and ended the workpiece.
     ctx = Context(log=EventLog())
-    env = ShellboxEnv(MissingPathIrisMachine(), "image", ctx.emit, AsyncExitStack(), str(tmp_path))
+    env = ShellboxEnv(MissingPathIrisMachine(), "image", AsyncExitStack(), str(tmp_path))
     ctx.resource(env, env.fingerprint)
     ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
     result = await ReadFileTool()(ctx, {"path": "grade.py"})
