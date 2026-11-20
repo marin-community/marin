@@ -80,7 +80,18 @@ class ResettingFactory:
         return ResettingMachine(await ShellSimMachineFactory().create(spec), reset=fails, operation=self.reset)
 
 
-async def rollout(worker_config, factory, *, environment=SHELL_ENVIRONMENT, harbor=None, replies=None, retry=RETRY_SETTINGS, resources=None, grader=None, verifier_factory=None):
+async def rollout(
+    worker_config,
+    factory,
+    *,
+    environment=SHELL_ENVIRONMENT,
+    harbor=None,
+    replies=None,
+    retry=RETRY_SETTINGS,
+    resources=None,
+    grader=None,
+    verifier_factory=None,
+):
     waits = []
 
     async def wait(delay):
@@ -106,13 +117,16 @@ async def rollout(worker_config, factory, *, environment=SHELL_ENVIRONMENT, harb
         retry=retry,
         shutdown_timeout=5,
     )
+    lowered = lowered_task(
+        task, max_turns=2, backend="shellsim", verifier_backend="verifier" if grader else None
+    )
+    request = TaskRequestBatch(rows=(task_input(lowered),))
     try:
-        (result,) = await worker.generate(
-            TaskRequestBatch(rows=(task_input(lowered_task(task, max_turns=2, backend="shellsim", verifier_backend="verifier" if grader else None)),))
-        )
+        (result,) = await worker.generate(request)
+        batch = worker.projection.project([result], request)
     finally:
         await worker.shutdown()
-    return result, waits
+    return result, waits, batch
 
 
 @pytest.mark.asyncio
@@ -123,7 +137,7 @@ async def rollout(worker_config, factory, *, environment=SHELL_ENVIRONMENT, harb
 )
 async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_config, failures, recovers):
     factory = ResettingFactory(failures)
-    result, waits = await rollout(worker_config, factory)
+    result, waits, _ = await rollout(worker_config, factory)
     assert factory.creations == RETRY_SETTINGS.max_retries + 1
     assert (result.failure is None) == recovers
     # Each restart waits first, because the resets arrive in bursts.
@@ -134,7 +148,7 @@ async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_conf
 @pytest.mark.asyncio
 async def test_lost_connection_in_the_setup_command_restarts_the_rollout(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.COMMAND)
-    result, _ = await rollout(worker_config, factory, environment=SETUP_ENVIRONMENT)
+    result, _, _ = await rollout(worker_config, factory, environment=SETUP_ENVIRONMENT)
     assert factory.creations == 2
     assert result.failure is None
 
@@ -143,17 +157,20 @@ async def test_lost_connection_in_the_setup_command_restarts_the_rollout(worker_
 async def test_lost_connection_in_a_model_command_keeps_the_failure(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.COMMAND)
     replies = [sampled_reply(None, tool_calls=shell_call("true")["tool_calls"])]
-    result, waits = await rollout(worker_config, factory, replies=replies)
+    result, waits, batch = await rollout(worker_config, factory, replies=replies)
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
+    assert batch["error_treatments"] == ["mask"]
+    assert batch["exclude_from_baseline"] == [True]
+    assert not any(batch["loss_masks"][0])
 
 
 @pytest.mark.asyncio
 async def test_harbor_task_obeys_the_same_zero_retry_budget(worker_config):
     factory = ResettingFactory(failures=1)
     harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {}}))
-    result, waits = await rollout(worker_config, factory, harbor=harbor, retry=RetrySettings())
+    result, waits, _ = await rollout(worker_config, factory, harbor=harbor, retry=RetrySettings())
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
@@ -168,7 +185,7 @@ async def test_permanent_provider_failure_does_not_restart_the_machine(worker_co
             raise DaytonaError("unauthorized", status_code=401)
 
     factory = UnauthorizedFactory(failures=1)
-    result, waits = await rollout(worker_config, factory)
+    result, waits, _ = await rollout(worker_config, factory)
     assert factory.creations == 1
     assert waits == []
     assert result.failure.cause_type == "DaytonaError"
@@ -179,7 +196,7 @@ async def test_permanent_provider_failure_does_not_restart_the_machine(worker_co
 async def test_lost_connection_during_resource_upload_restarts_before_the_model_turn(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.UPLOAD)
     resources = ResourceGroups(worker=(inline_resource("input.txt", b"task input"),))
-    result, waits = await rollout(worker_config, factory, resources=resources)
+    result, waits, _ = await rollout(worker_config, factory, resources=resources)
     assert factory.creations == 2
     assert len(waits) == 1
     assert result.failure is None
@@ -193,12 +210,15 @@ async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_c
 
     factory = ResettingFactory(failures=0)
     grader = ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT)
-    result, waits = await rollout(worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier())
+    result, waits, batch = await rollout(worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier())
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
     assert result.failure.operation == "grade"
     assert result.steps
+    assert batch["error_treatments"] == ["mask"]
+    assert batch["exclude_from_baseline"] == [True]
+    assert not any(batch["loss_masks"][0])
 
 
 def test_harbor_preset_preserves_its_budget_in_the_common_task_settings():
