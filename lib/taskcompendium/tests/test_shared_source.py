@@ -19,6 +19,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import textwrap
 import zlib
 from dataclasses import dataclass
@@ -51,6 +52,7 @@ SETUP_FILES = Path("/setup_files")
 AGENT_UID, GRADER_UID = 10001, 10002
 
 SHIM = "/tmp/taskcompendium-source-shim"
+SOURCE_PREFIX = Path("/opt/miniconda3/envs/testbed")
 SOURCE_ENV_PATH = (
     "{shim}:/opt/miniconda3/envs/testbed/bin:/opt/miniconda3/bin:"
     "/opt/conda/envs/testbed/bin:/opt/conda/bin:"
@@ -487,14 +489,14 @@ def stage_package(files: dict[str, bytes]) -> None:
             subprocess.run(["/bin/sh", "-c", line.removeprefix("RUN ")], check=True)
 
 
-def stage_and_bootstrap(files: dict[str, bytes]) -> None:
+def stage_and_bootstrap(files: dict[str, bytes], *, path: str | None = None) -> None:
     stage_package(files)
     environment = tomlkit.parse(files["task.toml"].decode())["environment"]
     command = environment["setup"]["command"]
     subprocess.run(
         ["bash", "-c", command],
         cwd="/",
-        env={**os.environ, **environment["env"], "PATH": SHIM + ":" + os.environ["PATH"]},
+        env={**os.environ, **environment["env"], "PATH": path or SHIM + ":" + os.environ["PATH"]},
         check=True,
         timeout=600,
     )
@@ -571,17 +573,67 @@ def cleanup() -> None:
 
 @pytest.fixture
 def shim() -> None:
-    # Model an agent-writable interpreter directory (as the source conda
-    # environments are group-writable in the real images).
+    # The source scorer alias can change; the resolved control Python stays protected.
     directory = Path(SHIM)
     directory.mkdir(parents=True, exist_ok=True)
-    directory.chmod(0o777)
-    for name in ("python", "python3"):
-        python = directory / name
-        python.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
-        python.chmod(0o755)
+    directory.chmod(0o755)
+    python = directory / "python"
+    python.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+    python.chmod(0o755)
+    os.chown(python, AGENT_UID, AGENT_UID)
+    python3 = directory / "python3"
+    python3.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+    python3.chmod(0o755)
     yield
     shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture
+def source_prefix(shim, request):
+    """Use a full task Python prefix ahead of the scorer shim, as in Prime images."""
+    cleanup()
+    base = build_repo()
+    files, profile = package_files(request.param, base)
+    harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE)
+    (SOURCE_PREFIX / "bin").mkdir(parents=True)
+    shutil.copy2(Path(sys.executable).resolve(), SOURCE_PREFIX / "bin/python3")
+    (SOURCE_PREFIX / "bin/python").symlink_to("python3")
+    stdlib = SOURCE_PREFIX / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    shutil.copytree(sysconfig.get_path("stdlib"), stdlib, ignore=shutil.ignore_patterns("site-packages", "__pycache__"))
+    sites = stdlib / "site-packages"
+    sites.mkdir()
+    (sites / "fixture-dependencies.pth").write_text(f"import site;site.addsitedir({sysconfig.get_path('purelib')!r})\n")
+    yield SourceTask(family=request.param, files=files, base_commit=base)
+    cleanup()
+    shutil.rmtree(SOURCE_PREFIX)
+
+
+@pytest.mark.parametrize("source_prefix", ["scale", "lego"], indirect=True)
+def test_task_python_stdlib_cannot_run_actor_code_as_root(source_prefix):
+    stage_and_bootstrap(source_prefix.files, path=f"{SOURCE_PREFIX}/bin:{SHIM}:{os.environ['PATH']}")
+    assert (BOOTSTRAP / "python").resolve() == SOURCE_PREFIX / "bin/python3"
+    probe = f"""import pathlib
+prefix=pathlib.Path({str(SOURCE_PREFIX)!r})
+stdlib=prefix/'lib/python{sys.version_info.major}.{sys.version_info.minor}'
+for target in (prefix/'bin/python3',stdlib/'json/__init__.py'):
+    try:
+        with target.open('ab') as stream:
+            stream.write(b'\\nraise RuntimeError("actor ran as root")\\n')
+    except PermissionError:
+        continue
+    raise AssertionError('actor modified root control runtime: '+str(target))
+(stdlib/'site-packages/actor_dependency.py').write_text('VALUE = 42\\n')
+"""
+    result = run_as_agent(probe)
+    assert result.returncode == 0, result.stderr
+    assert run_grade(source_prefix.files)["reward"] == 0
+
+
+@pytest.mark.parametrize("source_prefix", ["scale"], indirect=True)
+def test_bootstrap_rejects_an_actor_writable_control_prefix(source_prefix):
+    SOURCE_PREFIX.chmod(0o777)
+    with pytest.raises(subprocess.CalledProcessError):
+        stage_and_bootstrap(source_prefix.files, path=f"{SOURCE_PREFIX}/bin:{SHIM}:{os.environ['PATH']}")
 
 
 @pytest.fixture()
@@ -882,7 +934,6 @@ def test_hijacked_scorer_interpreter_cannot_forge_a_reward(source_image):
     program = (
         "import pathlib\n"
         f"python = pathlib.Path('{SHIM}/python')\n"
-        "python.unlink()\n"
         f"python.write_text({poison!r})\n"
         "python.chmod(0o755)\n"
     )
