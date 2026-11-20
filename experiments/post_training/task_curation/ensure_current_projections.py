@@ -167,11 +167,7 @@ def apply_projection_waivers(
         if not waivers.source_ids:
             raise ValueError("Ruling 68 waiver must name the exact declared source IDs")
         for gap in gaps:
-            if (
-                gap.projection == "served-catalog"
-                and gap.state == "missing"
-                and gap.source_id in waivers.source_ids
-            ):
+            if gap.projection == "served-catalog" and gap.state == "missing" and gap.source_id in waivers.source_ids:
                 record = ProjectionWaiver(
                     source_id=gap.source_id,
                     projection=gap.projection,
