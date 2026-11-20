@@ -196,14 +196,26 @@ def test_paths_the_caller_chose_fail_as_os_errors_and_transport_failures_do_not(
         source = tmp_path / "input.txt"
         source.write_text("payload")
         (tmp_path / "directory").mkdir()
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        (locked / "secret.txt").write_text("hidden")
+        for path in (locked / "secret.txt", locked):
+            path.chmod(0o500 if path == locked else 0)
         try:
             with pytest.raises(FileNotFoundError):
                 await machine.download(str(tmp_path / "missing.txt"), tmp_path / "out.txt")
             with pytest.raises(IsADirectoryError):
                 await machine.upload(source, str(tmp_path / "directory"))
-            with pytest.raises(OSError, match="Cannot access"):
+            with pytest.raises(NotADirectoryError):
                 await machine.upload(source, str(tmp_path / "input.txt" / "child"))
+            if os.geteuid() != 0:
+                with pytest.raises(PermissionError):
+                    await machine.upload(source, str(locked / "new" / "file.txt"))
+                with pytest.raises(PermissionError):
+                    await machine.download(str(locked / "secret.txt"), tmp_path / "out.txt")
         finally:
+            locked.chmod(0o700)
+            (locked / "secret.txt").chmod(0o600)
             await machine.close()
         unreachable, _ = local_machine(tmp_path, FailingRpc())
         try:
