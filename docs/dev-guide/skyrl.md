@@ -49,6 +49,22 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Task errors
+
+[rigging.task_errors](../../lib/rigging/src/rigging/task_errors.py) owns the
+shared exception categories, failure identities, and `RetrySettings` type.
+Import these directly; the Harbor taxonomy module and SkyRL snapshot are removed.
+SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
+infrastructure failures are excluded, agent failures receive zero reward, and
+passthrough failures retain available verifier output. Unknown names use the
+configured fallback and emit an error log.
+
+`RuntimeServiceError`, `RuntimeLogCollectionError`, `EnvironmentStopError`,
+`DaytonaError`, `DaytonaDockerSetupError`, `InternalServerError`,
+`APIConnectionError`, and `APITimeoutError` now use Harbor's infrastructure
+category in SkyRL. They previously used SkyRL's unknown-error fallback.
+Training overrides remain separate from retry settings.
+
 ## Run records
 
 Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).

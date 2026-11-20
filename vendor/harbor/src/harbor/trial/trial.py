@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 from harbor_config.models.trial.config import TaskConfig
 
 from harbor.agents.factory import AgentFactory

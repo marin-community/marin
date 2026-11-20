@@ -17,8 +17,8 @@ from harbor.agents.terminus_2.tmux_session import (
     TmuxSessionEndedError,
 )
 from harbor.environments.base import ExecResult
-from harbor_config import ErrorCategory, error_category
-from harbor_config.errors import is_resume_retryable
+from rigging.task_errors import ErrorCategory, error_category
+from rigging.task_errors import is_resume_retryable
 
 
 @pytest.fixture

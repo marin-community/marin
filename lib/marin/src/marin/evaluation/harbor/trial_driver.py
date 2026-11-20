@@ -55,13 +55,13 @@ from harbor.utils.env import (  # pyrefly: ignore[missing-import]
 )
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
-from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.environment_type import EnvironmentType  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
+from rigging.task_errors import ErrorCategory, errors_by_category, known_error_types
 
 from marin.evaluation.harbor.agent_context import (
     CANDIDATE_API_KEY_ENV,

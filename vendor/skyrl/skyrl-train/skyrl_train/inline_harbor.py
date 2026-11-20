@@ -17,7 +17,7 @@ from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
 from harbor.models.trial.config import TaskConfig
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 from skyrl_train.inline_harbor_client import CONTROL_MESSAGE_LIMIT
 
 

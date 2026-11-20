@@ -1,50 +1,21 @@
-"""Stable error taxonomy for Harbor trial failures.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-Harbor persists every trial failure as an :class:`~harbor.models.trial.result.ExceptionInfo`
-carrying the exception's type name (``type(exc).__name__``). Downstream consumers
-such as the MarinSkyRL rollout adapter receive that serialized string, not the
-original Python exception, so they classify by name against locally maintained
-sets. That couples every consumer to Harbor's exception names and silently goes
-stale when Harbor adds a new failure mode.
+"""Shared task failure identities, treatment categories, and retry decisions.
 
-This module is the shared contract. It maps the stable exception identifiers
-Harbor persists to semantic categories a consumer can translate into
-training-signal treatment *without importing the full Harbor runtime*. Harbor
-owns the taxonomy for a given release; consumers pin an immutable
-``harbor-config`` revision and inherit the complete mapping.
-
-Category semantics:
-
-* :attr:`ErrorCategory.INFRASTRUCTURE` -- the evaluated model never produced a
-  valid answer because Harbor, the sandbox, or the verifier failed. Exclude from
-  the RL baseline (no gradient contribution).
-* :attr:`ErrorCategory.AGENT` -- a real failure attributable to agent behavior;
-  include in the baseline with reward zero so the policy learns to avoid it.
-* :attr:`ErrorCategory.PASSTHROUGH` -- the agent produced partial or real work
-  and a verifier result may still be usable; use the verifier reward.
-* :attr:`ErrorCategory.UNKNOWN` -- no default decision; the consumer must apply
-  an explicit fallback policy and surface the category rather than silently
-  converting it to training signal.
-
-Retryability is a separate axis (an infrastructure failure may be retried at
-the job level while still being excluded from the baseline), so it is exposed
-via :func:`is_resume_retryable` rather than folded into the category enum.
+Categories describe the source of a failure. Consumers choose training treatment
+separately from retry settings. Persisted exception names are stable identifiers.
 """
 
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
-__all__ = [
-    "ErrorCategory",
-    "error_category",
-    "errors_by_category",
-    "is_resume_retryable",
-    "known_error_types",
-    "resume_retryable_error_types",
-]
+from pydantic import BaseModel, Field
 
 
 class ErrorCategory(StrEnum):
-    """Semantic treatment for a persisted Harbor exception."""
+    """Semantic category for a persisted task exception."""
 
     INFRASTRUCTURE = "infrastructure"
     AGENT = "agent"
@@ -53,7 +24,9 @@ class ErrorCategory(StrEnum):
 
 
 _ERROR_CATEGORIES: dict[str, ErrorCategory] = {
-    # --- Harbor context-management infrastructure (the gap this closes) ---
+    # --- Task and context-management infrastructure ---
+    "TaskMachineError": ErrorCategory.INFRASTRUCTURE,
+    "TemplateError": ErrorCategory.INFRASTRUCTURE,
     "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
     # --- Artifact persistence infrastructure ---
     "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
@@ -190,3 +163,99 @@ def known_error_types() -> frozenset[str]:
     Harbor's contract test enforces that every persisted exception is present.
     """
     return frozenset(_ERROR_CATEGORIES)
+
+
+class RetryDisposition(StrEnum):
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ErrorIdentity:
+    """Safe, serializable identity of a task failure and its provider cause."""
+
+    exception_type: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    cause_type: str | None = None
+    operation: str | None = None
+    retry_disposition: RetryDisposition = RetryDisposition.UNKNOWN
+
+    @property
+    def category(self) -> ErrorCategory:
+        return error_category(self.exception_type)
+
+
+class RetrySettings(BaseModel):
+    """Retry budget and filters shared by every task execution path."""
+
+    max_retries: int = Field(default=0, ge=0)
+    include_exceptions: set[str] | None = None
+    exclude_exceptions: set[str] | None = Field(
+        default_factory=lambda: {
+            "AgentTimeoutError",
+            "VerifierTimeoutError",
+            "RewardFileNotFoundError",
+            "RewardFileEmptyError",
+            "VerifierOutputParseError",
+        }
+    )
+    include_categories: set[ErrorCategory] | None = None
+    exclude_categories: set[ErrorCategory] = Field(default_factory=set)
+    wait_multiplier: float = Field(default=1.0, ge=1)
+    min_wait_sec: float = Field(default=1.0, ge=0)
+    max_wait_sec: float = Field(default=60.0, ge=0)
+
+
+_PERMANENT_ERROR_TYPES = {
+    "AgentTimeoutError",
+    "AgentDiskFullError",
+    "ContextLengthExceededError",
+    "NonZeroAgentExitCodeError",
+    "ModelInitiatedTmuxFailure",
+    "OutputLengthExceededError",
+    "TurnCapExhaustedError",
+    "MalformedModelResponseError",
+    "ModelAuthenticationError",
+    "MissingExtraError",
+    "SandboxDiskFullError",
+    "SnapshotQuotaExceeded",
+}
+
+
+def retry_disposition(failure: ErrorIdentity) -> RetryDisposition:
+    """Resolve retryability without inferring it from training treatment."""
+    if failure.retry_disposition is not RetryDisposition.UNKNOWN:
+        return failure.retry_disposition
+    if failure.exception_type in _RESUME_RETRYABLE_ERROR_TYPES:
+        return RetryDisposition.TRANSIENT
+    if failure.exception_type in _PERMANENT_ERROR_TYPES:
+        return RetryDisposition.PERMANENT
+    return RetryDisposition.UNKNOWN
+
+
+def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries: int) -> float | None:
+    """Return a bounded backoff, or None when the result must remain terminal.
+
+    Names can match the task error or its provider cause. Exclusions take
+    precedence over inclusions. Unknown failures require an explicit inclusion;
+    permanent failures cannot be retried.
+    """
+    if failure is None or retries >= settings.max_retries:
+        return None
+    names = {failure.exception_type, failure.cause_type} - {None}
+    if names.intersection(settings.exclude_exceptions or ()) or failure.category in settings.exclude_categories:
+        return None
+    disposition = retry_disposition(failure)
+    if disposition is RetryDisposition.PERMANENT:
+        return None
+    selected = bool(
+        names.intersection(settings.include_exceptions or ())
+        or failure.category in (settings.include_categories or ())
+    )
+    if settings.include_exceptions or settings.include_categories:
+        if not selected:
+            return None
+    if disposition is RetryDisposition.UNKNOWN and not selected:
+        return None
+    return min(settings.min_wait_sec * settings.wait_multiplier**retries, settings.max_wait_sec)

@@ -1,6 +1,6 @@
 """Contract tests for the shared Harbor error taxonomy.
 
-These pin the published ``harbor_config.errors`` seam that downstream consumers
+These pin the published ``rigging.task_errors`` seam that downstream consumers
 (MarinSkyRL's rollout adapter) rely on instead of duplicating Harbor exception
 names. The taxonomy must (a) classify ``ContextManagementInfrastructureError``
 as infrastructure, (b) cover every exception Harbor can persist as a trial
@@ -12,8 +12,8 @@ import inspect
 
 import pytest
 
-from harbor_config import ErrorCategory, error_category, errors_by_category
-from harbor_config.errors import is_resume_retryable, known_error_types
+from rigging.task_errors import ErrorCategory, error_category, errors_by_category
+from rigging.task_errors import is_resume_retryable, known_error_types
 
 # Modules whose exception classes can surface as a persisted trial
 # ``ExceptionInfo.exception_type``. A new exception added to any of these is a
@@ -128,7 +128,7 @@ def test_every_persisted_harbor_exception_has_an_explicit_category(name: str) ->
     """A new persisted Harbor exception without a category decision fails here."""
     assert name in known_error_types(), (
         f"{name} is persisted as a trial outcome but has no entry in the "
-        f"harbor_config.errors taxonomy; assign it an ErrorCategory."
+        f"rigging.task_errors taxonomy; assign it an ErrorCategory."
     )
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 import httpx
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 
 from harbor.agents.base import BaseAgent
 from harbor.agents.factory import AgentFactory

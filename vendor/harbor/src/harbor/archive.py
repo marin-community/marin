@@ -31,7 +31,7 @@ from harbor.models.job.paths import (
 from harbor.models.trajectories import ContentPart, Trajectory
 from harbor.models.trial.result import TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 from harbor_config.models.job.config import ArchiveConfig
 
 try:

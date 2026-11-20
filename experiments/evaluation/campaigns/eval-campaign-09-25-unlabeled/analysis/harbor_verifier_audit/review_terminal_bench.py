@@ -93,7 +93,7 @@ def runtime_taxonomy() -> HarborErrorTaxonomy:
         "--frozen",
         "python",
         "-c",
-        "import json; from harbor_config.errors import ErrorCategory, errors_by_category; "
+        "import json; from rigging.task_errors import ErrorCategory, errors_by_category; "
         "print(json.dumps({category.value: sorted(errors_by_category(category)) for category in ErrorCategory}))",
     ]
     categories = json.loads(subprocess.check_output(command, text=True))

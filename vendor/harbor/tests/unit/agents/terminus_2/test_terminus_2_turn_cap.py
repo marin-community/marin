@@ -3,7 +3,7 @@
 
 When ``_run_agent_loop`` exhausts ``max_turns`` without a confirmed task
 completion it raises :class:`TurnCapExhaustedError` (``PASSTHROUGH`` in the
-``harbor_config.errors`` taxonomy, so the verifier still scores the rollout)
+``rigging.task_errors`` taxonomy, so the verifier still scores the rollout)
 and records a bracketed ``[Turn cap exhausted]`` system step in the
 trajectory — the same marker convention as ``[Early termination]``. A
 turn-callback early termination, by contrast, is a deliberate external stop

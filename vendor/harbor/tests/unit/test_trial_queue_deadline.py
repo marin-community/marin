@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from harbor.agents.base import TurnCapExhaustedError
 from harbor.environments.base import SandboxDiskFullError
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
@@ -28,8 +28,8 @@ from harbor.utils.artifact_writer import (
     ArtifactUploadTimeoutError,
     ArtifactWriter,
 )
-from harbor_config import ErrorCategory, error_category
-from harbor_config.errors import is_resume_retryable
+from rigging.task_errors import ErrorCategory, error_category
+from rigging.task_errors import is_resume_retryable
 
 from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
@@ -738,7 +738,7 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
     monkeypatch.setattr(Trial, "create", classmethod(create))
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(max_retries=2, min_wait_sec=0, max_wait_sec=0),
+        retry_config=RetrySettings(max_retries=2, min_wait_sec=0, max_wait_sec=0),
     )
 
     async with asyncio.timeout(1):
@@ -856,7 +856,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
     monkeypatch.setattr("harbor.trial.attempt.get_artifact_writer", FailingWriter)
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             include_exceptions={"ArtifactUploadTimeoutError"},
             min_wait_sec=0,
@@ -942,7 +942,7 @@ async def test_cancellation_resistant_attempt_quarantines_capacity_until_termina
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             min_wait_sec=0,
             max_wait_sec=0,
@@ -1013,7 +1013,7 @@ async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(
     )
     queue = TrialQueue(
         n_concurrent=2,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             min_wait_sec=0,
             max_wait_sec=0,

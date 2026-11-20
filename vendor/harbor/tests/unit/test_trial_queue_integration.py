@@ -12,7 +12,8 @@ from harbor import TrialEvent as PublicTrialEvent
 from harbor import TrialHookEvent as PublicTrialHookEvent
 from harbor import TrialQueue as PublicTrialQueue
 from harbor.job import Job
-from harbor.models.job.config import JobConfig, RetryConfig
+from harbor.models.job.config import JobConfig
+from rigging.task_errors import RetrySettings
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.trial.config import AgentConfig, TaskConfig
 from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
@@ -101,7 +102,7 @@ class TestTrialQueueIntegration:
         hooks = {event: [] for event in TrialEvent}
         queue = TrialQueue(
             n_concurrent=4,
-            retry_config=RetryConfig(),
+            retry_config=RetrySettings(),
             hooks=hooks,
         )
         assert queue._n_concurrent == 4
@@ -113,7 +114,7 @@ class TestTrialQueueIntegration:
         queue = TrialQueue(n_concurrent=2)
 
         assert queue._n_concurrent == 2
-        assert queue._retry_config == RetryConfig()
+        assert queue._retry_config == RetrySettings()
         assert queue._hooks == {event: [] for event in TrialEvent}
 
     @pytest.mark.unit
@@ -126,7 +127,7 @@ class TestTrialQueueIntegration:
             job_name="queue-public-api-test",
             jobs_dir=tmp_path / "jobs",
             n_concurrent_trials=3,
-            retry=RetryConfig(max_retries=2),
+            retry=RetrySettings(max_retries=2),
             tasks=[TaskConfig(path=Path("/test/task"))],
         )
 
@@ -561,7 +562,7 @@ class TestTrialQueueIntegration:
             agents=[AgentConfig(name="pi")],
             n_concurrent_trials=8,
             quiet=True,
-            retry=RetryConfig(max_retries=3),
+            retry=RetrySettings(max_retries=3),
             tasks=[],
             datasets=[],
         )

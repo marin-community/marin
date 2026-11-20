@@ -6,7 +6,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 
 import harbor.environments.factory as environment_factory
 import pytest

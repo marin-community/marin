@@ -24,7 +24,7 @@ from upath import UPath
 
 from harbor.models.benchmark import SOTOPIA_PRIMARY_METRIC
 from harbor.models.trial.result import TrialResult
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 from harbor_config.models.job.config import SotopiaCohort
 
 SUMMARY = re.compile(r"/([^/]+)/attempts/(\d+)/agent/sotopia-summary\.json$")
