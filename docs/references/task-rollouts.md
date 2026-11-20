@@ -134,11 +134,11 @@ use this text. The chat template supplies the history terminator after tool call
 `skip_special_tokens` controls special tokens within the reply.
 
 Sampled `response_ids` keep all tokens for training. To inspect the complete
-decoded generation, set `return_raw_text=True` on the model-client request. The
-client then adds `raw_responses`, decoded from those IDs with special tokens,
+decoded generation, call `await client.generate(request, return_raw_text=True)`.
+The client then adds `raw_responses`, decoded from those IDs with special tokens,
 including any sampled reasoning and the final terminator. The field is absent by
-default. The client consumes this option; it does not forward it to the inference
-engine.
+default. This option belongs to the model-client API; it is not an inference-engine
+request field.
 
 ## Harnesses
 

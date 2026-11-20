@@ -60,8 +60,6 @@ class InferenceEngineInput(TypedDict):
     prompts: Optional[List[ConversationType]]
     prompt_token_ids: Optional[List[List[int]]]
     sampling_params: Optional[Dict[str, Any]]
-    # Model-client opt-in: exact decoded completion text, separate from visible replies.
-    return_raw_text: NotRequired[bool]
     # Per-prompt token scoring overrides. Rollout sampling remains shared.
     sampling_params_per_prompt: NotRequired[List[PromptSamplingOverride]]
     session_ids: Optional[List[Hashable]]
