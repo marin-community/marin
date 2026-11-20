@@ -1,3 +1,7 @@
+
+from omegaconf import DictConfig
+
+
 def validate_colocated_engine_geometry(*, tensor_pipeline_size: int, gpus_per_node: int) -> None:
     """Reject colocated engine shapes that cannot tile one policy node."""
 
@@ -38,3 +42,13 @@ def colocated_engine_bundle_indices(
             f"but only {len(reordered_bundle_indices)} bundles are available"
         )
     return selected
+
+
+def num_rollout_gpus(cfg: DictConfig) -> int:
+    generator = cfg.generator
+    return (
+        generator.num_inference_engines
+        * generator.inference_engine_tensor_parallel_size
+        * generator.inference_engine_pipeline_parallel_size
+        * generator.inference_engine_data_parallel_size
+    )
