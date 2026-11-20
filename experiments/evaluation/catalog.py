@@ -11,12 +11,16 @@ from experiments.evaluation.benchmarks import (
     biomedical,
     code,
     commonsense,
+    econevals,
+    facts_grounding,
     financebench,
     gsm8k,
     imobench,
     instruction_following,
     jee,
     lambada,
+    lexam,
+    livecodebench,
     long_context,
     longbench,
     math,
@@ -27,6 +31,7 @@ from experiments.evaluation.benchmarks import (
     question_answering,
     reasoning,
     simpleqa,
+    supergpqa,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
@@ -50,7 +55,9 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             lambada,
             mmlu,
             mmlu_redux,
+            lexam,
             code,
+            livecodebench,
             commonsense,
             biomedical,
             instruction_following,
@@ -59,10 +66,13 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             imobench,
             reasoning,
             financebench,
+            facts_grounding,
             simpleqa,
+            econevals,
             long_context,
             longbench,
             nupa,
+            supergpqa,
         )
         for benchmark in family.benchmarks()
     ]

@@ -12,6 +12,7 @@ from .model import Section, field, unset_field
 
 class EvalSamplingParams(Section):
     seed: NonNegativeInt | None = field(None)
+    ignore_eos: bool = field(False)
     max_generate_length: int = unset_field()
     repetition_penalty: int | float = field(1.0)
     temperature: int | float = field(0.0)

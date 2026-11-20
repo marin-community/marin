@@ -17,6 +17,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRunConfig,
@@ -32,7 +33,7 @@ from experiments.evaluation.pipeline import EvaluationResult
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_data_step
 from experiments.post_training.cat_count_canary.launcher import role_plan, training_config, with_role_plan
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.skyrl_evaluation import evaluate_model
 
 CLUSTER = "cw-rno2a"
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -151,13 +152,11 @@ def build_smoke(version: str) -> Smoke:
         )
 
     resume = replace(resume, build_config=resume_config, deps=(*resume.deps, train))
-    evaluate = skyrl_eval_step(
-        resume,
+    evaluate = evaluate_model(
+        SkyRLPolicyModel(resume),
         ModelConfig(
             name="skyrl-port-smoke",
-            location=SKYRL_POLICY_LOCATION,
-            tokenizer=MODEL,
-            tokenizer_revision=MODEL_REVISION,
+            location="",
             apply_chat_template=True,
             resource_hint=ResourceHint(gpu={"H100": 1}),
             serve=ServeConfig(tensor_parallel_size=1, max_model_len=4096, max_num_seqs=16),

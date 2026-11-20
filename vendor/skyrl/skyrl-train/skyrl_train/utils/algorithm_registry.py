@@ -15,25 +15,13 @@ from loguru import logger
 
 from marinskyrl.runtime_options import AdvantageEstimator, PolicyLossType
 from skyrl_train.config.objective_spec import BUILTIN_LOSS_SPECS, LossSpec
+from skyrl_train.group_admission import (
+    ExactPhysicalGroup as ExactPhysicalGroup,
+    GroupAdvantageContract,
+    MinimumBaselineEligibleGroup as MinimumBaselineEligibleGroup,
+    NoGroupAdvantage as NoGroupAdvantage,
+)
 from skyrl_train.utils.function_registry import BaseFunctionRegistry
-
-
-@dataclass(frozen=True)
-class ExactPhysicalGroup:
-    """Require the estimator's complete physical rollout group."""
-
-
-@dataclass(frozen=True)
-class MinimumBaselineEligibleGroup:
-    """Allow a ragged baseline cohort down to a user-configured floor."""
-
-
-@dataclass(frozen=True)
-class NoGroupAdvantage:
-    """Declare that the estimator does not compute group-relative advantages."""
-
-
-GroupAdvantageContract = ExactPhysicalGroup | MinimumBaselineEligibleGroup | NoGroupAdvantage
 
 
 class AdvantageEstimatorRegistry(BaseFunctionRegistry):
