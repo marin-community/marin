@@ -53,6 +53,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
+from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
@@ -80,6 +81,27 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
     assert "--control --replicates" in result.output
+
+
+def test_generation_presets_accept_init_only_for_eval_short(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    name, version = "tests/evaluation-init", "2026.11.17"
+    root = tmp_path / name / version
+    write_published_artifact(tmp_path, name, version, Artifact, source=str(root))
+    for preset_name in ("eval-short", "speed-short", "data-short"):
+        preset = table.by_name[preset_name]
+        arguments = ["--preset", preset_name, "--version", preset.revision, "--init", f"{name}@{version}", "--plan"]
+        if preset.tasks_input == "required":
+            arguments += ["--tasks", SELECTION_IDENTITY]
+        result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+        if preset_name == "eval-short":
+            assert result.exit_code == 0, (result.output, result.exception)
+            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            assert status["inputs"]["model"].partition(":")[0] == f"{name}@{version}"
+            assert status["updates"] == 0
+            assert status["guards"] == []
+        else:
+            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
 
 @pytest.mark.parametrize(
@@ -145,6 +167,12 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     producer = apply("tests/computed-init", export_model, version="2026.11.17", output=OUT)
     own_model = ArtifactHfModel(producer)
     train = snowball_model.SNOWBALL.by_name["train-long"]
+    init = OPENTHOUGHTS_32K_4NODE.model()
+    [sft_run] = snowball.build_experiment(train, init=init, table=snowball_model.SNOWBALL).runs
+    sft_run.lower()
+    assert init.step in sft_run.deps
+    config = yaml.safe_load(materialized_config(sft_run, str(tmp_path)).launch_config_yaml)
+    assert config["inputs"]["model"]["uri"] == f"{init.step.path(str(tmp_path))}/hf/step-9"
 
     def reject_export_read(*args, **kwargs):
         raise AssertionError("planning read an unbuilt export")
@@ -371,6 +399,12 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.3": "e54674f6",
             "2026.11.20.4": "aa9d679d",
         },
+        "eval-short": {
+            "2026.11.19.1": "8144570a",
+            "2026.11.20.1": "fad362ca",
+            "2026.11.20.3": "85b0359d",
+            "2026.11.20.4": "4b439968",
+        },
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
@@ -378,7 +412,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
-        generating = name in ("speed-short", "data-short")
+        generating = name in ("speed-short", "data-short", "eval-short")
         assert (
             config["runtime"]["training_type"],
             trainer["rollout_buffer"]["max_staleness_steps"],
@@ -835,6 +869,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("python-init-conflict",),
         ("python-init-compare",),
         ("--set", "trainer.dump_eval_results=false"),
+        ("--set", "trainer.hf_hub_repo_id=org/model"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
         ("--require", "typo>=0"),
@@ -876,6 +911,8 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "does not compute" in result.output
     if "trainer.dump_eval_results=false" in arguments:
         assert "owned" in result.output
+    if "trainer.hf_hub_repo_id=org/model" in arguments:
+        assert "use the preset's declared owned keys" in result.output
 
 
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
