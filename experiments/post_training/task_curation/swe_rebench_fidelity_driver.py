@@ -655,9 +655,7 @@ async def diagnose_condensed(row: dict, base_image: str, output_uri: str, ledger
             sandbox_id,
             "apply test patch",
             "cd {workdir} && git apply --verbose /tmp/test.patch || "
-            "patch --batch --fuzz=5 -p1 -i /tmp/test.patch".format(
-                workdir=shlex.quote(flat["workdir"])
-            ),
+            "patch --batch --fuzz=5 -p1 -i /tmp/test.patch".format(workdir=shlex.quote(flat["workdir"])),
         )
         test_cmd = "cd {workdir} && timeout -k 10 1800 bash -lc {cmd}".format(
             workdir=shlex.quote(flat["workdir"]), cmd=shlex.quote(flat["test_cmd"])

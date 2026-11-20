@@ -30,9 +30,7 @@ CONTEXT_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/base-b
 # elixir; v5 pushed swift/minor. Content verification found the go and node bases lost their
 # apt-installed binaries in the v1 kaniko build (dpkg records them; files absent); v6 rebuilds
 # those two bases with binary guards.
-GROUPS = (
-    "jvm",
-)
+GROUPS = ("jvm",)
 TAG_PREFIX = "base"
 
 
@@ -65,27 +63,78 @@ def main() -> None:
     )
     del staged
     environment = {**os.environ, "ATLAS_GHCR_DOCKER_CONFIG": json.dumps({"auths": {"ghcr.io": {"auth": ghcr_auth()}}})}
-    command = "set -eu; echo 'GROUPS=" + ",".join(GROUPS) + "'; " + " ; ".join(
-        "/kaniko/executor "
-        f"--context={CONTEXT_URI} "
-        f"--dockerfile={group}.Dockerfile "
-        f"--destination={PACKAGE}:{TAG_PREFIX}-{group} "
-        "--custom-platform=linux/amd64 --single-snapshot --cache=false --compressed-caching=false --reproducible "
-        f"--image-name-with-digest-file=/tmp/{group}-digest.txt; "
-        f'echo "{group} $(cat /tmp/{group}-digest.txt)"'
-        for group in GROUPS
+    command = (
+        "set -eu; echo 'GROUPS="
+        + ",".join(GROUPS)
+        + "'; "
+        + " ; ".join(
+            "/kaniko/executor "
+            f"--context={CONTEXT_URI} "
+            f"--dockerfile={group}.Dockerfile "
+            f"--destination={PACKAGE}:{TAG_PREFIX}-{group} "
+            "--custom-platform=linux/amd64 --single-snapshot --cache=false --compressed-caching=false --reproducible "
+            f"--image-name-with-digest-file=/tmp/{group}-digest.txt; "
+            f'echo "{group} $(cat /tmp/{group}-digest.txt)"'
+            for group in GROUPS
+        )
     )
     job_name = "swe-repair-swe-rebench-v2-bases-v22"
     args = [
-        "uv", "run", "--no-sync", "iris", "--cluster=marin", "job", "run", "--no-wait",
-        "--target-cluster=cw-us-east-02a", "--no-sync", "--task-image", BUILDER,
-        "--cpu", "8", "--memory", "128GB", "--disk", "300GB", "--enable-extra-resources",
-        "--timeout", "259200", "--priority", "batch", "--job-name", job_name,
-        "--secret-behavior", "isolate", "--secret", "config.json", "env:ATLAS_GHCR_DOCKER_CONFIG",
-        "--secret", "CW_KEY_ID", "env:CW_KEY_ID", "--secret", "CW_KEY_SECRET", "env:CW_KEY_SECRET",
-        "-e", "DOCKER_CONFIG", "/run/rigging/secrets", "-e", "S3_ENDPOINT", "https://cwobject.com",
-        "-e", "S3_FORCE_PATH_STYLE", "false", "-e", "AWS_REGION", "US-EAST-02A",
-        "-e", "AWS_EC2_METADATA_DISABLED", "true", "--", "/busybox/sh", "-c", command,
+        "uv",
+        "run",
+        "--no-sync",
+        "iris",
+        "--cluster=marin",
+        "job",
+        "run",
+        "--no-wait",
+        "--target-cluster=cw-us-east-02a",
+        "--no-sync",
+        "--task-image",
+        BUILDER,
+        "--cpu",
+        "8",
+        "--memory",
+        "128GB",
+        "--disk",
+        "300GB",
+        "--enable-extra-resources",
+        "--timeout",
+        "259200",
+        "--priority",
+        "batch",
+        "--job-name",
+        job_name,
+        "--secret-behavior",
+        "isolate",
+        "--secret",
+        "config.json",
+        "env:ATLAS_GHCR_DOCKER_CONFIG",
+        "--secret",
+        "CW_KEY_ID",
+        "env:CW_KEY_ID",
+        "--secret",
+        "CW_KEY_SECRET",
+        "env:CW_KEY_SECRET",
+        "-e",
+        "DOCKER_CONFIG",
+        "/run/rigging/secrets",
+        "-e",
+        "S3_ENDPOINT",
+        "https://cwobject.com",
+        "-e",
+        "S3_FORCE_PATH_STYLE",
+        "false",
+        "-e",
+        "AWS_REGION",
+        "US-EAST-02A",
+        "-e",
+        "AWS_EC2_METADATA_DISABLED",
+        "true",
+        "--",
+        "/busybox/sh",
+        "-c",
+        command,
     ]
     with (root / "kaniko-submit.log").open("w") as output:
         completed = subprocess.run(args, env=environment, stdout=output, stderr=subprocess.STDOUT)
