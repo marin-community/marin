@@ -15,7 +15,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
 from marin.rl.curriculum import RlCurriculum
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model, whole_run_lr_receipt
@@ -53,7 +53,10 @@ from experiments.post_training.task_curation.exp5_curriculum import (
 )
 
 DATA_VERSION = "2026.11.20.1"
-PREPARATION_ROUTE_QUOTAS = {"agentic": 13, "nonagentic": 51}
+# The inherited 64-group window apportions the prepared 0.95 to 14 SWE groups.
+# This diagnostic subset remains unlaunchable while the research slot is pending.
+PREPARATION_ROUTE_QUOTAS = {"agentic": 14, "nonagentic": 50}
+TERMINAL_STAGE = "archive"
 
 
 def prepared_curriculum() -> RlCurriculum:
@@ -86,8 +89,8 @@ def prepared_pools(resolved: dict) -> dict[str, ArtifactStep]:
         ):
             raise ValueError("Exp5 prepared pool does not match the held curriculum")
         files = [
-            {"uri": path + "/train.parquet", "sha256": manifest["sha256"]},
-            {"uri": path + "/manifest.json", "sha256": manifest_sha},
+            {"uri": prefix_join(path, "train.parquet"), "sha256": manifest["sha256"]},
+            {"uri": prefix_join(path, "manifest.json"), "sha256": manifest_sha},
         ]
         adopted[route] = ArtifactStep.adopt(
             f"long-loop-exp5/prepared-{route}",
@@ -112,9 +115,8 @@ def prepared_pools(resolved: dict) -> dict[str, ArtifactStep]:
 @click.option("--round", "round_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--source-revision", required=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
-@click.option("--through", type=click.Choice(["sft", "rl", "eval", "archive"]), default="archive", show_default=True)
 @rl_build_options
-def main(round_path: Path, source_revision: str, validation_output: Path, through: str) -> ArtifactStep:
+def main(round_path: Path, source_revision: str, validation_output: Path) -> ArtifactStep:
     context = click.get_current_context()
     if context.params["do_run"]:
         raise click.UsageError("Exp5 launch is on hold: OpenResearcher's 5% slot is not admitted; --run is disabled")
@@ -135,6 +137,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
     resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     resolved["exp5_admission"] = {
         "launch_ready": False,
+        "terminal_stage": TERMINAL_STAGE,
         "launch_hold": "User review of Exp4 evaluation and unresolved OpenResearcher runtime",
         "target_shares": dict(TARGET_SHARES),
         "prepared_absolute_share": sum(curriculum.weights().values()),
@@ -165,7 +168,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
     terminal = build_spec_graph(
         resolved,
         spec.version,
-        through=through,
+        through=TERMINAL_STAGE,
         data_artifacts=pools,
         curriculum=curriculum,
         sft_release=handle,

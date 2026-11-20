@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -20,7 +21,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 
-from experiments.post_training.long_loop.exp5 import main, prepared_curriculum
+from experiments.post_training.long_loop.exp5 import main, prepared_curriculum, prepared_pools
 from experiments.post_training.long_loop.exp5_data import hardmath_task, ifbench_row
 from experiments.post_training.task_curation.exp4_curriculum import CARRY_OVER_SHARES
 from experiments.post_training.task_curation.exp5_curriculum import (
@@ -105,3 +106,14 @@ def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp
     assert result.exit_code == 2
     assert "--run is disabled" in result.output
     assert not list(tmp_path.iterdir())
+
+
+def test_exp5_refuses_a_different_swe_population_before_constructing_training_inputs(monkeypatch):
+    def substituted_bytes(path):
+        if str(path).endswith("manifest.json"):
+            return b'{"rows":5608,"source_counts":{"clone-only":5608}}'
+        return b"{}"
+
+    monkeypatch.setattr(StoragePath, "read_bytes", substituted_bytes)
+    with pytest.raises(ValueError, match="Exp4 SWE pool manifest changed"):
+        prepared_pools({})

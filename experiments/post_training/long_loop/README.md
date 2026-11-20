@@ -31,9 +31,15 @@ A printed blocked plan is not a successful dry-run or permission to launch.
 Exp5 setup reuses qualified V7, whose four science components already derive
 from the sealed accepted/repaired science release. It preserves Exp4's SWE
 bug-fix pool, adds the pinned Atlas IFBench training release and base HARDMath,
-and reserves five percent for OpenResearcher. The research source requires a
-newer task schema and the `openresearcher-bm25:v1` provider; it is excluded from
-the prepared pool. `exp5.py` refuses `--run` before resolving any artifacts.
+and reserves five percent of RL rollout groups for OpenResearcher. The research
+source requires a newer task schema and the `openresearcher-bm25:v1` provider;
+it is excluded from the prepared pool. `exp5.py` unconditionally refuses `--run`
+before resolving any artifacts.
+
+Source revisions are recorded in [the curriculum](../task_curation/exp5_curriculum.py).
+The science inputs are `rqa`, `so`, `syn_mcq` and `vendor` at revision
+`1583049c1df02b418e07d14047eb37db9df46eba`; V7's existing publisher and native
+consumer receipts qualify their retained population.
 
 The intended shares total one. The static preparation graph records the
 prepared 0.95 and reserved 0.05 separately. Its sampler weights remain absolute;
@@ -44,13 +50,16 @@ be submitted. The launch hold also preserves the user's Exp4 evaluation review.
 uv run python -m experiments.post_training.long_loop.exp5 \
   --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
   --source-revision "$(git rev-parse HEAD)" \
-  --version 2026.11.20.85 --through archive \
+  --version 2026.11.20.85 \
   --validation-output /tmp/long-loop-exp5-setup
 ```
 
-The regional CPU data producer is `experiments.post_training.long_loop.exp5_data`
-at version `2026.11.20.1`. Its manifest pins the unchanged Exp4 input, IFBench
-and HARDMath files and records all source counts. It processes all 702 raw
+This command validates the complete graph through its archive stage, writes local
+receipts, and submits no jobs. The US-EAST-08A CPU data producer is
+`experiments.post_training.long_loop.exp5_data` at version `2026.11.20.1`.
+Its output prefix is `OUTPUT_PREFIX` in [the producer](exp5_data.py); its
+`long-loop-exp5/rl-pool-nonagentic/2026.11.20.1/manifest.json` pins the unchanged
+Exp4 input, IFBench and HARDMath files and records all source counts. It processes all 702 raw
 HARDMath rows with the base converter, retaining 684 tasks and preserving the
 18 invalid-reference rejection receipts. It applies no difficulty filter and
 does not select the RHS variant.

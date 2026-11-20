@@ -19,7 +19,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.cli import build_options
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
@@ -58,7 +58,7 @@ HARDMATH_URI = f"hf://datasets/{HARDMATH_REPO}@{HARDMATH_REVISION}/{HARDMATH_FIL
 
 
 def base_pool(route: str) -> str:
-    return f"{BASE_PREFIX}/rl-pool-{route}/{BASE_VERSION}"
+    return str(StoragePath(BASE_PREFIX) / f"rl-pool-{route}" / BASE_VERSION)
 
 
 def ifbench_row(row: dict) -> tuple[dict, Counter]:
@@ -81,7 +81,7 @@ def ifbench_row(row: dict) -> tuple[dict, Counter]:
 
 
 def hardmath_task(data: dict, index: int) -> TaskSpec | ImportRejection:
-    """Use the base converter on every input row, without a difficulty predicate."""
+    """Convert every base HARDMath row without selecting by difficulty."""
     return convert_hardmath(
         RawRow(
             id=f"hardmath:{index}",
@@ -199,7 +199,7 @@ def pool_step(version: str) -> ArtifactStep:
     baseline = ArtifactStep.adopt(
         "long-loop-exp5/inputs/exp4-nonagentic",
         BASE_VERSION,
-        source=base_pool("nonagentic") + "/train.parquet",
+        source=prefix_join(base_pool("nonagentic"), "train.parquet"),
         config={"sha256": NONAGENTIC_SHA256, "manifest_sha256": NONAGENTIC_MANIFEST_SHA256},
     )
     ifbench = ArtifactStep.adopt(
