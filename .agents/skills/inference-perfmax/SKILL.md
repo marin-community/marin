@@ -47,6 +47,10 @@ configuration the best applicable baseline.
 Identify a plausible bottleneck, predict what a change should affect and seek
 evidence that could reject the hypothesis. Separate a measured cause from a
 correlation. Use profiles and controlled changes when they can resolve that gap.
+For an unexplained serving bottleneck or custom model/kernel work, use the
+[vLLM diagnostic reference](references/vllm-diagnostics.md). Choose tools for
+the hypothesis and record what each test establishes. Confirm gains with
+unprofiled serving measurements.
 When prefix reuse is poor, compare AgentX's reported actual and theoretical hit rates.
 Check KV use and routing across data-parallel engines before blaming cache capacity.
 
