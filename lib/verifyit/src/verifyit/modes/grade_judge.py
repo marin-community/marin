@@ -497,7 +497,9 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             final = answer.rsplit("\n", 1)[-1].strip()
             completed_lines = {line.strip() for line in answer.splitlines()}
             observed = {
-                label for label in labels if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+                label
+                for label in labels
+                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
             }
         if final not in labels or observed != {final}:
             if parse_attempt + 1 < parse_attempts:
@@ -507,7 +509,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
         if label_metrics:
             detail["metrics"] = label_metrics[final]
         return scored(float(labels[final]), **detail)
-
+    raise RuntimeError("judge exhausted verdict parse attempts")
 
 
 def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatCompletionMessageParam]:

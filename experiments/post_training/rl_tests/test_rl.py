@@ -507,12 +507,21 @@ def test_published_init_binds_export_tokenizer(
 def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, request):
     if model == "mochi":
         revisions = {
-            "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.2": "15b0f019", "2026.11.20.4": "08ba7390"},
-            "train-long": {"2026.11.20.4": "e105d46c"},
-            "train-long-3rack": {"2026.11.20.4": "9734d621"},
-            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985"},
-            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "d540f763"},
+            "train-medium": {
+                "2026.11.19.1": "8b5a970e",
+                "2026.11.20.2": "15b0f019",
+                "2026.11.20.4": "08ba7390",
+                "2026.11.20.8": "e4afd00c",
+            },
+            "train-long": {"2026.11.20.4": "e105d46c", "2026.11.20.8": "53b78b81"},
+            "train-long-3rack": {"2026.11.20.4": "9734d621", "2026.11.20.8": "dd85dd47"},
+            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3", "2026.11.20.8": "3c5f8008"},
+            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985", "2026.11.20.8": "e97cccee"},
+            "train-long-agentic-3rack": {
+                "2026.11.20.6": "b8f3bba7",
+                "2026.11.20.7": "d540f763",
+                "2026.11.20.8": "c62d85c7",
+            },
         }
         with monkeypatch.context() as local:
             local.delenv("MARIN_PREFIX", raising=False)
@@ -547,6 +556,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "dc52613e",
             "2026.11.20.4": "a7a47da1",
             "2026.11.20.5": "10cc4eaf",
+            "2026.11.20.8": "5c4e3ba0",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -556,6 +566,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "d4749482",
             "2026.11.20.4": "9f40e11e",
             "2026.11.20.5": "21ab1a22",
+            "2026.11.20.8": "1612e7bc",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -565,6 +576,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "dbc38bdf",
             "2026.11.20.4": "fcfe5389",
             "2026.11.20.5": "6d3c4d40",
+            "2026.11.20.8": "6d3c4d40",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -575,6 +587,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
             "2026.11.20.5": "7fb37255",
+            "2026.11.20.8": "e89c912f",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -585,6 +598,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
             "2026.11.20.5": "7fb37255",
+            "2026.11.20.8": "e89c912f",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -594,6 +608,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "87feb546",
             "2026.11.20.4": "a70043f9",
             "2026.11.20.5": "3ffe17e0",
+            "2026.11.20.8": "3ffe17e0",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -604,25 +619,29 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
             "2026.11.20.5": "1a57b152",
+            "2026.11.20.8": "fbbcf021",
         },
         "train-long-harbor": {
             "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
             "2026.11.20.7": "9ceb90cb",
+            "2026.11.20.8": "992b1fff",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
+            "2026.11.20.8": "e6f5e51e",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
+        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f", "2026.11.20.8": "9264bdfb"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
             "2026.11.20.4": "6230565f",
             "2026.11.20.5": "34e130c7",
+            "2026.11.20.8": "34e130c7",
         },
     }
     configs = assert_revisioned_native_configs(
