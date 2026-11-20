@@ -35,6 +35,7 @@ DEPENDENCIES = {
     "facts_grounding": ("facts_grounding.py",),
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
+    "medmcqa_cot": ("choices.py",),
     "zeroeval_mcqa": ("zeroeval.py",),
     "mrcr": ("long_context.py",),
     "graphwalks": ("long_context.py",),
