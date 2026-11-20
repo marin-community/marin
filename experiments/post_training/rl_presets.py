@@ -207,10 +207,6 @@ class Training:
                 )
             )
         every = preset.checkpoint_every
-        if every is None and preset.checkpoints != "none":
-            callbacks.append(
-                CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True)
-            )
         if preset.export != "none":
             callbacks.append(
                 HFModelSaveCallback(
@@ -387,19 +383,23 @@ class Preset:
             raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
             raise ValueError("held-out evaluations require a held-out task selection")
-        if self.checkpoint_every is not None and self.checkpoint_every <= 0:
+        cadence = self.checkpoint_every
+        if cadence is not None and cadence <= 0:
             raise ValueError("checkpoint_every must be positive")
-        if self.checkpoints == "none" and (self.checkpoint_every is not None or self.keep_every is not None):
-            raise ValueError('checkpoints="none" requires checkpoint_every and keep_every to be unset')
         if self.keep_every is not None and self.keep_every <= 0:
             raise ValueError("keep_every must be positive")
         if self.export not in ("none", self.checkpoints):
             raise ValueError("export must be none or match checkpoints")
-        if self.checkpoints == "best":
+        if self.checkpoints == "none":
+            if cadence is not None or self.keep_every is not None:
+                raise ValueError('checkpoints="none" requires checkpoint_every and keep_every to be unset')
+        elif cadence is None:
+            raise ValueError(f'checkpoints="{self.checkpoints}" requires checkpoint_every')
+        elif self.checkpoints == "best":
             if not self.evaluations:
                 raise ValueError('checkpoints="best" requires an evaluation')
             every = self.evaluations[0].every
-            if every and (self.checkpoint_every is None or every % self.checkpoint_every):
+            if every and every % cadence:
                 raise ValueError('scheduled evaluations for checkpoints="best" must fall on checkpoint steps')
         validate_agentic_recipe(self.recipe.config)
         for evaluation in self.evaluations[1:]:

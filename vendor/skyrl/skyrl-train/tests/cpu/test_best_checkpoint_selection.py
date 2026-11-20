@@ -27,11 +27,10 @@ def test_rolling_cleanup_keeps_best_periodic_and_recent_checkpoints(tmp_path, mo
     trainer.cfg = OmegaConf.create(
         {"trainer": {"ckpt_path": str(tmp_path), "max_ckpts_to_keep": 2, "checkpoint_keep_every": 2}}
     )
-    trainer._last_saved_step = 6
     trainer._node_ids = ["worker"]
     monkeypatch.setattr("skyrl_train.trainer.run_on_each_node", lambda *_args: None)
 
-    trainer._cleanup_old_checkpoints()
+    trainer._cleanup_old_checkpoints(6)
 
     assert {path.name for path in tmp_path.glob("global_step_*")} == {
         "global_step_1",

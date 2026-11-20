@@ -39,6 +39,7 @@ from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSn
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 from skyrl_train.checkpoint_listing import best_checkpoint_step, cleanup_old_checkpoints, periodic_checkpoint_steps
+from skyrl_train.hf_export import protected_hf_export_steps
 from skyrl_train.io import io as checkpoint_io
 
 
@@ -189,19 +190,24 @@ def _retain_terminal_checkpoints(config: DictConfig) -> None:
     if (selection := trainer.get("checkpoint_retention")) is None:
         return
     root = str(config.artifacts.checkpoint_root)
+    marker = StoragePath(root) / LATEST_CHECKPOINT_FILE
+    if not marker.exists():
+        return
     latest = terminal_checkpoint_step(root)
     best = best_checkpoint_step(root) if selection == "best" else None
     selected = latest if best is None else best
     kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest)
     if selected > 0:
         kept.add(selected)
-    marker = str(StoragePath(root) / LATEST_CHECKPOINT_FILE)
+    protected = protected_hf_export_steps(root)
+    if protected:
+        kept.update(periodic_checkpoint_steps(root, 1, latest) & protected)
     if not kept:
-        checkpoint_io.remove(marker)
+        checkpoint_io.remove(str(marker))
     elif (newest := max(kept)) != latest:
         # Publish a retained checkpoint before deleting the former marker target.
-        checkpoint_io.write_bytes_atomic(marker, str(newest).encode())
-    cleanup_old_checkpoints(root, 0, kept)
+        checkpoint_io.write_bytes_atomic(str(marker), str(newest).encode())
+    cleanup_old_checkpoints(root, 0, kept | protected)
 
 
 def _result(
@@ -328,10 +334,14 @@ def execute_launch(
             outcome,
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
-    _retain_terminal_checkpoints(config)
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
     receipt = _write_attempt_receipt(config, result)
     write_json(terminal_receipt_uri, receipt.model_dump(mode="json"))
+    if config.run.mode == RunMode.TRAIN:
+        try:
+            _retain_terminal_checkpoints(config)
+        except Exception as error:
+            logger.warning(f"Failed to prune checkpoints for {config.run.id}: {error}")
     return result
 
 

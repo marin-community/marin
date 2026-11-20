@@ -265,7 +265,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
 
 
 def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin a finished run's latest committed native checkpoint and its starting model."""
+    """Pin the newest retained recovery checkpoint and starting model from a finished run."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable run version")

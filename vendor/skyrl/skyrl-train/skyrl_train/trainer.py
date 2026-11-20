@@ -758,7 +758,7 @@ class RayPPOTrainer:
             io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
             self._last_saved_step = snapshot.step
             cleanup_started = time.monotonic()
-            self._cleanup_old_checkpoints()
+            self._cleanup_old_checkpoints(snapshot.step)
             cleanup_duration = time.monotonic() - cleanup_started
         return time.monotonic() - snapshot.upload_started_at, cleanup_duration
 
@@ -2999,7 +2999,7 @@ class RayPPOTrainer:
             marker_path=latest_checkpoint_file,
         )
 
-    def _cleanup_old_checkpoints(self):
+    def _cleanup_old_checkpoints(self, step: int):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep
         # A negative limit keeps all checkpoints. The payload is a no-op at
         # this value, so skip the per-node Ray lease entirely. Leasing a fresh
@@ -3008,12 +3008,11 @@ class RayPPOTrainer:
         if max_ckpts < 0:
             return
 
-        checkpoint_root = self.cfg.trainer.ckpt_path
-        protected_steps = protected_hf_export_steps(checkpoint_root)
-        if best_step := best_checkpoint_step(checkpoint_root):
+        protected_steps = protected_hf_export_steps(self.cfg.trainer.ckpt_path)
+        if best_step := best_checkpoint_step(self.cfg.trainer.ckpt_path):
             protected_steps.add(best_step)
         protected_steps.update(
-            periodic_checkpoint_steps(checkpoint_root, self.cfg.trainer.get("checkpoint_keep_every"), self._last_saved_step)
+            periodic_checkpoint_steps(self.cfg.trainer.ckpt_path, self.cfg.trainer.get("checkpoint_keep_every"), step)
         )
 
         if not self._node_ids:
@@ -3022,7 +3021,7 @@ class RayPPOTrainer:
             run_on_each_node(
                 self._node_ids,
                 cleanup_old_checkpoints,
-                checkpoint_root,
+                self.cfg.trainer.ckpt_path,
                 max_ckpts,
                 protected_steps,
             )
@@ -3036,7 +3035,7 @@ class RayPPOTrainer:
 
         # Driver-side cleanup. For a shared ckpt_path (GPFS, S3) this alone
         # suffices; the per-node fan-out above only matters for node-local dirs.
-        cleanup_old_checkpoints(checkpoint_root, max_ckpts, protected_steps)
+        cleanup_old_checkpoints(self.cfg.trainer.ckpt_path, max_ckpts, protected_steps)
 
     def load_checkpoints(self) -> Tuple[int, str]:
         """

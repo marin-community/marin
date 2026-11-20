@@ -130,7 +130,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
     producer = apply("tests/computed-init", export_model, version="2026.11.17", output=OUT)
     own_model = ArtifactHfModel(producer)
-    train = snowball_model.SNOWBALL.by_name["train-long"]
+    train = replace(snowball_model.SNOWBALL.by_name["train-long"], checkpoints="best", export="best")
     dev_sft = replace(OPENTHOUGHTS_32K_4NODE, recipe=replace(OPENTHOUGHTS_SPEC, version="dev"))
     dev_model = dev_sft.model()
 
@@ -261,11 +261,10 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
 
 def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
+    preset = replace(snowball_model.SNOWBALL.by_name["train-long-harbor"], checkpoints="best", export="best")
     paths = []
     for index, settings in enumerate(((), ("context_budget.serving_window_tokens=28672",))):
-        step = snowball.build_run(
-            snowball_model.SNOWBALL.by_name["train-long-harbor"], table=snowball_model.SNOWBALL, settings=settings
-        ).runs[0]
+        step = snowball.build_run(preset, table=snowball_model.SNOWBALL, settings=settings).runs[0]
         path = tmp_path / f"harbor-{index}.yaml"
         document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
         if index:
@@ -486,26 +485,26 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.12.1": "ba638a12",
             "2026.11.17.1": "2be6e5e2",
             "2026.11.19.1": "4aa3aed9",
-            "2026.11.20.1": "e44e2dad",
+            "2026.11.20.1": "a10a7ac5",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
             "2026.11.17.1": "2be6e5e2",
             "2026.11.19.1": "4aa3aed9",
-            "2026.11.20.1": "e44e2dad",
+            "2026.11.20.1": "a10a7ac5",
         },
         "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "9edc7b70"},
         "train-long": {
             "2026.11.11.1": "4945b701",
             "2026.11.17.1": "b411c765",
             "2026.11.19.1": "e56a62fa",
-            "2026.11.20.1": "30754c02",
+            "2026.11.20.1": "1729e419",
         },
         "train-long-harbor": {
             "2026.11.17.2": "5a71e7e8",
             "2026.11.18.1": "7c3c9478",
             "2026.11.19.1": "3f50c3ec",
-            "2026.11.20.1": "46cc7e70",
+            "2026.11.20.1": "a9627935",
         },
     }
     configs = assert_revisioned_native_configs(
@@ -551,7 +550,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             assert config["run"]["export_hf"] and "hf_model_save" in [row["type"] for row in trainer["callbacks"]]
         if name == "train-long":
             kinds = [row["type"] for row in trainer["callbacks"]]
-            assert kinds.index("evaluation") < kinds.index("best_checkpoint")
+            assert "evaluation" in kinds and "best_checkpoint" not in kinds
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
 
 
@@ -1016,7 +1015,12 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
     preset = snowball_model.SNOWBALL.by_name["train-long"]
-    preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
+    preset = replace(
+        preset,
+        checkpoints="best",
+        export="best",
+        recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")),
+    )
     table = preset_table(preset)
     initializer = ArtifactHfModel(
         ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=Artifact),

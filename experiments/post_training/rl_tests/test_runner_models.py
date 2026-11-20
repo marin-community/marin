@@ -99,8 +99,21 @@ def test_checkpoint_retention_composes_with_the_save_and_evaluation_callbacks(se
     [
         ({"checkpoints": "latest"}, "export must be none or match checkpoints"),
         ({"export": "none", "evaluations": ()}, "requires an evaluation"),
+        ({"checkpoints": "latest", "export": "none", "checkpoint_every": None}, 'checkpoints="latest" requires'),
+        ({"checkpoint_every": None}, 'checkpoints="best" requires checkpoint_every'),
+        ({"checkpoints": "none", "export": "none"}, 'checkpoints="none" requires'),
+        ({"keep_every": 0}, "keep_every must be positive"),
+        ({"keep_every": -1}, "keep_every must be positive"),
     ],
-    ids=["export-mismatch", "best-without-evaluation"],
+    ids=[
+        "export-mismatch",
+        "best-without-evaluation",
+        "latest-without-cadence",
+        "best-without-cadence",
+        "none-with-cadence",
+        "zero-keep-every",
+        "negative-keep-every",
+    ],
 )
 def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
     with pytest.raises(ValueError, match=error):
@@ -193,7 +206,6 @@ def test_snowball_plan_derives_route_capture_and_refuses_explicit_disable(select
         ("mix", {"agentic": Fraction(1, 4), "nonagentic": Fraction(1, 4)}, "sum to 1"),
         ("mix", {"agentic": Fraction(1, 3), "nonagentic": Fraction(2, 3)}, "whole number of groups"),
         ("mix", {"agentic": Fraction(1, 2), "math": Fraction(1, 2)}, "training selection has"),
-        ("checkpoint", None, "fall on checkpoint steps"),
         ("evaluation", 3, "fall on checkpoint steps"),
         ("prefix", None, "storage prefix"),
         ("gated", None, "already built"),
@@ -217,8 +229,6 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
             )
         elif case == "mix":
             rl_recipe.run_spec(replace(preset, batch_mix=BatchMix(value)), name="mix-test", tasks=selection)
-        elif case == "checkpoint":
-            replace(preset, checkpoint_every=None)
         elif case == "evaluation":
             replace(preset, evaluations=(replace(preset.evaluations[0], every=value),))
         else:

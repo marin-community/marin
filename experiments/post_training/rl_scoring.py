@@ -455,7 +455,7 @@ def _session_invariants(
     counts = Counter(row["item"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if evaluation == preset.guarded or (preset.checkpoint_every and evaluation.held_out):
+    if evaluation == preset.guarded or (preset.checkpoints == "best" and evaluation.held_out):
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
@@ -571,7 +571,7 @@ def load_run(
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
-        quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
+        quality = evaluation.held_out and (evaluation == preset.guarded or preset.checkpoints == "best")
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         )

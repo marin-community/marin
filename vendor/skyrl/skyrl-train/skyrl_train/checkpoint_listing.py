@@ -57,8 +57,8 @@ def best_checkpoint_step(checkpoint_root: str) -> int | None:
     return None
 
 
-def periodic_checkpoint_steps(checkpoint_root: str, keep_every: int | None, latest_step: int | None) -> set[int]:
-    if keep_every is None or latest_step is None:
+def periodic_checkpoint_steps(checkpoint_root: str, keep_every: int | None, latest_step: int) -> set[int]:
+    if keep_every is None:
         return set()
     return {
         step
