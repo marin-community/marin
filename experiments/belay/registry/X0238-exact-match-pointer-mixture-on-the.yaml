@@ -88,6 +88,13 @@ trials:
   commit: 3779f981d8
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.6077
+  delta:
+  - -0.0044
+  steps: 30389
+  baseline: s7n-d768 2.6121 (same commit, seed 0)
+  step_time_change: 0%
 - id: t005
   variant: exact-match pointer mixture, 8 candidates
   rung: competitive-d1024
