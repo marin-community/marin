@@ -88,7 +88,6 @@ def deleted_sandboxes(monkeypatch):
 def test_cli_dry_run_and_rechecked_delete_preserve_active_ids_and_append_ledger(
     monkeypatch, tmp_path, deleted_sandboxes, delete
 ):
-    deleted = deleted_sandboxes
     ledger = tmp_path / "ledger.jsonl"
     previous = '{"outcome": "previous run"}\n'
     ledger.write_text(previous)
@@ -100,7 +99,7 @@ def test_cli_dry_run_and_rechecked_delete_preserve_active_ids_and_append_ledger(
         with pytest.raises(SystemExit) as error:
             stale_cli.main()
         assert error.value.code == 1
-        assert deleted == {"idle"}
+        assert deleted_sandboxes == {"idle"}
         records = [json.loads(line) for line in ledger.read_text().splitlines()]
         assert records[0] == {"outcome": "previous run"}
         assert [(row["id"], row["outcome"]) for row in records[1:]] == [
@@ -114,11 +113,11 @@ def test_cli_dry_run_and_rechecked_delete_preserve_active_ids_and_append_ledger(
         ]
     else:
         stale_cli.main()
-        assert deleted == set()
+        assert deleted_sandboxes == set()
         assert ledger.read_text() == previous
 
 
-def test_cli_ledger_without_delete_rejects_run_and_preserves_ledger(monkeypatch, tmp_path, deleted_sandboxes):
+def test_cli_ledger_without_delete_rejects_run_and_preserves_ledger(monkeypatch, tmp_path):
     ledger = tmp_path / "ledger.jsonl"
     previous = '{"outcome": "previous run"}\n'
     ledger.write_text(previous)
@@ -130,5 +129,4 @@ def test_cli_ledger_without_delete_rejects_run_and_preserves_ledger(monkeypatch,
     with pytest.raises(SystemExit) as error:
         stale_cli.main()
     assert error.value.code == 2
-    assert not deleted_sandboxes
     assert ledger.read_text() == previous

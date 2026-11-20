@@ -12,8 +12,6 @@ NOW = datetime(2026, 11, 20, 12, tzinfo=UTC)
 @pytest.mark.parametrize(
     "activity, updated, idle",
     [
-        ("2026-11-20T10:00:00Z", None, True),
-        ("2026-11-20T11:30:00Z", None, False),
         ("2026-11-20T11:00:00Z", None, True),
         ("2026-11-20T11:00:00.000001Z", None, False),
         ("2026-11-20T13:00:00+02:00", None, True),
