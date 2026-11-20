@@ -410,6 +410,26 @@ class OutcomeLedger:
 TRANSIENT_RETRY_DELAYS_SEC = (60.0, 300.0)
 
 
+def verifier_timeout_text(text: str) -> bool:
+    """A verifier deadline exhaustion: a FAILED grading outcome, not a missing one.
+
+    Graders fail closed (ruling 2026-11-20): an oracle timeout means the oracle did not
+    pass (the row is not admitted); a NoP timeout counts as NoP not passing. The outcome
+    records as a phase fail, never as reward=None, and never as a pass — and because the
+    recorded reward is a real float, the timeout never feeds the churn window.
+    """
+    return "Verifier execution timed out" in text or "VerifierTimeoutError" in text
+
+
+def fail_closed_reward(phase: str) -> float:
+    """The fail-closed reward for a phase whose verifier hit its deadline.
+
+    NoP pass means reward 0.0 (no side effects), so NoP-not-passing records 1.0; oracle
+    pass means reward 1.0, so oracle-not-passing records 0.0.
+    """
+    return 1.0 if phase == "nop" else 0.0
+
+
 def transient_daytona_text(text: str) -> bool:
     """Classify the retryable Daytona infrastructure failures."""
     return (
@@ -461,6 +481,17 @@ def trial(
                 asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
             )
         except Exception as error:
+            if verifier_timeout_text(f"{type(error).__name__}: {error}"):
+                # Graders fail closed: the phase records a FAIL (never reward=None, never a
+                # pass), and the recorded float keeps the timeout out of the churn window.
+                summary = {
+                    "rewards": {"reward": fail_closed_reward(phase)},
+                    "exception": {
+                        "exception_type": type(error).__name__,
+                        "exception_message": str(error)[:400],
+                    },
+                }
+                break
             if not transient_daytona_error(error) or retry_index == len(TRANSIENT_RETRY_DELAYS_SEC):
                 raise
             last_error = error

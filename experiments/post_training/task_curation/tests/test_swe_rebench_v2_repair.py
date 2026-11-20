@@ -511,3 +511,31 @@ def test_outcome_ledger_checkpoint_preserves_cross_pod_history(tmp_path):
     assert third.completed(("task-a", "condensed", "oracle"))
     assert third.completed(("task-b", "condensed", "nop"))
     assert third.reward(("task-a", "condensed", "oracle")) == {"reward": 1.0}
+
+
+def test_verifier_timeout_fails_closed_and_never_feeds_the_churn_window():
+    """Ruling 2026-11-20 (the wave-v11 churn refinement): graders fail closed. A verifier
+    timeout is a FAILED grading outcome for that phase - an oracle timeout means the oracle
+    did not pass (the row is not admitted), a NoP timeout counts as NoP not passing - never
+    reward=None, never a pass, and never a churn signal. EnvironmentStartTimeoutError stays
+    in the churn window (that is infra)."""
+    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
+        ChurnMonitor,
+        fail_closed_reward,
+        transient_daytona_error,
+        verifier_timeout_text,
+    )
+
+    assert verifier_timeout_text("Verifier execution timed out after 2400.0 seconds")
+    assert verifier_timeout_text("harbor.trial.errors.VerifierTimeoutError: deadline")
+    assert not verifier_timeout_text("EnvironmentStartTimeoutError: Public fixture initialization timed out")
+    # fail-closed values: NoP-not-passing records 1.0; oracle-not-passing records 0.0
+    assert fail_closed_reward("nop") == 1.0
+    assert fail_closed_reward("oracle") == 0.0
+    # a verifier timeout is not a transient infra error and is not retried
+    assert not transient_daytona_error(RuntimeError("Verifier execution timed out after 2400.0 seconds"))
+    # the recorded float keeps the timeout out of the churn window
+    monitor = ChurnMonitor()
+    for _ in range(60):
+        monitor.record(False)
+    assert not monitor.tripped()
