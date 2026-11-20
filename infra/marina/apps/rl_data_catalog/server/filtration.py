@@ -13,6 +13,7 @@ from .admission import (
     require_lexical_qualification,
     require_population_admission,
 )
+from .consumer import consumer_projection
 from .licensing import declaration_license_ban
 from .source_counts import SourceCountEvidence
 
@@ -39,6 +40,14 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
         "source_status": declaration["status"],
         "reason": "Filtration in progress: no complete current-pin admission receipt is recorded.",
     }
+    projected = consumer_projection(declaration)
+    if projected["consumer_blockers"] and declaration["status"] in {"Available", "Pending"}:
+        return {
+            **pending,
+            "admitted_count": 0,
+            "source_status": "Pending",
+            "reason": ", ".join(projected["consumer_blockers"]),
+        }
     raw = declaration.get("oracle_filtration")
     if raw is None:
         return counted_population(declaration, counts, pending)

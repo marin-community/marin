@@ -10,6 +10,7 @@ from typing import Annotated, Protocol
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ActorCensusInput,
+    ConsumerReceipt,
     ContentEvidenceReference,
     ConvertedExamples,
     DatasetRelease,
@@ -33,6 +34,7 @@ from finestore.rl.curation import (
     SourceQualityResult,
     SourceUse,
     WithinSourceDedupEvidence,
+    consumer_blockers,
     source_identifier,
     source_title,
 )
@@ -270,6 +272,7 @@ class SourceInfo:
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
+    consumer_receipt: ConsumerReceipt | None = None
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: Annotated[OracleFiltrationEvidence | None, Field(exclude_if=lambda value: value is None)] = None
     no_oracle_executability_policy: Annotated[
@@ -400,6 +403,15 @@ class RlDataSource[ConfigT: CatalogConfig]:
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
+        blockers.extend(
+            reason.value
+            for reason in consumer_blockers(
+                info.consumer_receipt,
+                info.id,
+                info.actor_census_input,
+                info.within_source_dedup.unique_count if info.within_source_dedup else 0,
+            )
+        )
         dataset = self.dataset
         if ban := source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt):
             blockers.append(f"license ban: {ban.reason} ({ban.issue_url})")
@@ -662,6 +674,13 @@ class RlDataSource[ConfigT: CatalogConfig]:
             return SourceStatus.EXCLUDED
         if "deprecated" in self.info.tags:
             return SourceStatus.DEPRECATED
+        if consumer_blockers(
+            self.info.consumer_receipt,
+            self.info.id,
+            self.info.actor_census_input,
+            self.info.within_source_dedup.unique_count if self.info.within_source_dedup else 0,
+        ):
+            return SourceStatus.PENDING
         return SourceStatus.AVAILABLE
 
     @property
@@ -793,6 +812,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             grading_environment=info.grading_environment,
             integrity_contracts=info.integrity_contracts,
             actor_census_input=info.actor_census_input,
+            consumer_receipt=info.consumer_receipt,
             converted_examples=info.converted_examples,
             oracle_filtration=info.oracle_filtration,
             no_oracle_executability_policy=info.no_oracle_executability_policy,

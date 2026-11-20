@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.datasets import (
 )
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.cascade import tasks as cascade
+from experiments.post_training.task_curation.datasets.consumer_receipts import consumer_receipts
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
@@ -274,8 +275,19 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source_id, source in selected.items()
     }
-    return {
+    selected = {
         source_id: bind_derived_contract_tags(source, receipts.get(source.info.id))
+        for source_id, source in selected.items()
+    }
+    consumers = consumer_receipts()
+    return {
+        source_id: replace(
+            source,
+            info=replace(
+                source.info,
+                consumer_receipt=consumers.get(source_id),
+            ),
+        )
         for source_id, source in selected.items()
     }
 

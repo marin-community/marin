@@ -17,6 +17,7 @@ from taskcompendium.source_fingerprints import DuplicateReview
 
 from .audit import register_audit_routes
 from .cohort_summaries import COHORT_SUMMARY_VERSION, materialize_cohort_summaries
+from .consumer import consumer_projection
 from .contamination import contamination
 from .content_access import (
     backend_metadata,
@@ -459,7 +460,10 @@ def create_api(services: AppletServices) -> FastAPI:
                         'id',id,'display_name',declaration->'display_name','name',declaration->'name',
                         'status',declaration->'status','stage',declaration->'stage',
                         'exclusion_claims',declaration->'exclusion_claims','notes',declaration->'notes',
-                        'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt'
+                        'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt',
+                        'within_source_dedup',declaration->'within_source_dedup',
+                        'actor_census_input',declaration->'actor_census_input',
+                        'consumer_receipt',declaration->'consumer_receipt'
                     ) || CASE WHEN declaration ? 'data_restriction'
                         THEN jsonb_build_object('data_restriction',declaration->'data_restriction')
                         ELSE '{}'::jsonb END AS declaration
@@ -471,7 +475,7 @@ def create_api(services: AppletServices) -> FastAPI:
             sources = []
             for row in rows:
                 record = canonical_source_record(dict(row))
-                declaration = license_projection(record["declaration"])
+                declaration = consumer_projection(license_projection(record["declaration"]))
                 if content_is_withheld(declaration):
                     declaration = withheld_declaration_projection(declaration)
                 else:
@@ -479,7 +483,16 @@ def create_api(services: AppletServices) -> FastAPI:
                 sources.append(
                     {
                         key: declaration.get(key)
-                        for key in ("id", "display_name", "name", "status", "stage", "exclusion_claims", "notes")
+                        for key in (
+                            "id",
+                            "display_name",
+                            "name",
+                            "status",
+                            "stage",
+                            "exclusion_claims",
+                            "notes",
+                            "consumer_blockers",
+                        )
                     }
                     | {"data_restriction": declaration.get("data_restriction"), "updated_at": metadata["loaded_at"]}
                 )
@@ -541,8 +554,8 @@ def create_api(services: AppletServices) -> FastAPI:
                 row = canonical_source_record(dict(retained_row))
                 withheld = content_is_withheld(row["declaration"])
                 restriction = declaration_restriction(row["declaration"])
-                row["declaration"] = license_projection(
-                    contract_projection(row["declaration"], contracts.get(row["id"], []))
+                row["declaration"] = consumer_projection(
+                    license_projection(contract_projection(row["declaration"], contracts.get(row["id"], [])))
                 )
                 served_declaration = (
                     withheld_declaration_projection(row["declaration"]) if withheld else row["declaration"]
@@ -1010,7 +1023,7 @@ def create_api(services: AppletServices) -> FastAPI:
             quality_display(source["declaration"], source["curation"], source["assessment_key"]).quality,
             full_reviews.get(canonical_source_id(source_id), []),
         )
-        declaration = license_projection(source["declaration"])
+        declaration = consumer_projection(license_projection(source["declaration"]))
         declaration = restriction_projection(declaration)
         if withheld:
             declaration = withheld_declaration_projection(declaration)

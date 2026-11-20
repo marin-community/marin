@@ -799,6 +799,74 @@ class ActorCensusInput(CatalogRecord):
     carry_forward: str | None = None
 
 
+# The runtime selected for Atlas admission. Changing this pin requires new CONSUMER receipts.
+CONSUMER_RUNTIME_COMMIT = "b937327803bd3656305b070f2b56c5176c7a6c9d"
+
+
+class ConsumerReason(StrEnum):
+    RECEIPT_MISSING = "CONSUMER_RECEIPT_MISSING"
+    RUNTIME_STALE = "CONSUMER_RUNTIME_STALE"
+    POPULATION_MISMATCH = "CONSUMER_POPULATION_MISMATCH"
+    SCHEMA_REJECTED = "CONSUMER_SCHEMA_REJECTED"
+    TOOL_UNREGISTERED = "CONSUMER_TOOL_UNREGISTERED"
+    JUDGE_UNREGISTERED = "CONSUMER_JUDGE_UNREGISTERED"
+    LOADER_REJECTED = "CONSUMER_LOADER_REJECTED"
+
+
+class ConsumerReceipt(CatalogRecord):
+    """Complete frozen-population check by the pinned SkyRL loader and registry."""
+
+    source_id: str
+    dataset_id: str
+    dataset_revision: str
+    task_specs_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    checked_tasks: int = Field(gt=0)
+    failed_tasks: int = Field(ge=0)
+    failures: dict[ConsumerReason, int]
+    evidence_url: str
+
+    @model_validator(mode="after")
+    def _failure_counts(self) -> "ConsumerReceipt":
+        if self.failed_tasks > self.checked_tasks or any(
+            count <= 0 or count > self.failed_tasks for count in self.failures.values()
+        ):
+            raise ValueError("Consumer failure counts must fit the checked population")
+        if bool(self.failed_tasks) != bool(self.failures):
+            raise ValueError("Consumer failed tasks require typed failures")
+        return self
+
+
+def consumer_blockers(
+    receipt: ConsumerReceipt | None, source_id: str, binding: ActorCensusInput | None, retained_tasks: int
+) -> tuple[ConsumerReason, ...]:
+    """Return the reasons this population cannot enter current-runtime admission."""
+    if receipt is None:
+        return (ConsumerReason.RECEIPT_MISSING,)
+    if receipt.runtime_commit != CONSUMER_RUNTIME_COMMIT:
+        return (ConsumerReason.RUNTIME_STALE,)
+    if (
+        binding is None
+        or (
+            receipt.source_id,
+            receipt.dataset_id,
+            receipt.dataset_revision,
+            receipt.task_specs_sha256,
+            receipt.checked_tasks,
+        )
+        != (
+            source_id,
+            binding.dataset_id,
+            binding.dataset_revision,
+            binding.task_specs_sha256,
+            retained_tasks,
+        )
+        or binding.measured_tasks != retained_tasks
+    ):
+        return (ConsumerReason.POPULATION_MISMATCH,)
+    return tuple(sorted(receipt.failures))
+
+
 class NoOracleStaticRetentionEvidence(CatalogRecord):
     """Complete no-oracle population, with one typed exclusion per blocked task."""
 
@@ -976,6 +1044,7 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
+    consumer_receipt: ConsumerReceipt | None = None
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: OracleFiltrationEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
     no_oracle_executability_policy: NoOracleExecutabilityPolicy | None = Field(

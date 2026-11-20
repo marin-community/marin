@@ -119,6 +119,49 @@ remain intact.
 
 ## Current admission policy
 
+Ruling 72 (2026-11-20): a source requires a passing `CONSUMER` receipt before
+Atlas can mark it Available or count tasks as Admitted. This applies to existing
+admissions, including legacy blends. A consumer failure keeps the source Pending;
+it does not exclude or delete its population.
+
+The receipt binds the source ID, dataset revision, SHA-256 of the ordered concatenation of the stored `task_spec` UTF-8 strings
+and the number of those strings, and the current runtime commit in
+`finestore.rl.curation.CONSUMER_RUNTIME_COMMIT`. It checks every task with the
+runtime's TaskSpec loader, SkyRL rollout-spec builder and actual provider
+registry, including advertised tools and judge modes. Rejected schema fields,
+missing tools, unavailable judges and rejected rollout contracts carry typed
+`CONSUMER_*` reasons. Missing receipts and changed runtime or population pins
+also block. Change the canonical runtime pin and repeat the full check whenever
+the consumer changes; old receipts cannot qualify the new pin.
+
+Run `experiments.post_training.task_curation.consumer_audit` in the population's
+storage region with an explicit frozen input inventory, runtime git archive,
+archive SHA, session configuration and judge profile. The archive must come from
+the receipt runtime commit; its SHA-256 is checked before extraction. The JSON
+configuration names `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
+`session` (the SkyRL rollout session settings), and `judges` (configured judge
+model names, with the empty string only when a default judge is bound). Derive
+the default judge from `MICRO210_JUDGE` in the consumer runtime
+`experiments/evaluation/judge_config.py`, and preserve each task
+`JudgeSpec`. It emits bounded counts
+and schema paths without task content. Keep result artifacts in regional storage,
+stage receipt metadata with the command below, publish it to the private
+`open-athena/marin-rl-data-atlas-registry` through the existing serialized
+registry publisher with SHA readback,, then commit references
+under `datasets/consumer_receipt_refs/`. The declaration, admission writer and
+served Atlas projection use the same receipt rule. The static check does not prove that a machine can start or that an original
+grader executes correctly; the backend and original-oracle gates remain required.
+Each declared blend population needs its own complete check, as each source does.
+
+```bash
+uv run python -m experiments.post_training.task_curation.consumer_audit \
+  --inputs "$AUDIT_INPUTS" --runtime-archive "$RUNTIME_ARCHIVE" \
+  --config "$CONSUMER_CONFIG" --workers 8 --output "$REGIONAL_OUTPUT"
+uv run python -m experiments.post_training.task_curation.datasets.consumer_receipts \
+  --audit "$LOCAL_AUDIT_JSON" --staged-root "$REGISTRY_STAGING"
+```
+
+
 Synced to preview revision 31 (2026-11-18). These rules include the admission
 display policy for Atlas preview revision 31. When a later section of this
 reference conflicts with them, this section is current.

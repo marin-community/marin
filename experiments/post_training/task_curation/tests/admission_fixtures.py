@@ -9,7 +9,9 @@ from dataclasses import replace
 
 import pytest
 from finestore.rl.curation import (
+    CONSUMER_RUNTIME_COMMIT,
     ActorCensusInput,
+    ConsumerReceipt,
     GradingEnvironmentEvidence,
 )
 from finestore.rl.curation import (
@@ -66,6 +68,20 @@ def actor_census_input(dataset: str, revision: str, version: str, count: int) ->
     return binding
 
 
+def consumer_receipt(source_id: str, binding: ActorCensusInput) -> ConsumerReceipt:
+    return ConsumerReceipt(
+        source_id=source_id,
+        dataset_id=binding.dataset_id,
+        dataset_revision=binding.dataset_revision,
+        task_specs_sha256=binding.task_specs_sha256,
+        runtime_commit=CONSUMER_RUNTIME_COMMIT,
+        checked_tasks=binding.measured_tasks,
+        failed_tasks=0,
+        failures={},
+        evidence_url="https://example.test/consumer",
+    )
+
+
 def with_admission_census(source: RlDataSource) -> RlDataSource:
     assert source.dataset is not None and source.info.within_source_dedup is not None
     binding = actor_census_input(
@@ -80,6 +96,7 @@ def with_admission_census(source: RlDataSource) -> RlDataSource:
             source.info,
             license_receipt=fixture_license(source.info.id, source.dataset.name, source.dataset.revision),
             actor_census_input=binding,
+            consumer_receipt=consumer_receipt(source.info.id, binding),
             grading_environment=source.info.grading_environment or grading_evidence(binding.measured_tasks),
         ),
     )
@@ -99,6 +116,7 @@ def with_declaration_admission_census(declaration: SourceDeclaration) -> SourceD
             **declaration.model_dump(),
             "license_receipt": fixture_license(declaration.id, declaration.dataset_id, declaration.dataset_revision),
             "actor_census_input": binding,
+            "consumer_receipt": consumer_receipt(declaration.id, binding),
             "grading_environment": declaration.grading_environment or grading_evidence(binding.measured_tasks),
         }
     )

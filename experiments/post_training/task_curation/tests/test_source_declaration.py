@@ -17,6 +17,7 @@ from finestore.rl.curation import (
     SourceOrigin,
     SourceQualityResult,
 )
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference

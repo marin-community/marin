@@ -45,7 +45,7 @@ def test_stale_count_evidence_never_carries_a_count_to_another_input(changed: st
         declaration[changed] = "eval" if changed == "intended_use" else "another-revision"
     result = filtration(declaration, observation)
     assert result["example_count"] is None
-    assert result["admitted_count"] is None
+    assert result["admitted_count"] == (0 if changed == "task_specs_sha256" else None)
 
 
 def test_oracle_inventory_and_missing_static_audit_do_not_establish_counts() -> None:

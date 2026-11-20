@@ -50,6 +50,7 @@ class PendingStage(StrEnum):
     """Intake stage of a queued source that is not configured for the catalog yet."""
 
     INTAKE_QUEUED = "Intake queued"
+    CONSUMER_CHECK_PENDING = "Consumer check pending"
     """No catalog measurement receipt is recorded for the source yet."""
 
     MEASUREMENTS_PENDING = "Measurements pending"

@@ -129,7 +129,7 @@ def remediation_rows() -> list[dict[str, Any]]:
             reasons=[claim.model_dump(mode="json") for claim in source.declaration.exclusion_claims],
         ).payload()
         for source in all_sources().values()
-        if source.status is SourceStatus.PENDING
+        if source.status is SourceStatus.PENDING and source.exclusion_claims
     ]
 
 
@@ -170,7 +170,14 @@ def status_extras() -> dict[str, Any]:
     remediation = remediation_rows()
     return {
         "pending": pending_rows(),
-        "stages": {row["id"]: row["stage"] for row in remediation if row["stage"]},
+        "stages": {
+            **{row["id"]: row["stage"] for row in remediation if row["stage"]},
+            **{
+                source.info.id: PendingStage.CONSUMER_CHECK_PENDING.value
+                for source in all_sources().values()
+                if source.status is SourceStatus.PENDING and not source.exclusion_claims
+            },
+        },
         "remediation_queue": remediation,
         "metadata_exclusions": metadata_rows(),
         "reason_explanations": reason_explanations(),
