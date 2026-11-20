@@ -217,7 +217,7 @@ def test_dashboard_prepares_runtime_on_demand_without_blocking_other_requests(mo
     available = tmp_path / "catalog-available"
 
     class Context:
-        def __init__(self, *, pypi_catalog, trusted_precompiled):
+        def __init__(self, *, pypi_catalog):
             self.catalog = pypi_catalog
 
         def Environment(self, *, pypi_packages):
