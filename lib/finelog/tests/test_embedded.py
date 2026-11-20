@@ -13,12 +13,16 @@ segment and reads come back empty. A disk-backed store serves reads.
 """
 
 import json
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
+from click.testing import CliRunner
 from finelog.client import LogClient
 from finelog.embedded import is_available, require_embedded_server
-from finelog.ops_feed import PAGE_SIZE, Event, Severity, Subscription, ack, emit, import_alerts, poll
+from finelog.ops_feed import NAMESPACE, PAGE_SIZE, Event, Severity, Subscription, ack, emit, poll
+from finelog.ops_feed_cli import cli
+from finelog.ops_feed_mac import MacSource, import_alerts
 from finelog.rpc import logging_pb2
 
 
@@ -155,7 +159,7 @@ def test_ops_feed_filtered_page_advances_to_next_page(embedded_server, tmp_path)
     state = tmp_path / "reader.sqlite"
     subscriptions = [Subscription("watchdog", Severity.ERROR)]
     try:
-        table = client.get_table("ops.events", Event)
+        table = client.get_table(NAMESPACE, Event)
         table.write(
             [Event(str(i), datetime.now(UTC), "watchdog", "progress", "info", "opaque", "{}") for i in range(PAGE_SIZE)]
         )
@@ -168,12 +172,48 @@ def test_ops_feed_filtered_page_advances_to_next_page(embedded_server, tmp_path)
         client.close()
 
 
-@pytest.mark.parametrize("source", ["job-watchdog", "mac-resource-watch"])
+def test_ops_feed_cli_lowercase_severity_poll_and_ack(embedded_server, tmp_path, monkeypatch):
+    client = LogClient.connect(embedded_server.address)
+
+    @contextmanager
+    def connection(*args, **kwargs):
+        yield client
+
+    monkeypatch.setattr("finelog.ops_feed_cli.open_client", connection)
+    runner = CliRunner()
+    prefix = ["--state", str(tmp_path / "state.sqlite")]
+    subscriptions = tmp_path / "subscriptions.yaml"
+    subscriptions.write_text("subscriptions:\n  - source: cli-probe\n    min_severity: info\n")
+    poll_args = ["poll", "--subscriptions", str(subscriptions), "--reader", "first"]
+    try:
+        emitted = runner.invoke(
+            cli,
+            [*prefix, "emit", "--source", "cli-probe", "--kind", "test", "--severity", "info", "--subject", "opaque"],
+        )
+        assert emitted.exit_code == 0, emitted.output
+        event_id = emitted.output.strip()
+        result = runner.invoke(cli, prefix + poll_args)
+        assert result.exit_code == 0, result.output
+        event = json.loads(result.output)
+        assert event["event_id"] == event_id
+        assert event["severity"] == "info"
+        assert event["ts"].endswith("+00:00")
+        acknowledged = runner.invoke(cli, [*prefix, "ack", event_id])
+        assert acknowledged.exit_code == 0, acknowledged.output
+        poll_args[-1] = "fresh"
+        result = runner.invoke(cli, prefix + poll_args)
+        assert result.exit_code == 0, result.output
+        assert result.output == ""
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("source", list(MacSource))
 def test_ops_feed_mac_import_replay_rotation_and_partial_write(embedded_server, tmp_path, source):
     client = LogClient.connect(embedded_server.address)
     path = tmp_path / "alerts.jsonl"
     state = tmp_path / "state.sqlite"
-    if source == "job-watchdog":
+    if source == MacSource.JOB_WATCHDOG:
         record = {
             "entry": "private-owner",
             "kind": "JOB_FAILED",

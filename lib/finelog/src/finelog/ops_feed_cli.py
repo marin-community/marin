@@ -11,7 +11,8 @@ import yaml
 
 from finelog.deploy.config import load_finelog_config
 from finelog.deploy.connect import open_client
-from finelog.ops_feed import DEFAULT_STATE, Severity, Subscription, ack, emit, event_dict, import_alerts, poll
+from finelog.ops_feed import DEFAULT_STATE, Severity, Subscription, ack, emit, event_dict, poll
+from finelog.ops_feed_mac import MacSource, import_alerts
 
 
 @click.group()
@@ -26,15 +27,17 @@ def cli(ctx: click.Context, deployment: str, state: Path) -> None:
 @cli.command("emit")
 @click.option("--source", required=True)
 @click.option("--kind", required=True)
-@click.option("--severity", type=click.Choice(list(Severity)), required=True)
+@click.option("--severity", type=click.Choice([level.value for level in Severity]), required=True)
 @click.option("--subject", required=True)
 @click.option("--payload", default="{}", help="JSON object without personal data or secrets.")
 @click.option("--dedup-key")
 @click.pass_obj
 def emit_cmd(settings, source, kind, severity, subject, payload, dedup_key) -> None:
-    click.echo(
-        emit(source, kind, Severity(severity), subject, json.loads(payload), dedup_key=dedup_key, deployment=settings[0])
-    )
+    deployment, _ = settings
+    with open_client(load_finelog_config(deployment), deployment) as client:
+        click.echo(
+            emit(source, kind, Severity(severity), subject, json.loads(payload), dedup_key=dedup_key, client=client)
+        )
 
 
 @cli.command("poll")
@@ -61,14 +64,14 @@ def ack_cmd(settings, event_id: str) -> None:
 
 
 @cli.command("import-alerts")
-@click.option("--source", type=click.Choice(["job-watchdog", "mac-resource-watch"]), required=True)
+@click.option("--source", type=click.Choice([source.value for source in MacSource]), required=True)
 @click.option("--path", type=click.Path(exists=True, path_type=Path), required=True)
 @click.pass_obj
 def import_cmd(settings, source: str, path: Path) -> None:
     """Deliver retained producer alerts; retry safely after a failed import."""
     deployment, state = settings
     with open_client(load_finelog_config(deployment), deployment) as client:
-        click.echo(import_alerts(client, source, path, destination=deployment, state=state))
+        click.echo(import_alerts(client, MacSource(source), path, destination=deployment, state=state))
 
 
 if __name__ == "__main__":

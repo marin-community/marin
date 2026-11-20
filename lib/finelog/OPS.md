@@ -915,8 +915,8 @@ pre-bind readiness delay.
 `ops.events` holds typed fleet events. Producers register the table on their
 first write through `LogClient.get_table`. Each row has an event ID, UTC time,
 source, kind, severity, opaque subject, JSON payload, and origin cluster.
-Desktop tools write to `marin` with
-cached IAP credentials. Iris jobs write to their regional Finelog route; the
+The desktop CLI defaults to `marin` with cached IAP credentials. Python callers
+pass a destination `LogClient` explicitly. Iris jobs use their regional Finelog route; the
 existing regional forwarder carries this table to `marin`. The `cluster` column
 preserves that origin. This feed needs no server schema change or namespace reset.
 
@@ -933,7 +933,7 @@ uv run ops-feed ack <event_id>
 ```
 
 The Python API is `finelog.ops_feed.emit(source, kind, Severity.ERROR, subject,
-payload, dedup_key="stable-key")`. It returns the event ID after a successful
+payload, dedup_key="stable-key", client=client)`. It returns the event ID after a successful
 flush. A failed or timed-out flush raises; retry with the same dedup key. In an
 Iris job, pass the task's regional client explicitly:
 
@@ -993,6 +993,7 @@ working directory and inputs:
 
 ```bash
 uv run --no-sync python scripts/ops/relay_mac_alerts.py \
+  --deployment marin \
   --watchdog-alerts "$HOME/Documents/experiments/active/job-watchdog/alerts.jsonl" \
   --resource-alerts "$HOME/.local/share/mac-resource-watch/state/alerts.jsonl"
 ```
