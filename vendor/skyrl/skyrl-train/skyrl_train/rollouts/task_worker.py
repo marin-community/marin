@@ -227,7 +227,6 @@ async def _model_turn(
 
 
 def _lost_machine_start(interruption: GradedRolloutInterrupted) -> DaytonaConnectionError | None:
-    """Return the connection error that stopped the task machine from starting, or none."""
     error = interruption.__cause__
     if interruption.operation != RolloutOperation.START or not isinstance(error, TaskMachineError):
         return None

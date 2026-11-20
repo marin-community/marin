@@ -1,5 +1,3 @@
-"""A rollout whose task machine loses its connection while starting restarts with a fresh machine."""
-
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -22,8 +20,6 @@ SETUP_ENVIRONMENT = SHELL_ENVIRONMENT.model_copy(update={"setup_commands": ("tru
 
 
 class Reset(StrEnum):
-    """Where the Daytona connection resets."""
-
     CREATE = "create"
     COMMAND = "command"
 
@@ -69,7 +65,6 @@ class ResettingFactory:
 
 
 async def rollout(worker_config, factory, *, environment=SHELL_ENVIRONMENT, harbor=None, replies=None):
-    """Run one shell task and return its result with the waits between restarts."""
     waits = []
 
     async def wait(delay):

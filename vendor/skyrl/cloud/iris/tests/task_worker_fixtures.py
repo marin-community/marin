@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model and tokenizer stand-ins for tests that drive a ``TaskRolloutWorker``."""
-
 from skyrl_train.trajectory_runners.types import TokenProvenance
 
 
@@ -14,7 +12,6 @@ class WorkerTokenizer:
 
 
 def sampled_reply(content="Working", **message):
-    """One engine-sampled assistant turn; ``message`` adds fields such as ``tool_calls``."""
     return {
         "token_provenance": TokenProvenance.ENGINE,
         "assistant_messages": [{"role": "assistant", "content": content, **message}],

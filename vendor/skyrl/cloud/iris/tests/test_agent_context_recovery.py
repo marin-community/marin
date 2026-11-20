@@ -22,7 +22,7 @@ from skyrl_train.trajectory_runners.model_clients import (
     GenerationBudgetExceededError,
     ModelServerError,
 )
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_gym.verification import VerificationStatus
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import NoGrader
