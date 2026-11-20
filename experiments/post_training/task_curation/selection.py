@@ -416,7 +416,7 @@ def _selection_row(task: TaskSpec, strata: TaskStrata, *, state: MembershipState
     )
 
 
-def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
+def _admitted_records(source: SelectionInput) -> Iterator[tuple[TaskSpec, str]]:
     root = StoragePath(source.root)
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
     if manifest["mode"] not in {CurationMode.SAMPLE, CurationMode.FULL}:
@@ -424,7 +424,9 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
     if manifest["intended_use"] != IntendedUse.TRAIN:
         raise ValueError(f"Selection source is not a training population: {source.source_id}")
     for path in sorted((root / "final" / "*.parquet").glob(), key=str):
-        yield from _parquet_rows(path, TASK_JSON_COLUMN)
+        for row in _parquet_rows(path, TASK_JSON_COLUMN):
+            task_json = row[TASK_JSON_COLUMN]
+            yield TaskSpec.model_validate_json(task_json), task_json
 
 
 def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
@@ -454,7 +456,7 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
         record = next(_admitted_records(source), None)
         if record is None:
             raise ValueError(f"No admitted grader environment for {source.source_id}")
-        task = TaskSpec.model_validate_json(record[TASK_JSON_COLUMN])
+        task, _ = record
         if not isinstance(task.grader, ScriptGrader) or _grader_kind(task) != GraderKind.PACKAGE:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
         environments[components[source.source_id]] = task.grader.environment
@@ -515,14 +517,7 @@ def write_training(
         seen_contracts: set[str] = set()
         for source in sources:
             release = releases.get(source.source_id)
-            rows = (
-                _released_records(release)
-                if release is not None
-                else (
-                    (TaskSpec.model_validate_json(row[TASK_JSON_COLUMN]), row[TASK_JSON_COLUMN])
-                    for row in _admitted_records(source)
-                )
-            )
+            rows = _released_records(release) if release is not None else _admitted_records(source)
             for task, task_json in rows:
                 source_counts = counts[source.source_id]
                 source_counts.input += 1

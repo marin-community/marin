@@ -24,7 +24,13 @@ from skyrlrecipe.declared import EvaluationSampling
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import HARBOR_EVALUATION, agentic, agentic_limits
+from experiments.post_training.rl_agentic_recipe import (
+    HARBOR_EVALUATION,
+    SAMPLED_TRAJECTORIES,
+    STOP_TOKEN_IDS,
+    agentic,
+    agentic_limits,
+)
 from experiments.post_training.rl_presets import (
     UPDATE_SECONDS_METRIC,
     ControlPin,
@@ -353,18 +359,10 @@ _CAMPAIGN_PATCH = RecipePatch(
         max_num_seqs=64,
         chat_template_kwargs={"enable_thinking": True},
         sampling_params=sections.SamplingParams(
-            temperature=0.7, stop_token_ids=(128001, 128009), skip_special_tokens=False
+            temperature=0.7, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
         ),
         engine_init_kwargs={"enable_auto_tools": True, "tool_parser": "hermes"},
-        trajectory_retention=sections.TrajectoryRetention(
-            phases=("train", "eval"),
-            sample_fraction=0.1,
-            sample_count_per_step=0,
-            required=True,
-            always_retain_failures=False,
-            always_retain_non_terminating=False,
-            always_retain_loops=False,
-        ),
+        trajectory_retention=SAMPLED_TRAJECTORIES,
     ),
 )
 
@@ -372,21 +370,17 @@ _TRAIN_LONG_AGENTIC = agentic(
     replace(
         _TRAIN_LONG.with_updates(10_000),
         revision="2026.11.20.1",
+        recipe=replace(_TRAIN_LONG.recipe, layout=_CAMPAIGN_LAYOUT),
         data_settings=frozenset({"shuffle"}),
-        checkpoints="best",
-        export="best",
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
         gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != "no-agentic-tasks"), "harbor-on-daytona"),
     ),
     name="train-long-agentic",
-    layout=_CAMPAIGN_LAYOUT,
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
     limits=agentic_limits(
         attempt_timeout=5400,
-        session_attempt_timeout=5400,
         model_turn_timeout=1800,
-        ttl_minutes=90,
         stall_timeout=10_800,
     ).merge(_CAMPAIGN_PATCH),
 )

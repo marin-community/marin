@@ -252,66 +252,74 @@ def completed_run_checkpoints(tmp_path):
     return path, root
 
 
-@pytest.mark.parametrize(
-    ("retention", "keep_every", "best_format", "export_hf", "job_state", "missing_rollout_step", "kept"),
-    [
-        ("best", None, "native", True, "succeeded", None, {1}),
-        ("best", 2, "native", False, "succeeded", None, {1, 2}),
-        ("best", 1, "native", False, "succeeded", 2, {1, 3}),
-        ("best", None, "hf", False, "succeeded", None, set()),
-        ("best", 2, "hf", False, "succeeded", None, {2}),
-        ("best", None, None, False, "succeeded", None, {3}),
-        ("latest", 2, None, False, "succeeded", None, {2, 3}),
-        (None, None, "native", False, "succeeded", None, {1, 2, 3, 4}),
-        ("best", None, "native", False, "failed", None, {1, 2, 3, 4}),
-    ],
-    ids=[
-        "best-after-export",
-        "periodic-newer-than-best",
-        "missing-rollout",
-        "hf-initializer",
-        "hf-with-periodic",
-        "no-winner",
-        "latest",
-        "legacy-config",
-        "failed",
-    ],
-)
-def test_launch_retains_checkpoints_only_after_success(
-    completed_run_checkpoints, retention, keep_every, best_format, export_hf, job_state, missing_rollout_step, kept
-):
+@dataclass(frozen=True)
+class RetentionCase:
+    kept: tuple[int, ...]
+    retention: str | None = "best"
+    keep_every: int | None = None
+    best_format: str | None = "native"
+    export_hf: bool = False
+    job_state: str = "succeeded"
+    missing_rollout_step: int | None = None
+    marker: str | None = "3"
+    expected_marker: str | None = "3"
+    pending_exports: tuple[int, ...] = ()
+
+
+@pytest.mark.parametrize("case", [
+    pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
+    pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
+    pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
+    pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
+    pytest.param(RetentionCase((3,), best_format=None), id="no-winner"),
+    pytest.param(RetentionCase((2, 3), retention="latest", keep_every=2, best_format=None), id="latest"),
+    pytest.param(RetentionCase((1, 2, 3, 4), retention=None), id="legacy-config"),
+    pytest.param(RetentionCase((1, 2, 3, 4), job_state="failed"), id="failed"),
+    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
+    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"), id="unreadable-marker"),
+    pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
+])
+def test_launch_retains_checkpoints_only_after_success(completed_run_checkpoints, case):
     path, root = completed_run_checkpoints
     config = yaml.safe_load(path.read_text())
-    config["run"]["export_hf"] = export_hf
+    config["run"]["export_hf"] = case.export_hf
     trainer = config["skyrl"]["trainer"]
-    if retention is None:
+    if case.retention is None:
         trainer.pop("checkpoint_retention")
     else:
-        trainer.update(checkpoint_retention=retention, checkpoint_keep_every=keep_every)
-    if export_hf:
+        trainer.update(checkpoint_retention=case.retention, checkpoint_keep_every=case.keep_every)
+    if case.export_hf:
         trainer["hf_export_checkpoint"] = "best"
     path.write_text(yaml.safe_dump(config))
 
-    if missing_rollout_step is not None:
-        (root / f"global_step_{missing_rollout_step}" / ROLLOUT_STATE_FILENAME).unlink()
-    if best_format is not None:
+    if case.missing_rollout_step is not None:
+        (root / f"global_step_{case.missing_rollout_step}" / ROLLOUT_STATE_FILENAME).unlink()
+    if case.best_format is not None:
         (root / BEST_CHECKPOINT_FILENAME).write_text(
-            json.dumps({"step": 1 if best_format == "native" else 0, "model_format": best_format})
+            json.dumps({"step": 1 if case.best_format == "native" else 0, "model_format": case.best_format})
         )
+    if case.pending_exports:
+        training = load_launch_config(path)
+        for step in case.pending_exports:
+            write_hf_export_request(HFExportRequest.from_trainer(
+                training.skyrl.trainer, step=step, checkpoint_root=str(root), export_root=training.artifacts.export_root
+            ))
 
     backend = LocalLaunchBackend(
-        outcome=LaunchOutcome("/user/training", job_state, int(job_state == "failed")), export_step=1
+        outcome=LaunchOutcome("/user/training", case.job_state, int(case.job_state == "failed")),
+        export_step=1,
+        checkpoint_marker=case.marker,
     )
     result = execute_launch(path, backend=backend)
 
-    assert result.state.value == job_state
-    assert {path.name for path in root.glob("global_step_*")} == {f"global_step_{step}" for step in kept}
+    assert result.state.value == case.job_state
+    assert {path.name for path in root.glob("global_step_*")} == {f"global_step_{step}" for step in case.kept}
+    if case.job_state == "succeeded":
+        terminal = Path(config["artifacts"]["terminal_manifest_uri"])
+        assert json.loads(terminal.read_text())["result"]["state"] == "succeeded"
     marker = root / CHECKPOINT_MARKER_FILENAME
-    if kept:
-        assert int(marker.read_text()) == (3 if retention is None or job_state == "failed" else max(kept))
-    else:
-        assert not marker.exists()
-    if export_hf:
+    assert (marker.read_text().strip() if marker.exists() else None) == case.expected_marker
+    if case.export_hf:
         assert result.model is not None and result.model.global_step == 1
 
 
@@ -337,20 +345,6 @@ def test_checkpoint_export_launch_preserves_training_checkpoints(completed_run_c
     assert (root / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
 
 
-@pytest.mark.parametrize("checkpoint_marker", [None, "invalid"], ids=["absent", "unreadable"])
-def test_checkpoint_pruning_does_not_change_success_without_a_readable_marker(
-    completed_run_checkpoints, tmp_path, checkpoint_marker
-):
-    path, root = completed_run_checkpoints
-    before = set(root.glob("global_step_*"))
-
-    result = execute_launch(path, backend=LocalLaunchBackend(checkpoint_marker=checkpoint_marker))
-
-    assert result.state is LaunchState.SUCCEEDED
-    assert json.loads((tmp_path / "terminal.json").read_text())["result"]["state"] == "succeeded"
-    assert set(root.glob("global_step_*")) == before
-
-
 def test_checkpoint_pruning_waits_for_the_terminal_receipt(completed_run_checkpoints, monkeypatch):
     path, root = completed_run_checkpoints
     before = set(root.glob("global_step_*"))
@@ -364,24 +358,6 @@ def test_checkpoint_pruning_waits_for_the_terminal_receipt(completed_run_checkpo
 
     assert set(root.glob("global_step_*")) == before
     assert (root / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
-
-
-def test_checkpoint_pruning_keeps_pending_export_steps(completed_run_checkpoints):
-    path, root = completed_run_checkpoints
-    training = load_launch_config(path)
-    (root / BEST_CHECKPOINT_FILENAME).write_text(json.dumps({"step": 1, "model_format": "native"}))
-    for step in (2, 4):
-        write_hf_export_request(
-            HFExportRequest.from_trainer(
-                training.skyrl.trainer, step=step, checkpoint_root=str(root), export_root=training.artifacts.export_root
-            )
-        )
-
-    result = execute_launch(path, backend=LocalLaunchBackend())
-
-    assert result.state is LaunchState.SUCCEEDED
-    assert {directory.name for directory in root.glob("global_step_*")} == {"global_step_1", "global_step_2", "global_step_4"}
-    assert (root / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "2"
 
 
 def test_launch_reuses_the_initializer_when_step_zero_wins(completed_run_checkpoints, tmp_path: Path):

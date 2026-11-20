@@ -86,10 +86,10 @@ def local_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
 
 
-def source_task(identifier: str, *, image: bool = False) -> TaskSpec:
+def source_task(identifier: str, *, dataset: str = "fixture", image: bool = False) -> TaskSpec:
     return TaskSpec(
         id=identifier,
-        source=Source(dataset="fixture", revision="release", row=identifier, importer_revision="1"),
+        source=Source(dataset=dataset, revision="release", row=identifier, importer_revision="1"),
         context=ConversationInput(events=(TextMessage(role="user", content=f"Solve {identifier}."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
@@ -364,6 +364,25 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
     )
 
 
+def harness_task(tags=("harbor",)) -> TaskSpec:
+    return source_task("agent-task", dataset="long-loop-smartie-swesmith").model_copy(
+        update={"grader": NoGrader(reason="The harness grades the completed trial"), "tags": tags}
+    )
+
+
+def released_recipe(release: ReleasedSource, **options) -> SelectionRecipe:
+    return SelectionRecipe(
+        name="mixed",
+        version="2026.11.19.1",
+        sources={},
+        family_limits={"agentic": 1},
+        heldout=(),
+        validation_per_family=1,
+        seed=20261023,
+        released=(release,),
+    ).model_copy(update=options)
+
+
 @pytest.mark.parametrize(
     ("setup_suffix", "existing_commands", "error"),
     [
@@ -431,30 +450,17 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
     repeated = source_task("evaluation-overlap")
     one_turn_task = source_task("one-turn")
     alias = one_turn_task.model_copy(update={"id": "cross-source-alias"})
-    agent_task = source_task("agent-task")
-    agent_task = agent_task.model_copy(
-        update={
-            "source": agent_task.source.model_copy(update={"dataset": "long-loop-smartie-swesmith"}),
-            "grader": NoGrader(reason="The harness grades the completed trial"),
-            "tags": ("harbor",),
-        }
-    )
-    release = released_training(tmp_path / "release.parquet", agent_task, repeated, alias)
-    heldout = source_task("validation")
-    heldout = heldout.model_copy(update={"source": heldout.source.model_copy(update={"dataset": "structure-closure"})})
+    release = released_training(tmp_path / "release.parquet", harness_task(), repeated, alias)
+    heldout = source_task("validation", dataset="structure-closure")
     one_turn = "fixture:first"
-    settings = SelectionRecipe(
-        name="mixed",
-        version="2026.11.19.1",
+    settings = released_recipe(
+        release,
         sources={one_turn: "nonagentic"},
         family_limits={"nonagentic": 1, "agentic": 1},
         source_limits={one_turn: 1, release.uri: 1},
         heldout=(task_file(tmp_path / "heldout.parquet", [heldout]),),
         exclusions=(task_file(tmp_path / "evallite.parquet", [repeated]),),
-        validation_per_family=1,
-        seed=20261023,
         admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS},
-        released=(release,),
     )
     curated = {one_turn: admitted_source(tmp_path / "curated", [one_turn_task])}
     step = task_selection_step(curated, settings)
@@ -500,25 +506,13 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
     if fault == "tag":
         task = task.model_copy(update={"tags": ("agentic",)})
     if fault in ("harness", "harness-without-tag"):
-        task = task.model_copy(
-            update={
-                "grader": NoGrader(reason="The harness grades the completed trial"),
-                "tags": ("harbor",) if fault == "harness" else (),
-            }
-        )
+        task = harness_task(("harbor",) if fault == "harness" else ())
     release = released_training(tmp_path / "release.parquet", task)
     update = {"digest": {"sha256": "0" * 64}, "count": {"rows": 2}, "tag": {"agentic": False}}
     release = release.model_copy(update=update.get(fault, {}))
-    settings = SelectionRecipe(
-        name="released",
-        version="2026.11.19.1",
-        sources={},
-        family_limits={"agentic": 1},
-        heldout=(),
-        validation_per_family=1,
-        seed=20261023,
+    settings = released_recipe(
+        release,
         admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS} if fault == "harness-without-tag" else LOCAL_GRADERS,
-        released=(release,),
     )
     step = task_selection_step({}, settings)
     with pytest.raises(RuntimeError) as error:

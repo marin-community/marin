@@ -462,7 +462,6 @@ def run_spec(
             f"{', '.join(missing_harnesses)}"
         )
     chosen = preset.evaluations
-    workload = preset.recipe.layout.workload
     if preset.batch_mix is not None:
         assert isinstance(workload, presets.Training)
         try:
@@ -475,13 +474,11 @@ def run_spec(
             RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
         )
     preset = preset.with_updates(config.trainer.max_steps)
-    inherited_model = resume.model if resume is not None else None
-    model = init or preset.model
-    initial_model_uri = (
-        inherited_model.uri
-        if inherited_model is not None
-        else model.step.path(artifact_prefix(preset.recipe.layout.cluster))
-    )
+    model = (resume.model if resume is not None else None) or init or preset.model
+    initial_model_uri = None
+    if preset.checkpoints == "best":
+        prefix = artifact_prefix(preset.recipe.layout.cluster)
+        initial_model_uri = model.uri if isinstance(model, ResolvedModelLocator) else model.step.path(prefix)
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -528,7 +525,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri if preset.checkpoints == "best" else None,
+                    initial_model_uri,
                 ),
             )
         )
@@ -538,7 +535,7 @@ def run_spec(
         name=name,
         version=preset.revision,
         config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
-        model=inherited_model or model,
+        model=model,
         model_name=model_name,
         train_data=workload.training_data(selection),
         validation_data=validation_data,

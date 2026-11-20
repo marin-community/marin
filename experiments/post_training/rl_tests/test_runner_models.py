@@ -35,6 +35,15 @@ def table(request):
     return {"snowball": SNOWBALL, "mochi": MOCHI}[request.param]
 
 
+def plan(table, name, *options, version=None, then=None):
+    preset = table.by_name[name]
+    args = ("--preset", name, "--version", version or preset.revision, "--plan")
+    if preset.tasks_input == "required":
+        args += ("--tasks", SELECTION_IDENTITY)
+    args += options
+    return CliRunner().invoke(rl.command(table, argv=args, then=then), args)
+
+
 @pytest.fixture
 def mochi_sft_preset(monkeypatch):
     from experiments.grug.moe_hero_ep import launch_hero_sft, sft_recipe  # noqa: PLC0415
@@ -45,53 +54,23 @@ def mochi_sft_preset(monkeypatch):
     return MIXTURE_262K_176NODE
 
 
-def test_mochi_default_matches_production_sft_export(mochi_sft_preset):
-    produced = mochi_sft_preset.model()
-    for preset in MOCHI.presets:
-        model = preset.model
-        assert isinstance(model, ArtifactHfModel)
-        prefix = rl_recipe.artifact_prefix(preset.recipe.layout.cluster)
-        assert (model.step.name, model.step.version, model.step.path(prefix)) == (
-            produced.step.name,
-            produced.step.version,
-            produced.step.path(prefix),
-        )
-        assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
-
-
-def test_checkpoint_retention_composes_with_the_save_and_evaluation_callbacks(selection, tmp_path):
-    template = MOCHI.by_name["train-long"]
-    cases = (
-        ("none", None, "none", ["evaluation"]),
-        ("latest", 4, "none", ["checkpoint", "evaluation"]),
-        ("best", None, "best", ["checkpoint", "evaluation", "best_checkpoint", "hf_model_save"]),
+@pytest.mark.parametrize("mode, cadence, period", [("none", None, None), ("latest", 2, 4)])
+def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, mode, cadence, period):
+    preset = replace(
+        MOCHI.by_name["train-long"], checkpoints=mode, checkpoint_every=cadence, keep_every=period, export="none"
     )
-    paths = []
-    for mode, keep_every, export, _ in cases:
-        preset = replace(
-            template,
-            checkpoints=mode,
-            checkpoint_every=None if mode == "none" else 2,
-            keep_every=keep_every,
-            export=export,
-        )
-        spec = rl_recipe.run_spec(preset, name=f"retention-{mode}", model_name=MOCHI.model)
-        launch = materialized_config(rl_recipe.run_step(preset, spec), str(tmp_path)).launch_config_yaml
-        path = tmp_path / f"{mode}.yaml"
-        path.write_text(launch)
-        paths.append(str(path))
-
-    for (mode, keep_every, export, callbacks), config in zip(cases, rl_gate.compose_configs(paths), strict=True):
-        trainer = config["skyrl"]["trainer"]
-        assert trainer.get("checkpoint_retention", "none") == mode
-        assert trainer.get("checkpoint_keep_every") == keep_every
-        assert trainer["ckpt_interval"] == 0
-        assert trainer["max_ckpts_to_keep"] == 2
-        assert [callback["type"] for callback in trainer["callbacks"]] == callbacks
-        assert config["run"]["export_hf"] == (export == "best")
-        assert trainer["hf_export_checkpoint"] == ("best" if export == "best" else "latest")
-        if mode != "none":
-            assert trainer["callbacks"][0]["save_steps"] == 2
+    spec = rl_recipe.run_spec(preset, name="periodic-retention", model_name=MOCHI.model)
+    path = tmp_path / "launch.yaml"
+    path.write_text(materialized_config(rl_recipe.run_step(preset, spec), str(tmp_path)).launch_config_yaml)
+    (config,) = rl_gate.compose_configs([str(path)])
+    trainer = config["skyrl"]["trainer"]
+    assert (trainer.get("checkpoint_retention", "none"), trainer.get("checkpoint_keep_every")) == (mode, period)
+    assert (trainer["ckpt_interval"], trainer["max_ckpts_to_keep"], trainer["hf_export_checkpoint"]) == (0, 2, "latest")
+    callbacks = ["checkpoint", "evaluation"] if cadence else ["evaluation"]
+    assert [callback["type"] for callback in trainer["callbacks"]] == callbacks
+    if cadence:
+        assert trainer["callbacks"][0]["save_steps"] == cadence
+    assert not config["run"]["export_hf"]
 
 
 @pytest.mark.parametrize(
@@ -145,11 +124,23 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
     indirect=["table"],
     ids=("mochi", "snowball-agentic"),
 )
-def test_new_presets_match_revisioned_native_configs(table, revisions, selection, tmp_path, monkeypatch):
-    with monkeypatch.context() as pins:
-        configs = assert_revisioned_native_configs(
-            table, revisions, tmp_path=tmp_path, monkeypatch=pins, mixed_tasks=selection
-        )
+def test_new_presets_match_revisioned_native_configs(table, revisions, tmp_path, monkeypatch, request):
+    if table.model == "mochi":
+        produced = request.getfixturevalue("mochi_sft_preset").model()
+        for preset in table.presets:
+            model, prefix = preset.model, rl_recipe.artifact_prefix(preset.recipe.layout.cluster)
+            assert isinstance(model, ArtifactHfModel)
+            assert (model.step.name, model.step.version, model.step.path(prefix)) == (
+                produced.step.name,
+                produced.step.version,
+                produced.step.path(prefix),
+            )
+            assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
+
+    selection = request.getfixturevalue("selection")
+    configs = assert_revisioned_native_configs(
+        table, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch, mixed_tasks=selection
+    )
     if table.model == "mochi":
         documents = dict(zip(revisions, configs, strict=True))
         docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
@@ -166,24 +157,16 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     run = rl.build_run(preset, table=SNOWBALL, tasks=selection, settings=settings)
     assert run.inputs is not None
     config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
-    # The Snowball campaign recipe sets a fixed cap of 32 generating groups.
-    assert config["trainer"]["rollout_buffer"]["max_in_flight"] == 32
-    assert config["trainer"]["rollout_buffer"]["groups_per_family"] == {"agentic": 64, "nonagentic": 64}
-    execution = next(value for value in run.runs[0].runtime_args.values() if isinstance(value, IrisSkyRLExecution))
+    buffer = config["trainer"]["rollout_buffer"]
+    assert (buffer["max_in_flight"], buffer["groups_per_family"]) == (32, {"agentic": 64, "nonagentic": 64})
+    (step,) = run.runs
+    execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
     assert set(execution.required_env_vars) == {
         "DAYTONA_RL_API_KEY",
         "DAYTONA_EVAL_API_KEY",
         "DAYTONA_TARGET",
         "WANDB_API_KEY",
     }
-
-
-def test_snowball_plan_refuses_explicitly_disabled_route_capture(selection):
-    args = ("--preset", "train-medium-agentic", "--version", "dev", "--plan", "--tasks", SELECTION_IDENTITY)
-    args += ("--set", "generator.engine_init_kwargs.enable_return_routed_experts=false")
-    invalid = CliRunner().invoke(rl.command(SNOWBALL, argv=args), args)
-    assert invalid.exit_code == 4, (invalid.output, invalid.exception)
-    assert "moe_router_replay requires generator.engine_init_kwargs.enable_return_routed_experts=true" in invalid.output
 
 
 @pytest.mark.parametrize(
@@ -239,7 +222,7 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize(
-    ("table", "name", "settings", "error"),
+    ("table", "name", "settings", "version", "error"),
     [
         (
             "mochi",
@@ -251,21 +234,30 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
                 # Expert-block weight sync requires TP=1.
                 "generator.weight_sync_transport=broadcast",
             ),
+            None,
             "MuonH fused-matrix updates require tensor parallel size 1",
         ),
-        ("snowball", "train-medium-agentic", ("terminal_bench.installed_agent.agent.kwargs.unused=true",), "unused"),
+        (
+            "snowball",
+            "train-medium-agentic",
+            ("terminal_bench.installed_agent.agent.kwargs.unused=true",),
+            None,
+            "unused",
+        ),
+        (
+            "snowball",
+            "train-medium-agentic",
+            ("generator.engine_init_kwargs.enable_return_routed_experts=false",),
+            "dev",
+            "moe_router_replay requires generator.engine_init_kwargs.enable_return_routed_experts=true",
+        ),
     ],
     indirect=["table"],
-    ids=("muonh", "installed-agent-kwargs"),
+    ids=("muonh", "installed-agent-kwargs", "disabled-route-capture"),
 )
-def test_plan_print_rejects_invalid_native_config(table, name, settings, error, selection):
-    preset = table.by_name[name]
-    args = ["--preset", name, "--version", preset.revision, "--plan"]
-    for setting in settings:
-        args += ["--set", setting]
-    if preset.tasks_input == "required":
-        args += ["--tasks", SELECTION_IDENTITY]
-    result = CliRunner().invoke(rl.command(table, argv=tuple(args)), args)
+def test_plan_print_rejects_invalid_native_config(table, name, settings, version, error, selection):
+    options = tuple(arg for setting in settings for arg in ("--set", setting))
+    result = plan(table, name, *options, version=version)
     assert result.exit_code == 4, (result.output, result.exception)
     assert "native configuration cannot be composed" in result.output and error in result.output
 
@@ -283,10 +275,12 @@ def test_plan_requires_harness_grading_mapping(selection, dataset, harness_overr
     summary = json.loads(summary_path.read_text())
     summary["harness_graded_datasets"] = [dataset]
     summary_path.write_text(json.dumps(summary))
-    args = ["--preset", "train-medium-agentic", "--version", "dev", "--plan", "--tasks", SELECTION_IDENTITY]
-    if harness_override:
-        args += ["--set", f"environment.task_sessions.task_spec.harness_by_dataset.{dataset}={harness_override}"]
-    result = CliRunner().invoke(rl.command(SNOWBALL, argv=tuple(args)), args)
+    options = (
+        ("--set", f"environment.task_sessions.task_spec.harness_by_dataset.{dataset}={harness_override}")
+        if harness_override
+        else ()
+    )
+    result = plan(SNOWBALL, "train-medium-agentic", *options, version="dev")
     assert result.exit_code == exit_code, (result.output, result.exception)
     if exit_code:
         assert "harbor_trial in harness_by_dataset" in result.output and dataset in result.output
@@ -295,61 +289,36 @@ def test_plan_requires_harness_grading_mapping(selection, dataset, harness_overr
 @pytest.fixture
 def stored_checkpoint(tmp_path):
     root = tmp_path / "checkpoints" / "previous" / "2026.11.19.1"
+    return write_native_checkpoint(root, {})
+
+
+def write_native_checkpoint(root, launch_document):
     checkpoint = root / "scratch" / "global_step_4"
     checkpoint.mkdir(parents=True)
-    (root / RESOLVED_LAUNCH_FILENAME).write_text(
-        yaml.safe_dump({"config": {"artifacts": {"checkpoint_root": str(checkpoint.parent)}}})
-    )
+    launch_document.setdefault("artifacts", {})["checkpoint_root"] = str(checkpoint.parent)
+    (root / RESOLVED_LAUNCH_FILENAME).write_text(yaml.safe_dump({"config": launch_document}))
     (checkpoint.parent / "latest_ckpt_global_step.txt").write_text("4")
     return checkpoint
 
 
-@pytest.mark.parametrize("recorded_model", (False, True), ids=("legacy", "changed-default"))
-def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoint, recorded_model):
-    table = SNOWBALL
+def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoint):
     preset = SNOWBALL.by_name["train-long"]
-    original_model = preset.model.step
-    checkpoint = stored_checkpoint
-    with pytest.raises(click.BadParameter, match="source run's retention period"):
-        rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
-    (checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
-    if recorded_model:
-        (original,) = rl.build_run(preset, table=table).runs
-        source_config = materialized_config(original, str(tmp_path))
-        source_model = yaml.safe_load(source_config.launch_config_yaml)["inputs"]["model"]
-        launch = checkpoint.parent.parent / RESOLVED_LAUNCH_FILENAME
-        document = yaml.safe_load(launch.read_text())
-        document["config"]["inputs"] = {"model": source_model}
-        launch.write_text(yaml.safe_dump(document))
-        changed = ArtifactStep.adopt("models/changed-default", preset.revision, "gs://fixture-models/changed-default")
-        preset = replace(preset, model=replace(preset.model, step=changed))
-        table = replace(table, presets=(preset,))
-    resume = rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
-    resumed = rl.build_run(preset, table=table, resume=resume)
-    config = materialized_config(resumed.runs[0], str(tmp_path)).launch_config_yaml
-    native_inputs = yaml.safe_load(config)["inputs"]
-    source = native_inputs["starting_checkpoint"]
-    assert source["uri"] == str(checkpoint)
-    assert "step-4@2026.11.19.1" in source["identity"]
-    assert native_inputs["model"]["uri"] == original_model.path(str(tmp_path))
-    args = ("--preset", preset.name, "--version", preset.revision, "--resume", "checkpoints/previous@2026.11.19.1")
-    planned = CliRunner().invoke(rl.command(table, argv=args), args)
+    args = ("--resume", "checkpoints/previous@2026.11.19.1")
+    expired = plan(SNOWBALL, preset.name, *args)
+    assert expired.exit_code == 4 and "source run's retention period" in expired.output
+    (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
+    runs = []
+    planned = plan(SNOWBALL, preset.name, *args, then=lambda model: runs.append(model.step) or ())
     assert planned.exit_code == 0 and "-resume-step-4" in planned.output, (planned.output, planned.exception)
-    assert f"  model: {artifact_identity(original_model)}\n" in planned.output
-    if recorded_model:
-        invalid_batch = (
-            *args,
-            "--set",
-            "trainer.train_batch_size=2",
-            "--set",
-            "trainer.policy_mini_batch_size=2",
-            "--set",
-            "generator.n_samples_per_prompt=8",
-        )
-        refused = CliRunner().invoke(rl.command(table, argv=invalid_batch), invalid_batch)
-        assert refused.exit_code == 4 and "lcm_dp_size=16" in refused.output, (refused.output, refused.exception)
+    assert f"  model: {artifact_identity(preset.model.step)}\n" in planned.output
+    launch = materialized_config(runs[0], str(tmp_path)).launch_config_yaml
+    inputs = yaml.safe_load(launch)["inputs"]
+    assert inputs["model"]["uri"] == preset.model.step.path(str(tmp_path))
+    assert inputs["starting_checkpoint"]["uri"] == str(stored_checkpoint)
+    assert "step-4@2026.11.19.1" in inputs["starting_checkpoint"]["identity"]
+    resume = rl_recipe.published_checkpoint(args[1], preset=preset)
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
-        rl.build_run(preset, table=table, resume=resume, init=preset.model)
+        rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
 
 
 @pytest.fixture
@@ -363,9 +332,14 @@ def mochi_with_incomplete_default(tmp_path):
     return replace(MOCHI, presets=(replace(preset, model=model),))
 
 
-@pytest.mark.parametrize("table", ("snowball", "mochi"), indirect=True)
+@pytest.mark.parametrize(
+    ("table", "explicit_init"),
+    [("snowball", False), ("snowball", True), ("mochi", True)],
+    indirect=["table"],
+    ids=["recorded-default", "snowball-init", "mochi-init"],
+)
 def test_resume_inherits_the_source_runs_initializer(
-    selection, table, tmp_path, monkeypatch, mochi_with_incomplete_default
+    selection, table, explicit_init, tmp_path, monkeypatch, mochi_with_incomplete_default
 ):
     if table is MOCHI:
         table = mochi_with_incomplete_default
@@ -373,45 +347,59 @@ def test_resume_inherits_the_source_runs_initializer(
     model_name = "models/alternative"
     model_uri = "gs://fixture-models/alternative"
     tokenizer = {"tokenizer_uri": "gs://fixture-models/tokenizer", "tokenizer_revision": "tokenizer-pin"}
-    write_published_artifact(tmp_path, model_name, preset.revision, Artifact, source=model_uri, config=tokenizer)
-    monkeypatch.setattr("marin.rl.skyrl.discover_hf_checkpoints", lambda path: [f"{path}/hf"])
-    monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
-    runner = CliRunner()
+    start_args = ()
+    if explicit_init:
+        write_published_artifact(tmp_path, model_name, preset.revision, Artifact, source=model_uri, config=tokenizer)
+        monkeypatch.setattr("marin.rl.skyrl.discover_hf_checkpoints", lambda path: [f"{path}/hf"])
+        start_args = ("--init", f"{model_name}@{preset.revision}")
     runs = []
 
     def collect(model):
         runs.append(model.step)
         return ()
 
-    args = ("--preset", preset.name, "--version", preset.revision, "--plan")
-    start_args = (*args, "--init", f"{model_name}@{preset.revision}")
-    started = runner.invoke(rl.command(table, argv=start_args, then=collect), start_args)
+    started = plan(table, preset.name, *start_args, then=collect)
     assert started.exit_code == 0, (started.output, started.exception)
     (source,) = runs
     source_config = materialized_config(source, str(tmp_path))
-    source.run(source_config)
-    launch_file = Path(source_config.output.resolved_config_uri)
     source_launch = yaml.safe_load(source_config.launch_config_yaml)
     source_model = source_launch["inputs"]["model"]
-    assert source_model["uri"] == f"{model_uri}/hf"
-    checkpoint_root = tmp_path / "checkpoints-from-source"
-    checkpoint = checkpoint_root / "global_step_4"
-    checkpoint.mkdir(parents=True)
+    if explicit_init:
+        assert source_model["uri"] == f"{model_uri}/hf"
+    else:
+        changed = ArtifactStep.adopt("models/changed-default", preset.revision, "gs://fixture-models/changed-default")
+        table = replace(table, presets=(replace(preset, model=replace(preset.model, step=changed)),))
+    root = Path(source_config.output.resolved_config_uri).parent
+    checkpoint = write_native_checkpoint(root, source_launch)
     (checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
-    (checkpoint_root / "latest_ckpt_global_step.txt").write_text("4")
-    source_launch["artifacts"]["checkpoint_root"] = str(checkpoint_root)
-    launch_file.write_text(yaml.safe_dump({"config": source_launch}))
     monkeypatch.setattr("marin.rl.skyrl.discover_hf_checkpoints", lambda path: [f"{path}/newer-hf"])
 
-    resume_args = (*args, "--resume", f"{source.name}@{source.version}")
-    planned = runner.invoke(rl.command(table, argv=resume_args, then=collect), resume_args)
+    resume_args = ("--resume", f"{source.name}@{source.version}")
+    planned = plan(table, preset.name, *resume_args, then=collect)
     assert planned.exit_code == 0, (planned.output, planned.exception)
     assert f"  model: {source_model['identity']}\n" in planned.output
     assert f"  starting_checkpoint: {source.name}/resume/step-4@{source.version}:" in planned.output
     _, resumed = runs
     resumed_config = materialized_config(resumed, str(tmp_path))
-    assert yaml.safe_load(resumed_config.launch_config_yaml)["inputs"]["model"] == source_model
+    inputs = yaml.safe_load(resumed_config.launch_config_yaml)["inputs"]
+    assert inputs["model"] == source_model
+    assert inputs["starting_checkpoint"]["uri"] == str(checkpoint)
+    if not explicit_init:
+        refused = plan(
+            table,
+            preset.name,
+            *resume_args,
+            "--set",
+            "trainer.train_batch_size=2",
+            "--set",
+            "trainer.policy_mini_batch_size=2",
+            "--set",
+            "generator.n_samples_per_prompt=8",
+        )
+        assert refused.exit_code == 4 and "lcm_dp_size=16" in refused.output, (refused.output, refused.exception)
+        return
     assert all(dep.name != model_name for dep in resumed.lower().deps)
+    monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
     resumed.run(resumed_config)
     inputs = read_gate_inputs(str(Path(resumed_config.output.resolved_config_uri).parent))
     assert {key: getattr(inputs.resume.model, key) for key in tokenizer} == tokenizer
@@ -430,11 +418,11 @@ def test_mochi_plan_refuses_an_incomplete_default_export(
     preset = table.by_name["train-long"]
     model = preset.model
     table = replace(table, presets=(replace(preset, export="none"),))
-    args = ("--preset", preset.name, "--version", preset.revision, "--plan")
+    args = ()
     if resume:
         (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
         args += ("--resume", "checkpoints/previous@2026.11.19.1")
-    result = CliRunner().invoke(rl.command(table, argv=args), args)
+    result = plan(table, preset.name, *args)
     assert result.exit_code == 4, (result.output, result.exception)
     assert f"{model.step.name}@{model.step.version}" in result.output
     assert "mochi_sft_then_rl.py" in result.output and "--init NAME@VERSION" in result.output

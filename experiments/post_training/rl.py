@@ -357,21 +357,15 @@ def _status(
             }
     preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
     launch_inputs = planned[0]["inputs"]
+    inputs = {"model": launch_inputs["model"]["identity"]}
+    for name in ("train_data", "validation_data"):
+        inputs[name] = [source["identity"] for source in launch_inputs[name]]
+    if "starting_checkpoint" in launch_inputs:
+        inputs["starting_checkpoint"] = launch_inputs["starting_checkpoint"]["identity"]
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(recipe.REPO_ROOT)),
-        "inputs": {
-            "model": launch_inputs["model"]["identity"],
-            **{
-                name: [source["identity"] for source in launch_inputs[name]]
-                for name in ("train_data", "validation_data")
-            },
-            **(
-                {"starting_checkpoint": launch_inputs["starting_checkpoint"]["identity"]}
-                if "starting_checkpoint" in launch_inputs
-                else {}
-            ),
-        },
+        "inputs": inputs,
         "context_budget": planned[0]["skyrl"]["context_budget"],
         "updates": preset.recipe.layout.workload.update_count(preset.updates),
         "measured_updates": list(preset.measured),

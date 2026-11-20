@@ -14,7 +14,7 @@ from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import agentic, agentic_limits
+from experiments.post_training.rl_agentic_recipe import SAMPLED_TRAJECTORIES, STOP_TOKEN_IDS, agentic, agentic_limits
 from experiments.post_training.rl_presets import (
     Evaluation,
     Layout,
@@ -24,8 +24,6 @@ from experiments.post_training.rl_presets import (
     Training,
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
-
-_STOP_TOKEN_IDS = (128001, 128009)
 
 _MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -69,9 +67,8 @@ THREE_RACK = replace(
     ONE_RACK,
     name="mochi-three-rack",
     megatron=replace(ONE_RACK.megatron, pipeline_model_parallel_size=16),
-    workload=replace(
-        ONE_RACK.workload,
-        plan=replace(
+    workload=Training(
+        replace(
             _ONE_RACK_PLAN,
             policy_num_nodes=16,
             num_inference_engines=8,
@@ -150,7 +147,7 @@ _ONE_TURN = RecipePatch(
         chat_template=None,
         chat_template_kwargs={"enable_thinking": True},
         sampling_params=sections.SamplingParams(
-            temperature=0.7, top_p=1.0, logprobs=0, stop_token_ids=_STOP_TOKEN_IDS, skip_special_tokens=False
+            temperature=0.7, top_p=1.0, logprobs=0, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
         ),
         trajectory_reward_shaping=sections.TrajectoryRewardShaping(
             enabled=True,
@@ -164,16 +161,9 @@ _ONE_TURN = RecipePatch(
             "model_loader_extra_config": {"distributed": False, "concurrency": 4, "memory_limit": 8 * 1024**3},
             "compilation_config": {"mode": 3, "cudagraph_mode": "PIECEWISE", "splitting_ops": _SPLITTING_OPS},
         },
-        trajectory_retention=sections.TrajectoryRetention(
-            phases=("train", "eval"),
-            sample_fraction=0.1,
-            sample_count_per_step=0,
+        trajectory_retention=SAMPLED_TRAJECTORIES.replace(
             max_bytes_per_step=64 * 1024**2,
             max_bytes_per_run=512 * 1024**2,
-            required=True,
-            always_retain_failures=False,
-            always_retain_non_terminating=False,
-            always_retain_loops=False,
         ),
     ),
     trajectory_runner=sections.TrajectoryRunner(
@@ -222,7 +212,7 @@ _EVALUATION = Evaluation(
     source="held_out",
     profile=EvaluationSampling(
         sampling_params=EvalSamplingParams(
-            temperature=0.7, top_p=1.0, stop_token_ids=_STOP_TOKEN_IDS, skip_special_tokens=False
+            temperature=0.7, top_p=1.0, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
         ),
         n_samples_per_prompt=1,
     ),
@@ -232,9 +222,7 @@ _EVALUATION = Evaluation(
 # Four hours covers the trial; eight hours covers the trial and one retry.
 _AGENTIC_LIMITS = agentic_limits(
     attempt_timeout=14_400,
-    session_attempt_timeout=14_400,
     model_turn_timeout=10_800,
-    ttl_minutes=240,
     stall_timeout=28_800,
 ).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
 
