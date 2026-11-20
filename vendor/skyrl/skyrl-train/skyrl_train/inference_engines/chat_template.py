@@ -44,9 +44,10 @@ def assistant_prefix_token_ids(
     # restored text as a whole: the whitespace can merge with the preceding characters into one token.
     text = cast(str, render(tokenize=False))
     if not text.endswith(prefix):
-        # Leading whitespace may stay trimmed; it does not border the continuation.
+        # Leading whitespace may stay trimmed; it does not border the continuation. A prefix of whitespace alone
+        # is trimmed away entirely, and the text then ends at the message header.
         stripped = prefix.strip()
-        if not stripped or not text.endswith(stripped):
+        if stripped and not text.endswith(stripped):
             raise ValueError("The chat template changed the assistant prefix beyond trimming its whitespace")
         text += trailing_whitespace
     return tokenizer.encode(text, add_special_tokens=False)

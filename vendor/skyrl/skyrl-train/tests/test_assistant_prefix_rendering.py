@@ -47,6 +47,15 @@ def test_assistant_prefix_tokens_from_trimming_template_keep_trailing_whitespace
     assert token_ids == tokenizer.encode(prompt, add_special_tokens=False)
 
 
+@pytest.mark.parametrize("prefix", ["\n", "\n\n"], ids=["newline", "two-newlines"])
+def test_whitespace_only_assistant_prefix_follows_the_header(prefix):
+    tokenizer = bracket_tokenizer(TRIMMING_TEMPLATE)
+
+    token_ids = assistant_prefix_token_ids(tokenizer, conversation(prefix), ASSISTANT_PREFIX_OPTIONS)
+
+    assert token_ids == tokenizer.encode("<|user|>x<|end|><|assistant|>" + prefix, add_special_tokens=False)
+
+
 @pytest.mark.parametrize(
     "chat_template,prefix",
     [(TRIMMING_TEMPLATE, "[1]"), (TRIMMING_TEMPLATE, "\n[1"), (KEEPING_TEMPLATE, "[1]\n")],
