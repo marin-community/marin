@@ -112,38 +112,62 @@ Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
 neither is available.
 
-`shellbox-daytona-usage` reads the account's live quota, current usage and
-remaining capacity. It lists the account's sandboxes (paginated) and reports
-the usage overview with sandbox counts by state. The `/organizations` endpoint
-rejects API-key credentials with 401, so the command resolves the organization
-ID from the inventory; when the org has no sandboxes, it reads snapshots and
-then volumes instead:
+`shellbox-daytona-usage` reads every page of the sandbox inventory and reports
+organization headroom. It uses the account-owner limits from
+`experiments/active/DAYTONA-QUOTAS.md` (2026-11-19); it does not call the
+organization-usage endpoint, which rejects API keys with 403.
 
 ```bash
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
-  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8
+  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8 --json
+
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
+  --all --cpu 4 --memory-gib 8 --disk-gib 10 --headroom 0.2 --json
 ```
 
-`--all` reads the three known accounts in one sweep (eval =
-`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`;
-data = `DAYTONA_DATA_API_KEY`). `DAYTONA_API_KEY` is never an account
-selector here: the SDK treats it as an ambient variable, and some launchers
-load the RL key into it. `--json` emits the
-machine-readable report, including per-region rows with the provider's
-per-sandbox maxima.
+`--all` uses the dedicated keys: eval = `DAYTONA_EVAL_API_KEY`,
+rl = `DAYTONA_RL_API_KEY`, data = `DAYTONA_DATA_API_KEY`. Missing keys produce
+explicit skipped-account entries. A single standard key selects its quota
+preset. For another variable, select the limits explicitly, for example
+`--api-key-env DAYTONA_API_KEY --limits eval`. Check that this variable holds
+the intended account's key. The ambient `DAYTONA_API_KEY` never selects an
+account by itself.
 
-Size concurrency from the remaining capacity. The `max concurrency` line sizes
-against the quota row for the launch's target region and sandbox class
-(`--target`, `--sandbox-class`, default class `container`), because the
-provider enforces each row's quota separately; the summed totals above it are
-informational. The line applies the headroom (default 20%, `--headroom`) to
-that row's remaining CPU, memory and disk capacity, divides by the per-sandbox
-request from `--cpu`, `--memory-gib` and `--disk-gib`, and reports the
-minimum. The sandbox state counts show what is live. The reading moves as
-lanes start and stop, so re-read before large submissions. A
-per-sandbox request above the row's `max_cpu_per_sandbox`,
-`max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox` fails at creation;
-the command prints a warning when the profile exceeds one.
+The presets are organization totals, across all regions:
+
+| Preset | vCPU | RAM (GB) | Disk (GB) |
+| --- | ---: | ---: | ---: |
+| eval | 2,500 | 7,500 | 25,000 |
+| rl | 6,000 | 12,000 | 20,000 |
+| data | 2,000 | 4,000 | 10,000 |
+
+All three presets limit one sandbox to 4 vCPU, 8 GiB RAM and 10 GiB disk.
+The report converts decimal GB quotas to GiB to match inventory allocations.
+`--memory-gib` and `--disk-gib` take whole GiB. Update the maintained presets
+when the account owner changes these limits; the command does not fetch live
+quotas. `--target` configures the SDK connection and does not filter inventory.
+
+The report counts every state and sums allocations for `started`, `starting`
+and `creating` sandboxes. For each resource, `remaining` is `max(0, quota - used)`,
+and `available` is `max(0, quota * (1 - headroom) - used)`. The default
+`--headroom 0.2` reserves 20% of the total quota. `max_concurrency.limit` is the
+minimum of `floor(available / per_sandbox_request)` across CPU, RAM and disk.
+A profile above any per-sandbox maximum gets a zero limit.
+
+JSON includes `organization_id`, `observed_at`, `usage_source`, `quota_source`,
+`org_limits`, `headroom_fraction`, `charged_states`, `resources`, and
+`sandboxes` (`total`, `started`, `charged`, `by_state`). A supplied profile adds
+`max_concurrency` (`profile`, `by_resource`, `exceeds_per_sandbox_maximum`,
+`limit`). Resource fields are `quota`, `used`, `remaining` and `available`.
+An empty inventory reports zero usage and a null organization ID, without
+querying snapshots or volumes. Duplicate IDs, mixed organizations or missing
+active allocations fail the reading instead of reporting free capacity.
+
+Inventory is an estimate at read time, not a capacity reservation. Re-read it
+before and during submissions, include the entire simultaneous batch, and
+back off when it does not fit. Keep lane admission locks and pending-create
+reservations: this read-only command does not coordinate concurrent submitters
+or enforce creation-rate limits. Snapshot quota is separate.
 
 1. Inventory snapshots in the intended account, including every result page:
 

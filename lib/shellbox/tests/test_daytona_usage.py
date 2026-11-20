@@ -1,389 +1,206 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the Daytona quota/usage reader against an in-memory SDK fake."""
+"""Check inventory-based capacity reports at SDK and HTTP boundaries."""
 
 import asyncio
 import json
-import math
 import sys
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 pytest.importorskip("daytona")
 
-from daytona_api_client_async import OrganizationUsageOverview, SandboxState
+from daytona import AsyncDaytona, DaytonaConfig
+from daytona_api_client_async import SandboxState
 from shellbox.backends.daytona import usage_cli
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
-    AccountUsage,
-    RegionCapacity,
-    ResourceCapacity,
+    OrganizationLimits,
     SandboxProfile,
-    account_usage,
-    max_concurrency,
-    region_for_launch,
+    account_usage_from_client,
     usage_report,
 )
 
-ORG_ID = "org-00000000-0000-0000-0000-000000000001"
-OTHER_ORG_ID = "org-00000000-0000-0000-0000-000000000002"
+LIMITS = OrganizationLimits(100, 100, 100, SandboxProfile(4, 8, 10))
 
 
-def _sandbox(organization_id: str = ORG_ID, state: SandboxState = SandboxState.STARTED) -> SimpleNamespace:
+def sandbox(identifier, state=SandboxState.STARTED, *, organization_id="org", cpu=2, memory=4, disk=10):
     return SimpleNamespace(
-        id=f"sandbox-{organization_id}-{state.value}",
-        organization_id=organization_id,
-        state=state,
-        cpu=2,
-        memory=8,
-        disk=10,
+        id=identifier, state=state, organization_id=organization_id, cpu=cpu, memory=memory, disk=disk
     )
 
 
-def _snapshot(organization_id: str = ORG_ID, name: str = "snapshot-1") -> SimpleNamespace:
-    return SimpleNamespace(name=name, organization_id=organization_id)
+class InventoryClient:
+    def __init__(self, rows):
+        self.rows = rows
 
+    def list(self, **_kwargs):
+        async def iterate():
+            for row in self.rows:
+                yield row
 
-def _volume(organization_id: str = ORG_ID) -> SimpleNamespace:
-    return SimpleNamespace(name="volume-1", organization_id=organization_id)
-
-
-def _region_payload(region_id: str = "us", sandbox_class: str = "container") -> dict:
-    """One region row of the usage overview, as the parsed API payload looks."""
-    return {
-        "region_id": region_id,
-        "sandbox_class": sandbox_class,
-        "total_cpu_quota": 6000,
-        "current_cpu_usage": 1000,
-        "total_memory_quota": 12000,
-        "current_memory_usage": 2000,
-        "total_disk_quota": 20000,
-        "current_disk_usage": 5000,
-        "total_gpu_quota": 0,
-        "current_gpu_usage": 0,
-        "max_cpu_per_sandbox": 4,
-        "max_memory_per_sandbox": 8,
-        "max_disk_per_sandbox": 10,
-        "max_disk_per_non_ephemeral_sandbox": 10,
-        "max_cpu_per_gpu_sandbox": 16,
-        "max_memory_per_gpu_sandbox": 192,
-        "max_disk_per_gpu_sandbox": 512,
-    }
-
-
-def _overview(**overrides) -> OrganizationUsageOverview:
-    """Build one usage overview exactly as the parsed API payload looks."""
-    payload = {
-        "region_usage": [_region_payload()],
-        "total_snapshot_quota": 40,
-        "current_snapshot_usage": 12,
-        "total_volume_quota": 10,
-        "current_volume_usage": 0,
-    } | overrides
-    return OrganizationUsageOverview.model_validate(payload)
-
-
-class FakeDaytonaClient:
-    """In-memory SDK client: paginated sandbox, snapshot and volume inventories."""
-
-    def __init__(self, sandboxes=(), snapshots=(), volumes=(), overview=None):
-        self._sandboxes = list(sandboxes)
-        self._snapshots = {snapshot.name: snapshot for snapshot in snapshots}
-        self._volumes = list(volumes)
-        self.snapshot = SimpleNamespace(list=self._snapshot_list)
-        self.volume = SimpleNamespace(list=self._volume_list)
-        # The usage reader only passes this handle to OrganizationsApi, which the
-        # tests replace with a fake reading the overview from here.
-        self._api_client = SimpleNamespace(usage_overview=overview or _overview(), requested_organizations=[])
+        return iterate()
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *exc_info):
+    async def __aexit__(self, *_args):
         return None
 
-    def list(self, query=None, request_timeout=None):
-        async def iterate():
-            for sandbox in self._sandboxes:
-                yield sandbox
 
-        return iterate()
+def test_usage_reads_every_http_page_and_never_calls_organization_api():
+    async def scenario():
+        requests = []
+        states = ["started", "starting", "creating", "stopped", "archived", "error"]
 
-    async def _snapshot_list(self, page=None, limit=None):
-        size = limit or 100
-        current = page or 1
-        ordered = list(self._snapshots.values())
-        return SimpleNamespace(
-            items=ordered[(current - 1) * size : current * size],
-            total=len(ordered),
-            page=current,
-            total_pages=max(1, math.ceil(len(ordered) / size)),
-        )
+        async def endpoint(request):
+            if request.headers.get("Upgrade", "").lower() == "websocket":
+                websocket = web.WebSocketResponse()
+                await websocket.prepare(request)
+                async for _ in websocket:
+                    pass
+                return websocket
+            requests.append((request.method, request.path, request.query.get("cursor")))
+            if request.method != "GET" or request.path != "/sandbox":
+                return web.json_response({"message": "API key denied"}, status=403)
+            offset = 0 if "cursor" not in request.query else 2
+            rows = [
+                {
+                    "id": f"sandbox-{index}",
+                    "organizationId": "org",
+                    "name": f"sandbox-{index}",
+                    "target": "us" if index < 2 else "eu",
+                    "state": state,
+                    "user": "root",
+                    "public": False,
+                    "cpu": 2,
+                    "gpu": 0,
+                    "memory": 4,
+                    "disk": 10,
+                    "labels": {},
+                    "toolboxProxyUrl": "https://fixture.invalid/toolbox",
+                }
+                for index, state in enumerate(states)
+            ]
+            return web.json_response(
+                {"items": rows[:2] if offset == 0 else rows[2:], "nextCursor": "second" if offset == 0 else None}
+            )
 
-    async def _volume_list(self):
-        return self._volumes
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                usage = await account_usage_from_client(client, LIMITS)
+        report = usage_report(usage, SandboxProfile(2, 4, 10))
+        assert requests == [("GET", "/sandbox", None), ("GET", "/sandbox", "second")]
+        assert report["organization_id"] == "org"
+        assert report["sandboxes"] == {"total": 6, "started": 1, "charged": 3, "by_state": dict.fromkeys(states, 1)}
+        assert report["resources"]["cpu"] == {"quota": 100, "used": 6, "remaining": 94, "available": 74}
+        assert report["resources"]["memory_gib"]["used"] == 12
+        assert report["resources"]["disk_gib"]["used"] == 30
+        assert report["resources"]["memory_gib"]["quota"] == pytest.approx(100_000_000_000 / 2**30)
+        assert report["max_concurrency"]["limit"] == 4
 
-
-class FakeOrganizationsApi:
-    """Stands in for the SDK organizations API at the HTTP boundary."""
-
-    def __init__(self, api_client):
-        self._api_client = api_client
-
-    async def get_organization_usage_overview(self, organization_id, **_):
-        self._api_client.requested_organizations.append(organization_id)
-        return self._api_client.usage_overview
-
-
-def _install_fakes(monkeypatch, client: FakeDaytonaClient) -> None:
-    monkeypatch.setattr("shellbox.backends.daytona.usage.OrganizationsApi", FakeOrganizationsApi)
-    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: client)
-
-
-def _region(
-    *,
-    region_id: str = "us",
-    sandbox_class: str = "container",
-    cpu_quota=6000,
-    cpu_used=1000,
-    memory_quota=12000,
-    memory_used=2000,
-    disk_quota=20000,
-    disk_used=5000,
-) -> RegionCapacity:
-    return RegionCapacity(
-        region_id=region_id,
-        sandbox_class=sandbox_class,
-        cpu=ResourceCapacity(quota=cpu_quota, used=cpu_used),
-        memory_gib=ResourceCapacity(quota=memory_quota, used=memory_used),
-        disk_gib=ResourceCapacity(quota=disk_quota, used=disk_used),
-        gpu=ResourceCapacity(quota=0, used=0),
-        max_cpu_per_sandbox=4,
-        max_memory_gib_per_sandbox=8,
-        max_disk_gib_per_sandbox=10,
-    )
-
-
-def _account(**region_overrides) -> AccountUsage:
-    return AccountUsage(
-        organization_id=ORG_ID,
-        regions=(_region(**region_overrides),),
-        snapshots=ResourceCapacity(quota=40, used=12),
-        volumes=ResourceCapacity(quota=10, used=0),
-        sandboxes=125,
-        sandbox_states=(("started", 120), ("stopped", 5)),
-    )
-
-
-def test_account_usage_sums_quota_and_counts_sandboxes_by_state(monkeypatch) -> None:
-    sandboxes = [_sandbox(), *(_sandbox(state=SandboxState.STOPPED) for _ in range(5))]
-    client = FakeDaytonaClient(sandboxes=sandboxes)
-    _install_fakes(monkeypatch, client)
-
-    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x")))
-
-    assert usage.organization_id == ORG_ID
-    assert usage.sandboxes == 6
-    assert usage.sandbox_states == (("started", 1), ("stopped", 5))
-    assert (usage.cpu.quota, usage.cpu.used, usage.cpu.remaining) == (6000.0, 1000.0, 5000.0)
-    assert usage.memory_gib.remaining == 10000.0
-    assert usage.disk_gib.remaining == 15000.0
-    assert (usage.snapshots.quota, usage.snapshots.remaining) == (40.0, 28.0)
-    assert client._api_client.requested_organizations == [ORG_ID]
-
-
-def test_account_usage_resolves_the_organization_from_snapshots_without_sandboxes(monkeypatch) -> None:
-    client = FakeDaytonaClient(snapshots=[_snapshot(organization_id=ORG_ID)])
-    _install_fakes(monkeypatch, client)
-
-    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x")))
-
-    assert usage.organization_id == ORG_ID
-    assert client._api_client.requested_organizations == [ORG_ID]
-
-
-def test_account_usage_resolves_the_organization_from_volumes_without_other_rows(monkeypatch) -> None:
-    client = FakeDaytonaClient(volumes=[_volume(organization_id=OTHER_ORG_ID)])
-    _install_fakes(monkeypatch, client)
-
-    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x")))
-
-    assert usage.organization_id == OTHER_ORG_ID
-
-
-def test_account_usage_fails_when_the_inventory_spans_organizations(monkeypatch) -> None:
-    client = FakeDaytonaClient(sandboxes=[_sandbox(organization_id=ORG_ID), _sandbox(organization_id=OTHER_ORG_ID)])
-    _install_fakes(monkeypatch, client)
-
-    with pytest.raises(RuntimeError):
-        asyncio.run(account_usage(DaytonaConnection(api_key="x")))
-
-
-def test_account_usage_fails_when_the_organization_cannot_be_resolved(monkeypatch) -> None:
-    client = FakeDaytonaClient()
-    _install_fakes(monkeypatch, client)
-
-    with pytest.raises(RuntimeError):
-        asyncio.run(account_usage(DaytonaConnection(api_key="x")))
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
-    ("overrides", "profile", "headroom", "expected"),
-    (
-        ({"memory_used": 11000}, SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), 0.2, 100),  # memory binds
-        ({"cpu_used": 5000}, SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), 0.2, 400),  # cpu binds
-        ({"disk_used": 19000}, SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), 0.2, 80),  # disk binds
-        ({"memory_used": 11000}, SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), 0.0, 125),
-        ({"memory_used": 11000}, SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), 0.5, 62),
-        ({"cpu_used": 6000}, SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), 0.2, 0),  # exhausted
-    ),
+    ("limits", "row", "expected"),
+    [
+        (OrganizationLimits(100, 1000, 1000, SandboxProfile(4, 8, 10)), sandbox("cpu", cpu=70), 5),
+        (OrganizationLimits(1000, 100, 1000, SandboxProfile(4, 8, 10)), sandbox("memory", memory=65), 2),
+        (OrganizationLimits(1000, 1000, 100, SandboxProfile(4, 8, 10)), sandbox("disk", disk=70), 0),
+    ],
 )
-def test_max_concurrency_is_the_minimum_over_remaining_resources(overrides, profile, headroom, expected) -> None:
-    assert max_concurrency(_region(**overrides), profile, headroom=headroom) == expected
+def test_capacity_reserves_total_quota_and_uses_the_binding_resource(limits, row, expected):
+    usage = asyncio.run(account_usage_from_client(InventoryClient([row]), limits))
+    report = usage_report(usage, SandboxProfile(2, 4, 10))
+    assert report["max_concurrency"]["limit"] == expected
 
 
-def test_region_for_launch_selects_the_target_row_not_the_sum() -> None:
-    # Two rows with the same free CPU must not double the suggested limit: a
-    # launch into us is charged only against the us row.
-    usage = AccountUsage(
-        organization_id=ORG_ID,
-        regions=(
-            _region(region_id="us", cpu_quota=200, cpu_used=100),
-            _region(region_id="eu", cpu_quota=200, cpu_used=100),
-        ),
-        snapshots=ResourceCapacity(quota=40, used=0),
-        volumes=ResourceCapacity(quota=10, used=0),
-        sandboxes=0,
-        sandbox_states=(),
-    )
-    profile = SandboxProfile(cpu=2, memory_gib=8, disk_gib=10)
-    region = region_for_launch(usage, target="us")
-
-    assert region.region_id == "us"
-    assert max_concurrency(region, profile) == 40
-
-    with pytest.raises(RuntimeError):
-        region_for_launch(usage, target="eu-cross")
-    with pytest.raises(RuntimeError):
-        region_for_launch(usage, target="us", sandbox_class="linux-vm")
+@pytest.mark.parametrize("profile", [SandboxProfile(5, 4, 10), SandboxProfile(2, 9, 10), SandboxProfile(2, 4, 11)])
+def test_oversized_profile_cannot_be_admitted_even_with_free_quota(profile):
+    usage = asyncio.run(account_usage_from_client(InventoryClient([]), LIMITS))
+    report = usage_report(usage, profile)
+    assert report["max_concurrency"]["limit"] == 0
+    assert len(report["max_concurrency"]["exceeds_per_sandbox_maximum"]) == 1
 
 
-def test_usage_report_json_includes_remaining_and_concurrency() -> None:
-    report = usage_report(
-        _account(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), region=region_for_launch(_account(), target="us")
-    )
-
-    assert report["organization_id"] == ORG_ID
-    assert report["resources"]["cpu"] == {"quota": 6000.0, "used": 1000.0, "remaining": 5000.0}
-    assert report["sandboxes"] == {"total": 125, "by_state": {"started": 120, "stopped": 5}}
-    assert report["max_concurrency"]["region_id"] == "us"
-    assert report["max_concurrency"]["limit"] == 1000
+def test_empty_inventory_reports_unused_quota_without_other_api_access():
+    usage = asyncio.run(account_usage_from_client(InventoryClient([]), LIMITS))
+    report = usage_report(usage, SandboxProfile(2, 4, 10), headroom=0)
+    assert report["organization_id"] is None
+    assert report["sandboxes"] == {"total": 0, "started": 0, "charged": 0, "by_state": {}}
+    assert report["max_concurrency"]["limit"] == 9
 
 
-def test_usage_report_json_omits_concurrency_without_a_profile() -> None:
-    report = usage_report(_account(), None)
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [sandbox("same"), sandbox("same")],
+        [sandbox("one"), sandbox("two", organization_id="other")],
+        [sandbox("missing-cpu", cpu=None)],
+        [sandbox("missing-memory", memory=None)],
+        [sandbox("missing-disk", disk=None)],
+    ],
+)
+def test_uncertain_inventory_cannot_report_free_capacity(rows):
+    with pytest.raises(ValueError):
+        asyncio.run(account_usage_from_client(InventoryClient(rows), LIMITS))
 
-    assert "max_concurrency" not in report
 
-
-def test_usage_cli_prints_the_account_table_and_concurrency(monkeypatch, capsys) -> None:
-    client = FakeDaytonaClient(sandboxes=[_sandbox()])
-    _install_fakes(monkeypatch, client)
-    monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
+def test_usage_cli_all_applies_each_org_quota_and_hides_credentials(monkeypatch, capsys):
+    clients = {
+        "eval-secret": InventoryClient([sandbox("eval", organization_id="eval-org")]),
+        "rl-secret": InventoryClient([]),
+        "data-secret": InventoryClient([sandbox("data", organization_id="data-org", cpu=1900)]),
+    }
+    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: clients[self.api_key])
+    for name, secret in (("EVAL", "eval-secret"), ("RL", "rl-secret"), ("DATA", "data-secret")):
+        monkeypatch.setenv(f"DAYTONA_{name}_API_KEY", secret)
     monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "shellbox-daytona-usage",
-            "--api-key-env",
-            "DAYTONA_RL_API_KEY",
-            "--cpu",
-            "2",
-            "--memory-gib",
-            "8",
-            "--disk-gib",
-            "10",
-        ],
+        sys, "argv", ["shellbox-daytona-usage", "--all", "--cpu", "2", "--memory-gib", "4", "--disk-gib", "10", "--json"]
     )
-
     usage_cli.main()
-
     output = capsys.readouterr().out
-    assert "resource" in output and "quota" in output
-    assert "cpu" in output and "6000" in output
-    assert "started 1" in output
-    assert "max concurrency" in output and "1000 sandboxes" in output
-    assert "synthetic-secret-key" not in output
+    reports = json.loads(output)
+    assert reports["eval"]["resources"]["cpu"]["quota"] == 2500
+    assert reports["rl"]["resources"]["memory_gib"]["quota"] == pytest.approx(12_000_000_000_000 / 2**30)
+    assert reports["data"]["resources"]["disk_gib"]["quota"] == pytest.approx(10_000_000_000_000 / 2**30)
+    assert reports["data"]["max_concurrency"]["limit"] == 0
+    assert reports["data"]["resources"]["cpu"]["remaining"] == 100
+    assert reports["data"]["resources"]["cpu"]["available"] == 0
+    assert reports["rl"]["organization_id"] is None
+    assert all(secret not in output for secret in clients)
 
 
-def test_usage_cli_json_emits_the_usage_interchange(monkeypatch, capsys) -> None:
-    client = FakeDaytonaClient(sandboxes=[_sandbox()])
-    _install_fakes(monkeypatch, client)
-    monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
-    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY", "--json"])
-
+@pytest.mark.parametrize(
+    ("key_env", "options"), [("SELECTED_DAYTONA_KEY", ["--limits", "data"]), ("DAYTONA_DATA_API_KEY", [])]
+)
+def test_usage_cli_selects_inferred_or_explicit_account_limits(monkeypatch, capsys, key_env, options):
+    monkeypatch.setenv(key_env, "secret")
+    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: InventoryClient([sandbox("one")]))
+    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", key_env, *options, "--json"])
     usage_cli.main()
-
     report = json.loads(capsys.readouterr().out)
-    assert report["organization_id"] == ORG_ID
-    assert report["resources"]["memory_gib"]["remaining"] == 10000.0
-    assert report["sandboxes"]["total"] == 1
-    assert "max_concurrency" not in report
+    assert report["account"] == "data"
+    assert report["resources"]["cpu"]["quota"] == 2000
+    assert report["resources"]["cpu"]["used"] == 2
 
 
-def test_usage_cli_all_reports_each_account_and_skips_missing_keys(monkeypatch, capsys) -> None:
-    client = FakeDaytonaClient(sandboxes=[_sandbox()])
-    _install_fakes(monkeypatch, client)
-    monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
-    monkeypatch.delenv("DAYTONA_EVAL_API_KEY", raising=False)
-    monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
-    monkeypatch.setenv("DAYTONA_DATA_API_KEY", "synthetic-secret-key")
-    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--all"])
-
+def test_usage_cli_missing_keys_are_explicit_in_all_account_report(monkeypatch, capsys):
+    for name in usage_cli.ACCOUNT_KEY_ENVS.values():
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--all", "--json"])
     usage_cli.main()
-
-    output = capsys.readouterr().out
-    assert "eval: skipped (missing DAYTONA_EVAL_API_KEY)" in output
-    assert "account rl" in output and "account data" in output
-
-
-def test_usage_cli_all_skips_an_account_without_the_target_row(monkeypatch, capsys) -> None:
-    # The eval lane's quota sits in eu only; the sweep must still report the
-    # rl and data accounts instead of stopping at the first mismatch.
-    clients = [
-        FakeDaytonaClient(sandboxes=[_sandbox()], overview=_overview(region_usage=[_region_payload("eu")])),
-        FakeDaytonaClient(sandboxes=[_sandbox()]),
-        FakeDaytonaClient(sandboxes=[_sandbox()]),
-    ]
-    monkeypatch.setattr("shellbox.backends.daytona.usage.OrganizationsApi", FakeOrganizationsApi)
-    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: clients.pop(0))
-    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "synthetic-secret-key")
-    monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
-    monkeypatch.setenv("DAYTONA_DATA_API_KEY", "synthetic-secret-key")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["shellbox-daytona-usage", "--all", "--cpu", "2", "--memory-gib", "8", "--disk-gib", "8", "--json"],
-    )
-
-    usage_cli.main()
-
-    reports = json.loads(capsys.readouterr().out)
-    assert "No container quota row for region us" in reports["eval"]["skipped"]
-    assert reports["rl"]["max_concurrency"]["region_id"] == "us"
-    assert reports["data"]["max_concurrency"]["region_id"] == "us"
-
-
-def test_usage_cli_rejects_partial_profiles_and_missing_credentials(monkeypatch) -> None:
-    monkeypatch.delenv("DAYTONA_RL_API_KEY", raising=False)
-
-    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY"])
-    with pytest.raises(SystemExit):
-        usage_cli.main()
-
-    monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
-    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY", "--cpu", "2"])
-    with pytest.raises(SystemExit):
-        usage_cli.main()
+    assert json.loads(capsys.readouterr().out) == {
+        "eval": {"skipped": "missing DAYTONA_EVAL_API_KEY"},
+        "rl": {"skipped": "missing DAYTONA_RL_API_KEY"},
+        "data": {"skipped": "missing DAYTONA_DATA_API_KEY"},
+    }
