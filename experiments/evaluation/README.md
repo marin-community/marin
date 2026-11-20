@@ -271,10 +271,11 @@ labels, rubric prompts and the 128/512/2048 token schedule stay the same.
 BixBench keeps its JSON schema, 1024-token cap and 600-second request timeout.
 Its temperature is fixed at 1, matching the old pinned model's generation config.
 
-The submitting client resolves the policy's versioned judge credential and
-delivers it as `JUDGE_API_KEY` through Iris secret files. CoreWeave coordinators
-read that delivered credential; they do not need Google Application Default
-Credentials. An ambient `TOGETHER_API_KEY` does not replace the versioned binding.
+The Marin RL launcher resolves the policy's `judge.credential` on the submitting
+machine and delivers it as `JUDGE_API_KEY` through Iris secret files. CoreWeave
+coordinators read that delivered credential; they do not need Google Application
+Default Credentials. A `TOGETHER_API_KEY` environment variable on either machine
+does not replace the policy's versioned Secret Manager reference.
 
 The policy and prepared tasks have new hashes. Scores from this judge and the
 old MiniMax M3 judge are not directly comparable. A paired re-score of one or
