@@ -217,8 +217,8 @@ admin authorization for this elevated profile. Grader commands still run inside 
 
 Use artifact dependencies for model and data handoffs. A raw checkpoint path hides provenance and
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
-temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
-not repeat a source bucket prefix.
+temporary-storage helper for trajectories and native checkpoints when the retention policy selects
+temporary storage. These paths have a bounded lifetime and do not repeat a source bucket prefix.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then
@@ -249,6 +249,11 @@ to false as well. Without export, successful runs retain native recovery checkpo
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
+Set `SkyRLRetentionPolicy.native_checkpoint_storage` to
+`SkyRLCheckpointStorage.PERMANENT` to write native checkpoints, including best
+and final, under the RL artifact output's `checkpoints/` directory.
+The default remains temporary storage. Attempt diagnostics keep their TTL path.
+
 Every HF export writes `generation_config.json` through SkyRL's Hugging Face
 model lifecycle utilities. It keeps the explicit fields of the source model's
 generation config and fills in the rest:
@@ -273,7 +278,7 @@ baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
 
-The temporary checkpoint root is derived from the RL artifact name and version.
+The selected checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
@@ -360,10 +365,3 @@ does not establish correctness for every message size or topology. Check resolve
 role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
-
-
-Set `SkyRLRetentionPolicy.native_checkpoint_storage` to
-`SkyRLCheckpointStorage.PERMANENT` to write native checkpoints, including best
-and final, under the permanent artifact output's `checkpoints/` directory.
-The default remains temporary storage. Attempt diagnostics keep their TTL path.
-No existing checkpoint is moved when this policy changes.
