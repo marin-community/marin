@@ -170,6 +170,7 @@ _ONE_TURN = RecipePatch(
         rollout_workers=sections.RolloutWorkers(num_workers=32, cpus_per_worker=2, start_interval_seconds=0)
     ),
     extra_env={
+        "NCCL_IB_HCA": "ibp",
         "OT_AGENT_RAY_OBJECT_STORE_CAP_GIB": "32",
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
     },
@@ -203,11 +204,11 @@ _THREE_RACK_PATCH = RecipePatch(
             }
         },
     ),
-    extra_env={"NCCL_NET": "IB", "NCCL_IB_DISABLE": "0", "NCCL_IB_HCA": "ibp", "NCCL_SOCKET_FAMILY": "AF_INET"},
+    extra_env={"NCCL_NET": "IB", "NCCL_IB_DISABLE": "0", "NCCL_SOCKET_FAMILY": "AF_INET"},
 )
 
 _EVALUATION = Evaluation(
-    name="eval_lite",
+    name="eval_lite_100",
     file=Path(VALIDATION_FILENAME).stem,
     source="held_out",
     profile=EvaluationSampling(
@@ -229,7 +230,7 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.20.1",
+    revision="2026.11.20.2",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -265,7 +266,7 @@ _TRAIN_MEDIUM = replace(
     export="none",
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.2"
+    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.3"
 )
 
 MOCHI = ModelPresets(

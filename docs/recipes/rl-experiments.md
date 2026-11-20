@@ -39,8 +39,10 @@ Mochi’s medium presets run two updates and its long presets run up to 10,000 u
 - A three-update mixed run used 95.5 GB200-hours. [Mixed run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-03b184b7-2026.11.19.1-coordinator-c7f0249f)
 - A one-update resume used 69.0 GB200-hours. [Resume run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
 
-The mixed measurements use the v3 selection. A native Mochi checkpoint occupied 4.3 TB, and saves
-took 16 to 26 minutes on the single-rack layout. [Short mixed save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-9adaf2cd-2026.11.19.1-coordinator-2c4b43b1) · [Resume save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
+Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets evaluate the
+100-task active set as `eval_lite_100`. The three-rack layout has CPU composition coverage.
+The mixed measurements use the v3 selection. A native Mochi checkpoint
+occupied 4.3 TB, and saves took 16 to 26 minutes on the single-rack layout. [Short mixed save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-9adaf2cd-2026.11.19.1-coordinator-2c4b43b1) · [Resume save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
 
 | Snowball preset | When to use it | Layout | Checkpoints and export |
 | --- | --- | --- | --- |

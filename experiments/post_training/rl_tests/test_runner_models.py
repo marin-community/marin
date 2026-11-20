@@ -105,19 +105,29 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
         (
             "mochi",
             {
-                "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.1": "674dadce"},
-                "train-long": {"2026.11.19.1": "db854d78", "2026.11.20.1": "b6144722"},
-                "train-long-3rack": {"2026.11.19.1": "a0e17c94", "2026.11.20.1": "bc381480"},
-                "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.1": "5f0a0fa1"},
+                "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.1": "674dadce", "2026.11.20.2": "15b0f019"},
+                "train-long": {"2026.11.19.1": "db854d78", "2026.11.20.1": "b6144722", "2026.11.20.2": "d1f75f26"},
+                "train-long-3rack": {
+                    "2026.11.19.1": "a0e17c94",
+                    "2026.11.20.1": "bc381480",
+                    "2026.11.20.2": "bc381480",
+                },
+                "train-medium-agentic": {
+                    "2026.11.19.1": "3f203da5",
+                    "2026.11.20.1": "5f0a0fa1",
+                    "2026.11.20.2": "d25249f4",
+                },
                 "train-long-agentic": {
                     "2026.11.19.1": "bef4849f",
                     "2026.11.20.1": "9c4ea508",
                     "2026.11.20.2": "335aff0c",
+                    "2026.11.20.3": "9f1754cd",
                 },
                 "train-long-agentic-3rack": {
                     "2026.11.19.1": "87a6ba8f",
                     "2026.11.20.1": "15da2779",
                     "2026.11.20.2": "0fcb3537",
+                    "2026.11.20.3": "fbfd8b6a",
                 },
             },
         ),
@@ -159,6 +169,11 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, tmp_path,
     )
     if table.model == "mochi":
         documents = dict(zip(revisions, configs, strict=True))
+        for preset in table.presets:
+            if preset.evaluations:
+                (evaluation,) = preset.evaluations
+                (validation,) = documents[preset.name]["inputs"]["validation_data"]
+                assert (evaluation.name, validation["relative_path"]) == ("eval_lite_100", "validation.parquet")
         docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
         fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
         served = rl_gate._config_values(documents["train-long-3rack"]["skyrl"])
