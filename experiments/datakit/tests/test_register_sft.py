@@ -13,4 +13,3 @@ def test_registration_resolves_download_behind_processed_chat(name):
     download = source.chat_steps[0].deps[0]
     selected = registered_download(source, download.hash_attrs["hf_dataset_id"], download.hash_attrs["revision"])
     assert selected is download
-    assert selected is not source.chat_steps[0]
