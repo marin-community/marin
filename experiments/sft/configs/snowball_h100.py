@@ -10,7 +10,7 @@ Snowball also supports Levanter's packed-document attention mask.
 
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, run_sft_cli
 
