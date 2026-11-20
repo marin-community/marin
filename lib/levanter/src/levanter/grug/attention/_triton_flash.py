@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Grug's ``gpu_triton_flash`` attention: a Triton flash attention for causal self-attention.
 
-Written for AMD Instinct GPUs (ROCm) to replace ``gpu_pallas_triton_flash``. Forward, dQ and dK/dV are separate
-Triton kernels in the FlashAttention-2 layout, launched through ``jax_triton``:
+Runs on AMD Instinct GPUs (ROCm). Forward, dQ and dK/dV are separate Triton kernels in the FlashAttention-2
+layout, launched through ``jax_triton``:
 
 - Every mask is reduced to one inclusive key lower bound per query, ``lb[b, q]``. A query ``q`` attends to keys
   ``lb[q] <= k <= q``. A sliding window ``W`` gives ``lb[q] >= q - W + 1`` and packed segment IDs give
@@ -19,10 +19,10 @@ Segment semantics: each maximal run of equal segment IDs is one document, the pa
 ID that reappears after a different ID starts a new document here, whereas ``reference_attention`` would let the
 two runs see each other. Query and key segment IDs must be equal (self-attention).
 
-The kernels are plain Triton rather than Pallas because JAX deprecates the Pallas Triton backend, and Mosaic GPU,
-its replacement, does not target AMD GPUs. On ROCm, ``jax_triton`` needs ``jax_rocm10_plugin`` 0.12.0 or newer:
-earlier plugins delete each compiled kernel file on its first launch without holding a lock, so a process that
-launches a new kernel on several GPUs at once fails or hangs.
+The kernels are plain Triton because Mosaic GPU, the GPU backend of JAX's own kernel language (Pallas), does not
+target AMD GPUs. On ROCm, ``jax_triton`` needs ``jax_rocm10_plugin`` 0.12.0 or newer: older plugins delete each
+compiled kernel file on its first launch without holding a lock, so a process that launches a new kernel on several
+GPUs at once fails or hangs.
 """
 
 import dataclasses
@@ -167,13 +167,13 @@ def _dkv_query_ranges(
 
 # Each kernel walks a band of blocks ``[lo, hi)`` in three loops: masked on ``[lo, full_lo)``, unmasked on
 # ``[full_lo, full_hi)`` and masked on ``[full_hi, hi)``. The bounds are clamped at zero, which they already satisfy,
-# so Triton can prove the load offsets non-negative; on MI350X that made the backward 1-2% faster.
+# so Triton can prove the load offsets non-negative, which runs the backward 1-2% faster on MI350X.
 # Row tensors are ``[rows, head_dim]`` slices of a ``[B, S, H, D]`` array, ``row_stride = H * D`` apart.
 #
 # Every grid is ``(batch, head, block)``. Triton launches programs with the first grid axis varying fastest, so the
 # block index varies slowest: the longest blocks of every batch row and head start first and the short ones fill in
-# at the end. With the block index fastest, blocks of different lengths launch interleaved, which ran
-# ``gpu_pallas_triton_flash``'s kernels 1.2-1.5x slower on MI350X.
+# at the end. With the block index fastest, blocks of different lengths launch interleaved, and forward plus
+# backward on MI355X is about 1.3x (window 2048) to 1.8x (causal) slower.
 
 
 @triton.jit

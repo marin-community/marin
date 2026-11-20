@@ -24,9 +24,8 @@ ID that reappears after a different ID starts a new document here, whereas ``ref
 two runs see each other. Query and key segment IDs must be equal (self-attention).
 
 JAX 0.11 deprecates the Pallas Triton backend, and Mosaic GPU, its replacement, does not target AMD GPUs.
-``gpu_triton_flash`` (``_triton_flash.py``) runs the same kernels through ``jax_triton`` and is meant to replace this
-module. It needs ``jax_rocm10_plugin`` 0.12.0 or newer, whose kernel loader no longer races when one process launches
-a new kernel on several GPUs at once.
+``gpu_triton_flash`` (``_triton_flash.py``) runs the same algorithm through ``jax_triton`` and is faster on MI355X;
+it needs ``jax_rocm10_plugin`` 0.12.0 or newer.
 """
 
 import dataclasses
