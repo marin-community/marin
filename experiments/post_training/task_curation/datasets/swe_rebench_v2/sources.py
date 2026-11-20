@@ -17,7 +17,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.groups impo
     UPSTREAM_DATASET,
     UPSTREAM_REVISION,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
