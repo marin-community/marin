@@ -188,8 +188,8 @@ def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path,
     environment, process_environment = _fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     shutil.rmtree(site_packages / "nvidia")
-    (site_packages / "flash_attn.py").unlink()
-    (site_packages / "flash_attn_2_cuda.py").unlink()
+    shutil.rmtree(site_packages / "flash_attn")
+    (site_packages / "flash_attn_interface.py").unlink()
     if publisher_installed:
         _write_module(site_packages, "skyrl_train/hf_publisher.py", "def publish_verified_hf_export(*args): pass\n")
 

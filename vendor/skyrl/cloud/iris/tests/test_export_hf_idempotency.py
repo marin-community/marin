@@ -223,7 +223,7 @@ def test_cpu_upload_pins_the_gcs_bucket_region(export_run, monkeypatch):
 def test_gpu_job_without_a_complete_export_never_submits_upload(export_run, monkeypatch):
     run = export_run
     monkeypatch.setattr(subprocess, "call", lambda *_args, **_kwargs: 0)
-    with pytest.raises(RuntimeError, match="no safetensors weights"):
+    with pytest.raises(RuntimeError, match="without a completed HF model"):
         export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
     assert run.submissions == []
     assert read_hf_export_request(run.spec.request.checkpoint_path).status is HFExportStatus.PENDING
