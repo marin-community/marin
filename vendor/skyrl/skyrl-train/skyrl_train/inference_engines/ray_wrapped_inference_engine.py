@@ -410,6 +410,10 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
         finally:
             ray.cancel(gen)
 
+    async def get_served_model_name(self) -> str:
+        """Read the live actor's registered OpenAI serving model name."""
+        return await self.inference_engine_actor.get_served_model_name.remote()
+
     async def completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
         actor_task = await _submit_actor_task(self.inference_engine_actor.completion, request_payload)
         return await _await_actor_task(actor_task)
@@ -565,6 +569,7 @@ def create_ray_wrapped_inference_engines(
         still require the ray backend for shared-GPU resource management.
     """
     engine_init_kwargs = dict(engine_init_kwargs)
+    engine_init_kwargs.pop("marin_near_window_serving_probe", None)
     # Direct factory callers bypass generator config validation.
     validate_weight_sync_pause_backend(weight_sync_pause_policy, backend=backend, run_engines_locally=True)
     model_metadata_path = engine_init_kwargs.pop(MODEL_METADATA_PATH_KEY, pretrain)
