@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import OversightEvidence, OversightLevel
+from finestore.rl.difficulty import DIFFICULTY_GAPS
 from finestore.rl.status_taxonomy import (
-    DIFFICULTY_GAP_EXCLUSION_REASONS,
     REASON_EXPLANATIONS,
     ExclusionReason,
     SourceStatus,
@@ -296,7 +296,9 @@ def test_oversight_missing_explanation_carries_the_quick_receipt_path():
 
 
 def test_difficulty_gap_mapping_targets_defined_reasons():
-    for reason in DIFFICULTY_GAP_EXCLUSION_REASONS.values():
+    mapped = {spec.exclusion for spec in DIFFICULTY_GAPS.values() if spec.exclusion is not None}
+    assert mapped, "The typed gap table must keep at least one SOURCE-owned exclusion mapping"
+    for reason in mapped:
         assert reason in ExclusionReason
         assert reason in REASON_EXPLANATIONS  # every mapped reason carries its canonical explanation
 

@@ -2531,11 +2531,11 @@ at serving time by the judge probe and identity receipt.
 
 ### How SOURCE gaps are escalated
 
-`DIFFICULTY_GAP_EXCLUSION_REASONS`
-(`lib/finestore/src/finestore/rl/status_taxonomy.py`), keyed by the member
-name, maps each SOURCE-owned gap to the `ExclusionReason` that owns its
-admission outcome. Never map it again elsewhere: `None` in that table means the
-gap is PIPELINE-owned and never excludes a source. Escalate a SOURCE gap
+`DIFFICULTY_GAPS`
+(`lib/finestore/src/finestore/rl/difficulty.py`) carries each gap's
+`DifficultyGapSpec.exclusion`: the `ExclusionReason` that owns its admission
+outcome. `None` means the gap never excludes a source, and only SOURCE-owned
+gaps may name a reason. Escalate a SOURCE gap
 through the normal admission procedure with its evidence — the requirement URI
 and its existence check, the `BackendSurvey` row, the judge identity and its
 validation, or the frozen-sample receipt — and let the user rule between
