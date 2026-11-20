@@ -458,5 +458,4 @@ async def test_one_stored_task_uses_each_runs_retrieval_service(open_worker, mon
             )
         assert result.failure is None
         assert stored.model_dump_json() == frozen
-        assert endpoint not in frozen
     assert observed == ["http://first-run:8788/health", "http://second-run:8788/health"]

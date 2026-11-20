@@ -192,6 +192,25 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
     assert leg_paths(selection.matrix, "marin") == expected
 
 
+def test_multiple_native_configs_select_each_consumer_once(tmp_path: Path) -> None:
+    consumers = [
+        "experiments/post_training/rl_tests/test_rl.py",
+        "tests/rl/test_rl_launch_documents.py",
+    ]
+    for consumer in consumers:
+        write(tmp_path, consumer, "def test_native_configuration():\n    pass\n")
+    selection = select_changed_tests(
+        [
+            "vendor/skyrl/marinskyrl/task_machine_factories.py",
+            "vendor/skyrl/marinskyrl/local_images.py",
+            *consumers,
+        ],
+        tmp_path,
+    )
+
+    assert leg_paths(selection.matrix, "marin") == consumers
+
+
 @pytest.mark.parametrize(
     "changed_file",
     [
