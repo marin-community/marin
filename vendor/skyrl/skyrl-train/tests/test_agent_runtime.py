@@ -7,15 +7,19 @@ from contextlib import asynccontextmanager
 
 import daytona
 import pytest
-from harbor.host_capabilities import HostCapabilities
+from harbor.host_capabilities import HostCapabilities, MODEL_RELAY_PORT
 from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.pi import Pi
 from harbor.environments.factory import EnvironmentFactory
+from harbor.environments.capabilities import EnvironmentCapabilities
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
+from harbor.models.task.task import Task
+from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from harbor.verifier.verifier import Verifier
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRolloutInterrupted
@@ -208,6 +212,63 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     [result_path] = list((attempts[0] / "trials").glob("*/result.json"))
     result = TrialResult.model_validate_json(result_path.read_text())
     assert result.exception_info.exception_type == "ProviderUnavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["${OPENAI_BASE_URL}", "https://declared-provider.invalid/v1"])
+async def test_verifier_model_calls_receive_relay_values_only_during_verification(tmp_path, harbor_package, endpoint):
+    with (harbor_package / "task.toml").open("a") as config:
+        config.write(
+            f'\n[verifier.env]\nOPENAI_BASE_URL = "{endpoint}"\n'
+            'OPENAI_API_KEY = "${OPENAI_API_KEY}"\nMODEL_NAME = "${MODEL_NAME}"\n'
+        )
+    task = harbor_trial_task(harbor_package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
+    settings = InstalledAgentSettings(
+        agent=AgentConfig(name="pi"), output_path=str(tmp_path / "attempts"),
+        setup_timeout=5, run_timeout=5, cleanup_timeout=5,
+        service_startup_timeout=5, service_shutdown_timeout=5, judge_model="fixture-judge",
+    )
+    connection = DaytonaConnection(api_key="daytona-secret")
+    runtime = InstalledAgentRuntime(
+        settings, AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()), 128,
+        daytona_connection=connection, eval_daytona_connection=connection,
+        judge=JudgeConnection("https://host-judge.invalid/v1", "host-judge-secret"),
+    )
+    binding = runtime.original_trial_binding(
+        lowered_task(task, "harbor_trial", attempt_timeout=15),
+        HarborTaskSettings.from_config(OmegaConf.create({})), "eval", {},
+    )
+    paths = TrialPaths(tmp_path / "verifier-trial")
+    paths.mkdir()
+    commands = []
+
+    class VerifierMachine:
+        async def run(self, command):
+            commands.append(command)
+            paths.reward_text_path.write_text("1")
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+    class MountedEnvironment(BorrowedMachineEnvironment):
+        @property
+        def capabilities(self):
+            return EnvironmentCapabilities(mounted=True)
+
+    environment = MountedEnvironment(
+        VerifierMachine(), tmp_path / "verifier-trial", "verifier-only", EnvironmentConfig(),
+        host_capabilities=binding.host_capabilities,
+    )
+    await environment.exec("true")
+    assert "OPENAI_BASE_URL" not in commands[0].env
+    assert "OPENAI_API_KEY" not in commands[0].env
+    result = await Verifier(
+        task=Task(task_dir=harbor_package), trial_paths=paths, environment=environment,
+        override_env=binding.verifier_environment, skip_tests_upload=True,
+    ).verify()
+    assert result.rewards == {"reward": 1.0}
+    assert commands[-1].env["OPENAI_BASE_URL"] == f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1"
+    assert commands[-1].env["OPENAI_API_KEY"] == "EMPTY"
+    assert commands[-1].env["MODEL_NAME"] == "fixture-judge"
+    assert "host-judge-secret" not in commands[-1].env.values()
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,7 +16,7 @@ from harbor.environments.model_relay import JudgeAccess
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
-from harbor.host_capabilities import HostCapabilities, model_api_url, task_model_environment
+from harbor.host_capabilities import HostCapabilities, model_api_url, model_guest_environment, task_model_environment
 from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
@@ -79,6 +80,14 @@ class InstalledAgentSettings(BaseModel):
                 "and remove the legacy snapshot mapping before launching"
             )
         return values
+
+
+@dataclass(frozen=True)
+class OriginalTrialBinding:
+    environment: TrialEnvironmentConfig
+    host_capabilities: HostCapabilities
+    verifier_environment: dict[str, str]
+    guest_environment: dict[str, str]
 
 
 class InstalledAgentRuntime:
@@ -153,9 +162,9 @@ class InstalledAgentRuntime:
         finally:
             await publish_attempt(trial_dir, destination)
 
-    def original_trial_environment(
-        self, lowered: TaskRolloutSpec, settings: HarborTaskSettings, phase: str
-    ) -> tuple[TrialEnvironmentConfig, HostCapabilities]:
+    def original_trial_binding(
+        self, lowered: TaskRolloutSpec, settings: HarborTaskSettings, phase: str, verifier_environment: dict[str, str]
+    ) -> OriginalTrialBinding:
         """Resolve phase-specific provisioning and the original task's model relay."""
         kwargs = dict(settings.environment.kwargs)
         kwargs.pop("api_key_env", None)
@@ -170,10 +179,8 @@ class InstalledAgentRuntime:
                 next(resource for resource in lowered.task.resources.verifier if resource.path == "task.toml")
             ).decode()
         )
-        verifier_environment = dict(package_config.verifier.env)
-        binding = self.settings.task_bindings.get(lowered.task.id)
-        if binding is not None and binding.verifier_environment is not None:
-            verifier_environment.update(binding.verifier_environment)
+        verifier_environment = {**package_config.verifier.env, **verifier_environment}
+        guest_environment = {}
         if (
             (model_api_url(verifier_environment) is not None or model_api_url(package_config.environment.env) is not None)
             and self.judge is not None
@@ -182,15 +189,17 @@ class InstalledAgentRuntime:
             kwargs.update(model_endpoint=self.judge.base_url, model_name=self.settings.judge_model)
             authentication[self.judge.base_url] = self.judge.api_key
             protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
+            verifier_environment = model_guest_environment(verifier_environment, self.settings.judge_model)
             if model_api_url(package_config.environment.env) is not None:
                 kwargs["judge_access"] = JudgeAccess.RUNTIME.value
+                guest_environment = task_model_environment(self.settings.judge_model)
         host_capabilities = HostCapabilities(
             daytona=connection,
             model_authentication=authentication,
             protected_values=protected,
         )
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
-        return environment, host_capabilities
+        return OriginalTrialBinding(environment, host_capabilities, verifier_environment, guest_environment)
 
     def original_harness(
         self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
@@ -203,7 +212,6 @@ class InstalledAgentRuntime:
                 "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
                 "machines use the borrowed-machine harness"
             )
-        environment, host_capabilities = self.original_trial_environment(lowered, settings, phase)
         agent = self.settings.agent.model_copy(
             update={
                 "override_timeout_sec": lowered.limits.total_turn_timeout or self.settings.run_timeout,
@@ -212,10 +220,18 @@ class InstalledAgentRuntime:
         config = TrialConfig(
             task=TaskConfig(path="runtime-package"),
             agent=agent,
-            environment=environment,
+            environment=settings.environment.model_dump(),
             verifier={**settings.verifier.model_dump(), "override_timeout_sec": lowered.limits.verifier_timeout},
             trial_attempt_timeout_sec=lowered.limits.attempt_timeout,
             trial_cleanup_grace_sec=lowered.limits.cleanup_timeout,
+        )
+        config = apply_task_binding(config, self.settings.task_bindings.get(lowered.task.id))
+        binding = self.original_trial_binding(lowered, settings, phase, config.verifier.env)
+        config = config.model_copy(
+            update={
+                "environment": binding.environment,
+                "verifier": config.verifier.model_copy(update={"env": binding.verifier_environment}),
+            }
         )
 
         async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
@@ -224,7 +240,8 @@ class InstalledAgentRuntime:
                 lowered=lowered,
                 session_id=session_id,
                 config=config,
-                host_capabilities=host_capabilities,
+                host_capabilities=binding.host_capabilities,
+                guest_environment=binding.guest_environment,
             )
 
         return HarborTrialHarness(run, self.settings.trial_reward_key)
@@ -237,6 +254,7 @@ class InstalledAgentRuntime:
         session_id: str,
         config: TrialConfig,
         host_capabilities: HostCapabilities,
+        guest_environment: dict[str, str],
     ) -> TrialResult:
         """Execute the original package with Harbor-owned environments and verification."""
         if self.port is None:
@@ -251,7 +269,6 @@ class InstalledAgentRuntime:
             task_dir = evidence / "task"
             restore_harbor_trial_task(lowered.task, task_dir)
             binding = self.settings.task_bindings.get(lowered.task.id)
-            config = apply_task_binding(config, binding)
             environment = config.environment
             if binding is not None:
                 environment = environment.model_copy(update=binding.environment_resources.model_dump(exclude_none=True))
@@ -276,13 +293,7 @@ class InstalledAgentRuntime:
                 trial = await Trial.create(
                     trial_config,
                     host_capabilities=host_capabilities,
-                    guest_environment=(
-                        task_model_environment(self.settings.judge_model)
-                        if self.judge is not None
-                        and self.settings.judge_model is not None
-                        and config.environment.kwargs.get("judge_access") == JudgeAccess.RUNTIME.value
-                        else {}
-                    ),
+                    guest_environment=guest_environment,
                 )
                 result = await run_harbor_trial(
                     trial,
