@@ -4,6 +4,7 @@
 """Single-writer environments with replayable command and binary-file effects."""
 
 import errno
+import os
 import shlex
 import time
 from collections.abc import AsyncIterator, Sequence
@@ -130,6 +131,11 @@ BACKSTOP = 30.0
 """Machine deadline beyond the command timeout: the kill-after grace plus exec and capture latency."""
 
 
+SIMULATION_ERRNOS = {
+    os.strerror(code).lower(): code for code in (errno.EISDIR, errno.ENOTDIR, errno.EACCES, errno.ENOENT)
+}
+
+
 def _machine_issue(error: RuntimeError) -> Hold | Restart | Transient:
     if isinstance(error, MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
@@ -152,27 +158,22 @@ class ShellboxEnv(RecordedEnv):
         self.check_open()
         try:
             yield
-        except IsADirectoryError as error:
-            raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
             raise _machine_issue(error) from error
-        except (RuntimeError, SimulationError) as error:
-            detail = str(error)
-            if "is a directory" in detail.lower():
-                raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path) if path else detail) from error
-            if path is not None:
-                if "not a directory" in detail.lower():
-                    raise NotADirectoryError(errno.ENOTDIR, "Not a directory", str(path)) from error
-                if "permission denied" in detail.lower():
-                    raise PermissionError(errno.EACCES, "Permission denied", str(path)) from error
-            if (
-                path is not None or isinstance(error, SimulationError)
-            ) and "no such file or directory" in detail.lower():
-                missing = str(path) if path is not None else detail.partition("No such file or directory: ")[2] or detail
-                raise FileNotFoundError(errno.ENOENT, "No such file or directory", missing) from error
-            raise
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment operation did not resolve") from error
+        except OSError as error:
+            # Path failures carry an errno; report them against the path the caller asked for.
+            if path is None or error.errno is None:
+                raise
+            raise OSError(error.errno, os.strerror(error.errno), str(path)) from error
+        except SimulationError as error:
+            # ShellSim reports path failures as "<strerror>: <path>" text only.
+            message, _, name = str(error).partition(": ")
+            code = SIMULATION_ERRNOS.get(message.lower())
+            if code is None:
+                raise
+            raise OSError(code, os.strerror(code), str(path) if path is not None else name) from error
 
     @override
     async def run(self, cmd: str, *, timeout: float) -> CommandResult:

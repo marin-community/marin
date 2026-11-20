@@ -8,6 +8,7 @@ import asyncio
 import base64
 import errno
 import math
+import os
 import re
 import shlex
 import tarfile
@@ -58,8 +59,14 @@ from shellbox.machine import (
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
 # `sh -c` script, so 64 KiB of data (87,384 encoded bytes) leaves room for the target path.
 TRANSFER_CHUNK_BYTES = 64 * 1024
-# Exit statuses of the path probe, above those sh and coreutils use for their own failures.
-PATH_IS_DIRECTORY, PATH_MISSING = 101, 102
+# Path probe exit statuses, above those sh and coreutils use for their own failures, and the errno each reports.
+PROBE_ERRNOS = {101: errno.EISDIR, 102: errno.ENOENT, 103: errno.ENOTDIR, 104: errno.EACCES}
+READ_PROBE = "test -d {path} && exit 101; test -e {path} || exit 102; test -r {path} || exit 104; "
+# The nearest existing ancestor must be a writable directory, or the target itself writable.
+WRITE_PROBE = (
+    'test -d {path} && exit 101; a=$(dirname {path}); while [ ! -e "$a" ]; do a=$(dirname "$a"); done; '
+    'test -d "$a" || exit 103; if [ -e {path} ]; then test -w {path}; else test -w "$a"; fi || exit 104; '
+)
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
@@ -279,17 +286,15 @@ class IrisMachine:
             raise RuntimeError(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
         return response.stdout
 
-    async def _path_checked(self, path: str, script: str, *, exists: bool) -> str:
-        """Run ``script`` on a caller-chosen ``path``; a failure the path causes raises ``OSError``."""
-        quoted = shlex.quote(path)
-        probe = f"test -d {quoted} && exit {PATH_IS_DIRECTORY}; "
-        if exists:
-            probe += f"test -e {quoted} || exit {PATH_MISSING}; "
-        response = await self._script(probe + script)
-        if response.exit_code == PATH_IS_DIRECTORY:
-            raise IsADirectoryError(errno.EISDIR, "Is a directory", path)
-        if response.exit_code == PATH_MISSING:
-            raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
+    async def _path_checked(self, path: str, script: str, probe: str) -> str:
+        """Run ``script`` on a caller-chosen ``path`` after ``probe``; a failure the path causes raises ``OSError``.
+
+        Probed failures raise the errno subclass (``FileNotFoundError``, ``IsADirectoryError``,
+        ``NotADirectoryError``, ``PermissionError``); transport failures keep their own types.
+        """
+        response = await self._script(probe.format(path=shlex.quote(path)) + script)
+        if (code := PROBE_ERRNOS.get(response.exit_code)) is not None:
+            raise OSError(code, os.strerror(code), path)
         if response.exit_code:
             raise OSError(f"Cannot access {path} ({response.exit_code}): {response.stderr or response.stdout}")
         return response.stdout
@@ -297,7 +302,7 @@ class IrisMachine:
     async def _upload_bytes(self, data: bytes, target: str, *, caller_path: bool = False) -> None:
         quoted = shlex.quote(target)
         create = f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}"
-        await (self._path_checked(target, create, exists=False) if caller_path else self._checked(create))
+        await (self._path_checked(target, create, WRITE_PROBE) if caller_path else self._checked(create))
         for offset in range(0, len(data), TRANSFER_CHUNK_BYTES):
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
             await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
@@ -307,7 +312,7 @@ class IrisMachine:
     ) -> tuple[bytes, bool]:
         quoted = shlex.quote(source)
         measure = f"wc -c < {quoted}"
-        measured = self._path_checked(source, measure, exists=True) if caller_path else self._checked(measure)
+        measured = self._path_checked(source, measure, READ_PROBE) if caller_path else self._checked(measure)
         size = int((await measured).strip())
         count = size if limit is None else min(size, limit)
         chunks = []
