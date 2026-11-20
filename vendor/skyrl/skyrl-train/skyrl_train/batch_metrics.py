@@ -30,7 +30,7 @@ from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metric
 from skyrl_train.metric_reduction import MetricReduction, LocalReduction
 
 
-def rollout_metrics(facts: Sequence[RowFacts], *, tis_lcs_alert_threshold: float) -> dict[str, float]:
+def rollout_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     """Aggregate admitted rollout counters and row values without reading payloads."""
     token_rewards = any(group.fields.token_rewards for group in facts)
     lengths = [int(length) for group in facts for length in group.response_len]
@@ -53,11 +53,7 @@ def rollout_metrics(facts: Sequence[RowFacts], *, tis_lcs_alert_threshold: float
         else None
     )
     metrics = rollout_length_metrics(lengths, successes, env_metrics, env_classes)
-    metrics.update(
-        rollout_counter_metrics(
-            [group.group_metrics for group in facts], tis_lcs_alert_threshold=tis_lcs_alert_threshold
-        )
-    )
+    metrics.update(rollout_counter_metrics([group.group_metrics for group in facts]))
     metrics.update(_facts_shaping_metrics(facts))
     return metrics
 

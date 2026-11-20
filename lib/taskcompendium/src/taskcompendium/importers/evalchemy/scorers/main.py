@@ -68,6 +68,10 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
         if scorer == "mrcr":
             return grade_nonce_similarity(config["expected"], config["nonce"], response)
         return grade_graphwalks(tuple(config["expected"]), response)
+    if scorer == "longbench_v2":
+        from .longbench_v2 import grade_longbench_v2
+
+        return grade_longbench_v2(config["expected"], response)
     if scorer == "nupa":
         from .nupa import grade_nupa_candidate
 
