@@ -218,10 +218,6 @@ def render_report(
                 "Recommendation requires a successful GPU job, complete allocation cost, "
                 "a valid Confirm window, unchanged gang and passed required checks"
             )
-        if reference and (not accepted(reference) or comparison_controls(chosen) != comparison_controls(reference)):
-            raise ValueError(
-                "A baseline comparison requires a qualified baseline " "with matched model and workload controls"
-            )
         lines += [
             "",
             f"Recommended trial: {recommendation}. Settings and runtime: "
@@ -244,6 +240,7 @@ def throughput_change(result: dict, baseline: dict | None) -> float | None:
 
 
 def report_campaign(campaign_uri: str, recommendation: str | None = None, baseline: str | None = None) -> str:
+    requested_recommendation = recommendation
     filesystem, path = filesystem_for(prefix_join(campaign_uri, "trials/*/result.json"))
     results = [read_record(filesystem.unstrip_protocol(item)) for item in sorted(filesystem.glob(path))]
     recorded = {row["trial_id"] for row in results}
@@ -264,8 +261,13 @@ def report_campaign(campaign_uri: str, recommendation: str | None = None, baseli
             if baseline is None:
                 baseline = decision["baseline_trial"]
     report = render_report(results, campaign_uri, recommendation, baseline)
-    if recommendation:
+    if requested_recommendation:
         selected = next(row for row in results if row["trial_id"] == recommendation)
+        reference = next((row for row in results if row["trial_id"] == baseline), None)
+        if reference and (not accepted(reference) or comparison_controls(selected) != comparison_controls(reference)):
+            raise ValueError(
+                "A baseline comparison requires a qualified baseline with matched model and workload controls"
+            )
         series = selected["manifest"]["series"]
         profile = series["profile"]
         runtime = prefix_join(selected["trial_uri"], "runtime.json")
@@ -279,7 +281,6 @@ def report_campaign(campaign_uri: str, recommendation: str | None = None, baseli
         prefix = "# Numerical qualification uses a provisional policy. See decision.json.\n" if provisional else ""
         prefix += f"# {QUALIFICATION_SCOPE}\n"
         write_text(prefix_join(campaign_uri, "recommended.yaml"), prefix + yaml.safe_dump(profile, sort_keys=False))
-        reference = next((row for row in results if row["trial_id"] == baseline), None)
         write_record(
             prefix_join(campaign_uri, "decision.json"),
             {

@@ -404,6 +404,10 @@ def test_report_keeps_diagnostics_separate_and_pins_selected_runtime_and_load(tm
     for stage in (Stage.SCREEN, Stage.CONFIRM):
         assert resolved_series(recommended, stage)["concurrency"] == 64
     assert report_campaign(str(tmp_path), baseline="baseline") == output
+    before = read_record(str(tmp_path / "decision.json"))
+    diagnostic_view = report_campaign(str(tmp_path), baseline="diagnostic")
+    assert str(tmp_path / "recommended.yaml") in diagnostic_view
+    assert read_record(str(tmp_path / "decision.json")) == before
     with pytest.raises(ValueError):
         report_campaign(str(tmp_path), recommendation="diagnostic", baseline="baseline")
 
