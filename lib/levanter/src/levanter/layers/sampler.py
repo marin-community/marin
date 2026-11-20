@@ -8,6 +8,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import AxisSelector, NamedArray
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 
 __all__ = ["Sampler"]
 
@@ -86,7 +87,7 @@ class Sampler(eqx.Module):
             jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
             axis=-1,
         ).squeeze(-1)
-        log_z = jax.nn.logsumexp(sampling_logits_array, axis=-1)
+        log_z = batch_invariant_logsumexp(sampling_logits_array)
         log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
         return tokens, log_prob_tokens

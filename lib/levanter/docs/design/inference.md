@@ -137,7 +137,16 @@ capacity/drop state or router auxiliary losses.
 Engine sampled logprobs describe its temperature/top-p sampling logits;
 temperature zero selects greedily using unscaled logits. Raw-policy comparison
 is initially supported only at temperature one and top-p one.
-`payload.raw_policy_logprobs` rejects other settings. Learner logits are untransformed logits with the retained routing policy. CPU reference tests exercise scheduling,
+`payload.raw_policy_logprobs` rejects other settings. The sampler and unfused
+Levanter policy loss share `batch_invariant_logsumexp`: FP32 normalization in
+fixed eight-row tiles, with highest-accuracy exp/log and a complete vocabulary
+on each device. Mapped sampler calls absorb their batch axes before tiling,
+so outer `vmap` transformations retain the same reduction shape. Learners
+comparing raw policy logprobs should use
+`batch_invariant_log_softmax` from `levanter.kernels.logsumexp` on logits with
+vocabulary last. Ordinary XLA `logsumexp` can differ by an FP32 ULP when the
+same logits appear in different row counts. Fused projection/loss kernels
+retain their own normalization schedule. Learner logits are untransformed logits with the retained routing policy. CPU reference tests exercise scheduling,
 transport and numerical replay at the existing tolerances. They do not
 establish TPU bitwise equality, throughput or full production qualification.
 External vLLM/SkyRL rollout transport and learner integration remain outside

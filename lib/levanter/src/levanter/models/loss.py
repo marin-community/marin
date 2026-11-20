@@ -11,8 +11,8 @@ from jax.sharding import reshard
 import haliax as hax
 from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
-from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
@@ -158,6 +158,18 @@ def next_token_loss(
         weight=loss_weight,
         logsumexp_weight=logsumexp_weight,
     )
+
+
+def cross_entropy_loss_and_log_normalizers(
+    pred_y: NamedArray, Label: hax.AxisSelector, target_y: NamedArray
+) -> tuple[NamedArray, NamedArray]:
+    """Compute unfused policy cross entropy with the serving normalization schedule."""
+    vocab = pred_y.resolve_axis(Label)
+    axis = pred_y.axes.index(vocab)
+    normalizers = batch_invariant_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
+    log_normalizers = hax.named(normalizers, tuple(a for a in pred_y.axes if a != vocab))
+    loss = hax.dot(target_y, log_normalizers - pred_y, axis=vocab)
+    return loss, log_normalizers
 
 
 def cross_entropy_and_logsumexp_penalty(
