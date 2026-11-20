@@ -359,3 +359,25 @@ def test_workspace_rewrites_respect_path_boundaries():
     assert to_workspace("ls /sympy2 /sympy-bench", "/sympy") == "ls /sympy2 /sympy-bench"
     assert to_workspace("ls /x/sympy", "/sympy") == "ls /x/sympy"
     assert to_workspace("cd /testbed", "/testbed") == "cd /testbed"
+
+
+def test_transient_daytona_classification_retries_infra_and_never_grading():
+    """The wave resume survives the org CPU-limit saturation and reaped sandboxes: the
+    infrastructure failures classify as retryable; grading verdicts and config errors do
+    not (ruling 2026-11-20: the wave1-full post-mortem)."""
+    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
+        TRANSIENT_RETRY_DELAYS_SEC,
+        transient_daytona_error,
+    )
+
+    assert TRANSIENT_RETRY_DELAYS_SEC == (60.0, 300.0)
+    assert transient_daytona_error(RuntimeError("Daytona environment is not running"))
+    assert transient_daytona_error(
+        RuntimeError("Failed to create sandbox: Total CPU limit exceeded. Maximum allowed: 2500.")
+    )
+    assert transient_daytona_error(RuntimeError("DaytonaConnectionError: connection reset"))
+    assert transient_daytona_error(RuntimeError("DaytonaTimeoutError: sandbox start timed out"))
+    # grading verdicts and config errors are never retried
+    assert not transient_daytona_error(AssertionError("assert 0.0 == 1.0"))
+    assert not transient_daytona_error(ValueError("Unexpected hardened setup command shape"))
+    assert not transient_daytona_error(RuntimeError("UnsupportedMachineSpec: missing environment/Dockerfile"))

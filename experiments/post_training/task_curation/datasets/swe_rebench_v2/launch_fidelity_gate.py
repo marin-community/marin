@@ -18,13 +18,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/wave-v9"
+OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/wave-v9-v2"
 SAMPLE_URI = f"{OUTPUT_ROOT}/fidelity-sample-manifest.json"
 BINDINGS_URI = f"{OUTPUT_ROOT}/base-image-bindings.json"
 DATASET_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/v2-1-data"
-DRIVER_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/gate/swe_rebench_fidelity_driver.py"
-DRIVER_SHA256 = "8ea4d720ef4bd586e3ea2cac05ed57ec1e402ddf8af3a17fc1adf86dd9559105"
-JOB_NAME = "swe-repair-swe-rebench-wave-v9"
+# The driver stages at a VERSIONED uri: a running wave job's retries pin the sha, so a
+# re-stage at a shared uri breaks every retry's bootstrap assert (the wave1-full post-mortem).
+DRIVER_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/gate/2026.11.20.2/swe_rebench_fidelity_driver.py"
+DRIVER_SHA256 = "d963497dd3878f32710a981bae357a50b6d4d5cfb4885c40dbb66649be6def3f"
+JOB_NAME = "swe-repair-swe-rebench-wave-v9-v2"
 
 
 def parse_args() -> dict:
@@ -48,6 +50,8 @@ def parse_args() -> dict:
             overrides["wave_exclusions"] = argv[index + 1]
         elif argv[index] == "--workers":
             overrides["workers"] = argv[index + 1]
+        elif argv[index] == "--output-root":
+            overrides["output_root"] = argv[index + 1]
         elif argv[index] == "--task-memory":
             overrides["task_memory"] = argv[index + 1]
     return overrides
@@ -63,6 +67,7 @@ def ghcr_auth() -> str:
 def main() -> None:
     overrides = parse_args()
     job_name = overrides.get("job_name", JOB_NAME)
+    output_root = overrides.get("output_root", OUTPUT_ROOT)
     bootstrap = (
         "import hashlib;from rigging.filesystem.s3_compat import configure_coreweave_s3;"
         "from rigging.filesystem.storage_path import StoragePath;configure_coreweave_s3();"
@@ -133,7 +138,7 @@ def main() -> None:
         DATASET_URI,
         "-e",
         "GATE_OUTPUT_URI",
-        OUTPUT_ROOT,
+        output_root,
         *(["-e", "GATE_GROUPS", overrides["groups"]] if "groups" in overrides else []),
         *(["-e", "GATE_INSTANCE", overrides["instances"]] if "instances" in overrides else []),
         *(["-e", "WAVE_GROUPS", overrides["wave_groups"]] if "wave_groups" in overrides else []),

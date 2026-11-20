@@ -378,6 +378,27 @@ class OutcomeLedger:
             return {(k): {"rewards": {"reward": v}} for k, v in self._rewards.items()}
 
 
+# Transient Daytona infrastructure failures a phase retry survives: the organization CPU
+# limit saturating (sandbox creates fail with "Total CPU limit exceeded" and live sandboxes
+# are reaped, surfacing as "Daytona environment is not running") and the connection-level
+# provider errors. Grading verdicts and config errors are never retried. Each retry runs in
+# a fresh attempt directory: the machinery creates a uniquely named sandbox per run, so a
+# retry is a clean recreate — never a reattach to a reaped or stopped sandbox (idle Daytona
+# sandboxes are purged across orgs; never assume one survives a long preemption).
+TRANSIENT_RETRY_DELAYS_SEC = (60.0, 300.0)
+
+
+def transient_daytona_error(error: BaseException) -> bool:
+    """Classify the retryable Daytona infrastructure failures."""
+    text = f"{type(error).__name__}: {error}"
+    return (
+        "Daytona environment is not running" in text
+        or "Total CPU limit exceeded" in text
+        or "DaytonaConnectionError" in text
+        or "DaytonaTimeoutError" in text
+    )
+
+
 def trial(
     root: Path, row: dict, variant: str, phase: str, image: str, ledger: OutcomeLedger, *, force: bool = False
 ) -> dict:
@@ -390,16 +411,37 @@ def trial(
     # nop phase's artifact pass removed task.toml before the oracle phase read it).
     name = f"{row['instance_id']}-{variant}-{phase}"
     package = write_package(root, name, row_variant_files(row, variant, image), row, variant, image)
-    attempt = root / "trials" / f"{name}-{phase}"
-    attempt.mkdir(parents=True, exist_ok=True)
     agent = {"name": "nop"} if phase == "nop" else {"name": "oracle"}
-    config = trial_config(package, attempt / "jobs", agent, f"{name}-{phase}")
-    config_path = attempt / "trial.json"
-    config_path.write_text(json.dumps(config))
-    started = time.monotonic()
-    summary = asyncio.run(
-        asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
-    )
+    summary = None
+    last_error: Exception | None = None
+    for retry_index, delay in enumerate((0.0, *TRANSIENT_RETRY_DELAYS_SEC)):
+        if delay:
+            LOGGER.warning(
+                "[%s/%s] transient Daytona failure (attempt %d failed); retrying in %ds: %s",
+                row["instance_id"],
+                variant,
+                retry_index,
+                int(delay),
+                last_error,
+            )
+            time.sleep(delay)
+        attempt = root / "trials" / (f"{name}-{phase}" if not retry_index else f"{name}-{phase}-r{retry_index}")
+        attempt.mkdir(parents=True, exist_ok=True)
+        config = trial_config(package, attempt / "jobs", agent, f"{name}-{phase}")
+        config_path = attempt / "trial.json"
+        config_path.write_text(json.dumps(config))
+        started = time.monotonic()
+        try:
+            summary = asyncio.run(
+                asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
+            )
+        except Exception as error:
+            if not transient_daytona_error(error) or retry_index == len(TRANSIENT_RETRY_DELAYS_SEC):
+                raise
+            last_error = error
+            continue
+        break
+    assert summary is not None  # the loop exits only through the break or the re-raise
     elapsed = time.monotonic() - started
     summary["elapsed_sec"] = elapsed
     summary["deadline_sensitive"] = phase == "oracle" and elapsed > VERIFIER_DEADLINE_SEC
