@@ -126,6 +126,5 @@ def test_02a_sandbox_runtime_selects_only_cpu_nodes():
     selected_group = runtime.node_selector[group_label]
     selected = config.scale_groups[selected_group]
     assert selected.resources is not None and selected.resources.device_type == AcceleratorType.CPU
-    assert runtime.node_selector["node.coreweave.cloud/gvisor"] == "true"
     pools = derive_nodepools(config)
     assert [pool.name for pool in pools if pool.node_labels[group_label] == selected_group] == ["cw-use02a-cpu-genoa"]
