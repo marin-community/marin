@@ -189,6 +189,7 @@ jobs:
             --github-output
 
       - name: Validate canary metrics
+        id: validate
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
         # Runs on the GitHub runner (outside CoreWeave), so it reads
@@ -200,6 +201,10 @@ jobs:
         env:
           CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          # A lost W&B history only warns; keep the metrics file, which expires
+          # with the canary output directory after a day.
+          CANARY_METRICS_COPY_DIR: /tmp/canary-diag
 
       - name: Summarize GPU canary profile
         continue-on-error: true
@@ -216,7 +221,7 @@ jobs:
         # Runs on both failures and cancellations — GHA timeouts surface as
         # cancelled(), not failure(). That gap hid two weeks of hung H100
         # provisioning before we noticed.
-        if: failure() || cancelled()
+        if: failure() || cancelled() || steps.validate.outputs.wandb_history_lost == 'true'
         continue-on-error: true
         env:
           JOB_ID: ${{ steps.submit.outputs.job_id }}
@@ -234,7 +239,7 @@ jobs:
             --include-cluster-context
 
       - name: Upload diagnostics bundle
-        if: failure() || cancelled()
+        if: failure() || cancelled() || steps.validate.outputs.wandb_history_lost == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: canary-diag-${{ github.run_id }}
