@@ -55,7 +55,6 @@ def test_micro210_model_rejects_mutable_references(identity, revision):
 def test_default_policy_references_pin_immutable_hugging_face_revisions():
     for reference in (LEGACY_POLICY_REFERENCE, POLICY_REFERENCE):
         assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
-    assert "s3://" not in LEGACY_POLICY_REFERENCE.uri and "gs://" not in POLICY_REFERENCE.uri
 
 
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
