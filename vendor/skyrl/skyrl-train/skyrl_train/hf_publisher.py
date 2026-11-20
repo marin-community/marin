@@ -47,7 +47,6 @@ class HuggingFacePublisher:
     private: bool
     revision: str = DEFAULT_HF_HUB_REVISION
     upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
-    api: HfApi | None = None
     staging_dir: str | None = None
 
     def publish(self, export_path: str, step: int) -> None:
@@ -56,7 +55,7 @@ class HuggingFacePublisher:
         manifest_path = join_resource_path(export_path, MODEL_MANIFEST_FILENAME)
         if not io.exists(manifest_path):
             raise ValueError(f"Hugging Face publication requires a model manifest: {manifest_path}")
-        api = self.api or HfApi()
+        api = HfApi()
         with hugging_face_hub_online():
             call_with_hugging_face_retry(
                 lambda: api.create_repo(
@@ -87,7 +86,9 @@ class HuggingFacePublisher:
                 )
                 self._upload(api, root, files, "", f"Upload checkpoint at step {step}")
                 if self.upload_mode is HFUploadMode.ALL:
-                    self._upload(api, root, files, f"checkpoints/step_{step}", f"Archive checkpoint at step {step}")
+                    self._upload(
+                        api, root, files, f"checkpoints/step_{step}", f"Archive checkpoint at step {step}"
+                    )
                 logger.info("Hub upload completed in {:.3f} seconds", time.monotonic() - upload_started)
 
     def _upload(

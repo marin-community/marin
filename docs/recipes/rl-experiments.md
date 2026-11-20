@@ -507,7 +507,8 @@ Candidate receipts must match their recorded inputs exactly.
 
 Use `experiments.post_training.skyrl_evaluation.evaluate_model` to score a model in a separate evaluation
 job. Pass a `SkyRLPolicyModel` for an exported RL policy or an `ArtifactHfModel` for an SFT export,
-a serving `ModelConfig`, evaluation definitions, a version, and the accelerator and cluster settings.
+a serving `ModelConfig` with `location=""`, evaluation definitions, a version, and the accelerator
+and cluster settings.
 The artifact supplies the model URI, identity, and tokenizer. The serving config supplies the engine
 and generation settings.
 

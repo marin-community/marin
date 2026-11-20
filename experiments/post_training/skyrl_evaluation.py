@@ -24,12 +24,12 @@ def evaluate_model(
     submission_cluster: str,
     federated_cluster: str | None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a trained model with serving settings and replace its location with the resolved export."""
-    if any(
+    """Evaluate an artifact using a serving config with an empty location."""
+    if serving.location or any(
         value is not None
         for value in (serving.revision, serving.identity, serving.tokenizer, serving.tokenizer_revision)
     ):
-        raise ValueError("Evaluation revision, identity, tokenizer and tokenizer_revision come from the model")
+        raise ValueError("Evaluation location, revision, identity, tokenizer and tokenizer_revision come from the model")
 
     def resolve_model(ctx: StepContext) -> ModelConfig:
         resolved = model.resolve(ctx)

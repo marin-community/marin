@@ -7,11 +7,17 @@ from types import SimpleNamespace
 
 import pytest
 from evalrecords.records import RunStatus, record_path
+from huggingface_hub import constants
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import _record
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord
 from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.inference.model_preparation import read_tool_chat_template
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
+from rigging.filesystem.storage_path import StoragePath
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import PreTrainedTokenizerFast
 
 import experiments.evaluation.launch as launch_module
 import experiments.evaluation.pipeline as pipeline_module
@@ -44,6 +50,7 @@ def remove_attempt_ids(path, *, legacy=False):
 @pytest.mark.parametrize(
     "model_fields",
     [
+        pytest.param({"location": "s3://checkpoints/unrelated"}, id="location"),
         {"revision": "starter-commit"},
         {"identity": "starter"},
         {"tokenizer": "org/tokenizer"},
@@ -53,7 +60,7 @@ def remove_attempt_ids(path, *, legacy=False):
 def test_evaluate_rejects_invalid_inputs_when_building_the_step(tmp_path, model_fields):
     source = ArtifactHfModel(ArtifactStep.adopt("tests/model", "2026.10.26", str(tmp_path)))
     with pytest.raises(ValueError, match="come from the model"):
-        evaluate_smoke(source, ModelConfig(name="candidate", location="", **model_fields))
+        evaluate_smoke(source, ModelConfig(name="candidate", **{"location": "", **model_fields}))
 
 
 @pytest.mark.parametrize("source_kind", ["rl", "without-ids", "hf"])
@@ -68,8 +75,17 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
     if tokenizer is not None:
         Path(tokenizer).mkdir()
     tokenizer_revision = "tokenizer-commit" if tokenizer is not None else None
+    export_uri = str(export)
     if source_kind == "hf":
-        source = ArtifactHfModel(ArtifactStep.adopt("tests/model", version, str(export)), relative_path="")
+        template = "{{ messages[0].content }}"
+        backend = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+        PreTrainedTokenizerFast(tokenizer_object=backend, chat_template=template).save_pretrained(export)
+        snapshot = StoragePath(f"memory://{tmp_path.name}/policy")
+        for file in export.iterdir():
+            (snapshot / file.name).write_bytes(file.read_bytes())
+        export_uri = str(snapshot)
+        monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
+        source = ArtifactHfModel(ArtifactStep.adopt("tests/model", version, export_uri), relative_path="")
     else:
         source = SkyRLPolicyModel(ArtifactStep.adopt("tests/model", version, str(root), kind=SkyRLRun))
         write_skyrl_run_record(
@@ -89,13 +105,17 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
     class Client:
         def submit(self, *, entrypoint, **_kwargs):
             _, (batch,), _ = entrypoint.resolve()
+            if source_kind == "hf":
+                assert (
+                    read_tool_chat_template(batch.model.tokenizer, batch.model.effective_tokenizer_revision) == template
+                )
             for evaluation in batch.evaluations:
                 _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
             return SimpleNamespace(wait=lambda **_kwargs: None)
 
     monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=Client()))
     monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
-    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=str(root)))
+    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=""))
     result = evaluation.run(materialized_config(evaluation, str(tmp_path)))
 
     assert len(result.run_ids) == 2
@@ -103,12 +123,13 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
         path = Path(record_path(result.records_prefix, run_id))
         record_json = json.loads(path.read_text())
         model = record_json["model"]
-        assert model["location"] == str(export)
+        assert model["location"] == export_uri
         config = model["config"]
         assert config["identity"] == f"tests/model@{version}:{source.step.fingerprint()}"
         assert config["revision"] is None
-        assert config["tokenizer"] == (tokenizer or str(export))
-        assert config["tokenizer_revision"] == (tokenizer_revision or config["identity"])
+        assert config["tokenizer"] == (tokenizer or export_uri)
+        if tokenizer_revision is not None:
+            assert config["tokenizer_revision"] == tokenizer_revision
         if source_kind == "rl":
             assert record_json["rl_attempt"] == ids
         else:

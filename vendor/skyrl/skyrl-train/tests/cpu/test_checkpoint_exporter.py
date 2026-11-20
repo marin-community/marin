@@ -11,9 +11,9 @@ from safetensors.torch import save_file
 
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model_manifest
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
-from skyrl_train.hf_export_schema import HFUploadMode
+from skyrl_train.hf_export_schema import HFExportRequest, HFUploadMode
+from skyrl_train.hf_publisher import publish_verified_hf_export
 from skyrl_train.hf_model_io import verify_hf_model_export
-from skyrl_train.hf_publisher import HuggingFacePublisher
 
 
 class FakePolicyExportWorkers:
@@ -228,18 +228,18 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
 @pytest.mark.parametrize(
     ("visibility", "requested", "upload_mode", "corrupt", "missing_manifest", "error"),
     [
-        (None, False, HFUploadMode.ALL, None, False, None),
-        pytest.param(None, False, HFUploadMode.LATEST, None, False, None, id="root-only"),
+        (None, None, HFUploadMode.ALL, None, False, None),
+        pytest.param(None, None, HFUploadMode.LATEST, None, False, None, id="root-only"),
         (None, True, HFUploadMode.ALL, None, False, None),
-        (True, False, HFUploadMode.ALL, None, False, "visibility differs"),
+        (True, None, HFUploadMode.ALL, None, False, "visibility differs"),
         (False, True, HFUploadMode.ALL, None, False, "visibility differs"),
-        (False, False, HFUploadMode.ALL, "config.json", False, "differs from the model manifest"),
+        (False, None, HFUploadMode.ALL, "config.json", False, "differs from the model manifest"),
         (
-            False, False, HFUploadMode.ALL, "checkpoints/step_12/model.safetensors",
+            False, None, HFUploadMode.ALL, "checkpoints/step_12/model.safetensors",
             False, "differs from the model manifest",
         ),
         pytest.param(
-            None, False, HFUploadMode.LATEST, None, True, "publication requires a model manifest", id="missing-manifest"
+            None, None, HFUploadMode.LATEST, None, True, "HF export lacks completion markers", id="missing-manifest"
         ),
     ],
 )
@@ -256,21 +256,35 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
         (export_path / MODEL_MANIFEST_FILENAME).unlink()
     (export_path / "worker.log").write_text("worker log")
     api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
+    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: api)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    publisher = HuggingFacePublisher(repo_id="org/model", private=requested, upload_mode=upload_mode, api=api)
-
+    visibility_request = {} if requested is None else {"hf_hub_private": requested}
+    request = HFExportRequest(
+        step=12,
+        checkpoint_base_path=str(tmp_path / "checkpoints"),
+        checkpoint_path=str(tmp_path / "checkpoints" / "global_step_12"),
+        export_path=str(tmp_path / "exports"),
+        model_path="org/model",
+        num_nodes=1,
+        gpus_per_node=1,
+        hf_hub_repo_id="org/model",
+        hf_upload_mode=upload_mode,
+        **visibility_request,
+    )
+    staging_dir = str(tmp_path / "staging")
     if error:
-        with pytest.raises(ValueError, match=error):
-            publisher.publish(str(export_path), step=12)
+        error_type = RuntimeError if missing_manifest else ValueError
+        with pytest.raises(error_type, match=error):
+            publish_verified_hf_export(request, staging_dir)
         if corrupt is None:
             assert not api.commits
         if missing_manifest:
             assert api.private is None
         return
 
-    publisher.publish(str(export_path), step=12)
+    publish_verified_hf_export(request, staging_dir)
 
-    assert api.private is requested
+    assert api.private is (requested is True)
     paths = [file.path for file in manifest.files] + [MODEL_MANIFEST_FILENAME]
     expected = {path: (export_path / path).read_bytes() for path in paths}
     snapshots = [expected]
