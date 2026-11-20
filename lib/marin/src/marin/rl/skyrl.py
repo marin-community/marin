@@ -897,6 +897,9 @@ def _launch_config_yaml(
     if callbacks is not _MISSING_CONFIG_VALUE and callbacks is not None:
         for callback in cast(list[dict[str, object]], callbacks):
             if callback["type"] == "best_checkpoint":
+                declared_model = callback.get("initial_model_uri")
+                if declared_model not in (None, "model-input", model.uri):
+                    raise ValueError("best_checkpoint.initial_model_uri disagrees with the adopted model")
                 callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
     if execution.role_topology is not None:

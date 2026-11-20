@@ -1054,3 +1054,11 @@ def test_best_checkpoint_binds_model_before_artifact_fingerprinting() -> None:
         assert callback["initial_model_uri"] == f"s3://test/model/{version}/hf/global_step-32"
         fingerprints.append(step.fingerprint())
     assert fingerprints[0] != fingerprints[1]
+
+
+def test_initial_selection_model_cannot_silently_override_the_adopted_checkpoint():
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": "s3://other/baseline"}]
+    with pytest.raises(ValueError):
+        skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
