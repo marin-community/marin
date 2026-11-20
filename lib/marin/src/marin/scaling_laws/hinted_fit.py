@@ -19,7 +19,7 @@ least-squares loss on cell accuracies.
 cell and method) and refits every forecast.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import product
@@ -177,6 +177,15 @@ class JointLawParams:
         return np.maximum(self.floor, self.lower + (self.upper - self.lower) * expit(z))
 
 
+def _best_least_squares(
+    residuals: Callable[[np.ndarray], np.ndarray],
+    starts: Iterable[Sequence[float]],
+    bounds: tuple[Sequence[float] | float, Sequence[float] | float] = (-np.inf, np.inf),
+) -> np.ndarray:
+    """Run bounded least squares from every start and return the lowest-cost solution."""
+    return min((least_squares(residuals, x0=x0, bounds=bounds) for x0 in starts), key=lambda r: r.cost).x
+
+
 def _joint_starts() -> Iterator[tuple[float, ...]]:
     for b1, b2, b0, (upper, lower), floor in product(
         (0.5, 2.0),
@@ -199,11 +208,8 @@ def fit_joint_law(capability: np.ndarray, hint: np.ndarray, accuracy: np.ndarray
     def residuals(x: np.ndarray) -> np.ndarray:
         return JointLawParams(*x).predict(c, h) - y
 
-    best = min(
-        (least_squares(residuals, x0=x0, bounds=(_JOINT_LOWER_BOUNDS, _JOINT_UPPER_BOUNDS)) for x0 in _joint_starts()),
-        key=lambda r: r.cost,
-    )
-    return JointLawParams(*(float(v) for v in best.x))
+    best = _best_least_squares(residuals, _joint_starts(), (_JOINT_LOWER_BOUNDS, _JOINT_UPPER_BOUNDS))
+    return JointLawParams(*(float(v) for v in best))
 
 
 @dataclass(frozen=True)
@@ -218,21 +224,13 @@ class SigmoidParams:
 
 
 def fit_sigmoid_baseline(capability: np.ndarray, accuracy: np.ndarray) -> SigmoidParams:
-    """Fit acc = sigmoid(a1 * C + a0), a1 >= 0, on unhinted scores; multi-start least squares.
-
-    The starts matter on floor-heavy ladders, where a single start lands in a poor local optimum.
-    """
+    """Fit acc = sigmoid(a1 * C + a0), a1 >= 0, on unhinted scores; multi-start least squares."""
     c, y = np.asarray(capability, dtype=float), np.asarray(accuracy, dtype=float)
     c_mean = float(c.mean())
+    # On floor-heavy ladders a single start lands in a poor local optimum.
     starts = ((1.0, -10.0), (1.0, -c_mean), (0.5, -0.5 * c_mean), (3.0, -3.0 * c_mean), (10.0, -10.0 * c_mean))
-    best = min(
-        (
-            least_squares(lambda b: SigmoidParams(*b).predict(c) - y, x0=x0, bounds=([0.0, -np.inf], [np.inf, np.inf]))
-            for x0 in starts
-        ),
-        key=lambda r: r.cost,
-    )
-    return SigmoidParams(*(float(v) for v in best.x))
+    best = _best_least_squares(lambda b: SigmoidParams(*b).predict(c) - y, starts, ([0.0, -np.inf], [np.inf, np.inf]))
+    return SigmoidParams(*(float(v) for v in best))
 
 
 @dataclass(frozen=True)
@@ -257,23 +255,12 @@ def fit_two_stage_baseline(capability: np.ndarray, bits_per_byte: np.ndarray, ac
     bits per byte -> accuracy (unbounded sigmoid), each by multi-start least squares."""
     flops = 10.0 ** np.asarray(capability, dtype=float)
     bpb, y = np.asarray(bits_per_byte, dtype=float), np.asarray(accuracy, dtype=float)
-    power = min(
-        (
-            least_squares(
-                lambda p: p[2] + p[0] * flops ** (-p[1]) - bpb,
-                x0=x0,
-                bounds=([0.0, 0.0, 0.0], [np.inf, 2.0, 1.0]),
-            )
-            for x0 in _POWER_LAW_STARTS
-        ),
-        key=lambda r: r.cost,
+    power = _best_least_squares(
+        lambda p: p[2] + p[0] * flops ** (-p[1]) - bpb, _POWER_LAW_STARTS, ([0.0, 0.0, 0.0], [np.inf, 2.0, 1.0])
     )
-    link = min(
-        (least_squares(lambda b: SigmoidParams(*b).predict(bpb) - y, x0=x0) for x0 in _BPB_SIGMOID_STARTS),
-        key=lambda r: r.cost,
-    )
-    scale, exponent, irreducible = (float(v) for v in power.x)
-    return TwoStageParams(scale, exponent, irreducible, SigmoidParams(*(float(v) for v in link.x)))
+    link = _best_least_squares(lambda b: SigmoidParams(*b).predict(bpb) - y, _BPB_SIGMOID_STARTS)
+    scale, exponent, irreducible = (float(v) for v in power)
+    return TwoStageParams(scale, exponent, irreducible, SigmoidParams(*(float(v) for v in link)))
 
 
 @dataclass(frozen=True)
