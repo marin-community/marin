@@ -297,7 +297,7 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
         raise ValueError("Recovery round identity differs from the pinned plan")
     if plan["rl"]["execution"]["cluster"] != spec.cluster:
         raise ValueError("Recovery round cluster differs from the pinned plan")
-    # Keep the source-plan value while omitting the retired flag from the active recipe.
+    # The pinned source plan stays immutable; only this active recipe omits the retired key.
     plan["rl"]["config"]["trainer"]["algorithm"].pop("tis_splice")
     plan["marin_revision"] = source_revision
     plan["runtime_source"] = runtime_source_manifest(Path(__file__).resolve().parents[3], source_revision)

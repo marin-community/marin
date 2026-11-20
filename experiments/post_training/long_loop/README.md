@@ -60,7 +60,7 @@ be submitted. The launch hold also preserves the user's Exp4 evaluation review.
 uv run python -m experiments.post_training.long_loop.exp5 \
   --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
   --source-revision "$(git rev-parse HEAD)" \
-  --version 2026.11.20.92 \
+  --version 2026.11.20.93 \
   --validation-output /tmp/long-loop-exp5-setup
 ```
 
