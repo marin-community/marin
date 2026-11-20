@@ -10,8 +10,8 @@ from rigging.task_errors import ErrorIdentity, RetryDisposition, exception_ident
 def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity:
     """Classify SDK failures, including conflicts that clear during deletion."""
     identity = exception_identity(error, operation=operation)
-    if (
-        isinstance(error, DaytonaConnectionError) and identity.provider_status_code is None
-    ) or (isinstance(error, DaytonaConflictError) and operation == "delete"):
+    if (isinstance(error, DaytonaConnectionError) and identity.provider_status_code is None) or (
+        isinstance(error, DaytonaConflictError) and operation == "delete"
+    ):
         return identity.model_copy(update={"retry_disposition": RetryDisposition.TRANSIENT})
     return identity
