@@ -664,10 +664,6 @@ Snowball parity profiles are `snowball-one-rack` (32 + 8 GPUs) and
 domains at production priority. Compilation and piecewise CUDA graphs stay on.
 Both Snowball profiles select the InfiniBand ports `ibp0:1` through `ibp3:1`
 explicitly and use a 4-MiB NCCL buffer on mixed InfiniBand/RoCE hosts.
-With `trainer.debug_mode: distributed`, an inference-readiness timeout requests
-native stacks from actor and EngineCore processes before teardown. If native
-unwinding fails, capture attempts Python frames and retains unwind errors.
-Each Iris GPU task syncs these files to `debug_artifacts/<node>/stacks/`.
 
 NVL72 coordinators use `mochi-<profile>-<version>` for RL and
 `mochi-<evaluation-name>-<version>` for policy evaluation. Iris adds the submitting
