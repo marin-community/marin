@@ -32,13 +32,16 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
     Image,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from rigging.task_errors import RetryDisposition
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.errors import daytona_error_identity
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaImageBuild,
@@ -1690,3 +1693,11 @@ def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypa
         asyncio.run(_delete_named_sandbox(StuckSandbox(), "fixture"))
 
     assert caught.value is conflict
+
+
+def test_daytona_connection_and_delete_conflict_use_shared_retry_identity():
+    reset = daytona_error_identity(DaytonaConnectionError("connection reset"), operation="create")
+    assert reset.retry_disposition is RetryDisposition.TRANSIENT
+    conflict = DaytonaConflictError("state change in progress", status_code=409)
+    assert daytona_error_identity(conflict, operation="delete").retry_disposition is RetryDisposition.TRANSIENT
+    assert daytona_error_identity(conflict, operation="create").retry_disposition is RetryDisposition.UNKNOWN

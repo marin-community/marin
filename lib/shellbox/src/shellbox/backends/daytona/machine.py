@@ -30,11 +30,12 @@ from daytona import (
     DaytonaNotFoundError,
     DaytonaRateLimitError,
 )
+from rigging.task_errors import RetryDisposition
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.errors import daytona_error_identity
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
-    TRANSIENT_DAYTONA_STATUS,
     daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
@@ -149,14 +150,11 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
                     return
                 except DaytonaNotFoundError:
                     return
-                except DaytonaConflictError as error:
-                    # Daytona refuses deletion while the sandbox is still starting or stopping.
-                    logger.warning("Retrying Daytona sandbox deletion during a state change: %s: %s", name, error)
-                    retried = error
                 except DaytonaError as error:
-                    if error.status_code not in TRANSIENT_DAYTONA_STATUS:
+                    failure = daytona_error_identity(error, operation="delete")
+                    if failure.retry_disposition is not RetryDisposition.TRANSIENT:
                         raise
-                    logger.warning("Retrying Daytona sandbox deletion after HTTP %s: %s", error.status_code, name)
+                    logger.warning("Retrying Daytona sandbox deletion after %s: %s", type(error).__name__, name)
                     retried = error
                 await sleep(backoff.next_interval())
     except TimeoutError:

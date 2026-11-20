@@ -17,6 +17,7 @@ from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from shellbox.backends.daytona.errors import daytona_error_identity
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -279,6 +280,12 @@ def _failed_rollout(
     failure = exception_identity(error, operation=interruption.operation.value)
     exception_type = type(error).__name__
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
+        failure = failure.model_copy(update={
+            "retry_disposition": provider.retry_disposition,
+            "provider_status_code": provider.provider_status_code,
+        })
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics.update(_machine_diagnostics(error, failure.provider_status_code))
     if isinstance(error, TimeoutError):
