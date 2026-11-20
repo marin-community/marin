@@ -19,10 +19,12 @@ Run it with that login (``HfApi()``/``hf_hub_download`` need no explicit token):
 """
 
 import argparse
+import hashlib
 import shutil
 import tempfile
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
@@ -32,6 +34,23 @@ from experiments.post_training.task_curation.publication_gate import require_pub
 
 TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
+
+
+def _require_loader_hash_column(tasks: Path) -> None:
+    """The runtime cohort loader requires each row's task content hash.
+
+    A publication whose rows lack the ``task_sha256`` column, or whose recorded hash
+    differs from the serialized ``task_spec``, would publish a cohort the loader
+    refuses to import. The check runs before any upload (ruling 66).
+    """
+    table = pq.read_table(tasks)
+    if "task_sha256" not in table.column_names:
+        raise ValueError(f"Cohort publication lacks the row-level task_sha256 column the loader requires: {tasks}")
+    specs = table.column("task_spec").to_pylist()
+    recorded = table.column("task_sha256").to_pylist()
+    for serialized, digest in zip(specs, recorded, strict=True):
+        if hashlib.sha256(serialized.encode()).hexdigest() != digest:
+            raise ValueError(f"Published task hash differs from its task_spec content: {tasks}")
 
 
 def _source_pin_line(card_text: str) -> str | None:
@@ -77,6 +96,7 @@ def publish(
         shutil.copyfile(card, staging / CARD_FILENAME)
         for source in evidence_files:
             shutil.copyfile(source, staging / source.name)
+        _require_loader_hash_column(staging / TASKS_FILENAME)
         api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=exist_ok)
         if not api.repo_info(repo, repo_type="dataset").private:
             raise ValueError(f"Publication destination must be private: {repo}")

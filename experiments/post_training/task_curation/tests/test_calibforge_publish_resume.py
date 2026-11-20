@@ -3,9 +3,12 @@
 
 """The publication helper resumes partial runs and refuses foreign content pins."""
 
+import hashlib
 import pathlib
 import tempfile
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training.task_curation.calibforge_publish import _source_pin_line, publish
@@ -51,16 +54,54 @@ class FakeApi:
 
 @pytest.fixture
 def cards(tmp_path):
-    tasks = tmp_path / "tasks.parquet"
-    tasks.write_bytes(b"parquet")
+    tasks = _stamped_tasks(tmp_path / "tasks.parquet")
     new_card = tmp_path / "new-card.md"
     new_card.write_text(f"# Atlas retention release\n\n{PLAN_PIN}\n\nBody.\n")
     return tasks, new_card, tmp_path
 
 
+def _stamped_tasks(path: pathlib.Path, *, rows: int = 2) -> pathlib.Path:
+    """A minimal tasks parquet carrying the loader contract's row-level hashes."""
+    specs = [f'{{"id": "task-{index}", "prompt": "solve"}}' for index in range(rows)]
+    table = pa.table(
+        {
+            "task_spec": pa.array(specs, pa.large_string()),
+            "task_sha256": pa.array([hashlib.sha256(spec.encode()).hexdigest() for spec in specs], pa.large_string()),
+        }
+    )
+    pq.write_table(table, path)
+    return path
+
+
 def test_source_pin_line_extracts_the_declared_pin():
     assert _source_pin_line(f"header\n\n{PLAN_PIN}\n\nbody") == PLAN_PIN.strip()
     assert _source_pin_line("no pin here") is None
+
+
+def test_publish_refuses_tasks_without_the_loader_hash_column(cards, monkeypatch):
+    tasks, new_card, _ = cards
+    pq.write_table(pa.table({"task_spec": pa.array(['{"id": "task-0"}'], pa.large_string())}), tasks)
+    fake = FakeApi(None)
+    monkeypatch.setattr("experiments.post_training.task_curation.calibforge_publish.HfApi", lambda: fake)
+    with pytest.raises(ValueError, match="lacks the row-level task_sha256 column"):
+        publish(tasks, new_card, "open-athena/retained-repo", data_restriction="open", evidence_files=())
+    assert fake.calls == [], "the publication must refuse before any upload"
+
+
+def test_publish_refuses_tasks_whose_hash_differs(cards, monkeypatch):
+    tasks, new_card, _ = cards
+    table = pq.read_table(tasks)
+    table = table.set_column(
+        table.column_names.index("task_sha256"),
+        "task_sha256",
+        pa.array(["0" * 64] * table.num_rows, pa.large_string()),
+    )
+    pq.write_table(table, tasks)
+    fake = FakeApi(None)
+    monkeypatch.setattr("experiments.post_training.task_curation.calibforge_publish.HfApi", lambda: fake)
+    with pytest.raises(ValueError, match="differs from its task_spec content"):
+        publish(tasks, new_card, "open-athena/retained-repo", data_restriction="open", evidence_files=())
+    assert fake.calls == [], "the publication must refuse before any upload"
 
 
 def test_publish_resumes_into_a_repo_left_by_a_partial_run(cards, monkeypatch):
