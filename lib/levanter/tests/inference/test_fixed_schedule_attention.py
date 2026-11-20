@@ -1,12 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 from pathlib import Path
 import subprocess
 import sys
 import textwrap
 
+import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +22,11 @@ from levanter.grug.attention.fixed_schedule import (
     fixed_schedule_attention,
     materialize_contiguous_kv,
 )
+
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.utils import INVALID
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 
 def _require_four_tpu_devices() -> None:
@@ -362,3 +370,109 @@ def test_fixed_schedule_public_forward_poison_invalid_metadata() -> None:
             spec=spec,
         )
     assert jnp.all(jnp.isnan(output[0]))
+
+
+@pytest.mark.parametrize("prefix,num_sequences", [(127, 4), (128, 3), (129, 1)])
+@pytest.mark.timeout(240)
+def test_snowball_fixed_decode_preserves_partial_pages_and_packed_padding(prefix, num_sequences):
+    _require_four_tpu_devices()
+    config = SnowballConfig(
+        vocab_size=23,
+        hidden_dim=128,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        num_experts=2,
+        num_experts_per_token=1,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=128,
+        max_seq_len=256,
+        attention_implementation="tpu_splash",
+        inference_attention_implementation="tpu",
+        moe_implementation="ring",
+        projection_implementation="fixed_schedule",
+        gated_norm_implementation="fixed_schedule",
+        rms_norm_implementation="pallas_tpu",
+        qk_rms_norm_implementation="pallas_tpu",
+        shared_attention_implementation="fixed_schedule",
+    )
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", 23), config, key=jax.random.key(38127))
+        cache = model.initial_cache(PageTableSpec(8, 128, 4), dtype=jnp.bfloat16)
+        physical = np.asarray([[6, 1], [7, 0], [4, 3], [5, 2]], np.int32)
+        slots = np.asarray([3, 1, 2, 0][:num_sequences], np.int32)
+        count = num_sequences * prefix
+        capacity = ((count + 3) // 4) * 4 + 4
+        valid_tokens = np.asarray(jax.random.randint(jax.random.key(90211), (count,), 0, 23), np.int32)
+        valid_positions = np.tile(np.arange(prefix, dtype=np.int32), num_sequences)
+        batch_rows = np.repeat(np.arange(num_sequences), prefix)
+        destinations = physical[slots[batch_rows], valid_positions // 128] * 128 + valid_positions % 128
+
+        def inputs(size):
+            page_indices = np.full((4, 2), INVALID, np.int32)
+            page_indices[:num_sequences] = physical[slots]
+            if prefix <= 128:
+                page_indices[:num_sequences, 1] = INVALID
+            slot_ids = np.full(4, INVALID, np.int32)
+            slot_ids[:num_sequences] = slots
+            lengths = np.full(4, INVALID, np.int32)
+            lengths[:num_sequences] = prefix
+            cumulative = np.full(5, count, np.int32)
+            cumulative[: num_sequences + 1] = np.arange(num_sequences + 1) * prefix
+            # SequenceTable records a padding segment in the unused tail. The
+            # public active prefix ends at cu_q_lens[num_seqs], not at [-1].
+            if num_sequences < 4:
+                cumulative[num_sequences + 1 :] = size
+            info = PageBatchInfo(
+                slot_ids=hax.named(jnp.asarray(slot_ids), "seq"),
+                page_indices=hax.named(jnp.asarray(page_indices), ("seq", "page")),
+                seq_lens=hax.named(jnp.asarray(lengths), "seq"),
+                cu_q_lens=hax.named(jnp.asarray(cumulative), "seq"),
+                num_seqs=jnp.asarray(num_sequences, jnp.int32),
+                new_token_dests=hax.named(
+                    jnp.asarray(np.pad(destinations, (0, size - count), constant_values=INVALID)), "position"
+                ),
+                page_size=128,
+            )
+            tokens = hax.named(
+                jnp.asarray(np.pad(valid_tokens, (0, size - count), constant_values=INVALID)), "position"
+            )
+            positions = hax.named(
+                jnp.asarray(np.pad(valid_positions, (0, size - count), constant_values=INVALID)), "position"
+            )
+            return tokens, info, positions
+
+        decode = eqx.filter_jit(
+            lambda ids, info, positions: model.decode_with_route_captures(ids, cache, info, positions)
+        )
+        tokens, info, positions = inputs(capacity)
+        output, _, capture = decode(tokens, info, positions)
+        expected = np.asarray(output.array)[:count]
+        assert np.isfinite(expected).all()
+        assert np.asarray(capture.token_valid).sum() == count
+        # Extra padded queries must neither overwrite a valid grid row nor
+        # change the actual experts or normalization evidence for any input.
+        longer = inputs(capacity + 4)
+        padded, _, padded_capture = decode(*longer)
+        np.testing.assert_array_equal(expected.view(np.uint32), np.asarray(padded.array)[:count].view(np.uint32))
+        for left, right in zip(capture.route_captures, padded_capture.route_captures, strict=True):
+            for field in ("selected_experts", "token_valid", "qb_alpha"):
+                np.testing.assert_array_equal(
+                    np.asarray(getattr(left, field))[:count], np.asarray(getattr(right, field))[:count]
+                )
+        # Giving future logical pages physical addresses cannot change causal
+        # predictions. This independently checks the adapter's sanitization.
+        complete_pages = np.asarray(info.page_indices.array).copy()
+        complete_pages[:num_sequences] = physical[slots]
+        complete_info = dataclasses.replace(info, page_indices=hax.named(jnp.asarray(complete_pages), ("seq", "page")))
+        complete, _, _ = decode(tokens, complete_info, positions)
+        np.testing.assert_array_equal(expected.view(np.uint32), np.asarray(complete.array)[:count].view(np.uint32))
+        # A missing visible page remains an actual model failure; sanitizing a
+        # future page must not turn a truncated history into a valid prediction.
+        missing = np.asarray(info.page_indices.array).copy()
+        missing[0, 0] = INVALID
+        invalid_info = dataclasses.replace(info, page_indices=hax.named(jnp.asarray(missing), ("seq", "page")))
+        invalid, _, _ = decode(tokens, invalid_info, positions)
+        assert not np.isfinite(np.asarray(invalid.array)[:count]).all()

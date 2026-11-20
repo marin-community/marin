@@ -1041,10 +1041,11 @@ def _fixed_shared_attention_decode(
         raise ValueError("Snowball fixed shared decode positions must be int32")
     token_rows = jnp.arange(q.shape[0], dtype=jnp.int32)
     starts = batch_info.cu_q_lens.array[:-1]
-    sequences = jnp.clip(jnp.sum(token_rows[:, None] >= starts[None, :], axis=1) - 1, 0, 3)
+    used = jnp.arange(spec.max_num_seqs, dtype=jnp.int32) < batch_info.num_seqs
+    sequences = jnp.clip(jnp.sum((token_rows[:, None] >= starts[None, :]) & used[None, :], axis=1) - 1, 0, 3)
     safe_positions = jnp.clip(pos_ids, 0, spec.max_kv_len - 1)
     position_valid = (pos_ids >= 0) & (pos_ids < spec.max_kv_len)
-    active = token_rows < batch_info.cu_q_lens.array[-1]
+    active = token_rows < batch_info.num_new_tokens
     grid = jnp.zeros((4, 256, cfg.num_heads, cfg.inferred_head_dim), dtype=jnp.float32)
     valid = jnp.zeros((4, 256), dtype=jnp.bool_)
     q_update = q[:, 0].astype(jnp.float32)
@@ -1055,21 +1056,37 @@ def _fixed_shared_attention_decode(
     grid_sharding = NamedSharding(q_sharding.mesh, P(q_spec[0], None, q_spec[1], q_spec[2]))
     grid = jax.sharding.reshard(grid, grid_sharding)
     grid = jax.lax.with_sharding_constraint(grid, grid_sharding)
-    grid = grid.at[sequences, safe_positions].set(q_update, out_sharding=grid_sharding)
-    valid = valid.at[sequences, safe_positions].set(position_valid)
-    counts = jnp.zeros((4, 256), dtype=jnp.int32).at[sequences, safe_positions].add(position_valid.astype(jnp.int32))
+    # The engine pads packed batches with INVALID rows. Drop their writes;
+    # clipping them into the grid could overwrite a real query in that slot.
+    write_positions = jnp.where(active & position_valid, pos_ids, spec.max_kv_len)
+    grid = grid.at[sequences, write_positions].set(q_update, mode="drop", out_sharding=grid_sharding)
+    valid = valid.at[sequences, write_positions].set(True, mode="drop")
+    counts = jnp.zeros((4, 256), dtype=jnp.int32).at[sequences, write_positions].add(1, mode="drop")
     slots = batch_info.slot_ids.array
+    pages = batch_info.page_indices.array
+    needed = jnp.arange(spec.pages_per_seq)[None, :] * spec.page_size < batch_info.seq_lens.array[:, None]
+    visible_pages_valid = jnp.all(~(used[:, None] & needed) | ((pages >= 0) & (pages < spec.num_physical_pages)))
+    # Future pages may remain unallocated until a generated input reaches them.
+    # The fixed kernel still prefetches them, so provide an in-range address;
+    # its unchanged causal mask excludes these future keys from every query.
+    safe_pages = jnp.clip(pages, 0, spec.num_physical_pages - 1)
     metadata_valid = (
-        (batch_info.num_seqs == 4)
+        (batch_info.num_seqs >= 0)
+        & (batch_info.num_seqs <= spec.max_num_seqs)
         & (batch_info.cu_q_lens.array[0] == 0)
-        & (batch_info.cu_q_lens.array[-1] == q.shape[0])
+        & (batch_info.num_new_tokens >= 0)
+        & (batch_info.num_new_tokens <= q.shape[0])
         & jnp.all(
-            (batch_info.cu_q_lens.array[1:] >= batch_info.cu_q_lens.array[:-1])
-            & (batch_info.cu_q_lens.array[1:] <= q.shape[0])
+            ~used
+            | (
+                (batch_info.cu_q_lens.array[1:] >= batch_info.cu_q_lens.array[:-1])
+                & (batch_info.cu_q_lens.array[1:] <= q.shape[0])
+            )
         )
-        & jnp.all((batch_info.seq_lens.array >= 0) & (batch_info.seq_lens.array <= 256))
-        & jnp.all((slots >= 0) & (slots < 4))
-        & jnp.all((slots[:, None] != slots[None, :]) | jnp.eye(4, dtype=jnp.bool_))
+        & jnp.all(~used | ((batch_info.seq_lens.array >= 0) & (batch_info.seq_lens.array <= 256)))
+        & jnp.all(~used | ((slots >= 0) & (slots < 4)))
+        & jnp.all((slots[:, None] != slots[None, :]) | ~used[:, None] | ~used[None, :] | jnp.eye(4, dtype=jnp.bool_))
+        & visible_pages_valid
         & jnp.all(~active | position_valid)
         & jnp.all(~active | (pos_ids < batch_info.seq_lens.array[jnp.clip(sequences, 0, 3)]))
         & jnp.all(counts <= 1)
@@ -1079,7 +1096,7 @@ def _fixed_shared_attention_decode(
         grid,
         cache.kv_pages.array,
         jnp.full((4,), 256, dtype=jnp.int32),
-        batch_info.page_indices.array,
+        safe_pages,
         jnp.full((4,), 256, dtype=jnp.int32),
         positions,
         valid,
@@ -1087,7 +1104,7 @@ def _fixed_shared_attention_decode(
     )
     out_sharding = NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[1], q_spec[2]))
     out = out.at[sequences, safe_positions].get(out_sharding=out_sharding)[:, None, ...]
-    return jnp.where(metadata_valid, out, jnp.nan)
+    return jnp.where(metadata_valid, jnp.where(active[:, None, None, None], out, 0), jnp.nan)
 
 
 def _validate_fixed_shared_attention_config(cfg: SnowballConfig) -> None:
