@@ -70,7 +70,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from functools import partial
 from typing import Protocol, runtime_checkable
@@ -641,13 +641,19 @@ class SFTSpec:
             if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
 
-    def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
+    def trained(
+        self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
+    ) -> ArtifactHfModel:
         """Build the training step and resolve its final Hugging Face export."""
         if not isinstance(self.model, HFExportSource):
             raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
+        resources = sft_child_resources(resources, coordinator_cluster)
         _validate_gpu_mesh(self, resources)
+        training = sft_step(self, resources)
+        if coordinator_prefix is not None:
+            training = replace(training, output_path_prefix=coordinator_prefix)
         return ArtifactHfModel(
-            step=sft_step(self, resources),
+            step=training,
             relative_path=self.model.hf_export_path(self.num_train_steps),
         )
 
@@ -655,7 +661,9 @@ class SFTSpec:
 class SFTRecipe(Protocol):
     """Produce a Hugging Face export with tokenizer files for RL and serving."""
 
-    def trained(self, resources: ResourceConfig) -> ArtifactHfModel: ...
+    def trained(
+        self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
+    ) -> ArtifactHfModel: ...
 
 
 @dataclass(frozen=True)
@@ -666,9 +674,22 @@ class SFTPreset[RecipeT: SFTRecipe]:
     recipe: RecipeT
     resources: ResourceConfig
 
-    def model(self) -> ArtifactHfModel:
+    def model(self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None) -> ArtifactHfModel:
         """Build the model export using the preset's fixed allocation."""
-        return self.recipe.trained(self.resources)
+        return self.recipe.trained(
+            self.resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
+        )
+
+
+def sft_child_resources(resources: ResourceConfig, coordinator_cluster: str | None) -> ResourceConfig:
+    """Route same-cluster SFT jobs through the coordinator's local Iris controller."""
+    if coordinator_cluster is None or resources.target_cluster is None:
+        return resources
+    if resources.target_cluster != coordinator_cluster:
+        raise ValueError(f"SFT targets {resources.target_cluster}, but the RL coordinator targets {coordinator_cluster}")
+    # A CoreWeave peer already places the coordinator and its children in one region.
+    regions = () if coordinator_cluster.startswith("cw-") else resources.regions
+    return replace(resources, target_cluster=None, regions=regions)
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").

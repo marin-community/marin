@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
-from hashlib import sha256
+from fnmatch import fnmatchcase
 from pathlib import Path
 import subprocess
 import tempfile
@@ -89,36 +89,41 @@ def export_run(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "call", convert)
 
     class Hub:
+        def __init__(self):
+            self.commits = {}
+
         def create_repo(self, **kwargs):
             assert kwargs["private"] is True
 
         def model_info(self, _repo_id):
             return SimpleNamespace(private=True)
 
-        def upload_folder(self, **kwargs):
+        def upload_folder(self, *, folder_path, path_in_repo, revision, allow_patterns, **_kwargs):
             if failures:
                 failures.pop()
                 raise RuntimeError("Hub unavailable")
-            assert kwargs["revision"] == "release"
-            assert (Path(kwargs["folder_path"]) / "model.safetensors").is_file()
-            assert Path(kwargs["folder_path"]).is_relative_to(staging)
-            self.root = Path(kwargs["folder_path"])
-            self.destination = kwargs["path_in_repo"]
-            uploads.append(self.destination)
-            self.commit = f"commit-{len(uploads)}"
-            return SimpleNamespace(oid=self.commit)
+            assert revision == "release"
+            folder = Path(folder_path)
+            assert (folder / "model.safetensors").is_file()
+            assert folder.is_relative_to(staging)
+            files = {}
+            for file in folder.iterdir():
+                if file.is_file() and any(fnmatchcase(file.name, pattern) for pattern in allow_patterns):
+                    files[(Path(path_in_repo) / file.name).as_posix()] = file.read_bytes()
+            commit = f"commit-{len(self.commits)}"
+            self.commits[commit] = files
+            uploads.append(path_in_repo)
+            return SimpleNamespace(oid=commit)
 
         def get_paths_info(self, _repo_id, paths, *, revision, **_kwargs):
-            assert revision == self.commit
-            for path in paths:
-                relative_path = Path(path).relative_to(self.destination)
-                content = (self.root / relative_path).read_bytes()
-                yield RepoFile(
-                    path=path,
-                    size=len(content),
-                    oid="blob",
-                    lfs={"size": len(content), "oid": sha256(content).hexdigest(), "pointerSize": 128},
-                )
+            files = self.commits[revision]
+            return [RepoFile(path=path, size=len(files[path]), oid="blob", lfs=None) for path in paths if path in files]
+
+        def hf_hub_download(self, _repo_id, filename, *, revision, **_kwargs):
+            target = tmp_path / "hub" / revision / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(self.commits[revision][filename])
+            return str(target)
 
     monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", Hub)
 

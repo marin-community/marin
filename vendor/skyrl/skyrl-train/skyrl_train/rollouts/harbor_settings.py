@@ -1,4 +1,4 @@
-"""Harbor task runtime, verifier, and retry settings."""
+"""Harbor task runtime and verifier settings."""
 
 from collections.abc import Mapping
 from enum import StrEnum

@@ -176,19 +176,24 @@ def known_error_types() -> frozenset[str]:
     return frozenset(_ERROR_CATEGORIES)
 
 
+DEFAULT_RETRY_EXCLUSIONS = frozenset(
+    {
+        "AgentTimeoutError",
+        "VerifierTimeoutError",
+        "RewardFileNotFoundError",
+        "RewardFileEmptyError",
+        "VerifierOutputParseError",
+    }
+)
+
+
 class RetrySettings(BaseModel):
     """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
     include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")
     exclude_exceptions: set[str] | None = Field(
-        default_factory=lambda: {
-            "AgentTimeoutError",
-            "VerifierTimeoutError",
-            "RewardFileNotFoundError",
-            "RewardFileEmptyError",
-            "VerifierOutputParseError",
-        },
+        default_factory=lambda: set(DEFAULT_RETRY_EXCLUSIONS),
         description="Excluded names take precedence over included names",
     )
     wait_multiplier: float = 1.0
