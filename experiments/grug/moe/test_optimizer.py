@@ -334,6 +334,45 @@ def test_scale_with_grug_muonh_rejects_4d_updates():
         transform.update(grads, transform.init(params), params)
 
 
+@pytest.mark.parametrize("expert_normalization", ["per_expert", "all_experts"])
+def test_muonh_stacked_4d_bfloat16_zero_lr_exact_and_positive_lr_preserves_norm(expert_normalization):
+    w_gate = (jax.random.normal(jax.random.PRNGKey(0), (2, 4, 64, 64)) * 0.05).astype(jnp.bfloat16)
+    params = {"blocks": {"mlp": {"expert_mlp": {"w_gate": w_gate}}}}
+
+    zero_cfg = GrugMoeMuonHConfig(
+        learning_rate=0.0,
+        adam_lr=0.0,
+        lr_schedule="constant",
+        use_syrk=False,
+        expert_normalization=expert_normalization,
+    )
+    initial, final = _run_steps(zero_cfg, params, num_steps=3)
+    assert not bool(
+        _bits_differ(
+            initial["blocks"]["mlp"]["expert_mlp"]["w_gate"],
+            final["blocks"]["mlp"]["expert_mlp"]["w_gate"],
+        ).any()
+    )
+
+    pos_cfg = GrugMoeMuonHConfig(
+        learning_rate=0.01,
+        adam_lr=0.01,
+        lr_schedule="constant",
+        use_syrk=False,
+        expert_normalization=expert_normalization,
+    )
+    initial_pos, final_pos = _run_steps(pos_cfg, params, num_steps=15)
+    axes = (1, 2, 3) if expert_normalization == "all_experts" else (2, 3)
+    ref_norm = jnp.sqrt(
+        jnp.sum(jnp.square(initial_pos["blocks"]["mlp"]["expert_mlp"]["w_gate"].astype(jnp.float32)), axis=axes)
+    )
+    cur_norm = jnp.sqrt(
+        jnp.sum(jnp.square(final_pos["blocks"]["mlp"]["expert_mlp"]["w_gate"].astype(jnp.float32)), axis=axes)
+    )
+    drift = float(jnp.max(jnp.abs(cur_norm / ref_norm - 1.0)))
+    assert drift <= _NORM_DRIFT_TOLERANCE, f"4-D BF16 expert norm drifted ({expert_normalization}): {drift:.3e}"
+
+
 @pytest.mark.parametrize("shape", [(3, 4), (2, 3, 4)])
 def test_muonh_unstacked_update_matches_existing_backend(shape):
     size = int(np.prod(shape))

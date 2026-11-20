@@ -73,29 +73,34 @@ def _scale_invariant_hyperball_updates(
             return None
         if not hasattr(param, "ndim"):
             return update
+        # Run the step and re-projection in float32 so BF16 parameter-space norms
+        # round identically to post-step norms, and use sum-of-squares plus a
+        # same-layout reshard so sharded reductions do not over-count (issue #8073).
+        param_f32 = param.astype(jnp.float32)
+        update_f32 = update.astype(jnp.float32)
         if param.ndim == 2:
-            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
-            # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
-            param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
-            update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32)))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32)))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param = _pin_sharding(new_param, param)
-            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
-
-        if path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
-            # Pipeline blocks have [experts, in, out]; the scanned EP model adds
-            # a leading layer axis. Normalize the same expert bank in both layouts.
-            bank_dims = 3 if expert_normalization == ExpertNormalization.ALL_EXPERTS else 2
-            axes = tuple(range(param.ndim - bank_dims, param.ndim))
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param)))
         else:
-            axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+            if path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
+                # Pipeline blocks have [experts, in, out]; the scanned EP model adds
+                # a leading layer axis. Normalize the same expert bank in both layouts.
+                bank_dims = 3 if expert_normalization == ExpertNormalization.ALL_EXPERTS else 2
+                axes = tuple(range(param.ndim - bank_dims, param.ndim))
+            else:
+                axes = tuple(range(1, param.ndim))
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32), axis=axes, keepdims=True))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+        # Ratio form: equal norms give a ratio of exactly 1.0, so a zero raw step
+        # yields an exactly zero update without a special case.
+        ratio = jnp.maximum(param_norm, 1e-10) / jnp.maximum(new_param_norm, 1e-10)
+        return (new_param * ratio - param_f32).astype(param.dtype)
 
     return jax.tree.map(scale_invariant_update, params, direction_updates, paths, is_leaf=lambda x: x is None)
 
