@@ -1025,7 +1025,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         assignments = example.tokens.array.size * self.config.num_experts_per_token * self.config.num_layers
         return loss, {
             "moe/dropped_assignment_fraction": Metric.from_value(
-                counts.dropped.sum() / assignments, ReductionType.MEAN
+                counts.dropped.sum(dtype=jnp.float32) / float(assignments), ReductionType.MEAN
             )
         }
 

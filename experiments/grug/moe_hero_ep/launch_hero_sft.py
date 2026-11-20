@@ -10,6 +10,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import click
 from fray.cluster import ResourceConfig
@@ -339,11 +340,13 @@ def build_sft_run(
     expert_placement: ExpertPlacement | None = None,
     version: str | None = None,
     resources: ResourceConfig | None = None,
+    checkpoints: Literal["periodic", "final", "none"] = "periodic",
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
     ``stop_after_steps`` bounds a smoke test to that many updates of the full one-epoch schedule.
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
+    ``checkpoints`` selects periodic saves, a single final save, or training without checkpoint writes.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
     expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
@@ -402,7 +405,7 @@ def build_sft_run(
             replica_axis_size=dp_racks,
             training_data_mode=TrainingDataMode.MIXTURE,
             watch_mode=WatchMode.INLINE,
-            save_checkpoints=True,
+            save_checkpoints=checkpoints != "none",
             max_grad_norm=max_grad_norm,
             context_axis_size=context_axis_size,
             expert_axis_size=expert_axis_size,
@@ -437,7 +440,10 @@ def build_sft_run(
         # placement, or none, starts again from the source checkpoint; the trainer would refuse to resume them.
         permanent_path = permanent_checkpoint_dir(ctx.output_path, checkpoint_root, expert_placement)
         root = str(StoragePath(permanent_path).parent)
-        if checkpoint_root is None:
+        if checkpoints != "periodic":
+            temporary_path = None
+            resume_paths = [permanent_path] if checkpoints == "final" else []
+        elif checkpoint_root is None:
             temporary_path = temporary_checkpoint_base_path(
                 root, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
@@ -485,8 +491,8 @@ def build_sft_run(
             checkpointer=CheckpointerConfig(
                 base_path=permanent_path,
                 temporary_base_path=temporary_path,
-                save_interval=RESUME_SAVE_INTERVAL,
-                keep=[{"every": 500}],
+                save_interval=RESUME_SAVE_INTERVAL if checkpoints == "periodic" else None,
+                keep=[{"every": 500}] if checkpoints == "periodic" else None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,

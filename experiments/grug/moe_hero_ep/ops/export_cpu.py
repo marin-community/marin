@@ -50,6 +50,8 @@ from experiments.grug.moe_hero_ep.weights import (
 logger = logging.getLogger(__name__)
 BF16_BYTES = 2
 EXPERT_PATH = "/expert_mlp/"
+DEFAULT_READ_HOST_BUDGET_BYTES = 96 * 1024**3
+DEFAULT_WRITE_HOST_BUDGET_BYTES = 32 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -59,8 +61,8 @@ class CpuExportConfig:
     model: GrugModelConfig
     destination: str
     source_revision: str
-    read_host_budget_bytes: int = 96 * 1024**3
-    export_host_budget_bytes: int = 32 * 1024**3
+    read_host_budget_bytes: int = DEFAULT_READ_HOST_BUDGET_BYTES
+    export_host_budget_bytes: int = DEFAULT_WRITE_HOST_BUDGET_BYTES
     max_concurrent_shards: int = 2
     request_concurrency: int = 16
 
@@ -76,6 +78,25 @@ def _native_shapes(config: GrugModelConfig) -> dict[str, tuple[int, ...]]:
         template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
     paths = jax.tree.leaves(leaf_key_paths(template))
     return {path.replace(".", "/"): value.shape for path, value in zip(paths, jax.tree.leaves(template), strict=True)}
+
+
+def _source_cache_bytes(shapes: dict[str, tuple[int, ...]]) -> tuple[int, int]:
+    ordinary_bytes = 0
+    largest_block = 0
+    for path, shape in shapes.items():
+        size = math.prod(shape) * BF16_BYTES
+        if EXPERT_PATH in path:
+            largest_block = max(largest_block, size)
+        else:
+            ordinary_bytes += size
+    return ordinary_bytes, largest_block
+
+
+def full_expert_bank_read_bytes(model: GrugModelConfig) -> int:
+    """BF16 cache size for ordinary weights and a whole native expert bank."""
+    shapes = _native_shapes(model)
+    paths = {spec.path for spec in grugmoe_inference_weight_specs(model)}
+    return sum(_source_cache_bytes({path: shapes[path] for path in paths}))
 
 
 class CpuCheckpointWeights:
@@ -119,16 +140,15 @@ class CpuCheckpointWeights:
         self.pending = self._open(pending_path)
         if tuple(self.pending.shape) != (config.model.num_layers, config.model.num_experts):
             raise ValueError("Pending router-bias shape differs from model config")
-        self.ordinary_bytes = sum(
-            math.prod(store.shape) * BF16_BYTES for path, store in self.stores.items() if EXPERT_PATH not in path
-        )
-        largest_block = max(
-            (
-                min(self.layer_chunk(path), store.shape[0]) * math.prod(store.shape[1:]) * BF16_BYTES
+        self.ordinary_bytes, largest_block = _source_cache_bytes(
+            {
+                path: (
+                    (min(self.layer_chunk(path), store.shape[0]), *store.shape[1:])
+                    if EXPERT_PATH in path
+                    else store.shape
+                )
                 for path, store in self.stores.items()
-                if EXPERT_PATH in path
-            ),
-            default=0,
+            }
         )
         if self.ordinary_bytes + largest_block > config.read_host_budget_bytes:
             raise ValueError(

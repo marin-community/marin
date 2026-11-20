@@ -19,6 +19,7 @@ import tempfile
 import textwrap
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import equinox as eqx
 import haliax as hax
@@ -359,6 +360,25 @@ def test_snowball_training_reports_capacity_drops():
             metric = metrics["moe/dropped_assignment_fraction"]
             assert metric.reduction is ReductionType.MEAN
             assert float(metric) == 0.5
+
+
+def test_snowball_drop_fraction_supports_large_batches():
+    # The 32-node SFT batch has 6,979,321,856 possible assignments across the layers.
+    config = _tiny_config(num_layers=26, num_experts_per_token=4)
+    tokens = SimpleNamespace(array=jax.ShapeDtypeStruct((256, 262_144), jnp.int32))
+    example = SimpleNamespace(tokens=tokens, attn_mask=None)
+
+    @jax.jit
+    def fraction(dropped):
+        model = SimpleNamespace(
+            config=config,
+            _activations=lambda *args, **kwargs: (None, None, SimpleNamespace(dropped=dropped)),
+            _loss_from_activations=lambda *args, **kwargs: jnp.float32(0),
+        )
+        _, metrics = SnowballLMHeadModel.next_token_loss_and_metrics(model, example)
+        return metrics["moe/dropped_assignment_fraction"]
+
+    assert float(fraction(jnp.array([1_744_830_464, 1_744_830_464], dtype=jnp.int32))) == 0.5
 
 
 def test_snowball_fp32_activations_is_a_runtime_setting():

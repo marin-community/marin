@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -15,12 +16,15 @@ import jax.numpy as jnp
 import levanter.compat.hf_export as hf_export
 import numpy as np
 import pytest
+from fray.current_client import set_current_client
+from fray.iris_backend import convert_constraints
+from iris.cluster.constraints import is_any_region_marker
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from marin.execution.artifact import read_record
-from marin.execution.lazy import materialized_config
+from marin.execution.lazy import StepContext, materialized_config
 from marin.rl.skyrl import skyrl_cpu_command
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
@@ -33,7 +37,7 @@ from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_
 from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, MOCHI_SPEC
+from experiments.post_training.mochi_sft import MIXTURE_262K_16NODE, MIXTURE_262K_48NODE, MOCHI_SPEC, build_training
 
 
 @pytest.mark.parametrize(
@@ -188,6 +192,47 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
+def test_mochi_sft_three_rack_plan_saves_only_for_export(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
+    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
+
+    step = build_training(MIXTURE_262K_48NODE, steps=None, export=False, prefix=None)
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+    allocation = step.runtime_args["train_resources"]
+    assert step.path().startswith("s3://marin-us-east-08a/tmp/ttl=3d/users/")
+    assert step.lower().output_path == step.path()
+    assert allocation.replicas == 48
+    assert allocation.device.count == 4
+    assert config.trainer.replica_axis_size == 3
+    assert config.stop_step == 393494
+    assert not config.trainer.save_checkpoints
+    assert config.trainer.trainer.load_checkpoint_path == [MOCHI_SPEC.initialize_from]
+
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path))
+    export_model = MIXTURE_262K_48NODE.model()
+    [training] = export_model.step.deps
+    config = training.build_config(StepContext.for_fingerprint(training.runtime_args.keys(), training.deps))
+    assert training.runtime_args["train_resources"].replicas == 48
+    assert config.trainer.replica_axis_size == 3
+    assert config.stop_step == 393494
+    assert config.trainer.save_checkpoints
+    assert config.trainer.trainer.checkpointer.save_interval is None
+    requests = []
+
+    def submit(request):
+        requests.append(request)
+        return SimpleNamespace(wait=lambda **kwargs: None)
+
+    lowered = export_model.step.lower()
+    assert lowered.fn is not None
+    with set_current_client(SimpleNamespace(submit=submit)):
+        lowered.fn(str(tmp_path / "export"))
+    [request] = requests
+    assert request.resources.ram == "448GiB"
+
+
 @pytest.mark.timeout(240)
 def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -202,28 +247,38 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
-        MOCHI_SPEC,
+        MIXTURE_262K_16NODE.recipe,
         initialize_from=str(initializer),
-        dp_racks=1,
         stop_after_steps=1,
         eval_every=0,
         expert_placement=placement,
     )
-    allocation = launch_hero_sft.sft_resources(recipe.dp_racks)
-    resources = dataclasses.replace(MIXTURE_262K_176NODE.resources, replicas=allocation.replicas)
-    preset = dataclasses.replace(MIXTURE_262K_176NODE, recipe=recipe, resources=resources)
+    preset = dataclasses.replace(MIXTURE_262K_16NODE, recipe=recipe)
+    resources = preset.resources
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
-        dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=1)).model()
+        dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=15)).model()
     initializer_metadata.write_text(json.dumps({**initial, "is_temporary": True}))
     with pytest.raises(ValueError, match="temporary checkpoint"):
         preset.model()
     initializer_metadata.write_text(json.dumps(initial))
+    prefix = tmp_path / "selected-prefix"
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(prefix))
     model = preset.model()
     [trained] = model.step.deps
+    cli_training = build_training(preset, steps=1, export=True, prefix=recipe.scratch_prefix())
+    assert cli_training.fingerprint() == trained.fingerprint()
     training = materialized_config(trained, str(tmp_path))
-    assert training.resources.regions == ("US-EAST-08A",)
-    assert training.resources.target_cluster == "cw-us-east-08a"
-    checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
+    assert training.resources.replicas == 16
+    assert training.resources.device.count == 4
+    assert training.trainer.replica_axis_size == 1
+    assert training.trainer.save_checkpoints
+    assert training.trainer.trainer.checkpointer.save_interval is None
+    assert training.trainer.trainer.checkpointer.keep is None
+    [constraint] = convert_constraints(training.resources)
+    assert is_any_region_marker(constraint)
+    trained_path = Path(trained.path().removeprefix("file://"))
+    assert trained_path.is_relative_to(prefix)
+    checkpoints = trained_path / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     native_fixture(str(checkpoints / "step-18"), master=True, step=18)
     newer_metadata = checkpoints / "step-18" / "metadata.json"
@@ -241,11 +296,24 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
 
     monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
     monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
-    output = Path(model.step.path())
+    output = Path(model.step.path().removeprefix("file://"))
+    assert output.is_relative_to(prefix)
     config = materialized_config(model.step, str(tmp_path))
-    local_export = dataclasses.replace(model.step, run=lambda args: sft_recipe._export_final_sft(**args)).lower()
-    assert local_export.fn is not None
-    local_export.fn(str(output))
+    requests = []
+
+    def submit(request):
+        requests.append(request)
+        request.entrypoint.callable_entrypoint.callable()
+        return SimpleNamespace(wait=lambda **kwargs: None)
+
+    lowered = model.step.lower()
+    assert lowered.fn is not None
+    with set_current_client(SimpleNamespace(submit=submit)):
+        lowered.fn(model.step.path())
+    [request] = requests
+    [constraint] = convert_constraints(request.resources)
+    assert is_any_region_marker(constraint)
+    assert request.resources.ram == "448GiB"
 
     record = read_record(str(output))
     assert record is not None and record.config is not None
@@ -254,8 +322,13 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert record.config["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
     assert record.config["tokenizer_revision"] == MOCHI_SPEC.tokenizer_revision
     hf = output / model.relative_path
+    context = StepContext.for_run(
+        output_path=str(tmp_path / "rl"), prefix=str(tmp_path), region=None, runtime_args={}, deps=model.deps()
+    )
+    assert model.resolve(context).uri == hf.as_uri()
     manifest = hf / "export-manifest.json"
     completed = manifest.read_bytes()
+    assert json.loads(completed)["execution"]["read_host_budget_bytes"] == 384 * 1024**3
     sft_recipe._export_final_sft(**config)
     assert manifest.read_bytes() == completed
     with pytest.raises(FileExistsError, match="differs from the selected checkpoint"):
@@ -280,13 +353,13 @@ from skyrl_train.tokenizer import create_tokenizer, validate_checkpoint_vocabula
 
 root = Path(sys.argv[2])
 stage_artifact_model(sys.argv[1], "mochi-sft-test@dev", str(root))
-tokenizer = create_tokenizer(sys.argv[3], disable_fast_tokenizer=False)
+tokenizer = create_tokenizer(str(root), disable_fast_tokenizer=False)
 validate_checkpoint_vocabulary(
     tokenizer,
     checkpoint_path=str(root),
     checkpoint_revision=None,
     checkpoint_identity="mochi-sft-test@dev",
-    tokenizer_identity=sys.argv[3],
+    tokenizer_identity=str(root),
     disable_fast_tokenizer=False,
 )
 generation = json.loads((root / "generation_config.json").read_text())
@@ -300,15 +373,12 @@ assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
 """,
             str(hf),
             str(tmp_path / "staged"),
-            str(tokenizer_source),
         ),
         cwd=skyrl,
         env=os.environ | {"PYTHONPATH": "skyrl-train:skyrl-gym"},
         check=True,
         timeout=180,
     )
-    assert model.tokenizer_uri is None
-    assert model.tokenizer_revision is None
 
 
 def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):

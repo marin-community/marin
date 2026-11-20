@@ -62,6 +62,7 @@ Launch (a CPU coordinator job submits the training sub-job)::
 CoreWeave H100 runs use an ``s3://`` ``MARIN_PREFIX``. Use the recipe's H100 resources or pass
 ``--accelerator 8xH100`` for a recipe that takes its allocation from the command line.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -649,9 +650,9 @@ class SFTRecipe(Protocol):
 
 
 @dataclass(frozen=True)
-class SFTPreset:
+class SFTPreset[RecipeT: SFTRecipe]:
     name: str
-    recipe: SFTRecipe
+    recipe: RecipeT
     resources: ResourceConfig
 
     def model(self, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
@@ -949,10 +950,7 @@ def main(presets: Sequence[SFTPreset]) -> None:
     @click.command()
     @click.option("--preset", type=click.Choice(tuple(by_name)), required=True)
     @click.option("--run", is_flag=True, help="Launch training and export the model.")
-    @click.option("--accelerator", hidden=True)
-    def _cli(preset: str, run: bool, accelerator: str | None) -> None:
-        if accelerator is not None:
-            raise click.UsageError("The SFT preset fixes its own allocation. Run without --accelerator.")
+    def _cli(preset: str, run: bool) -> None:
         try:
             model = by_name[preset].model()
         except ValueError as error:

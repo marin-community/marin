@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.mesh import MeshConfig
+from marin.execution.lazy import StepContext
 
+from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.post_training.curriculum_sft import math_trial, trial
 from experiments.post_training.iceball_micro import build_workflow
+from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, build_training
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE, OPENTHOUGHTS_SPEC
 from experiments.sft.configs import delphi_1e22
 from experiments.sft.launcher import resources_from_accelerator, sft_step
@@ -22,6 +26,23 @@ def test_sft_recipe_identities(monkeypatch):
     monkeypatch.setattr("marin.experiment.checkpoints.resolve_lm_config", lambda *args: SnowballConfig(qk_mult=1.75))
     curriculum = math_trial.build_math_trial("2026.11.19.1", 1e-5, 10, "glm")["train"]
     [conversion] = [dep for dep in curriculum.deps if dep.name.startswith("checkpoints/hf-to-levanter/")]
+    monkeypatch.setattr("experiments.grug.moe_hero_ep.sft_recipe.checkpoint_step", lambda _: 393491)
+    anchors = {
+        text: [token_id]
+        for (_, text), token_id in zip(
+            launch_hero_sft.SPECIAL_TOKEN_ANCHORS, launch_hero_sft.EXPECTED_ANCHOR_IDS, strict=True
+        )
+    }
+    tokenizer = SimpleNamespace(encode=lambda text, *, add_special_tokens: anchors[text])
+    monkeypatch.setattr(launch_hero_sft, "load_tokenizer", lambda _: tokenizer)
+    production = MIXTURE_262K_176NODE
+    training = build_training(production, steps=None, export=True, prefix=None)
+    mochi_export = production.recipe.export_model(training).step
+    relocated = build_training(production, steps=None, export=False, prefix="/tmp/mochi-production")
+    config = relocated.build_config(StepContext.for_fingerprint(relocated.runtime_args.keys(), relocated.deps))
+    assert config.stop_step == 400407
+    assert config.trainer.save_checkpoints
+    assert config.trainer.trainer.checkpointer.keep == [{"every": 500}]
 
     old_mesh = MeshConfig(
         axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
@@ -38,19 +59,23 @@ def test_sft_recipe_identities(monkeypatch):
         build_workflow(version="2026.11.19.1").sft,
         curriculum,
         conversion,
+        *mochi_export.deps,
+        mochi_export,
     )
 
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "a2c0b0fc"),
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "f5525031"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "6d222125"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "2e853e89"),
         ("checkpoints/snowball/mixture-262k-32node", "2026.11.19.1", "300cf21f"),
-        ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "0ca53670"),
-        ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "9c258a76"),
-        ("checkpoints/iceball-micro-sft", "2026.11.19.1", "03dbbead"),
-        ("users/sft-fixture/checkpoints/curriculum-sft/1c980189d90b/snowball", "2026.11.19.1", "13f7f0db"),
+        ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "1c8b1c15"),
+        ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "00d6226d"),
+        ("checkpoints/iceball-micro-sft", "2026.11.19.1", "66049e2b"),
+        ("users/sft-fixture/checkpoints/curriculum-sft/1c980189d90b/snowball", "2026.11.19.1", "c820bf2a"),
         (
             "checkpoints/hf-to-levanter/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026-09-20-snowball",
             "2026.09.25.2",
             "cc7d2ded",
         ),
+        ("grug/hero-sft-fullab-step393k-v2", "2026.11.10", "eb21ce23"),
+        ("grug/hero-sft-fullab-step393k-v2-hf", "2026.11.10", "df950f55"),
     ]
