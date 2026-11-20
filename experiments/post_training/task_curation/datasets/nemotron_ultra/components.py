@@ -510,6 +510,7 @@ TOOLCALL_SCHEMA_RECIPE_VERSION = "6"
 EXECUTABLE_GRADER_RECIPE_VERSION = "6"
 REASONING_MARKUP_RECIPE_VERSION = "7"
 RECIPE_VERSIONS = {
+    "ultra_sft_step3200_math_tir": "8",
     "ultra_sft_step3200_nvarc_transductive": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_structured_outputs_v3": REPAIRED_RECIPE_VERSION,

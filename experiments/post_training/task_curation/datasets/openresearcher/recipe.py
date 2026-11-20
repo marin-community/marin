@@ -25,7 +25,7 @@ def sources() -> list[RlDataSource[ResearchDataset]]:
                 grounding_receipt_sha256="eb506c7c74320279937c82a541204cea07f335d2dbb1c78032b6efdef0e3c943",
                 heldout_hashes="s3://marin-us-east-02a/marin/rl-data/inputs/openresearcher/2026.11.15.1/heldout-question-hashes-v1.json",
                 heldout_hashes_sha256="c8a45fd2dbbfd844001559acb14059f375d0e86fd6abcf98d69d5a63b2c9ff18",
-                actor_image="ghcr.io/marin-community/rl-data-openresearcher@sha256:ff448d3a683247068454eaa67ee7e25e75b5357ee74e80696b5df18d15e016fa",
+                actor_image="ghcr.io/marin-community/rl-data-openresearcher@sha256:6ccb79c34d3c1da34c6bd947b9a0206e852b2e00d79b671efade9af1f853e9cb",
                 grader_image="ghcr.io/marin-community/rl-data-openresearcher@sha256:6ccb79c34d3c1da34c6bd947b9a0206e852b2e00d79b671efade9af1f853e9cb",
                 state=OpenResearcherState(
                     implementation_revision="036cceab31e06844720488fd29e504d479777f05",

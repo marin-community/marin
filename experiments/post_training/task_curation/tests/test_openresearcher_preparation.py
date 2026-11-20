@@ -185,6 +185,9 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
     output = tmp_path / "converted"
     exported = pq.read_table(output / "tasks.parquet").to_pylist()
     assert len(exported) == 1
+    actor = json.loads(exported[0]["task_spec"])["environment_requirements"]
+    assert actor["docker_image"] == config.actor_image
+    assert actor["tool_providers"]["retrieval"]["network_access"] == "service_only"
     normalized = pq.read_table(output / "normalize/part-00000.parquet").to_pylist()
     assert normalized[0]["task_json"] == exported[0]["task_spec"]
     assert json.loads((output / exported[0]["path"] / TASK_SPEC_FILE).read_text()) == json.loads(

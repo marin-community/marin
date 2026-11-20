@@ -452,6 +452,12 @@ def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
     assert [tool.name for tool in task.interaction_tools] == ["stateful_python_code_exec"]
     provider = task.environment_requirements.tool_providers["nemotron_agent"]
     assert provider.action_interface == "nemotron-agent:ns_tools_simple_agent"
+    assert provider.initial_state["tools"] == [tool.model_dump(mode="json") for tool in task.interaction_tools]
+    assert not task.final_tools
+    environment = task.environment_requirements
+    assert environment.docker_image.endswith("280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104")
+    assert environment.working_directory == "/workspace"
+    assert not environment.capabilities
 
 
 def test_abstention_idk_gets_source_partial_credit_after_reasoning_is_removed(staged):
