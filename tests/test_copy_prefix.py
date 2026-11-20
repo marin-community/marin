@@ -16,9 +16,39 @@ from scripts.ops.storage.copy_prefix import (
 def test_shards_cover_every_file_once_in_key_order_and_close_at_the_byte_target() -> None:
     files = [SourceFile("d", 4, "e4"), SourceFile("a", 6, "e1"), SourceFile("c", 5, "e3"), SourceFile("b", 1, "e2")]
 
-    shards = pack_shards(files, target_bytes=7)
+    shards = pack_shards(files, target_bytes=7, max_files=10)
 
     assert [[f.path for f in shard] for shard in shards] == [["a", "b"], ["c", "d"]]
+
+
+def test_splitting_a_run_of_tiny_files_keeps_the_later_shards_unchanged() -> None:
+    tiny = [SourceFile(f"a-{i}", 1, f"t{i}") for i in range(7)]
+    large = [SourceFile(f"b-{i}", 5, f"l{i}") for i in range(4)]
+
+    capped = pack_shards(tiny + large, target_bytes=10, max_files=3)
+    uncapped = pack_shards(tiny + large, target_bytes=10, max_files=len(tiny) + len(large))
+
+    assert [[f.path for f in shard] for shard in capped] == [
+        ["a-0", "a-1", "a-2"],
+        ["a-3", "a-4", "a-5"],
+        ["a-6", "b-0"],
+        ["b-1", "b-2"],
+        ["b-3"],
+    ]
+    assert capped[-2:] == uncapped[-2:]
+
+
+def test_a_run_of_tiny_files_splits_at_the_file_cap() -> None:
+    files = [SourceFile("big", 100, "e0")] + [SourceFile(f"tiny-{i}", 1, f"e{i}") for i in range(1, 6)]
+
+    shards = pack_shards(files, target_bytes=100, max_files=2)
+
+    assert [[f.path for f in shard] for shard in shards] == [
+        ["big"],
+        ["tiny-1", "tiny-2"],
+        ["tiny-3", "tiny-4"],
+        ["tiny-5"],
+    ]
 
 
 def test_a_rewritten_source_file_renames_its_shard_so_a_rerun_recopies_it() -> None:

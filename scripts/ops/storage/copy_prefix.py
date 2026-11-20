@@ -9,7 +9,8 @@ which hands it off to the CoreWeave peer cluster in the source's region, or in t
 destination's with ``--run-near destination``. The script streams the job's logs.
 
 The coordinator lists the source and packs its files, in key order, into shards of about
-``TARGET_SHARD_BYTES``. A shard's ID hashes each file's key, size, and source ETag. Zephyr
+``TARGET_SHARD_BYTES``, and splits any shard with more than ``MAX_SHARD_FILES`` files. A
+shard's ID hashes each file's key, size, and source ETag. Zephyr
 workers copy each shard with ``rigging.fsutil.verified_copy``: an upload in fixed parts
 publishes only when complete, and its size and ETag are checked against the streamed
 bytes; smaller objects are read back and hashed. Each source ETag is checked again after
@@ -81,8 +82,10 @@ HUB_CONFIG = REPO_ROOT / "lib" / "iris" / "config" / f"{HUB_CLUSTER}.yaml"
 DEFAULT_MAX_WORKERS = 50
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="10g")
 COPY_THREADS_PER_WORKER = 8
-# One shard is the unit of retry and resume; at about 80 MB per file this is ~400 files.
+# One shard is the unit of retry and resume. A byte-packed shard over the file cap is split, so a
+# run of tiny files cannot pile into one shard that a single worker copies file by file.
 TARGET_SHARD_BYTES = 32 * 1024**3
+MAX_SHARD_FILES = 2_000
 # The coordinator holds the source listing and the destination listing in memory.
 COORDINATOR_RESOURCES = ResourceSpec(cpu=4, memory="16GB", disk="5GB")
 RECORD_READ_THREADS = 64
@@ -206,20 +209,24 @@ def shard_id(files: Sequence[SourceFile]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:32]
 
 
-def pack_shards(files: Sequence[SourceFile], target_bytes: int) -> list[tuple[SourceFile, ...]]:
-    """Group files, in key order, into shards that each hold about *target_bytes*."""
-    shards: list[tuple[SourceFile, ...]] = []
+def pack_shards(files: Sequence[SourceFile], target_bytes: int, max_files: int) -> list[tuple[SourceFile, ...]]:
+    """Group files, in key order, into shards of about *target_bytes*, then split any over *max_files*.
+
+    Splitting after byte packing leaves every shard under the cap exactly as byte packing forms it,
+    so its ID, and a record written before the cap existed, still match.
+    """
+    by_bytes: list[list[SourceFile]] = []
     current: list[SourceFile] = []
     current_bytes = 0
     for file in sorted(files):
         current.append(file)
         current_bytes += file.size
         if current_bytes >= target_bytes:
-            shards.append(tuple(current))
+            by_bytes.append(current)
             current, current_bytes = [], 0
     if current:
-        shards.append(tuple(current))
-    return shards
+        by_bytes.append(current)
+    return [tuple(group[start : start + max_files]) for group in by_bytes for start in range(0, len(group), max_files)]
 
 
 def recorded_shard_ids(destination_url: str) -> set[str]:
@@ -327,7 +334,7 @@ def _plan(source_url: str, destination_url: str) -> tuple[list[CopyShard], list[
         raise ValueError(f"{source_url} holds no files")
     shards = [
         CopyShard(shard_id(group), source_url, destination_url, group)
-        for group in pack_shards(files, TARGET_SHARD_BYTES)
+        for group in pack_shards(files, TARGET_SHARD_BYTES, MAX_SHARD_FILES)
     ]
     pending = _pending_shards(shards, destination_url)
     _report(f"source: {len(files)} files, {format_size(_shard_bytes(shards))} in {len(shards)} shards")

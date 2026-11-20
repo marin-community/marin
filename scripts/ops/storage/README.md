@@ -68,7 +68,8 @@ uv run scripts/ops/storage/copy_prefix.py \
   --dry-run                       # list the source and shard records from this machine; submits no job
 ```
 
-The job packs source files, in key order, into 32 GiB shards. Each Zephyr
+The job packs source files, in key order, into 32 GiB shards and splits any
+shard with more than 2,000 files. Each Zephyr
 worker copies one shard eight files at a time with the per-object checks of
 `fsutil verified-copy`. Uploads use fixed 50 MiB parts and publish only when
 complete. Each upload's ETag is checked against the bytes read, and objects
