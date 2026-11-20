@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from finestore.rl.curation import QualifiedSourceDeclaration
-from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS
+from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, DifficultyGap
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
@@ -19,7 +19,7 @@ from experiments.post_training.task_curation.difficulty.importer import (
     declaration_population_revision,
     population_revision,
 )
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, PANELS_DIRECTORY
+from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, PANELS_DIRECTORY, read_rows
 from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
     Action,
@@ -33,7 +33,13 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_payload,
 )
 from experiments.post_training.task_curation.difficulty.selection import selected_tasks
-from experiments.post_training.task_curation.difficulty.state import GapReason, PanelReference
+from experiments.post_training.task_curation.difficulty.state import (
+    CatalogSource,
+    CoveragePolicy,
+    GapReason,
+    PanelReference,
+    cell_state,
+)
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
 from experiments.post_training.task_curation.difficulty_samples import (
@@ -43,6 +49,18 @@ from experiments.post_training.task_curation.difficulty_samples import (
 )
 from experiments.post_training.task_curation.images.__main__ import declared_environments
 from experiments.post_training.task_curation.images.build import DEFAULT_REPOSITORY, EnvironmentBuild, build_environment
+
+STATIC_ADMISSION_CAUSES = frozenset(
+    {
+        DifficultyGap.EXECUTABILITY_ADMISSION_PENDING,
+        DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING,
+        DifficultyGap.NO_EXECUTABLE_GRADER,
+        DifficultyGap.STATE_CAPTURE_REQUIRED,
+        DifficultyGap.TOOL_PROVIDER_REQUIRED,
+        DifficultyGap.SHARED_EXECUTOR_REQUIRED,
+        DifficultyGap.PROVIDER_CONTRACT_INVALID,
+    }
+)
 
 
 # Unknown recipes and judge routes require evidence or a ruling. They must not
@@ -105,7 +123,32 @@ class AdmissionBlocker:
     reason: str
 
 
-def recheck_admission(action: RecheckExecutabilityAdmission, local: Path) -> dict:
+def unverified_admission_capabilities(action: RecheckExecutabilityAdmission, ledger: str) -> list[str]:
+    """Retain active causes that frozen contract preparation cannot verify."""
+    evidence = set(action.source.evidence_ids)
+    rows = [row for row in read_rows(ledger) if row.attempt_id in evidence]
+    if not rows:
+        raise ValueError("Admission recheck lacks its planned ledger evidence")
+    source = CatalogSource(
+        action.source.source_id,
+        action.source.registry_revision,
+        tuple((task_id, sha) for task_id, sha, _ in action.source.tasks),
+        action.source.queue_uri,
+        action.source.queue_sha256,
+    )
+    return sorted(
+        {
+            gap.capability
+            for _, solver in action.cells
+            for gap in cell_state(rows, source, solver, CoveragePolicy()).gaps
+            if gap.reason == GapReason.EXECUTABILITY_ADMISSION_PENDING
+            and gap.capability
+            and gap.capability.partition(":")[0] not in STATIC_ADMISSION_CAUSES
+        }
+    )
+
+
+def recheck_admission(action: RecheckExecutabilityAdmission, local: Path, ledger: str) -> dict:
     """Re-run frozen executability checks; retain blocked contracts as evidence."""
     sources = load_queue_sources(action.source.queue_uri, action.source.queue_sha256, (action.source.source_id,))
     (source,) = sources
@@ -124,6 +167,15 @@ def recheck_admission(action: RecheckExecutabilityAdmission, local: Path) -> dic
         "population_changed": False,
     }
     if not blockers:
+        unverified = unverified_admission_capabilities(action, ledger)
+        if unverified:
+            return {
+                **result,
+                "status": "blocked",
+                "reason": GapReason.EXECUTABILITY_ADMISSION_PENDING,
+                "unverified_capabilities": unverified,
+                "detail": "Frozen contract checks cannot verify these admission prerequisites: " + "; ".join(unverified),
+            }
         return {**result, "status": "ready"}
     gap = legacy_gaps(blockers[0].reason)[0]
     return {
@@ -178,7 +230,7 @@ def repair_action(action: Action, local: Path, ledger: str) -> dict:
     if isinstance(action, BuildTaskSpecFactory):
         return build_factory(action, local)
     if isinstance(action, RecheckExecutabilityAdmission):
-        return recheck_admission(action, local)
+        return recheck_admission(action, local, ledger)
     if isinstance(action, BuildSnapshot):
         manifest = local / "snapshot-action.json"
         manifest.write_text(json.dumps(action_payload(action)))

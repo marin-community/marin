@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 
 import pytest
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import DifficultyGap, Solver
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import ProviderRequirement, TaskSpec
@@ -16,6 +16,7 @@ from experiments.post_training.task_curation import difficulty_preparation
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, execute_plan
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
+from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
     AttemptBatch,
     RecheckExecutabilityAdmission,
@@ -35,8 +36,17 @@ from experiments.post_training.task_curation.tests.test_difficulty_reconciler im
 
 
 @pytest.mark.parametrize("provider_missing", [False, True])
+@pytest.mark.parametrize(
+    "legacy_reason",
+    [
+        None,
+        DifficultyGap.EXECUTABILITY_ADMISSION_PENDING,
+        DifficultyGap.TOOL_PROVIDER_REQUIRED,
+        DifficultyGap.MATH_VERIFIER_DEADLINE,
+    ],
+)
 def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
-    tmp_path, monkeypatch, difficulty_source, provider_missing
+    tmp_path, monkeypatch, difficulty_source, provider_missing, legacy_reason
 ):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("admission-task")["lowered_task_spec"])["task"])
     if provider_missing:
@@ -65,7 +75,7 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
         task_id=None,
         task_sha256=None,
         reason=GapReason.EXECUTABILITY_ADMISSION_PENDING,
-        capability="executability_admission_pending:task_spec_tool_provider_required",
+        capability=legacy_gaps(legacy_reason)[0].capability if legacy_reason else None,
     )
     ledger = str(tmp_path / "ledger")
     append_rows(ledger, [observed, replace(observed, solver=Solver.LARGE, attempt_id="prior-large")])
@@ -79,10 +89,15 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
     rows = read_rows(ledger)
     after = cell_state(rows, catalog, Solver.SMALL, CoveragePolicy())
     assert file_sha256(StoragePath(str(queue))) == sha
-    if provider_missing:
+    runtime_unverified = legacy_reason == DifficultyGap.MATH_VERIFIER_DEADLINE
+    if provider_missing or runtime_unverified:
         assert after.state == CellStatus.BLOCKED
-        assert result["blockers"][0]["task_id"] == task.id
-        assert "task_spec_tool_provider_required" in result["blockers"][0]["reason"]
+        if provider_missing:
+            assert result["blockers"][0]["task_id"] == task.id
+            assert "task_spec_tool_provider_required" in result["blockers"][0]["reason"]
+        else:
+            assert result["blockers"] == []
+            assert result["unverified_capabilities"] == [legacy_gaps(legacy_reason)[0].capability]
         assert any(r.outcome == Outcome.ESCALATED and r.evidence_uri == str(target) for r in rows)
         repeated = [cell_state(rows, catalog, solver, CoveragePolicy()) for solver in (Solver.SMALL, Solver.LARGE)]
         assert plan(repeated, rows) == []

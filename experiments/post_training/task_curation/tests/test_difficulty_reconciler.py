@@ -226,7 +226,6 @@ def test_judge_qualification_groups_shared_models_without_crossing_routes():
         GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED,
         GapReason.NETWORK_POLICY_VIOLATION,
         GapReason.UNSUPPORTED_COMPOSE_DOCUMENT,
-        GapReason.EXECUTABILITY_ADMISSION_PENDING,
     ],
 )
 def test_escalations_leave_other_cells_schedulable(reason):

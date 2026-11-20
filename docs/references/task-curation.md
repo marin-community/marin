@@ -2529,7 +2529,7 @@ campaign for unscored coverage; route Daytona sources through the declarative
 Daytona executor and the TaskSpec actor factory for their snapshot preflight
 (Dockerfile-only Daytona tasks are measured with `--daytona-provisioning
 declarative`, which builds each task's original image or Dockerfile at sandbox
-creation on the Daytona EVAL account — the account that permits declarative
+creation on the Daytona DATA account under ruling 71, which permits declarative
 builds);
 re-run the executability-filtered admission pass after static findings; host a
 non-GLM judge through `JUDGE_TIER_SERVING` and qualify the GLM route at the
@@ -2540,15 +2540,19 @@ routes. The gate in `difficulty_preparation.py` accepts the GLM route and every
 `JUDGE_TIERS` model (`SERVED_JUDGE_MODELS`); a validated endpoint is confirmed
 at serving time by the judge probe and identity receipt.
 
-The reconciler schedules `RecheckExecutabilityAdmission` for legacy static
-admission and filtration gaps before escalation. One bounded CPU job per frozen
-source population rechecks every selected contract across affected solvers.
-The existing preparation gate verifies the original task hashes and repeats its
-executability checks. A cleared gate returns missing tasks to attempt planning.
+The reconciler schedules `RecheckExecutabilityAdmission` for every
+`EXECUTABILITY_ADMISSION_PENDING` source/solver cell, regardless of capability
+detail text. Cells using the same frozen SAMPLE panel share one bounded CPU job.
+The preparation gate verifies every sampled task's original hash and repeats its
+executability checks. A cleared gate returns tasks without scored coverage to
+attempt planning. Static preparation does not verify runtime conditions such as
+a verifier deadline or an unqualified hosted context; those ledger causes remain
+blocked and are escalated to the coordinator after the recheck.
 If a provider, shared executor or another preflight prerequisite is still
 unsupported, the result records each blocked task ID, hash and typed reason
-before escalation. It does not drop tasks or change source status. A different
-admitted population still requires a qualified release and a new frozen panel.
+before escalation to the coordinator. It does not drop tasks or change source
+status. Publishing a different task population requires its own admission
+evidence and a new frozen SAMPLE panel.
 
 ### How SOURCE gaps are escalated
 
