@@ -191,7 +191,7 @@ def _retain_terminal_checkpoints(config: DictConfig) -> None:
     root = str(config.artifacts.checkpoint_root)
     latest = terminal_checkpoint_step(root)
     best = native_best_checkpoint_step(root) if selection == "best" else None
-    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every")) | {best or latest}
+    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest) | {best or latest}
     newest = max(kept)
     if newest != latest:
         # Publish a retained checkpoint before deleting the former marker target.

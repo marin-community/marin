@@ -9,6 +9,8 @@ from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, GLOBAL_STEP_PR
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.io import io
 
+ROLLOUT_STATE_FILENAME = "data.pt"
+
 
 def extract_step_from_path(path: str) -> int:
     basename = os.path.basename(path)
@@ -57,16 +59,17 @@ def native_best_checkpoint_step(checkpoint_root: str) -> int | None:
     return None
 
 
-def periodic_checkpoint_steps(checkpoint_root: str, keep_every: int | None) -> set[int]:
-    if keep_every is None:
+def periodic_checkpoint_steps(checkpoint_root: str, keep_every: int | None, latest_step: int | None) -> set[int]:
+    if keep_every is None or latest_step is None:
         return set()
     return {
         step
         for directory in list_checkpoint_dirs(checkpoint_root)
         if directory.removeprefix(GLOBAL_STEP_PREFIX).isdecimal()
-        and (step := extract_step_from_path(directory)) > 0
+        and 0 < (step := extract_step_from_path(directory)) <= latest_step
         and step % keep_every == 0
         and io.exists(os.path.join(checkpoint_root, directory, TRAINER_STATE_FILENAME))
+        and io.exists(os.path.join(checkpoint_root, directory, ROLLOUT_STATE_FILENAME))
     }
 
 

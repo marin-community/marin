@@ -106,6 +106,7 @@ from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
 from skyrl_train.checkpoint_listing import (
+    ROLLOUT_STATE_FILENAME,
     cleanup_old_checkpoints,
     extract_step_from_path,
     native_best_checkpoint_step,
@@ -2972,7 +2973,7 @@ class RayPPOTrainer:
                 self.policy_model.backload_to_gpu()
 
         # Serialize rollout data state for publication after the rank uploads complete.
-        rollout_state_path = os.path.join(global_step_folder, "data.pt")
+        rollout_state_path = os.path.join(global_step_folder, ROLLOUT_STATE_FILENAME)
         rollout_state_buffer = stdlib_io.BytesIO()
         torch.save(rollout_state, rollout_state_buffer)
 
@@ -3011,7 +3012,9 @@ class RayPPOTrainer:
         protected_steps = protected_hf_export_steps(checkpoint_root)
         if (best_step := native_best_checkpoint_step(checkpoint_root)) is not None:
             protected_steps.add(best_step)
-        protected_steps.update(periodic_checkpoint_steps(checkpoint_root, self.cfg.trainer.get("checkpoint_keep_every")))
+        protected_steps.update(
+            periodic_checkpoint_steps(checkpoint_root, self.cfg.trainer.get("checkpoint_keep_every"), self._last_saved_step)
+        )
 
         if not self._node_ids:
             self._node_ids = get_node_ids(self.policy_model, self.critic_model, self.ref_model)
@@ -3103,7 +3106,7 @@ class RayPPOTrainer:
         policy_ckpt_dir = os.path.join(checkpoint_path, POLICY_CHECKPOINT_SUBDIRECTORY)
         critic_ckpt_dir = os.path.join(checkpoint_path, "critic")
         trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
-        rollout_state_path = os.path.join(checkpoint_path, "data.pt")
+        rollout_state_path = os.path.join(checkpoint_path, ROLLOUT_STATE_FILENAME)
 
         # Validate that required checkpoint files exist
         if not io.exists(trainer_state_path):

@@ -30,6 +30,7 @@ from cloud.iris.iris_backend import supervise_iris_job
 from iris.resources.state import JobState
 from rigging.timing import Timestamp
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, policy_export_path, selected_export_step
+from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 
 
@@ -231,18 +232,21 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
 
 
 @pytest.mark.parametrize(
-    ("retention", "keep_every", "best_format", "export_hf", "job_state", "kept"),
+    ("retention", "keep_every", "best_format", "export_hf", "job_state", "missing_rollout_step", "kept"),
     [
-        ("best", None, "native", True, "succeeded", {1}),
-        ("best", 2, "native", False, "succeeded", {1, 2}),
-        ("best", None, "hf", False, "succeeded", {3}),
-        ("best", None, None, False, "succeeded", {3}),
-        ("latest", 2, None, False, "succeeded", {2, 3}),
-        ("best", None, "native", False, "failed", {1, 2, 3}),
+        ("best", None, "native", True, "succeeded", None, {1}),
+        ("best", 2, "native", False, "succeeded", None, {1, 2}),
+        ("best", 1, "native", False, "succeeded", 2, {1, 3}),
+        ("best", None, "hf", False, "succeeded", None, {3}),
+        ("best", None, None, False, "succeeded", None, {3}),
+        ("latest", 2, None, False, "succeeded", None, {2, 3}),
+        ("best", None, "native", False, "failed", None, {1, 2, 3, 4}),
     ],
-    ids=["best-after-export", "periodic-newer-than-best", "hf-initializer", "no-winner", "latest", "failed"],
+    ids=["best-after-export", "periodic-newer-than-best", "missing-rollout", "hf-initializer", "no-winner", "latest", "failed"],
 )
-def test_launch_retains_checkpoints_only_after_success(tmp_path, retention, keep_every, best_format, export_hf, job_state, kept):
+def test_launch_retains_checkpoints_only_after_success(
+    tmp_path, retention, keep_every, best_format, export_hf, job_state, missing_rollout_step, kept
+):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
     config["run"]["export_hf"] = export_hf
@@ -254,10 +258,12 @@ def test_launch_retains_checkpoints_only_after_success(tmp_path, retention, keep
     path.write_text(yaml.safe_dump(config))
 
     root = tmp_path / "checkpoints"
-    for step in (1, 2, 3):
+    for step in (1, 2, 3, 4):
         checkpoint = root / f"global_step_{step}"
         checkpoint.mkdir(parents=True)
         (checkpoint / TRAINER_STATE_FILENAME).touch()
+        if step != missing_rollout_step:
+            (checkpoint / ROLLOUT_STATE_FILENAME).touch()
     if best_format is not None:
         (root / BEST_CHECKPOINT_FILENAME).write_text(
             json.dumps({"step": 1 if best_format == "native" else 0, "model_format": best_format})
@@ -268,7 +274,7 @@ def test_launch_retains_checkpoints_only_after_success(tmp_path, retention, keep
 
     assert result.state.value == job_state
     assert {path.name for path in root.glob("global_step_*")} == {f"global_step_{step}" for step in kept}
-    assert int((root / CHECKPOINT_MARKER_FILENAME).read_text()) == max(kept)
+    assert int((root / CHECKPOINT_MARKER_FILENAME).read_text()) == (3 if job_state == "failed" else max(kept))
     if export_hf:
         assert result.model is not None and result.model.global_step == 1
 
