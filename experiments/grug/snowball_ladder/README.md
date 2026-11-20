@@ -15,6 +15,15 @@ Documents are copied as stored: Marin tokenizer, no retokenization, no length ca
 
 Small builds from the real Harrier store compressed to about 1.6 bytes per token, which puts the two Harrier caches near 3.8 TB on disk. The `validate --du` step measures the real figure.
 
+## Built caches
+
+The Snowball-mix caches were built on 2026-11-12 under `gs://marin-us-central2/snowball_ladder/snowball_v2`, whose `report.json` holds the per-cell figures. The Harrier caches have not been built.
+
+| Cache | Target tokens | Realized tokens | Documents | Bytes on disk |
+|---|---|---|---|---|
+| `snowball_phase0` | 547.824B | 547.821B | 636.1M | 844.3 GB |
+| `snowball_phase1` | 136.956B | 136.922B | 165.9M | 211.0 GB |
+
 ## Build
 
 Run each recipe in its source store's region. Sampling a few percent of documents touches nearly every chunk of the source, so a build reads about the whole store: 37 TB for Harrier and 16 TB for Snowball. Reading either across clouds costs real egress.
@@ -22,7 +31,7 @@ Run each recipe in its source store's region. Sampling a few percent of document
 | Recipe | Iris placement | `MARIN_PREFIX` | Example `OUT` |
 |---|---|---|---|
 | `harrier` | `--target-cluster cw-us-east-08a` | `s3://marin-us-east-02a/marin` | `s3://marin-us-east-02a/marin/snowball_ladder/harrier_v1` |
-| `snowball` | `--region us-central2` | `gs://marin-us-central2` | `gs://marin-us-central2/snowball_ladder/snowball_v1` |
+| `snowball` | `--region us-central2` | `gs://marin-us-central2` | `gs://marin-us-central2/snowball_ladder/snowball_v2` |
 
 The commands below are for `harrier`. For `snowball`, use `--recipe snowball` and swap in the placement flag and prefix from the table.
 
