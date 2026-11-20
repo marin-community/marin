@@ -10,7 +10,6 @@ from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,
     SourceReference,
-    TaskFormat,
 )
 
 TASKTROVE_INPUT = SourceReference(
@@ -27,30 +26,6 @@ TASKTROVE_RELEASE = SourceReference(
 
 def sources() -> list[RlDataSource]:
     return [
-        RlDataSource(
-            info=SourceInfo(
-                id="Harbor Hub:skill2env",
-                title="skill2env/skill2env",
-                origin="Harbor Hub",
-                family="terminal-agent",
-                tags=("agentic", "multi-turn"),
-                count=7496,
-                notes=(
-                    "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
-                    "The paper's private S2EBench is a separate evaluation set. "
-                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms. "
-                    "Snapshot requirement is unassessed: a registry sample found a distinct environment for "
-                    "every sampled task, so the cohort is not treated as safe, and a full per-task count "
-                    "is pending."
-                ),
-                task_format=TaskFormat.HARBOR,
-                dataset=SourceReference(
-                    "skill2env/skill2env",
-                    "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
-                    "https://hub.harborframework.com/datasets/skill2env/skill2env",
-                ),
-            )
-        ),
         RlDataSource(
             info=SourceInfo(
                 id="Task Trove:AweAI-Team__CalibForge",
