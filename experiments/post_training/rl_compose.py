@@ -386,7 +386,8 @@ def run_spec(
     preset = preset.with_updates(config.trainer.max_steps)
     model = preset.model if init is None else init
     selects_best = preset.checkpoint_every or (preset.export_hf and config.trainer.hf_export_checkpoint == "best")
-    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster)) if selects_best else None
+    # The artifact builder resolves checkpoint subpaths after producer materialization.
+    initial_model_uri = "model-input" if selects_best else None
     validation_data = ()
     evaluation_data = []
     profiles = {}
