@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""LiveCodeBench rows convert to tasks whose packaged grader scores replies as the official harness does."""
-
 import base64
 import importlib.util
 import json
