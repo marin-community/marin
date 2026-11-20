@@ -361,13 +361,21 @@ graph by default; `--run` submits it through Iris.
 
 The protocol lives in durable object storage. The code pins its URI, revision,
 SHA256 and byte size, and verifies those bytes before reading the policy.
-The model binding cannot set sampling, task subsets, sandbox resources, harness
-deadlines or the judge. The graph checks the prepared task bytes and model
+The model binding cannot set sampling, sandbox resources, harness deadlines or
+the judge. Arbitrary task-subset overrides remain forbidden. The graph checks the prepared task bytes and model
 manifest before GPU allocation, then writes `canonical-evaluation.json` with the
 protocol hash beside the run outputs. Sandbox resources come from each task.
 The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
 `<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
 trajectories use the supplied run identity.
+
+Use repeated `--benchmark <name>` options for a diagnostic or correction subset.
+The standard graph resolves this allow-list against the content-pinned prepared
+rows and keeps their order, repetitions, prompts and task settings unchanged.
+Unknown benchmark names fail before GPU allocation. `canonical-evaluation.json`
+records the original row indices and both input hashes beside the unchanged
+policy hash. Omitting the option evaluates the full suite. A subset result is
+not a full-suite result; label its coverage when reporting it.
 
 Mochi exports use the adopted rounds in
 `experiments/post_training/long_loop/rounds/mochi-{base,sft}-eval.yaml` through

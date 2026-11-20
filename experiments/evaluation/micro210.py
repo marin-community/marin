@@ -13,7 +13,7 @@ import draccus
 import httpx
 import yaml
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -45,6 +45,7 @@ from experiments.evaluation.micro210_policy import (
     micro210_evaluation,
     runtime_policy_config,
 )
+from experiments.evaluation.micro210_subset import Micro210Subset, prepare_subset, validate_subset
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
@@ -122,6 +123,8 @@ class Micro210Run:
     canonical_launch_sha256: str
     serving_profile: Micro210ServingProfile | None = None
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME
+    subset: Micro210Subset | None = None
+    selected_inputs: str | None = None
 
 
 def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
@@ -173,11 +176,23 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS, model_manifest_filename=config.model_manifest_filename)
+    selection = None
+    if config.subset is not None:
+        assert config.selected_inputs is not None
+        policy = config.evaluation.policy()
+        selection = validate_subset(
+            prepared_inputs=PREPARED_INPUTS,
+            selected_inputs=config.selected_inputs,
+            source_sha256=policy["prepared_rollouts_sha256"],
+            data_relative_path=policy["evaluation"]["data_relative_path"],
+            subset=config.subset,
+        )
     validate_before_allocation(config.skyrl.launch_config_yaml)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(
             {
                 **asdict(config.evaluation.record()),
+                **({"selection": selection} if selection is not None else {}),
                 "runtime_field_renames": runtime_policy_config(config.evaluation.policy()).field_renames,
                 **(
                     {
@@ -198,7 +213,9 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     return run_skyrl(config.skyrl, env_vars={JUDGE_API_KEY: api_key, "OPENAI_API_KEY": api_key})
 
 
-def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
+def micro210_step(
+    model: Micro210Model, *, name: str, version: str, subset: Micro210Subset | None = None, **overrides
+) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph; reject all policy override fields."""
     binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>", **overrides)
     binding.policy()
@@ -210,6 +227,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
         name=name,
         version=version,
         model_binding=model,
+        subset=subset,
     )
 
 
@@ -221,6 +239,7 @@ def micro210_artifact_step(
     serving_profile: Micro210ServingProfile | None = None,
     model_binding: Micro210Model | None = None,
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME,
+    subset: Micro210Subset | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind a future committed model to the same frozen evaluator as a static export."""
     fingerprint_model = Micro210Model(
@@ -238,6 +257,17 @@ def micro210_artifact_step(
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )
+    if subset is not None:
+        inputs = apply(
+            "evaluation/micro210/subset",
+            prepare_subset,
+            version=version,
+            prepared_inputs=inputs,
+            source_sha256=frozen["prepared_rollouts_sha256"],
+            data_relative_path=policy["data_relative_path"],
+            subset=subset,
+            output=OUT,
+        )
     roles = draccus.decode(SkyRLRolePlan, policy["role_plan"])
     execution = IrisSkyRLExecution(
         **{**policy["execution"], "required_env_vars": tuple(policy["execution"]["required_env_vars"])},
@@ -296,6 +326,8 @@ def micro210_artifact_step(
             hashlib.sha256(rendered.encode()).hexdigest(),
             serving_profile,
             model_manifest_filename,
+            subset,
+            context.artifact_path(inputs) if subset is not None else None,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
@@ -308,13 +340,24 @@ def micro210_artifact_step(
 @click.option("--tokenizer-uri", required=True)
 @click.option("--tokenizer-revision", required=True)
 @click.option("--name", required=True)
+@click.option("--benchmark", multiple=True, help="Evaluate only these benchmark rows from the frozen prepared inputs.")
 @rl_build_options
 def main(
-    model_uri: str, model_manifest_sha256: str, tokenizer_uri: str, tokenizer_revision: str, name: str
+    model_uri: str,
+    model_manifest_sha256: str,
+    tokenizer_uri: str,
+    tokenizer_revision: str,
+    name: str,
+    benchmark: tuple[str, ...],
 ) -> ArtifactStep:
     configure_coreweave_s3()
     model = Micro210Model(model_uri, MODEL_IDENTITY_PREFIX + model_manifest_sha256, tokenizer_uri, tokenizer_revision)
-    return micro210_step(model, name=name, version=resolve_version(name, None))
+    return micro210_step(
+        model,
+        name=name,
+        version=resolve_version(name, None),
+        subset=Micro210Subset(tuple(sorted(benchmark))) if benchmark else None,
+    )
 
 
 if __name__ == "__main__":
