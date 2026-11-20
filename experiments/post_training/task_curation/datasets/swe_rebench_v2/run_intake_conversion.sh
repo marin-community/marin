@@ -12,6 +12,8 @@
 # Env:
 #   WORKDIR = the scratch directory (default /workspace)
 set -euo pipefail
+set -x
+trap 'echo "INTAKE-CONVERSION FAILED: line $LINENO: $BASH_COMMAND" >&2' ERR
 
 REVISION="${1:?landed marin revision}"
 OUTPUT_ROOT="${2:?intake output root}"
