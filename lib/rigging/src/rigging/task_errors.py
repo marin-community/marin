@@ -208,19 +208,24 @@ def known_error_types() -> frozenset[str]:
     return frozenset(_ERROR_CATEGORIES)
 
 
+DEFAULT_RETRY_EXCLUSIONS = frozenset(
+    {
+        AGENT_TIMEOUT_ERROR,
+        VERIFIER_TIMEOUT_ERROR,
+        REWARD_FILE_NOT_FOUND_ERROR,
+        REWARD_FILE_EMPTY_ERROR,
+        VERIFIER_OUTPUT_PARSE_ERROR,
+    }
+)
+
+
 class RetrySettings(BaseModel):
     """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
     include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")
     exclude_exceptions: set[str] | None = Field(
-        default_factory=lambda: {
-            AGENT_TIMEOUT_ERROR,
-            VERIFIER_TIMEOUT_ERROR,
-            REWARD_FILE_NOT_FOUND_ERROR,
-            REWARD_FILE_EMPTY_ERROR,
-            VERIFIER_OUTPUT_PARSE_ERROR,
-        },
+        default_factory=lambda: set(DEFAULT_RETRY_EXCLUSIONS),
         description="Excluded names take precedence over included names",
     )
     wait_multiplier: float = 1.0

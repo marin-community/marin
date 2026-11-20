@@ -210,6 +210,8 @@ UNDECLARED = MappingProxyType(
         "teacher_routing": ("SectionMap[TeacherRouting]", Ellipsis),
         "data.kind": ('Literal["tasks", "parquet"]', "tasks"),
         "trainer.enable_db_registration": ("bool", True),
+        "trainer.checkpoint_retention": ('Literal["latest", "best"] | None', None),
+        "trainer.checkpoint_keep_every": ("PositiveInt | None", None),
         "trainer.rollout_buffer.groups_per_family": ("CountMap", Ellipsis),
         "trainer.hf_hub_repo_id": ("str | None", None),
         "trainer.hf_hub_private": ("bool", False),
