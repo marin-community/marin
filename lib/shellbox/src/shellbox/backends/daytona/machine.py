@@ -324,11 +324,7 @@ class DaytonaMachine:
         return data, truncated
 
     async def _exit_code_after_lost_connection(self, request: Callable[[], Awaitable[object]], completed: str) -> int:
-        """Return the exit code of a command whose request lost its connection.
-
-        The provider may have started the command before the connection dropped. The command script claims its
-        directory before it runs, so the repeated request starts the command only if the first one did not.
-        """
+        """Return the exit code of a command whose request lost its connection, repeating ``request``."""
         await _reconnecting(request)
         backoff = ExponentialBackoff(initial=0.5, maximum=5, factor=2, jitter=0)
         path = shlex.quote(completed)

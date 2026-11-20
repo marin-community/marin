@@ -777,15 +777,17 @@ class LostDownload(LocalFiles):
         return await super().download_file(source)
 
 
-async def no_wait(delay):
-    pass
+@pytest.fixture
+def no_retry_wait(monkeypatch):
+    async def wait(delay):
+        pass
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
 
 
 @pytest.mark.parametrize("command_ran", [False, True])
 @pytest.mark.requires_host_setsid
-def test_daytona_command_runs_once_when_its_request_loses_the_connection(tmp_path, monkeypatch, command_ran):
-    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
-
+def test_daytona_command_runs_once_when_its_request_loses_the_connection(tmp_path, no_retry_wait, command_ran):
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=command_ran)
@@ -803,9 +805,7 @@ def test_daytona_command_runs_once_when_its_request_loses_the_connection(tmp_pat
 
 
 @pytest.mark.requires_host_setsid
-def test_daytona_command_fails_when_its_request_keeps_losing_the_connection(tmp_path, monkeypatch):
-    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
-
+def test_daytona_command_fails_when_its_request_keeps_losing_the_connection(tmp_path, no_retry_wait):
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = LostConnection("candidate-run", losses=math.inf, runs_first=False)
@@ -824,10 +824,7 @@ def test_daytona_command_fails_when_its_request_keeps_losing_the_connection(tmp_
 
 @pytest.mark.parametrize("lost", ["umask 077", "measure_and_cap", "tar xzf", "download"])
 @pytest.mark.requires_host_setsid
-def test_daytona_repeats_a_repeatable_request_that_lost_its_connection(tmp_path, monkeypatch, lost):
-    """The provider ran each of these requests before the connection dropped."""
-    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
-
+def test_daytona_repeats_a_repeatable_request_that_lost_its_connection(tmp_path, no_retry_wait, lost):
     async def scenario():
         client = LocalDaytona()
         if lost == "download":
