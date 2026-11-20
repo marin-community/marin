@@ -12,10 +12,10 @@ import httpx
 import pytest
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_limits
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from shellbox.backends.iris.machine import ExecOutput, IrisMachine
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import NumericSpec
 
