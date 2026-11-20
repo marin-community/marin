@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from pathlib import Path
 
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 import pytest
 
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from rolloutengine.models import ModelRequest
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend, TRIAL_HEADER
 from skyrl_train.rollouts.task_worker import _model_turn
@@ -85,22 +85,21 @@ def test_the_special_token_a_turn_stopped_at_is_removed_from_the_reply(terminato
     [
         ([PLAN, END_OF_TURN], "stop", "plan"),
         ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop", "call"),
+        ([PLAN, END_OF_TURN], "length", "plan"),
         ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "length", "call"),
+        ([CALL, TOOL_CALL_END], "length", "call<|tool_call_end|>"),
     ],
-    ids=["plain", "reasoning", "reasoning-length-stop"],
+    ids=["plain", "reasoning", "length-stop", "reasoning-length-stop", "cut-off-delimiter"],
 )
-def test_explicit_special_token_retention_excludes_the_turn_terminator(response_ids, finish_reason, expected):
+def test_explicit_special_token_retention_excludes_only_the_turn_terminator(response_ids, finish_reason, expected):
+    # A terminator sampled as the last budgeted token still ended the turn, so it leaves the text even when
+    # the stop reason is a length stop.
     output = _generate(response_ids, finish_reason, sampling_params={"skip_special_tokens": False})
 
     assert output["responses"] == [expected]
     assert output["assistant_messages"][0]["content"] == expected
-
-
-def test_a_length_stop_keeps_its_last_training_token_without_replaying_the_terminator():
-    output = _generate([PLAN, END_OF_TURN], "length", sampling_params={"skip_special_tokens": False})
-
-    assert output["assistant_messages"][0]["content"] == "plan"
-    assert output["response_ids"] == [[PLAN, END_OF_TURN]]
+    assert output["response_ids"] == [response_ids]
+    assert output["stop_reasons"] == [finish_reason]
 
 
 def test_a_tool_call_that_ended_its_turn_at_the_budget_is_not_a_length_stop():
@@ -142,13 +141,18 @@ def test_agent_output_cap_reaches_the_chat_server(options, effective_cap):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent_transport", [False, True], ids=["skyrl", "pi-transport"])
-async def test_tool_call_history_renders_without_reply_terminators(agent_transport):
-    # Frozen from https://huggingface.co/marin-community/marin-tokenizer-tools/
-    # blob/3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09/chat_template.jinja
-    template = (Path(__file__).parent / "fixtures/marin-chat-template.jinja").read_text()
+@pytest.mark.parametrize(
+    "response_ids,content,reply",
+    [
+        ([PLAN, CALL, END_OF_TURN], "plan", "plan"),
+        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "<think>plan</think>", "call"),
+    ],
+    ids=["plain", "reasoning"],
+)
+async def test_tool_call_history_renders_without_reply_terminators(agent_transport, response_ids, content, reply):
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
-        chat_template=template,
+        chat_template=MARIN_CHAT_TEMPLATE,
         bos_token="<|begin_of_text|>",
     )
     rendered = []
@@ -163,14 +167,14 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
         async def chat_completion(self, request):
             response = await super().chat_completion(request)
             response["choices"][0]["message"].update(
-                content="plan<|eot_id|>",
+                content=content + "<|eot_id|>",
                 tool_calls=[
                     {"id": "lookup", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "a"}'}}
                 ],
             )
             return response
 
-    engine = ToolClient([PLAN, CALL, END_OF_TURN], "tool_calls")
+    engine = ToolClient(response_ids, "tool_calls")
     client = DirectModelClient(engine)
     backend = AgentInferenceBackend("policy", HISTORY_CONTEXT_LENGTH, engine.tokenize, engine.tokenizer)
 
@@ -195,7 +199,7 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
                         "json": {"messages": list(messages)},
                     }
                 )
-            assert response["choices"][0]["token_ids"] == [PLAN, CALL, END_OF_TURN]
+            assert response["choices"][0]["token_ids"] == response_ids
             message = response["choices"][0]["message"]
         else:
             output = await client.generate(
@@ -205,14 +209,14 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
                     sampling_params={"skip_special_tokens": False},
                 )
             )
-            assert output["responses"] == ["plan"]
-            assert output["response_ids"] == [[PLAN, CALL, END_OF_TURN]]
+            assert output["responses"] == [reply]
+            assert output["response_ids"] == [response_ids]
             message = output["assistant_messages"][0]
         messages.extend([message, {"role": "tool", "tool_call_id": "lookup", "content": "12"}])
 
     initial = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\ngo<|eot_id|>\n"
     historical_turn = (
-        "<|start_header_id|>assistant<|end_header_id|>\nplan<tool_call>\n"
+        f"<|start_header_id|>assistant<|end_header_id|>\n{content}<tool_call>\n"
         '{"name": "lookup", "arguments": {"key": "a"}}\n</tool_call><|eot_id|>'
         '<|start_header_id|>tool<|end_header_id|>\n<tool_response name="lookup">12</tool_response><|eot_id|>\n'
     )
@@ -222,9 +226,10 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
     ]
 
 
-@pytest.mark.parametrize("chat", [True, False], ids=["chat", "completion"])
-@pytest.mark.parametrize("raw", [True, False], ids=["raw-opt-in", "visible-only"])
-def test_raw_text_is_opt_in_and_keeps_exact_completion_delimiters(chat, raw):
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_completion_reply_excludes_the_turn_terminator(finish_reason):
+    response_ids = [THINK_START, PLAN, THINK_END, CALL, END_OF_TURN]
+
     class Client(_InferenceClient):
         async def generate(self, request):
             return {
@@ -233,17 +238,9 @@ def test_raw_text_is_opt_in_and_keeps_exact_completion_delimiters(chat, raw):
                 "stop_reasons": [self.finish_reason],
             }
 
-    client = DirectModelClient(Client([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop"))
-    request = InferenceEngineInput(sampling_params={"skip_special_tokens": False})
-    if chat:
-        request.update(prompts=[[{"role": "user", "content": "go"}]], chat_completion_params=[{}])
-    else:
-        request["prompt_token_ids"] = [[PLAN]]
-    output = asyncio.run(client.generate(request, return_raw_text=raw))
+    client = DirectModelClient(Client(response_ids, finish_reason))
+    request = InferenceEngineInput(prompt_token_ids=[[PLAN]], sampling_params={"skip_special_tokens": False})
+    output = asyncio.run(client.generate(request))
 
-    assert output["responses"] == ["call" if chat else "<think>plan</think>call"]
-    assert output["response_ids"] == [[THINK_START, PLAN, THINK_END, CALL, END_OF_TURN]]
-    if raw:
-        assert output["raw_responses"] == ["<think>plan</think>call<|eot_id|>"]
-    else:
-        assert "raw_responses" not in output
+    assert output["responses"] == ["<think>plan</think>call"]
+    assert output["response_ids"] == [response_ids]
