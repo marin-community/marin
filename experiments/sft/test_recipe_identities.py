@@ -64,18 +64,18 @@ def test_sft_recipe_identities(monkeypatch):
     )
 
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "a2c0b0fc"),
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "f5525031"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "6d222125"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "2e853e89"),
         ("checkpoints/snowball/mixture-262k-32node", "2026.11.19.1", "300cf21f"),
-        ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "0ca53670"),
-        ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "9c258a76"),
-        ("checkpoints/iceball-micro-sft", "2026.11.19.1", "03dbbead"),
-        ("users/sft-fixture/checkpoints/curriculum-sft/1c980189d90b/snowball", "2026.11.19.1", "13f7f0db"),
+        ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "1c8b1c15"),
+        ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "00d6226d"),
+        ("checkpoints/iceball-micro-sft", "2026.11.19.1", "66049e2b"),
+        ("users/sft-fixture/checkpoints/curriculum-sft/1c980189d90b/snowball", "2026.11.19.1", "c820bf2a"),
         (
             "checkpoints/hf-to-levanter/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026-09-20-snowball",
             "2026.09.25.2",
             "cc7d2ded",
         ),
-        ("grug/hero-sft-fullab-step393k-v2", "2026.11.10", "f7dec57d"),
+        ("grug/hero-sft-fullab-step393k-v2", "2026.11.10", "eb21ce23"),
         ("grug/hero-sft-fullab-step393k-v2-hf", "2026.11.10", "df950f55"),
     ]
