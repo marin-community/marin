@@ -51,6 +51,8 @@ def system_prompt(policy: Policy) -> str:
         )
     )
     image = policy.setting("author.image", str)
+    workdir = policy.setting("author.workdir", str)
+    rule = "author.source_image_rule" if policy.setting("sandbox.source_images", bool) else "author.image_rule"
     environment = (
         "Python 3.12 Debian container" if image == GRADER_BASE_IMAGE else ("container" if image else "ShellSim")
     )
@@ -58,7 +60,8 @@ def system_prompt(policy: Policy) -> str:
         reference=reference,
         environment=environment,
         author_image=image or "none (ShellSim)",
-        workdir=policy.setting("author.workdir", str),
+        workdir=workdir,
+        image_rule=policy.prompt(rule).render(workdir=workdir),
         output_chars=policy.setting("tools.output_chars", int),
         grader_environments=json.dumps(environments, sort_keys=True),
         sandbox_limits=sandbox_limits(policy),
@@ -102,15 +105,30 @@ def opening_prompt(workpiece: Workpiece, policy: Policy) -> str:
     return policy.prompt("author.repair").render(kind="review", detail="\n".join(decision.findings))
 
 
+def author_requirements(workpiece: Workpiece, policy: Policy) -> EnvironmentRequirements:
+    """The author's machine: the task's own container when ``sandbox.source_images`` admits it, else ``author.image``.
+
+    A task from another source names the image its repository and tests live in, so the author works in
+    the same environment, setup included, that the solver and grader get.
+    """
+    submission = workpiece.submission
+    if (
+        policy.setting("sandbox.source_images", bool)
+        and submission is not None
+        and submission.task.environment_requirements.docker_image is not None
+    ):
+        return submission.task.environment_requirements
+    return requirements(
+        image=policy.setting("author.image", str) or None,
+        packages=policy.setting("author.packages", tuple),
+        workdir=policy.setting("author.workdir", str),
+    )
+
+
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
-    requested = requirements(
-        image=policy.setting("author.image", str) or None,
-        packages=policy.setting("author.packages", tuple),
-        workdir=str(workdir),
-    )
-    env = await resources.envs.create(host_requirements(requested))
+    env = await resources.envs.create(host_requirements(author_requirements(workpiece, policy)))
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)

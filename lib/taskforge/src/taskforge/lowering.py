@@ -227,10 +227,18 @@ def _hosted_task(task: TaskSpec) -> TaskSpec:
 
 @dataclass(frozen=True, slots=True)
 class LoweringSettings:
+    """Machine settings and budgets shared by every lowering of a run.
+
+    Attributes:
+        source_images: Let a grader run in the task's own container image, as a task from another source
+            provides it, besides the pinned image and ShellSim. Policy ``sandbox.source_images``.
+    """
+
     task_machine: MachineSettings
     verifier_machine: MachineSettings
     limits: RolloutLimits
     judge_model: str = ""
+    source_images: bool = False
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -249,7 +257,29 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
     if memory_mb <= 0:
         raise ValueError("sandbox.memory_mb must be positive")
     settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
-    return LoweringSettings(settings, settings, limits, policy.setting("judge.model", str))
+    return LoweringSettings(
+        settings,
+        settings,
+        limits,
+        policy.setting("judge.model", str),
+        policy.setting("sandbox.source_images", bool),
+    )
+
+
+def check_grader_image(task: TaskSpec, settings: LoweringSettings) -> None:
+    """Refuse a grader image other than the pinned one, ShellSim, or, with ``source_images``, the task's own."""
+    grader = grading_environment(task)
+    if grader is None or grader.docker_image in (None, GRADER_BASE_IMAGE):
+        return
+    task_image = task.environment_requirements.docker_image
+    if settings.source_images and grader.docker_image == task_image:
+        return
+    allowed = (
+        f"{GRADER_BASE_IMAGE}, the task's image {task_image},"
+        if settings.source_images and task_image
+        else GRADER_BASE_IMAGE
+    )
+    raise InvalidTaskSpec(f"grader image must be {allowed} or null for ShellSim; got {grader.docker_image}")
 
 
 def lower_with_settings(
@@ -271,11 +301,7 @@ def lower_with_settings(
         connection = JudgeConnection(
             "http://forge-judge.invalid/v1", "inference-effect", default_model=settings.judge_model
         )
-    grader = grading_environment(task)
-    if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
-        raise InvalidTaskSpec(
-            f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}"
-        )
+    check_grader_image(task, settings)
     timeout = verifier_timeout(task.grader)
     if judge is not None:
         timeout = max(timeout, settings.limits.model_turn_timeout or 0)

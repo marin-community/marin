@@ -10,6 +10,7 @@
   "tools.output_chars": 20000,
   "sandbox.memory_mb": 8192,
   "sandbox.output_budget_mb": 1024,
+  "sandbox.source_images": false,
   "proposals.environments": ["reasoning", "shellsim"],
   "proposals.verifications": ["code", "decision_model", "answer_in_box"],
   "author.image": "${GRADER_BASE_IMAGE}",

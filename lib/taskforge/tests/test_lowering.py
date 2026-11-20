@@ -89,6 +89,41 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
         assert lowered.verifier_machine.backend == (Backend.SHELLSIM if image is None else Backend.GVISOR)
 
 
+SOURCE_IMAGE = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
+
+
+@pytest.mark.parametrize(
+    "source_images,grader_image,admitted",
+    [
+        (False, SOURCE_IMAGE, False),
+        (True, SOURCE_IMAGE, True),
+        (True, "registry.example.com/other@sha256:" + "c" * 64, False),
+    ],
+)
+def test_source_images_admit_a_grader_only_in_the_tasks_own_image(
+    source_images: bool, grader_image: str, admitted: bool
+) -> None:
+    task = arithmetic_task(
+        environment_requirements=requirements(image=SOURCE_IMAGE, workdir="/testbed"),
+        grader=ScriptGrader(
+            argv=("sh", "-c", "echo 1"),
+            reward=StdoutReward(),
+            placement=GraderMachine(environment=requirements(image=grader_image, workdir="/testbed")),
+            answer_path=None,
+            timeout=1,
+        ),
+    )
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits(), source_images=source_images)
+    factories = {backend.value: AvailableFactory(backend) for backend in (Backend.GVISOR, Backend.SHELLSIM)}
+    if not admitted:
+        with pytest.raises(InvalidTaskSpec, match="grader image must be"):
+            lower_with_settings(task, settings, factories)
+        return
+    lowered = lower_with_settings(task, settings, factories)
+    assert lowered.task_machine is not None and lowered.task_machine.backend == Backend.GVISOR
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == Backend.GVISOR
+
+
 @pytest.mark.parametrize("directory", [None, "/custom"])
 def test_missing_workdir_resolves_before_machine_creation(directory: str | None) -> None:
     declared = EnvironmentRequirements(

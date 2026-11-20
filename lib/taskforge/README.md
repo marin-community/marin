@@ -190,7 +190,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
   whose context window or output budget runs out before it reports is `exhausted`: the task can
   still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
-- **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
+- **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `sandbox.source_images`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`.
@@ -207,6 +207,15 @@ Lowering accepts three task environments: none (the solver answers in the conver
 ShellSim, and the one pinned python container (`GRADER_BASE_IMAGE`). Any other image is refused
 at the author's `validate`/`submit` with a message naming the fix. The author and adversary
 always work in the pinned container with the task's resources hydrated.
+
+A task from another source usually brings its own container: a SWE-rebench task names the image
+that holds its repository and tests. Setting `sandbox.source_images: true` in the overlay admits
+that image, and Iris runs it like any other container, with no container nested inside another.
+The grader may then run in the task's own image as well as in the pinned one. The author of a task
+that names an image works in that task's environment, setup commands and working directory
+included, instead of `author.image`, so it sees what the solver and grader see. The author's system prompt tells
+it to keep the source image. A grader image that is neither pinned nor the task's own is still
+refused. A repair run sets the flag in its overlay; generation runs leave it off.
 
 ## Running locally
 
