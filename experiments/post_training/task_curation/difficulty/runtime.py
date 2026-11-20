@@ -31,7 +31,7 @@ from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
-from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
+from experiments.post_training.task_curation.difficulty_config import DATA_ACCOUNT, CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
@@ -317,10 +317,6 @@ def run_trial_worker(
         secrets[judge.api_key_secret] = require_secret(judge.api_key_secret)
     worker_env = {**os.environ}
     if daytona_api_key is not None:
-        # Harbor reads the Daytona connection from DAYTONA_API_KEY; measurement
-        # runs map the campaign's resolved credential onto that name without
-        # printing it and without touching other campaigns' accounts.
-        worker_env["DAYTONA_API_KEY"] = daytona_api_key
         worker_env["DAYTONA_DATA_API_KEY"] = daytona_api_key
     for name, value in secrets.items():
         path = secrets_dir / name
@@ -383,7 +379,7 @@ def main() -> None:
         "--daytona-provisioning",
         choices=("snapshot", "declarative"),
         default="snapshot",
-        help=("Provision through named RL snapshots or original-image declarative builds in the EVAL account."),
+        help="Provision through named snapshots or original-image declarative builds in the DATA account.",
     )
     parser.add_argument("--ledger", required=True)
     parser.add_argument("--action-manifest", required=True)
@@ -445,7 +441,7 @@ def main() -> None:
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
-        if action["daytona_account"] != "data":
+        if action["daytona_account"] != DATA_ACCOUNT:
             raise ValueError("Difficulty Daytona attempts require the DATA account")
         daytona_api_key = require_secret("DAYTONA_DATA_API_KEY")
         require_daytona_connection_environment(daytona_api_key)

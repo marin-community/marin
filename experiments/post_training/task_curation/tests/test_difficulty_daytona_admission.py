@@ -3,7 +3,8 @@
 
 """Exercise the temporary inventory-only DATA gate at its SDK boundary."""
 
-import asyncio
+import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -12,12 +13,14 @@ pytest.importorskip("daytona")
 
 from daytona_api_client_async import SandboxState
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.backends.daytona.usage import SandboxProfile
 
-from experiments.post_training.task_curation.difficulty.daytona_admission import current_report
+from experiments.post_training.task_curation.difficulty.daytona_admission import main
 
 
-def test_data_gate_reads_all_inventory_and_reserves_twenty_percent_of_total(monkeypatch):
+@pytest.mark.parametrize("started, expected_capacity", [(397, 1), (398, 0)])
+def test_data_gate_reads_all_inventory_and_reserves_twenty_percent_of_total(
+    monkeypatch, capsys, started, expected_capacity
+):
     class Client:
         async def __aenter__(self):
             return self
@@ -28,7 +31,7 @@ def test_data_gate_reads_all_inventory_and_reserves_twenty_percent_of_total(monk
         def list(self, *, request_timeout):
             async def pages():
                 for state, count in (
-                    (SandboxState.STARTED, 397),
+                    (SandboxState.STARTED, started),
                     (SandboxState.STARTING, 1),
                     (SandboxState.CREATING, 1),
                     (SandboxState.STOPPED, 100),
@@ -48,8 +51,14 @@ def test_data_gate_reads_all_inventory_and_reserves_twenty_percent_of_total(monk
     monkeypatch.setenv("DAYTONA_DATA_API_KEY", "data-fixture")
     monkeypatch.setenv("DAYTONA_API_KEY", "eval-must-not-be-used")
     monkeypatch.setenv("DAYTONA_TARGET", "us")
-    report = asyncio.run(current_report(SandboxProfile(4, 8, 10), 0.2))
-    assert report["sandboxes"] == 499
-    assert report["regions"][0]["cpu"]["used"] == 1596
-    assert report["max_concurrency"]["limit"] == 1
+    monkeypatch.setenv("DAYTONA_API_URL", "https://fixture.invalid")
+    monkeypatch.setattr(
+        sys, "argv", ["admission", "--cpu", "4", "--memory-gib", "8", "--disk-gib", "10", "--headroom", "0.2", "--json"]
+    )
+    main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["sandboxes"] == started + 102
+    assert report["regions"][0]["cpu"]["used"] == (started + 2) * 4
+    assert report["max_concurrency"]["limit"] == expected_capacity
     assert connections[0].api_key == "data-fixture"
+    assert connections[0].api_url == "https://fixture.invalid"

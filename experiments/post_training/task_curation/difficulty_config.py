@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
+DATA_ACCOUNT = "data"
 SNOWBALL_VLLM_RELEASE_TAG = "marin-vllm-gpu-20260924-01911be34fac"
 
 

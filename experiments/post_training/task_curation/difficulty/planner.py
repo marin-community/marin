@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     GapReason,
     LedgerRow,
 )
-from experiments.post_training.task_curation.difficulty_config import SNOWBALL_VLLM_RELEASE_TAG
+from experiments.post_training.task_curation.difficulty_config import DATA_ACCOUNT, SNOWBALL_VLLM_RELEASE_TAG
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
@@ -195,7 +195,7 @@ class AttemptRemediation:
                         (selected,),
                         sum(n for _, _, n in tasks),
                         vllm_release_tag=release,
-                        daytona_account="data" if cell.source.backend == "daytona" else None,
+                        daytona_account=DATA_ACCOUNT if cell.source.backend == "daytona" else None,
                     )
                 )
         return actions

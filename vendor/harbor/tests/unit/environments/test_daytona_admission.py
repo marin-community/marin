@@ -26,13 +26,15 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 
 
-@pytest.mark.parametrize("cpu", [2, 8])
+@pytest.mark.parametrize("cpu", [2, 8, None])
 def test_command_rechecks_capacity_and_rejects_an_oversized_machine(tmp_path, cpu):
     report = {
         "max_concurrency": {"region_id": "us", "sandbox_class": "container", "limit": 0},
         "regions": [{"region_id": "us", "sandbox_class": "container", "max_cpu_per_sandbox": 4,
                      "max_memory_gib_per_sandbox": 8, "max_disk_gib_per_sandbox": 10}],
     }
+    if cpu is None:
+        report["regions"][0].update(max_cpu_per_sandbox=6, max_memory_gib_per_sandbox=12, max_disk_gib_per_sandbox=20)
     response = tmp_path / "response.json"
     response.write_text(json.dumps(report))
     calls = tmp_path / "calls.json"
@@ -46,7 +48,8 @@ def test_command_rechecks_capacity_and_rejects_an_oversized_machine(tmp_path, cp
         "seen.append(sys.argv[3:]);calls.write_text(json.dumps(seen))\n"
         "print(json.dumps(report))\n"
     )
-    spec = MachineSpec(RegistryImage("original"), cpus=cpu, memory_mb=2049, storage_mb=3073)
+    memory, disk = (None, None) if cpu is None else (2049, 3073)
+    spec = MachineSpec(RegistryImage("original"), cpus=cpu, memory_mb=memory, storage_mb=disk)
     pending = admit_create((sys.executable, str(command), str(response), str(calls)), spec, recheck_interval=0)
     if cpu == 8:
         with pytest.raises(UnsupportedMachineSpec):
@@ -54,11 +57,16 @@ def test_command_rechecks_capacity_and_rejects_an_oversized_machine(tmp_path, cp
         assert len(json.loads(calls.read_text())) == 1
     else:
         asyncio.run(pending)
-        assert json.loads(calls.read_text()) == [
-            ["--cpu", "2", "--memory-gib", "3", "--disk-gib", "4", "--json"],
-            ["--cpu", "2", "--memory-gib", "3", "--disk-gib", "4", "--json"],
+        checked = json.loads(calls.read_text())
+        assert len(checked) == 2
+        profiles = [dict(zip(arguments[:-1:2], arguments[1:-1:2], strict=True)) for arguments in checked]
+        assert all(arguments[-1] == "--json" for arguments in checked)
+        expected = [{"--cpu": "2", "--memory-gib": "3", "--disk-gib": "4"}] * 2 if cpu is not None else [
+            {"--cpu": "1", "--memory-gib": "1", "--disk-gib": "1"},
+            {"--cpu": "6", "--memory-gib": "12", "--disk-gib": "20"},
         ]
-    assert spec.memory_mb == 2049 and spec.storage_mb == 3073
+        assert profiles == expected
+    assert spec.cpus == cpu and spec.memory_mb == memory and spec.storage_mb == disk
 
 
 @pytest.mark.asyncio

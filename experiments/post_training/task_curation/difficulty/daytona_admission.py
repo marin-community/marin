@@ -10,18 +10,21 @@ import math
 import os
 from collections import Counter
 from datetime import UTC, datetime
+from types import MappingProxyType
 
 from daytona import AsyncSandbox
-from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import SandboxProfile, _inventory_sandboxes
 
-DATA_LIMITS = {"cpu": 2000, "memory_gib": 4000, "disk_gib": 10000}
-SANDBOX_LIMITS = {"cpu": 4, "memory_gib": 8, "disk_gib": 10}
-CHARGED_STATES = {"started", "starting", "creating"}
+DATA_LIMITS = MappingProxyType({"cpu": 2000, "memory_gib": 4000, "disk_gib": 10000})
+SANDBOX_LIMITS = MappingProxyType({"cpu": 4, "memory_gib": 8, "disk_gib": 10})
+CHARGED_STATES = frozenset({"started", "starting", "creating"})
+TARGET = "us"
+SANDBOX_CLASS = "container"
 
 
 def inventory_report(sandboxes: list[AsyncSandbox], profile: SandboxProfile, headroom: float) -> dict:
-    """Size one DATA create from all pages, retaining a fraction of total quota."""
+    """Count additional DATA sandboxes that fit while retaining total-quota headroom."""
     requested = {"cpu": profile.cpu, "memory_gib": profile.memory_gib, "disk_gib": profile.disk_gib}
     if not 0 <= headroom < 1 or any(value <= 0 for value in requested.values()):
         raise ValueError("Headroom must be in [0, 1) and requested resources must be positive")
@@ -39,8 +42,8 @@ def inventory_report(sandboxes: list[AsyncSandbox], profile: SandboxProfile, hea
     if any(value > SANDBOX_LIMITS[name] for name, value in requested.items()):
         limit = 0
     region = {
-        "region_id": "us",
-        "sandbox_class": "container",
+        "region_id": TARGET,
+        "sandbox_class": SANDBOX_CLASS,
         **{name: {"quota": quota, "used": used[name]} for name, quota in DATA_LIMITS.items()},
         **{f"max_{name}_per_sandbox": value for name, value in SANDBOX_LIMITS.items()},
     }
@@ -50,15 +53,14 @@ def inventory_report(sandboxes: list[AsyncSandbox], profile: SandboxProfile, hea
         "sandboxes": len(sandboxes),
         "sandbox_states": dict(counts),
         "regions": [region],
-        "max_concurrency": {"region_id": "us", "sandbox_class": "container", "headroom": headroom, "limit": limit},
+        "max_concurrency": {"region_id": TARGET, "sandbox_class": SANDBOX_CLASS, "headroom": headroom, "limit": limit},
     }
 
 
-async def current_report(profile: SandboxProfile, headroom: float) -> dict:
+async def current_report(connection: DaytonaConnection, profile: SandboxProfile, headroom: float) -> dict:
     """Read DATA inventory without calling the organization-usage endpoint."""
-    if os.environ["DAYTONA_TARGET"] != "us":
+    if connection.target != TARGET:
         raise ValueError("Difficulty DATA admission requires DAYTONA_TARGET=us")
-    connection = DaytonaConnection(os.environ["DAYTONA_DATA_API_KEY"], DEFAULT_DAYTONA_API_URL, "us")
     async with connection.client_factory()() as client:
         sandboxes = await _inventory_sandboxes(client)
     return inventory_report(sandboxes, profile, headroom)
@@ -72,7 +74,12 @@ def main() -> None:
     parser.add_argument("--headroom", type=float, required=True)
     parser.add_argument("--json", action="store_true", required=True)
     args = parser.parse_args()
-    report = asyncio.run(current_report(SandboxProfile(args.cpu, args.memory_gib, args.disk_gib), args.headroom))
+    connection = DaytonaConnection(
+        os.environ["DAYTONA_DATA_API_KEY"], os.environ["DAYTONA_API_URL"], os.environ["DAYTONA_TARGET"]
+    )
+    report = asyncio.run(
+        current_report(connection, SandboxProfile(args.cpu, args.memory_gib, args.disk_gib), args.headroom)
+    )
     print(json.dumps(report))
 
 
