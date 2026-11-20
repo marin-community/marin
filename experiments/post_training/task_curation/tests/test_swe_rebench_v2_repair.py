@@ -4,9 +4,11 @@
 """SWE-rebench V2.1 repair conversion: declared bases, task-start setup, family config."""
 
 import json
+import types
 
 import pytest
 import tomlkit
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
@@ -18,6 +20,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     setup_command,
     task_toml,
 )
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import grader_source
 
 PYTHON_ROW = {
     "instance_id": "0b01001001__spectree-64",
@@ -40,13 +43,38 @@ def test_group_covers_every_declared_base():
         None,
         "python_base_310",
         "python_base_37",
-        "go_1.18.10", "go_1.19.13", "go_1.20.14", "go_1.21.13", "go_1.22.12", "go_1.23.8",
-        "node_16", "node_20",
-        "rust_1.77", "rust_1.78", "rust_1.79", "rust_1.81", "rust_1.83", "rust_1.84",
-        "java_11", "java_17", "java_21", "kotlin-jdk-11", "kotlin-jdk-21", "scala_base", "clojure_base",
-        "php_8.3.16", "php:8.3.16",
-        "julia_base", "elixir_base", "swift_base",
-        "c", "csharp_base", "dart_base", "r_base", "ocaml_base", "lua_base",
+        "go_1.18.10",
+        "go_1.19.13",
+        "go_1.20.14",
+        "go_1.21.13",
+        "go_1.22.12",
+        "go_1.23.8",
+        "node_16",
+        "node_20",
+        "rust_1.77",
+        "rust_1.78",
+        "rust_1.79",
+        "rust_1.81",
+        "rust_1.83",
+        "rust_1.84",
+        "java_11",
+        "java_17",
+        "java_21",
+        "kotlin-jdk-11",
+        "kotlin-jdk-21",
+        "scala_base",
+        "clojure_base",
+        "php_8.3.16",
+        "php:8.3.16",
+        "julia_base",
+        "elixir_base",
+        "swift_base",
+        "c",
+        "csharp_base",
+        "dart_base",
+        "r_base",
+        "ocaml_base",
+        "lua_base",
     }
     assert groups.GROUP_BY_BASE.keys() >= {base for base in declared if base is not None}
     assert "v1-python" in groups.GROUP_BY_BASE
@@ -69,7 +97,7 @@ def test_python_setup_clones_declared_env_and_runs_installs_in_checkout():
     setup = setup_command(flat, "v1-python", group)
     # Environment preparation precedes the clone; the clone block ends inside the workdir;
     # the install commands run inside the activated testbed env with their upstream wrappers.
-    create, clone, activate, install = setup.splitlines()[0], None, None, None
+    create = setup.splitlines()[0]
     assert create.startswith("conda env remove -n testbed")
     # Unlabeled (v1-python) rows build on python 3.9 upstream (spectree 3.9.21, clique 3.9.20).
     assert "conda create -n testbed --clone py39" in setup.splitlines()[1]
@@ -93,9 +121,18 @@ def test_python_setup_clones_labeled_env():
 
 def test_go_setup_selects_declared_toolchain():
     flat = _flatten(
-        {**PYTHON_ROW, "language": "go", "repo": "0xPolygonHermez/zkevm-node", "workdir": "/zkevm-node",
-         "install_config": {"base_image_name": "go_1.19.13", "install": ["go mod download"],
-                            "log_parser": "parse_log_go", "test_cmd": "go test ./..."}}
+        {
+            **PYTHON_ROW,
+            "language": "go",
+            "repo": "0xPolygonHermez/zkevm-node",
+            "workdir": "/zkevm-node",
+            "install_config": {
+                "base_image_name": "go_1.19.13",
+                "install": ["go mod download"],
+                "log_parser": "parse_log_go",
+                "test_cmd": "go test ./...",
+            },
+        }
     )
     setup = setup_command(flat, "go_1.19.13", groups.GROUP_BY_BASE["go_1.19.13"])
     assert setup.startswith("ln -sfn /opt/toolchains/go/1.19.13 /usr/local/go\n")
@@ -104,17 +141,31 @@ def test_go_setup_selects_declared_toolchain():
 
 def test_rust_setup_pins_declared_toolchain_offline():
     flat = _flatten(
-        {**PYTHON_ROW, "language": "rust",
-         "install_config": {"base_image_name": "rust_1.77", "install": ["cargo test"], "log_parser": "parse_log_rust",
-                            "test_cmd": "cargo test"}}
+        {
+            **PYTHON_ROW,
+            "language": "rust",
+            "install_config": {
+                "base_image_name": "rust_1.77",
+                "install": ["cargo test"],
+                "log_parser": "parse_log_rust",
+                "test_cmd": "cargo test",
+            },
+        }
     )
     setup = setup_command(flat, "rust_1.77", groups.GROUP_BY_BASE["rust_1.77"])
     assert setup.startswith("rustup default 1.77\n")
 
 
 def test_family_config_keeps_upstream_grader_keys_verbatim():
-    flat = _flatten({**PYTHON_ROW, "FAIL_TO_PASS": ["tests/test_utils.py::test_a"], "PASS_TO_PASS": ["tests/test_utils.py::test_b"],
-                     "test_files": ["tests/common.py"], "test_patch": "diff --git a/tests/common.py"})
+    flat = _flatten(
+        {
+            **PYTHON_ROW,
+            "FAIL_TO_PASS": ["tests/test_utils.py::test_a"],
+            "PASS_TO_PASS": ["tests/test_utils.py::test_b"],
+            "test_files": ["tests/common.py"],
+            "test_patch": "diff --git a/tests/common.py",
+        }
+    )
     config = family_config(flat)
     # The shared-source machinery reads test_ids; the upstream grade.py reads the verbatim split.
     assert config["test_ids"] == config["FAIL_TO_PASS"] + config["PASS_TO_PASS"]
@@ -122,8 +173,16 @@ def test_family_config_keeps_upstream_grader_keys_verbatim():
     assert config["workdir"] == "/spectree" and config["base_commit"].startswith("a091fab")
     assert config["log_parser"] == "parse_log_pytest" and config["language"] == "python"
     assert set(config) == {
-        "workdir", "base_commit", "test_cmd", "test_files", "log_parser", "language",
-        "test_ids", "FAIL_TO_PASS", "PASS_TO_PASS", "test_patch",
+        "workdir",
+        "base_commit",
+        "test_cmd",
+        "test_files",
+        "log_parser",
+        "language",
+        "test_ids",
+        "FAIL_TO_PASS",
+        "PASS_TO_PASS",
+        "test_patch",
     }
 
 
@@ -154,8 +213,6 @@ def test_dockerfile_is_group_shared():
 def test_admission_receipt_labels_carry_upstream_image_defect(tmp_path):
     """A flip row (NoP 0/0 both sides; oracle passes on ours, fails on the upstream image)
     admits WITH the typed upstream_image_defect receipt + evidence; unknown receipts fail."""
-    from rigging.filesystem.storage_path import StoragePath
-
     receipts = {
         "alecstrong__sql-psi-365": {
             "receipt": "upstream_image_defect",
@@ -189,12 +246,6 @@ def test_admission_receipt_labels_carry_upstream_image_defect(tmp_path):
 def test_grader_scores_empty_ids_with_empty_log_as_unscorable():
     """Rows with NO test ids and an empty parsed log must not resolve (vacuous pass bug:
     a row whose grader scored 1.0 upstream vs 0.0 condensed from identical empty logs)."""
-    import types
-
-    from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import (
-        grader_source,
-    )
-
     module = types.ModuleType("grade")
     exec(compile(grader_source("parse_log_pytest"), "grade.py", "exec"), module.__dict__)
 

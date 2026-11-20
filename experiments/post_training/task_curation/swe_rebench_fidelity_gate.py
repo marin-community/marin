@@ -27,10 +27,10 @@ import io
 import json
 import logging
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
@@ -67,10 +67,11 @@ def sample_rows(rows: list[dict], per_group: int = SAMPLE_PER_GROUP) -> dict[str
         per_base: dict[str, list[dict]] = defaultdict(list)
         for row in members:
             per_base[row_base(row)].append(row)
+
         # Deterministic per-row priority: repo diversity first, then the seeded hash.
-        def priority(row: dict) -> tuple:
+        def priority(row: dict, _members=members) -> tuple:
             digest = hashlib.sha256(f"{SAMPLE_SEED}:{row['instance_id']}".encode()).hexdigest()
-            return (repo_rank(row, members), digest)
+            return (repo_rank(row, _members), digest)
 
         chosen: dict[str, dict] = {}
         base_counts: dict[str, int] = defaultdict(int)
@@ -126,8 +127,6 @@ def repo_rank(row: dict, members: list[dict]) -> int:
 
 
 def load_rows(dataset_dir) -> list[dict]:
-    from rigging.filesystem.storage_path import StoragePath
-
     if isinstance(dataset_dir, StoragePath):
         shards = sorted((dataset_dir / "data" / "train-*.parquet").glob(), key=str) or sorted(
             (dataset_dir / "train-*.parquet").glob(), key=str
@@ -164,9 +163,7 @@ def main() -> None:
         "revision": groups.UPSTREAM_REVISION,
         "per_group": args.per_group,
         "total": total,
-        "groups": {
-            group_id: [row["instance_id"] for row in members] for group_id, members in sorted(sample.items())
-        },
+        "groups": {group_id: [row["instance_id"] for row in members] for group_id, members in sorted(sample.items())},
     }
     args.output.write_text(json.dumps(manifest, indent=1) + "\n")
     LOGGER.info("wrote %s: %d rows across %d groups", args.output, total, len(sample))

@@ -20,7 +20,10 @@ from pathlib import Path
 
 from rigging.filesystem.storage_path import StoragePath
 
-BUILDER = "ghcr.io/marin-community/rl-data-openresearcher@sha256:9e4985160e33e3c448da42d4b2140807267961f426f88720381e2578377f0d60"
+BUILDER = (
+    "ghcr.io/marin-community/rl-data-openresearcher"
+    "@sha256:9e4985160e33e3c448da42d4b2140807267961f426f88720381e2578377f0d60"
+)
 PACKAGE = "ghcr.io/marin-community/rl-data-swe-rebench-v2"
 CONTEXT_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/base-build/context.tar.gz"
 # v1 pushed python/go/node; v2 pushed rust; v3 pushed jvm (jammy pin); v4 pushed php/julia/

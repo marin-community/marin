@@ -23,18 +23,31 @@ machinery into this driver's environment).
 import asyncio
 import contextlib
 import hashlib
+import io
 import json
 import logging
 import os
+import resource
 import shlex
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import tomlkit
+from daytona import (
+    AsyncDaytona,
+    CreateSandboxFromImageParams,
+    DaytonaConfig,
+    Resources,
+)
+from harbor.host_capabilities import host_capabilities_from_environment
+from harbor.models.trial.config import TrialConfig
+from harbor.trial.trial import Trial
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import get_secret
 from taskcompendium.harbor.shared_source import harden_shared_source
 from taskcompendium.integrity import SharedDependencyState
 
@@ -71,7 +84,6 @@ def trial_environment() -> dict:
     comes from the job's DAYTONA_TARGET environment). The connection fields themselves travel
     through the process environment the Trial machinery snapshots.
     """
-    from rigging.secrets import get_secret
 
     key = get_secret("DAYTONA_EVAL_API_KEY")
     if key is None:
@@ -101,10 +113,6 @@ def trial_config(package: Path, trials_dir: Path, agent: dict, name: str) -> dic
 
 async def run_trial(config_path: Path) -> dict:
     """Run one production trial in-process and return its result summary."""
-    from harbor.agents.base import BaseAgent  # noqa: F401 - ensures the harbor runtime loads
-    from harbor.host_capabilities import host_capabilities_from_environment
-    from harbor.models.trial.config import TrialConfig
-    from harbor.trial.trial import Trial
 
     config = TrialConfig.model_validate_json(config_path.read_text())
     trial = await Trial.create(
@@ -288,14 +296,10 @@ class OutcomeLedger:
         for source in (uri, self._sidecar):
             try:
                 raw = StoragePath(source).read_text()
-            except Exception:  # noqa: BLE001 - absent or unreadable source starts empty
+            except Exception:
                 continue
             if source == self._sidecar:
-                entries = (
-                    item
-                    for line in raw.splitlines() if line.strip()
-                    for item in json.loads(line).items()
-                )
+                entries = (item for line in raw.splitlines() if line.strip() for item in json.loads(line).items())
             else:
                 entries = json.loads(raw).items()
             for key_str, outcome in entries:
@@ -346,26 +350,28 @@ class OutcomeLedger:
             entries = []
             try:
                 raw = StoragePath(self._sidecar).read_text()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 raw = ""
             for line in raw.splitlines():
                 if not line.strip():
                     continue
                 try:
                     payload = json.loads(line)
-                except Exception:  # noqa: BLE001 - a torn last line under a crash
+                except Exception:
                     continue
                 entries.append(payload)
-            StoragePath(self._uri).write_text(json.dumps(
-                {k: v for entry in entries for k, v in entry.items()}, indent=1) + "\n")
+            StoragePath(self._uri).write_text(
+                json.dumps({k: v for entry in entries for k, v in entry.items()}, indent=1) + "\n"
+            )
 
     def all(self) -> dict[tuple[str, str, str], dict]:
         with self._lock:
             return {(k): {"rewards": {"reward": v}} for k, v in self._rewards.items()}
 
 
-
-def trial(root: Path, row: dict, variant: str, phase: str, image: str, ledger: OutcomeLedger, *, force: bool = False) -> dict:
+def trial(
+    root: Path, row: dict, variant: str, phase: str, image: str, ledger: OutcomeLedger, *, force: bool = False
+) -> dict:
     key = (row["instance_id"], variant, phase)
     if ledger.completed(key) and not force:
         LOGGER.info("[%s/%s] already completed; resuming", row["instance_id"], variant)
@@ -382,7 +388,9 @@ def trial(root: Path, row: dict, variant: str, phase: str, image: str, ledger: O
     config_path = attempt / "trial.json"
     config_path.write_text(json.dumps(config))
     started = time.monotonic()
-    summary = asyncio.run(asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900))
+    summary = asyncio.run(
+        asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
+    )
     elapsed = time.monotonic() - started
     summary["elapsed_sec"] = elapsed
     summary["deadline_sensitive"] = phase == "oracle" and elapsed > VERIFIER_DEADLINE_SEC
@@ -412,7 +420,11 @@ def trial(root: Path, row: dict, variant: str, phase: str, image: str, ledger: O
     ][:400]
     LOGGER.info(
         "[%s/%s] reward=%s elapsed=%.0fs grading_stdout=%s verifier_files=%s",
-        name, phase, summary["rewards"].get("reward"), elapsed, len(summary.get("grading_stdout") or ""),
+        name,
+        phase,
+        summary["rewards"].get("reward"),
+        elapsed,
+        len(summary.get("grading_stdout") or ""),
         sorted(verifier_files),
     )
     ledger.record(key, summary)
@@ -445,9 +457,7 @@ def compare(row: dict, upstream: dict, condensed: dict) -> dict:
         }
 
     up, con = outcomes(upstream), outcomes(condensed)
-    complete = all(
-        isinstance(up[key], float) and isinstance(con[key], float) for key in ("nop_reward", "oracle_reward")
-    )
+    complete = all(isinstance(up[key], float) and isinstance(con[key], float) for key in ("nop_reward", "oracle_reward"))
     return {
         "task_id": row["instance_id"],
         "group": groups.GROUP_BY_BASE[row_base(row)].group_id,
@@ -459,10 +469,6 @@ def compare(row: dict, upstream: dict, condensed: dict) -> dict:
 
 
 def load_rows(dataset_dir: StoragePath) -> list[dict]:
-    import io
-
-    import pyarrow.parquet as pq
-
     shards = sorted((dataset_dir / "data" / "train-*.parquet").glob(), key=str) or sorted(
         (dataset_dir / "train-*.parquet").glob(), key=str
     )
@@ -545,13 +551,14 @@ async def delete_recorded_sandboxes(recorder: CreatedSandboxRecorder) -> list[st
     pending = {sid: name for sid, name in created.items() if sid not in machinery_deleted}
     if not pending:
         return []
-    from daytona import AsyncDaytona, DaytonaConfig
 
-    client = AsyncDaytona(DaytonaConfig(
-        api_key=os.environ["DAYTONA_API_KEY"],
-        api_url=os.environ.get("DAYTONA_API_URL", "https://app.daytona.io/api"),
-        target=os.environ.get("DAYTONA_TARGET", "us"),
-    ))
+    client = AsyncDaytona(
+        DaytonaConfig(
+            api_key=os.environ["DAYTONA_API_KEY"],
+            api_url=os.environ.get("DAYTONA_API_URL", "https://app.daytona.io/api"),
+            target=os.environ.get("DAYTONA_TARGET", "us"),
+        )
+    )
     deleted = []
     for sandbox_id in sorted(pending):
         try:
@@ -559,7 +566,7 @@ async def delete_recorded_sandboxes(recorder: CreatedSandboxRecorder) -> list[st
             await target.delete()
             deleted.append(sandbox_id)
             LOGGER.info("owned sandbox deleted by exact ID: %s (requested_name %s)", sandbox_id, created[sandbox_id])
-        except Exception as error:  # noqa: BLE001 - already gone or transient; report, never retry blindly
+        except Exception as error:
             LOGGER.error("owned sandbox %s cleanup failed: %s", sandbox_id, error)
     return deleted
 
@@ -573,16 +580,17 @@ async def _create_diagnose_sandbox(client, base_image: str):
     no snapshots, and the organization's snapshot quota is exhausted — the declarative path is
     the same pull the trials perform, including its registry credentials.
     """
-    from daytona import CreateSandboxFromImageParams, Resources
 
-    return await client.create(CreateSandboxFromImageParams(
-        image=base_image,
-        resources=Resources(cpu=4, memory=8, disk=10),
-        os_user="root",
-        labels={"purpose": "swe-repair-fidelity-diagnose", "owner": "swe-repair"},
-        auto_stop_interval=0,
-        ttl_minutes=360,
-    ))
+    return await client.create(
+        CreateSandboxFromImageParams(
+            image=base_image,
+            resources=Resources(cpu=4, memory=8, disk=10),
+            os_user="root",
+            labels={"purpose": "swe-repair-fidelity-diagnose", "owner": "swe-repair"},
+            auto_stop_interval=0,
+            ttl_minutes=360,
+        )
+    )
 
 
 async def diagnose_condensed(row: dict, base_image: str, output_uri: str, ledger_dir: Path) -> None:
@@ -602,13 +610,14 @@ async def diagnose_condensed(row: dict, base_image: str, output_uri: str, ledger
         return response
 
     trial_environment()  # validates the secret is present
-    from daytona import AsyncDaytona, DaytonaConfig
 
-    client = AsyncDaytona(DaytonaConfig(
-        api_key=os.environ["DAYTONA_API_KEY"],
-        api_url=os.environ.get("DAYTONA_API_URL", "https://app.daytona.io/api"),
-        target=os.environ.get("DAYTONA_TARGET", "us"),
-    ))
+    client = AsyncDaytona(
+        DaytonaConfig(
+            api_key=os.environ["DAYTONA_API_KEY"],
+            api_url=os.environ.get("DAYTONA_API_URL", "https://app.daytona.io/api"),
+            target=os.environ.get("DAYTONA_TARGET", "us"),
+        )
+    )
     sandbox = await _create_diagnose_sandbox(client, base_image)
     sandbox_id = sandbox.id
     LOGGER.info("diagnostic sandbox created: %s", sandbox_id)
@@ -617,36 +626,51 @@ async def diagnose_condensed(row: dict, base_image: str, output_uri: str, ledger
         await run(client, sandbox_id, "source setup (verbatim)", setup)
         await run(client, sandbox_id, "solution dir upload check", "mkdir -p /solution /tmp/diagnose")
         gold = flat["patch"]
-        await run(client, sandbox_id, "write gold patch",
-                  "cat > /solution/gold.patch <<'GOLD_EOF'\n" + gold + "\nGOLD_EOF")
-        await run(client, sandbox_id, "apply gold patch", "cd {0} && git apply --verbose /solution/gold.patch || "
-                  "git apply --verbose --ignore-space-change --ignore-whitespace /solution/gold.patch || "
-                  "patch --batch --fuzz=5 -p1 -i /solution/gold.patch || "
-                  "git apply --verbose --reject --ignore-whitespace /solution/gold.patch".format(flat["workdir"]))
+        await run(
+            client, sandbox_id, "write gold patch", "cat > /solution/gold.patch <<'GOLD_EOF'\n" + gold + "\nGOLD_EOF"
+        )
+        await run(
+            client,
+            sandbox_id,
+            "apply gold patch",
+            "cd {workdir} && git apply --verbose /solution/gold.patch || "
+            "git apply --verbose --ignore-space-change --ignore-whitespace /solution/gold.patch || "
+            "patch --batch --fuzz=5 -p1 -i /solution/gold.patch || "
+            "git apply --verbose --reject --ignore-whitespace /solution/gold.patch".format(workdir=flat["workdir"]),
+        )
         restore = "\n".join(
-            f"if git ls-files --error-unmatch {shlex.quote(f)} >/dev/null 2>&1; then git restore {shlex.quote(f)} 2>/dev/null; else rm -f {shlex.quote(f)}; fi"
+            f"if git ls-files --error-unmatch {shlex.quote(f)} >/dev/null 2>&1; "
+            f"then git restore {shlex.quote(f)} 2>/dev/null; else rm -f {shlex.quote(f)}; fi"
             for f in flat["test_files"]
         )
-        await run(client, sandbox_id, "restore test files",
-                  f"cd {shlex.quote(flat['workdir'])}\n{restore}")
-        await run(client, sandbox_id, "write test patch",
-                  "cat > /tmp/test.patch <<'TEST_EOF'\n" + flat["test_patch"] + "\nTEST_EOF")
-        await run(client, sandbox_id, "apply test patch", "cd {0} && git apply --verbose /tmp/test.patch || "
-                  "patch --batch --fuzz=5 -p1 -i /tmp/test.patch".format(shlex.quote(flat["workdir"])))
-        test_cmd = "cd {0} && timeout -k 10 1800 bash -lc {1}".format(
-            shlex.quote(flat["workdir"]), shlex.quote(flat["test_cmd"])
+        await run(client, sandbox_id, "restore test files", f"cd {shlex.quote(flat['workdir'])}\n{restore}")
+        await run(
+            client,
+            sandbox_id,
+            "write test patch",
+            "cat > /tmp/test.patch <<'TEST_EOF'\n" + flat["test_patch"] + "\nTEST_EOF",
+        )
+        await run(
+            client,
+            sandbox_id,
+            "apply test patch",
+            "cd {workdir} && git apply --verbose /tmp/test.patch || "
+            "patch --batch --fuzz=5 -p1 -i /tmp/test.patch".format(
+                workdir=shlex.quote(flat["workdir"])
+            ),
+        )
+        test_cmd = "cd {workdir} && timeout -k 10 1800 bash -lc {cmd}".format(
+            workdir=shlex.quote(flat["workdir"]), cmd=shlex.quote(flat["test_cmd"])
         )
         response = await run(client, sandbox_id, "grading test_cmd", test_cmd, timeout=1900)
-        StoragePath(f"{output_uri}/diagnose-{row['instance_id']}.txt").write_text(
-            "\n".join(log) + "\n"
-        )
+        StoragePath(f"{output_uri}/diagnose-{row['instance_id']}.txt").write_text("\n".join(log) + "\n")
         LOGGER.info("diagnostic capture written for %s (grading exit %s)", row["instance_id"], response.exit_code)
     finally:
         try:
             target = await client.get(sandbox_id)
             await target.delete()
             LOGGER.info("diagnostic sandbox deleted by exact ID: %s", sandbox_id)
-        except Exception as cleanup_error:  # noqa: BLE001
+        except Exception as cleanup_error:
             LOGGER.error("diagnostic sandbox %s cleanup failed: %s", sandbox_id, cleanup_error)
 
 
@@ -711,18 +735,20 @@ def run_wave(
                     if limit and scheduled >= limit:
                         break
                     scheduled += 1
-                    future_to_row[pool.submit(wave_row, root, rows_by_id[instance_id], image, ledger)] = (group_id, instance_id)
+                    future_to_row[pool.submit(wave_row, root, rows_by_id[instance_id], image, ledger)] = (
+                        group_id,
+                        instance_id,
+                    )
             # Process futures AS THEY COMPLETE and drop each result immediately: retaining
             # completed futures (with their full summaries) until run end was the wave2-full
             # OOM at 375 workers. The ledger holds the sealed per-row evidence on disk.
-            from concurrent.futures import as_completed
 
             for future in as_completed(future_to_row):
                 group_id, instance_id = future_to_row.pop(future)
                 counts.setdefault(group_id, {"done": 0, "valid": 0, "invalid": 0})
                 try:
                     summaries = future.result()
-                except Exception as error:  # noqa: BLE001 - record the failed row, keep going
+                except Exception as error:
                     LOGGER.error("wave row %s failed: %s", instance_id, error)
                     counts[group_id]["invalid"] += 1
                     invalid.append({"task_id": instance_id, "group": group_id, "error": str(error)[:400]})
@@ -734,14 +760,20 @@ def run_wave(
                     counts[group_id]["valid"] += 1
                 else:
                     counts[group_id]["invalid"] += 1
-                    invalid.append({
-                        "task_id": instance_id,
-                        "group": group_id,
-                        "nop_reward": nop,
-                        "oracle_reward": oracle,
-                        "nop_error": str(((summaries["nop"].get("exception") or {}).get("exception_message") or ""))[:300],
-                        "oracle_error": str(((summaries["oracle"].get("exception") or {}).get("exception_message") or ""))[:300],
-                    })
+                    invalid.append(
+                        {
+                            "task_id": instance_id,
+                            "group": group_id,
+                            "nop_reward": nop,
+                            "oracle_reward": oracle,
+                            "nop_error": str((summaries["nop"].get("exception") or {}).get("exception_message") or "")[
+                                :300
+                            ],
+                            "oracle_error": str(
+                                (summaries["oracle"].get("exception") or {}).get("exception_message") or ""
+                            )[:300],
+                        }
+                    )
                 del summaries
     finally:
         ledger.close()
@@ -754,16 +786,26 @@ def run_wave(
         created = recorder.created()
         machinery_deleted = recorder.machinery_deleted()
         StoragePath(f"{output_uri}/created-sandboxes.json").write_text(
-            json.dumps({"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": None}, indent=1) + "\n"
+            json.dumps(
+                {"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": None}, indent=1
+            )
+            + "\n"
         )
         deleted = asyncio.run(delete_recorded_sandboxes(recorder))
         StoragePath(f"{output_uri}/created-sandboxes.json").write_text(
-            json.dumps({"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": deleted}, indent=1) + "\n"
+            json.dumps(
+                {"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": deleted}, indent=1
+            )
+            + "\n"
         )
-        LOGGER.info("wave owned-sandbox cleanup: %d created, %d machinery-deleted, %d deleted", len(created), len(machinery_deleted), len(deleted))
-    except Exception as error:  # noqa: BLE001 - the proof ledger still records ownership
+        LOGGER.info(
+            "wave owned-sandbox cleanup: %d created, %d machinery-deleted, %d deleted",
+            len(created),
+            len(machinery_deleted),
+            len(deleted),
+        )
+    except Exception as error:
         LOGGER.error("wave owned-sandbox cleanup failed: %s", error)
-
 
 
 def _start_rss_logger() -> None:
@@ -771,8 +813,6 @@ def _start_rss_logger() -> None:
     evidence for the wave runs' driver-task memory. Daemon thread; ends with the process."""
 
     def loop():
-        import resource
-
         while True:
             peak_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             LOGGER.info("driver rss: peak_rss_kib=%d", peak_kib)
@@ -784,7 +824,7 @@ def _start_rss_logger() -> None:
 def _wave_group_id(row: dict) -> str | None:
     try:
         return groups.GROUP_BY_BASE[row_base(row)].group_id
-    except Exception:  # noqa: BLE001 - rows that do not resolve to a declared group
+    except Exception:
         return None
 
 
@@ -835,14 +875,21 @@ def main() -> None:
         created = recorder.created()
         machinery_deleted = recorder.machinery_deleted()
         StoragePath(f"{output_uri}/created-sandboxes.json").write_text(
-            json.dumps({"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": None}, indent=1) + "\n"
+            json.dumps(
+                {"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": None}, indent=1
+            )
+            + "\n"
         )
         try:
             deleted = asyncio.run(delete_recorded_sandboxes(recorder))
             StoragePath(f"{output_uri}/created-sandboxes.json").write_text(
-                json.dumps({"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": deleted}, indent=1) + "\n"
+                json.dumps(
+                    {"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": deleted},
+                    indent=1,
+                )
+                + "\n"
             )
-        except Exception as error:  # noqa: BLE001 - the proof ledger still records ownership
+        except Exception as error:
             LOGGER.error("owned-sandbox cleanup failed: %s", error)
         return
     records = []
@@ -864,11 +911,16 @@ def main() -> None:
         for instance_id, future in futures.items():
             try:
                 results[instance_id] = future.result()
-            except Exception as error:  # noqa: BLE001 - record the failed row, keep comparing
+            except Exception as error:
                 LOGGER.error("row %s trials failed: %s", instance_id, error)
                 results[instance_id] = {
                     (variant, phase): {"rewards": {}, "error": str(error)}
-                    for variant, phase in (("upstream", "nop"), ("upstream", "oracle"), ("condensed", "nop"), ("condensed", "oracle"))
+                    for variant, phase in (
+                        ("upstream", "nop"),
+                        ("upstream", "oracle"),
+                        ("condensed", "nop"),
+                        ("condensed", "oracle"),
+                    )
                 }
         for instance_id in sorted(results):
             summaries = results[instance_id]
@@ -895,18 +947,26 @@ def main() -> None:
     created = recorder.created()
     machinery_deleted = recorder.machinery_deleted()
     StoragePath(f"{output_uri}/created-sandboxes.json").write_text(
-        json.dumps({"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": None}, indent=1) + "\n"
+        json.dumps(
+            {"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": None}, indent=1
+        )
+        + "\n"
     )
     try:
         deleted = asyncio.run(delete_recorded_sandboxes(recorder))
         StoragePath(f"{output_uri}/created-sandboxes.json").write_text(
-            json.dumps({"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": deleted}, indent=1) + "\n"
+            json.dumps(
+                {"created": created, "deleted_by_machinery": machinery_deleted, "deleted_by_this_run": deleted}, indent=1
+            )
+            + "\n"
         )
         LOGGER.info(
             "owned-sandbox cleanup: %d created, %d already deleted by the machinery, %d deleted by exact ID",
-            len(created), len(machinery_deleted), len(deleted),
+            len(created),
+            len(machinery_deleted),
+            len(deleted),
         )
-    except Exception as error:  # noqa: BLE001 - the proof ledger still records ownership
+    except Exception as error:
         LOGGER.error("owned-sandbox cleanup failed: %s", error)
     LOGGER.info("fidelity verdicts per group: %s", json.dumps(by_group))
     StoragePath(f"{output_uri}/fidelity-verdicts.json").write_text(json.dumps(by_group, indent=2) + "\n")

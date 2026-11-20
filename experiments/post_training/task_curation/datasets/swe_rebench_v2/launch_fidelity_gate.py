@@ -90,7 +90,11 @@ def main() -> None:
         *(["-e", "WAVE_LIMIT", overrides["wave_limit"]] if "wave_limit" in overrides else []),
         *(["-e", "WAVE_EXCLUSIONS_URI", overrides["wave_exclusions"]] if "wave_exclusions" in overrides else []),
         *(["-e", "GATE_WORKERS", overrides["workers"]] if "workers" in overrides else []),
-        *(["-e", "GATE_DIAGNOSTIC", "1", "-e", "GATE_INSTANCE", overrides["diagnose_instances"]] if "diagnose_instances" in overrides else []),
+        *(
+            ["-e", "GATE_DIAGNOSTIC", "1", "-e", "GATE_INSTANCE", overrides["diagnose_instances"]]
+            if "diagnose_instances" in overrides
+            else []
+        ),
         "--", "uv", "run", "--isolated", "--frozen", "--package", "marin-core",
         "--extra", "cpu", "--extra", "dedup", "--prerelease", "allow",
         "--with-editable", "./vendor/harbor[daytona]", "python", "-c", bootstrap,

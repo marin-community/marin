@@ -25,13 +25,13 @@ import hashlib
 import json
 import logging
 import os
-import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import tomlkit
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.harbor.shared_source import harden_shared_source
+from taskcompendium.integrity import SharedDependencyState
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
@@ -50,8 +50,7 @@ from experiments.post_training.task_curation.scale_lego_protected_qa_v1 import (
     run_trial,
     trial_config,
 )
-from taskcompendium.harbor.shared_source import harden_shared_source
-from taskcompendium.integrity import SharedDependencyState
+from experiments.post_training.task_curation.swe_rebench_fidelity_gate import load_rows
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger("swe-rebench-fidelity-trials")
@@ -132,9 +131,7 @@ def trial(root: Path, row: dict, variant: str, phase: str, image: str, limits: d
     config_path = attempt / "trial.json"
     config_path.write_text(json.dumps(config))
     summary = asyncio.run(
-        asyncio.wait_for(
-            _run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900
-        )
+        asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
     )
     LOGGER.info("[%s/%s] reward=%s", name, phase, summary["rewards"].get("reward"))
     return summary
@@ -170,11 +167,15 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, help="Directory (local or s3://) for trial records and verdicts")
     args = parser.parse_args()
 
-    root = Path(os.environ["IRIS_OUTPUT_DIR"]) / "swe-rebench-fidelity-gate-v1" if os.environ.get("IRIS_OUTPUT_DIR") else Path(args.output_dir) / "gate"
+    root = (
+        Path(os.environ["IRIS_OUTPUT_DIR"]) / "swe-rebench-fidelity-gate-v1"
+        if os.environ.get("IRIS_OUTPUT_DIR")
+        else Path(args.output_dir) / "gate"
+    )
     limits_source = os.environ.get("GATE_LIMITS")
     try:
         limits = json.loads(limits_source) if limits_source else worker_limits(root)
-    except Exception as error:  # noqa: BLE001 - any provisioning failure falls back below
+    except Exception as error:
         # The disposable-container cgroup delegation is a sandboxing nicety, not the variable
         # under test; the gate compares two environments under the same backend settings. The
         # sandbox BINARIES (bwrap/skopeo/umoci/e2fsprogs) are still required, so provision them
@@ -183,9 +184,21 @@ def main() -> None:
         os.environ["DEBIAN_FRONTEND"] = "noninteractive"
         subprocess.run(["apt-get", "update"], check=True)
         subprocess.run(
-            ["apt-get", "install", "-y", "--no-install-recommends",
-             "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
-             "bubblewrap", "e2fsprogs", "util-linux", "umoci", "skopeo"],
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "--no-install-recommends",
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "bubblewrap",
+                "e2fsprogs",
+                "util-linux",
+                "umoci",
+                "skopeo",
+            ],
             check=True,
         )
         limits = {"disk_root": str(root / "sandbox-disks")}
@@ -194,15 +207,21 @@ def main() -> None:
     # Stage the pinned shards to local disk with fsutil (the CLI resolves the regional store
     # credentials; fsspec-backed parquet reads segfaulted in this container). The job then
     # reads plain local files with pyarrow.
-    from experiments.post_training.task_curation.swe_rebench_fidelity_gate import load_rows
-
     data_dir = root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     for index in range(6):
         subprocess.run(
-            ["uv", "run", "--no-sync", "fsutil", "cp",
-             f"{args.dataset_uri}/train-{index:05d}-of-00006.parquet", str(data_dir)],
-            check=True, stdout=subprocess.DEVNULL,
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "fsutil",
+                "cp",
+                f"{args.dataset_uri}/train-{index:05d}-of-00006.parquet",
+                str(data_dir),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
         )
     rows_by_id = {}
     for row in load_rows(data_dir):
@@ -222,10 +241,13 @@ def main() -> None:
             image = bindings["images"][group_id]
             for instance_id in members:
                 row = rows_by_id[instance_id]
-                for variant, phase in (("upstream", "nop"), ("upstream", "oracle"), ("condensed", "nop"), ("condensed", "oracle")):
-                    futures[(instance_id, variant, phase)] = pool.submit(
-                        trial, root, row, variant, phase, image, limits
-                    )
+                for variant, phase in (
+                    ("upstream", "nop"),
+                    ("upstream", "oracle"),
+                    ("condensed", "nop"),
+                    ("condensed", "oracle"),
+                ):
+                    futures[(instance_id, variant, phase)] = pool.submit(trial, root, row, variant, phase, image, limits)
         results = {}
         for key, future in futures.items():
             results[key] = future.result()
