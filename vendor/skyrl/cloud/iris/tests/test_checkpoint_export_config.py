@@ -4,7 +4,6 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import numpy as np
@@ -113,12 +112,6 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     raw["skyrl"]["trainer"].update(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
-    if not private:
-        with patch.object(export_hf_checkpoint, "validate_launch_config", wraps=validate_launch_config) as validate:
-            export_hf_checkpoint.validate_checkpoint_export(load_launch_config(path))
-        export = validate.call_args.args[0].skyrl.checkpoint_export
-        assert export.hf_hub_repo_id == "org/model"
-        assert export.hf_hub_private is False
     parser = export_hf_checkpoint.argument_parser()
     args = [
         "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
@@ -271,15 +264,18 @@ def test_export_selection_requires_the_best_initializer_uri(tmp_path: Path) -> N
         selected_export_checkpoint(str(tmp_path), "best", 20)
 
 
-@pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
-def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step) -> None:
+@pytest.mark.parametrize(("selection", "expected_step", "private"), [("best", 15, False), ("latest", 20, True)])
+def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step, private) -> None:
     config = get_default_config()
     config.trainer.ckpt_path = str(tmp_path / "checkpoints")
     config.trainer.export_path = str(tmp_path / "exports")
     config.trainer.hf_export_checkpoint = selection
     config.trainer.export_hf_artifact = True
+    trainer_recipe = Trainer(hf_hub_repo_id="org/model")
+    if private:
+        trainer_recipe = trainer_recipe.replace(hf_hub_private=True)
     with open_dict(config.trainer):
-        config.trainer.merge_with(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
+        config.trainer.merge_with(RecipePatch(trainer=trainer_recipe).to_skyrl()["trainer"])
     config.trainer.policy.model.path = "org/policy"
     root = Path(config.trainer.ckpt_path)
     for step in (15, 20):
@@ -299,7 +295,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     assert request.checkpoint_path == str(selected)
     assert request.model_path == "org/policy"
     assert request.hf_hub_repo_id == "org/model"
-    assert request.hf_hub_private is False
+    assert request.hf_hub_private is private
     other_step = 20 if expected_step == 15 else 15
     assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
 

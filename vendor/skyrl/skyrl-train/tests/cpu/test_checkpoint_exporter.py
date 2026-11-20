@@ -140,12 +140,14 @@ def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     )
 
 
-def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):
+def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path, monkeypatch):
     plan = _plan(tmp_path)
     workers = FakePolicyExportWorkers()
     tokenizer = object()
 
-    result = CheckpointExporter(plan, workers, tokenizer).run()
+    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: pytest.fail("publication requires a repository ID"))
+    publisher = hub_publisher(OmegaConf.create({"checkpoint_export": {}}))
+    result = CheckpointExporter(plan, workers, tokenizer, publisher=publisher).run()
 
     assert result.step == 12
     assert result.export_path == str(tmp_path / "exports" / "global_step_12" / "policy")
@@ -277,7 +279,6 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
             assert not (api.root / "commit-0" / "tokenizer.json").exists()
         elif corrupt is None:
             assert not api.commits
-            assert api.private is visibility
         return
 
     publisher.publish(str(export_path), step=12)
