@@ -2,7 +2,7 @@
 # Scale's prebuilt Docker Hub image (jefzda/sweap-images) and grades with the official
 # run_script.sh and parser.py. The registry URL pins the task list to harbor-datasets
 # commit c8e8f3fa, matching the vendored Harbor runtime (vendor/harbor/UPSTREAM.toml).
-n_concurrent_trials: 16
+n_concurrent_trials: 32
 n_attempts: 1
 release_trial_payloads_in_memory: true
 retry:
