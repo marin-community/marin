@@ -34,6 +34,7 @@ from typing import Any
 
 import jax
 import numpy as np
+from levanter.tensorstore_serialization import TensorStoreWriteConfig
 
 from marin.utilities.json_encoder import scalar_dtype
 
@@ -93,12 +94,16 @@ class _FingerprintEncoder(json.JSONEncoder):
     """Canonical JSON for config fingerprints.
 
     Canonical handlers run first; then registered converters; then either a raise
-    (strict) or a defined best-effort fallback (advisory, the default).
+    (strict) or a defined best-effort fallback (advisory, the default). A dataclass with a
+    registered converter uses it, at any depth of the config.
     """
 
     def default(self, o):
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            return dataclasses.asdict(o)
+            encode = _registered_encoder(type(o))
+            if encode is not None:
+                return encode(o)
+            return _dataclass_fields(o)
         if isinstance(o, Enum):
             return o.value
         if isinstance(o, timedelta):
@@ -135,6 +140,26 @@ class _FingerprintEncoder(json.JSONEncoder):
             raise TypeError(_unfingerprintable(o, "no deterministic serialization is known"))
 
         return _fallback(o)
+
+
+def _dataclass_fields(o: Any) -> dict[str, object]:
+    """One level of a dataclass's fields; the encoder canonicalizes the values."""
+    return {f.name: getattr(o, f.name) for f in dataclasses.fields(o)}
+
+
+def _tensorstore_write_config_fingerprint(config: TensorStoreWriteConfig) -> dict[str, object]:
+    """Leave an unset ``file_io_locking`` out of a training step's identity.
+
+    Unset means the save picks its own locking mode, which is how every checkpoint recorded
+    without the field was written, so those steps keep their fingerprints.
+    """
+    fields = _dataclass_fields(config)
+    if config.file_io_locking is None:
+        del fields["file_io_locking"]
+    return fields
+
+
+register_fingerprint(TensorStoreWriteConfig, _tensorstore_write_config_fingerprint)
 
 
 def _fallback(o: object) -> dict[str, object]:

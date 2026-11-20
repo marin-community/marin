@@ -107,6 +107,27 @@ def test_register_fingerprint_gives_an_exact_form():
     assert canonical_json({"s": Special("a")}) != canonical_json({"s": Special("b")})
 
 
+def test_registered_dataclass_form_applies_when_nested():
+    @dataclasses.dataclass(frozen=True)
+    class Inner:
+        kept: int = 1
+        later_addition: str | None = None
+
+    @dataclasses.dataclass(frozen=True)
+    class Outer:
+        inner: Inner
+
+    def without_unset_addition(inner: Inner) -> dict[str, object]:
+        fields = {"kept": inner.kept}
+        if inner.later_addition is not None:
+            fields["later_addition"] = inner.later_addition
+        return fields
+
+    register_fingerprint(Inner, without_unset_addition)
+    assert canonical_json(Outer(Inner())) == '{"inner": {"kept": 1}}'
+    assert canonical_json(Outer(Inner(later_addition="x"))) != canonical_json(Outer(Inner()))
+
+
 def test_strict_mode_rejects_callable_via_env(monkeypatch):
     monkeypatch.setenv("MARIN_FINGERPRINT_STRICT", "1")
     with pytest.raises(TypeError, match="callable"):
