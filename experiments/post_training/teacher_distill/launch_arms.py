@@ -52,6 +52,9 @@ ARMS = {"a": ("hard", 0.0), "b": ("soft", 0.5)}
 TOP = 20
 # Per run length: the teacher-row cache, the most rows it may substitute, the outer block, and the run timeout.
 # Both lengths substitute the same share of Mochi rows (472 scored of 1,920 in the 1 h run).
+NCCL_TIMEOUT_FLAG = "--xla_gpu_nccl_termination_timeout_seconds"
+NCCL_TIMEOUT_SECONDS = 1800
+
 LENGTHS = {
     "1h": {"cache": "train", "max_rows": 480, "block": 1920, "timeout_hours": 4},
     "8h": {"cache": "train8h-all", "max_rows": 3784, "block": 15360, "timeout_hours": 12},
@@ -137,6 +140,10 @@ def build(template: Path, arm: str, date: str, length: str = "1h", profile_steps
         inline_watch_enabled=True, processes_per_task=8, moe_implementation="sonic", remat_mode=config.model.remat_mode
     )
     env = resolve_training_env(base_env=runtime_env(profile), resources=config.resources)
+    # The first-step host rebind takes 8-12 min on some ranks in 02a (7 s in the template's run). A rank
+    # that is still rebinding then misses the 600 s NCCL clique rendezvous of the ranks already in step 1.
+    flags = [f for f in env["XLA_FLAGS"].split() if not f.startswith(NCCL_TIMEOUT_FLAG + "=")]
+    env["XLA_FLAGS"] = " ".join([*flags, f"{NCCL_TIMEOUT_FLAG}={NCCL_TIMEOUT_SECONDS}"])
     if "://" not in env["JAX_COMPILATION_CACHE_DIR"]:
         raise RuntimeError(f"JAX compilation cache must be remote: {env['JAX_COMPILATION_CACHE_DIR']}")
     output = str(raw["native_timing_root"]).removesuffix("/timing")
