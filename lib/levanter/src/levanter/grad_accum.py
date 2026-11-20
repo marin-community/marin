@@ -14,14 +14,111 @@ from haliax.partitioning import ResourceAxis
 from haliax.util import is_named_array
 from jax.lax import with_sharding_constraint
 from jax.sharding import PartitionSpec
+from jaxtyping import PyTree
 
-from levanter.metrics import Metric
+from levanter.metrics import Metric, ReductionType
 from levanter.metrics import fold as fold_metric
 from levanter.pipeline import reshape_array_into_microbatches
 from levanter.utils.jax_utils import zeros_like_tree
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
+
+
+ArrayGradientResult = tuple[tuple[jax.Array, dict[str, Metric]], PyTree[jax.Array]]
+
+
+def microbatched_arrays(
+    fn: Callable[..., ArrayGradientResult], microbatch_size: int
+) -> Callable[..., ArrayGradientResult]:
+    """Accumulate gradients of a raw-array batch without changing its placement.
+
+    ``fn(batch, **kwargs)`` returns ``((loss, metrics), gradients)``. Every
+    nonscalar array in ``batch`` leads with the same example dimension; scalar
+    and Python leaves, and keyword arguments other than ``key``, are shared.
+    Equal-size microbatch losses and ordinary gradients are averaged. Custom
+    gradient state uses its own reduction without averaging. Metrics retain
+    their own reductions and the RNG key is split once per microbatch.
+    """
+    if microbatch_size <= 0:
+        raise ValueError("microbatch_size must be positive")
+
+    @functools.wraps(fn)
+    def wrapped(batch, **kwargs):
+        leaves = [leaf for leaf in jax.tree.leaves(batch) if eqx.is_array(leaf) and leaf.ndim > 0]
+        if not leaves:
+            raise ValueError("A raw-array batch must contain a nonscalar array")
+        batch_size = leaves[0].shape[0]
+        if any(leaf.shape[0] != batch_size for leaf in leaves):
+            raise ValueError("Every nonscalar batch array must have the same leading example dimension")
+        if microbatch_size >= batch_size:
+            return fn(batch, **kwargs)
+        if batch_size % microbatch_size:
+            raise ValueError("Batch size must be divisible by microbatch_size")
+        num_microbatches = batch_size // microbatch_size
+        mapped, shared = eqx.partition(batch, lambda leaf: eqx.is_array(leaf) and leaf.ndim > 0)
+        mapped = jax.tree.map(lambda leaf: reshape_array_into_microbatches(leaf, num_microbatches), mapped)
+        keys = kwargs.get("key")
+        shared_kwargs = {name: value for name, value in kwargs.items() if name != "key"}
+        if keys is not None:
+            keys = jax.random.split(keys, num_microbatches)
+
+        def evaluate(microbatch, key):
+            arguments = {**shared_kwargs, "key": key} if "key" in kwargs else shared_kwargs
+            return fn(eqx.combine(microbatch, shared), **arguments)
+
+        shape = cast(
+            ArrayGradientResult,
+            eqx.filter_eval_shape(
+                evaluate, jax.tree.map(lambda leaf: leaf[0], mapped), None if keys is None else keys[0]
+            ),
+        )
+
+        def zero(leaf):
+            if isinstance(leaf, jax.ShapeDtypeStruct):
+                return jnp.zeros(leaf.shape, leaf.dtype, out_sharding=leaf.sharding)
+            return leaf
+
+        def identity(metric):
+            value = jnp.zeros_like(zero(metric._value))
+            if metric.reduction is ReductionType.MAX:
+                bound = (
+                    False
+                    if jnp.issubdtype(value.dtype, jnp.bool_)
+                    else (-jnp.inf if jnp.issubdtype(value.dtype, jnp.inexact) else jnp.iinfo(value.dtype).min)
+                )
+                value = jnp.full_like(value, bound)
+            elif metric.reduction is ReductionType.MIN:
+                bound = (
+                    True
+                    if jnp.issubdtype(value.dtype, jnp.bool_)
+                    else (jnp.inf if jnp.issubdtype(value.dtype, jnp.inexact) else jnp.iinfo(value.dtype).max)
+                )
+                value = jnp.full_like(value, bound)
+            return Metric(value, jnp.zeros_like(zero(metric._count)), metric.reduction)
+
+        (loss_shape, metric_shapes), gradient_shapes = shape
+        initial = (
+            (zero(loss_shape), jax.tree.map(identity, metric_shapes, is_leaf=lambda leaf: isinstance(leaf, Metric))),
+            jax.tree.map(zero, gradient_shapes),
+        )
+
+        def accumulate(accumulator, inputs):
+            (loss, metrics), gradients = evaluate(*inputs)
+            (acc_loss, acc_metrics), acc_gradients = accumulator
+            metrics = jax.tree.map(fold_metric, acc_metrics, metrics, is_leaf=lambda leaf: isinstance(leaf, Metric))
+            gradients = hq.accumulate_gradients(acc_gradients, gradients)
+            return ((acc_loss + loss, metrics), gradients), None
+
+        ((loss, metrics), gradients), _ = jax.lax.scan(accumulate, initial, (mapped, keys))
+        gradients = jax.tree.map(
+            lambda leaf: leaf if isinstance(leaf, hq.CustomGradientAccumulation) else leaf / num_microbatches,
+            gradients,
+            is_leaf=lambda leaf: isinstance(leaf, hq.CustomGradientAccumulation),
+        )
+        return (loss / num_microbatches, metrics), gradients
+
+    return wrapped
 
 
 # TODO: should we use a custom_jvp on microbatched?
