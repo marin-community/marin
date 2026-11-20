@@ -1,5 +1,6 @@
 """TaskCompendium execution and projection into SkyRL training batches."""
 
+
 import asyncio
 import math
 import os
@@ -10,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
+from rigging.task_errors import RetryDisposition, exception_identity
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -30,7 +32,6 @@ from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
     RolloutContractError,
-    RolloutFailure,
     RolloutOperation,
     Prompt,
     TaskRolloutSpec,
@@ -54,7 +55,6 @@ from skyrl_train.rollouts.harbor_tasks import (
     HARBOR_MACHINE_BACKEND,
     HARBOR_EVAL_MACHINE_BACKEND,
     HarborTaskSettings,
-    harbor_grading_failure,
     shape_harbor_rollouts,
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
@@ -82,6 +82,7 @@ from skyrl_train.rollouts.training_record import (
     TrainingRollout,
     reject_malformed_reasoning,
     training_rollout,
+    grading_failure,
 )
 from skyrl_train.task_error_handling import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
@@ -236,6 +237,7 @@ def _failed_rollout(
         error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
     ):
         raise error
+    failure = exception_identity(error, operation=interruption.operation.value)
     exception_type = type(error).__name__
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
@@ -243,8 +245,8 @@ def _failed_rollout(
         diagnostics["machine_operation"] = error.operation.value
         provider_error = error.__cause__
         if isinstance(provider_error, DaytonaError):
-            if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:
-                diagnostics["provider_status_code"] = provider_error.status_code
+            if failure.provider_status_code is not None:
+                diagnostics["provider_status_code"] = failure.provider_status_code
             rate_limits = {
                 name.lower(): int(value)
                 for name, value in (provider_error.headers or {}).items()
@@ -329,7 +331,17 @@ def _failed_rollout(
         rollout,
         grade=grade,
         stop_reason="error",
-        failure=RolloutFailure(exception_type, diagnostics),
+        failure=failure.model_copy(
+            update={
+                "exception_type": exception_type,
+                "diagnostics": diagnostics,
+                "cause_type": failure.cause_type
+                or (failure.exception_type if exception_type != failure.exception_type else None),
+                "retry_disposition": failure.retry_disposition
+                if exception_type == failure.exception_type
+                else RetryDisposition.UNKNOWN,
+            }
+        ),
     )
 
 
@@ -554,7 +566,7 @@ class TaskRolloutWorker:
                     )
                 if harbor is None:
                     return result
-                result = harbor_grading_failure(result)
+                result = grading_failure(result)
                 delay = harbor.retry_delay(result.failure, retries)
                 if delay is None:
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})

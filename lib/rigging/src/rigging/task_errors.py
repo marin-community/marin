@@ -8,8 +8,10 @@ separately from retry settings. Persisted exception names are stable identifiers
 """
 
 from enum import StrEnum
+from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ErrorCategory(StrEnum):
@@ -184,3 +186,78 @@ class RetrySettings(BaseModel):
     wait_multiplier: float = 1.0
     min_wait_sec: float = 1.0
     max_wait_sec: float = 60.0
+
+
+class RetryDisposition(StrEnum):
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+    UNKNOWN = "unknown"
+
+
+class ErrorIdentity(BaseModel):
+    """Persisted task failure identity, independent of training treatment."""
+
+    model_config = ConfigDict(frozen=True)
+
+    exception_type: str
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    cause_type: str | None = None
+    operation: str | None = None
+    retry_disposition: RetryDisposition = RetryDisposition.UNKNOWN
+    provider_status_code: int | None = None
+
+    @property
+    def category(self) -> ErrorCategory:
+        return error_category(self.exception_type)
+
+
+_TRANSIENT_HTTP_STATUS = frozenset({408, 429, 502, 503, 504})
+_PERMANENT_HTTP_STATUS = frozenset({400, 401, 403, 404, 405, 410, 422})
+
+
+def http_retry_disposition(status_code: int | None) -> RetryDisposition:
+    """Classify a provider status without using its response text."""
+    if status_code in _TRANSIENT_HTTP_STATUS:
+        return RetryDisposition.TRANSIENT
+    if status_code in _PERMANENT_HTTP_STATUS:
+        return RetryDisposition.PERMANENT
+    return RetryDisposition.UNKNOWN
+
+
+@runtime_checkable
+class HttpStatusError(Protocol):
+    """Provider exceptions that expose a response status independently of text."""
+
+    @property
+    def status_code(self) -> int | None: ...
+
+
+def exception_identity(error: BaseException, *, operation: str | None = None) -> ErrorIdentity:
+    """Capture safe exception names and retryability from provider causes."""
+    cause = error.__cause__ or (error.__context__ if isinstance(error, HttpStatusError) else None)
+    disposition = RetryDisposition.UNKNOWN
+    status_code = None
+    current: BaseException | None = error
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, HttpStatusError):
+            status = current.status_code
+            if type(status) is int and 100 <= status <= 599:
+                status_code = status
+                disposition = http_retry_disposition(status)
+                break
+            # SDKs can translate transport exceptions with `raise ... from None`.
+            current = current.__cause__ or current.__context__
+            continue
+        if isinstance(current, (TimeoutError, ConnectionError, httpx.TransportError)):
+            disposition = RetryDisposition.TRANSIENT
+            break
+        current = current.__cause__
+    return ErrorIdentity(
+        exception_type=type(error).__name__,
+        cause_type=None if cause is None else type(cause).__name__,
+        operation=operation,
+        retry_disposition=disposition,
+        provider_status_code=status_code,
+    )

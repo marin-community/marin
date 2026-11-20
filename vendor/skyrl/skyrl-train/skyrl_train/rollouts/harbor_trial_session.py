@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rigging.task_errors import ErrorIdentity
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.trial.result import TrialResult
@@ -23,14 +24,17 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped, AgentInferenceBackend
 from skyrl_train.rollouts.agent_trace import recorded_completion
-from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION
 
 
 def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
     """Preserve available scores and original failures for the training error policy."""
     diagnostics = {"harbor_trial_uri": result.trial_uri}
+    error_identity = None
     if result.exception_info is not None:
-        diagnostics[HARBOR_EXCEPTION] = result.exception_info.exception_type
+        info = result.exception_info
+        error_identity = ErrorIdentity(**info.model_dump(include=set(ErrorIdentity.model_fields))).model_copy(
+            update={"diagnostics": {**info.diagnostics, "timed_out": info.exception_type == "AgentTimeoutError"}}
+        )
     verifier = result.verifier_result
     if verifier is None or verifier.rewards is None or reward_key not in verifier.rewards:
         return GradeResult(
@@ -38,6 +42,7 @@ def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
             None,
             "Harbor trial has no verifier score",
             diagnostics=diagnostics,
+            error_identity=error_identity,
             failure=GradingFailure.MISSING_REWARD,
         )
     score = float(verifier.rewards[reward_key])
@@ -47,9 +52,10 @@ def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
             None,
             "Harbor verifier score is not finite and normalized",
             diagnostics=diagnostics,
+            error_identity=error_identity,
             failure=GradingFailure.INVALID_REWARD,
         )
-    return GradeResult(Outcome.GRADED, score, passed=score > 0, diagnostics=diagnostics)
+    return GradeResult(Outcome.GRADED, score, passed=score > 0, diagnostics=diagnostics, error_identity=error_identity)
 
 
 async def run_task_setup(

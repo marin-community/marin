@@ -10,10 +10,11 @@ distinct from the RL treatment category.
 
 import inspect
 
+from rigging.task_errors import RetryDisposition, ErrorCategory, error_category, errors_by_category
+from rigging.task_errors import is_resume_retryable, known_error_types
 import pytest
 
-from rigging.task_errors import ErrorCategory, error_category, errors_by_category
-from rigging.task_errors import is_resume_retryable, known_error_types
+from harbor.models.trial.result import ExceptionInfo
 
 # Modules whose exception classes can surface as a persisted trial
 # ``ExceptionInfo.exception_type``. A new exception added to any of these is a
@@ -184,3 +185,14 @@ def test_resume_retryable_is_distinct_from_category() -> None:
     # it is absent from the category registry (consumers treat it separately).
     assert is_resume_retryable("CancelledError")
     assert error_category("CancelledError") is ErrorCategory.UNKNOWN
+
+
+def test_native_exception_identity_round_trips_with_transport_cause():
+    error = RuntimeError("trial failed")
+    error.__cause__ = TimeoutError("provider timed out")
+    info = ExceptionInfo.from_exception(error)
+    restored = ExceptionInfo.model_validate_json(info.model_dump_json())
+    assert restored.exception_type == "RuntimeError"
+    assert restored.cause_type == "TimeoutError"
+    assert restored.retry_disposition is RetryDisposition.TRANSIENT
+    assert restored.exception_message == "trial failed"

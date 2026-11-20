@@ -65,6 +65,12 @@ configured fallback and emit an error log.
 `DaytonaError`, `DaytonaDockerSetupError`, `InternalServerError`,
 `APIConnectionError`, and `APITimeoutError` now use Harbor's infrastructure
 category in SkyRL. They previously used SkyRL's unknown-error fallback.
+
+The shared `ErrorIdentity` records the task error name, provider cause, operation,
+provider status, and retry disposition. Native Harbor exception records extend
+this identity with message and traceback details. TaskCompendium grades preserve
+the identity when a trial supplies one.
+
 Training overrides select treatment for each error name. Passthrough treatment
 also prevents retrying a result with usable verifier output.
 

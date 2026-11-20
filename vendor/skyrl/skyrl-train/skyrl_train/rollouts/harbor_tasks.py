@@ -6,16 +6,15 @@ import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
-from rigging.task_errors import RetrySettings
+from rigging.task_errors import ErrorIdentity, RetrySettings
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
-from rolloutengine.models import MachineRuntimeSpec, RolloutFailure, TaskRolloutSpec
-from taskcompendium.grading_result import GradingFailure, Outcome
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from taskcompendium.grading_result import Outcome
 from skyrl_train.rollouts.training_record import TrainingRollout
 
 from skyrl_train.rollouts.harbor_settings import (
-    HARBOR_EXCEPTION,
     EnvironmentConfig,
     EnvironmentType,
     VerifierConfig,
@@ -81,7 +80,7 @@ class HarborTaskSettings:
             trial.get("trial_attempt_timeout_sec"),
         )
 
-    def retry_delay(self, failure: RolloutFailure | None, retries: int) -> float | None:
+    def retry_delay(self, failure: ErrorIdentity | None, retries: int) -> float | None:
         """Return the backoff delay, or keep a terminal result without another attempt."""
         if failure is None or retries >= self.retry.max_retries:
             return None
@@ -178,33 +177,6 @@ class HarborTaskSettings:
         )
 
 
-_GRADING_FAILURE_TYPES = {
-    GradingFailure.TIMEOUT: "VerifierTimeoutError",
-    GradingFailure.MISSING_REWARD: "RewardFileNotFoundError",
-    GradingFailure.EMPTY_REWARD: "RewardFileEmptyError",
-    GradingFailure.INVALID_REWARD: "VerifierOutputParseError",
-    GradingFailure.EXECUTION: "VerifierRuntimeError",
-}
-
-
-def harbor_grading_failure(rollout: TrainingRollout) -> TrainingRollout:
-    """Translate structured verifier failures to the configured Harbor error policy."""
-    if rollout.failure is not None:
-        return rollout
-    exception_type = rollout.grade.diagnostics.get(HARBOR_EXCEPTION)
-    if exception_type is not None:
-        return replace(
-            rollout,
-            failure=RolloutFailure(exception_type, diagnostics={"timed_out": exception_type == "AgentTimeoutError"}),
-        )
-    if rollout.grade.status != Outcome.INFRA_ERROR:
-        return rollout
-    return replace(
-        rollout,
-        failure=RolloutFailure(_GRADING_FAILURE_TYPES.get(rollout.grade.failure, "VerifierRuntimeError")),
-    )
-
-
 def shape_harbor_rollouts(
     rollouts: list[TrainingRollout],
     request: TrajectoryRequestBatch,
@@ -281,7 +253,7 @@ def shape_harbor_rollouts(
                 )
         except RewardOutputParseError:
             eligible[index] = False
-            rollouts[index] = replace(rollout, failure=RolloutFailure("VerifierOutputParseError"))
+            rollouts[index] = replace(rollout, failure=ErrorIdentity(exception_type="VerifierOutputParseError"))
     group_metrics = [{} for _ in rollouts]
     if enabled and shaper == IDENTITY_AWARE_SHAPER:
         if identifiers is None:

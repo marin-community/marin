@@ -11,6 +11,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
+from rigging.task_errors import ErrorIdentity, exception_identity
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
@@ -40,7 +41,6 @@ from rolloutengine.models import (
     RolloutContractError,
     RolloutEnded,
     RolloutEventPayload,
-    RolloutFailure,
     RolloutInterrupted,
     RolloutLimits,
     RolloutOperation,
@@ -54,16 +54,16 @@ from rolloutengine.trace import _token_trace
 ADVANCE_INCOMPLETE = "advance_incomplete"
 """``Transition.metrics`` key of a turn that the harness did not finish handling; training must exclude its step."""
 FAILURE_ERROR_LIMIT = 2_000
-"""The characters of the failure's message that ``RolloutFailure.diagnostics["error"]`` keeps."""
+"""The characters of the failure's message that ``ErrorIdentity.diagnostics["error"]`` keeps."""
 
 
-def _failure_record(operation: RolloutOperation, cause: BaseException) -> RolloutFailure:
+def _failure_record(operation: RolloutOperation, cause: BaseException) -> ErrorIdentity:
     """The failure of an interrupted attempt: its operation, and the cause's type, message, and notes."""
     diagnostics: dict[str, Any] = {"operation": operation.value, "error": str(cause)[:FAILURE_ERROR_LIMIT]}
     notes = getattr(cause, "__notes__", ())
     if notes:
         diagnostics["notes"] = list(notes)
-    return RolloutFailure(type(cause).__name__, diagnostics)
+    return exception_identity(cause, operation=operation.value).model_copy(update={"diagnostics": diagnostics})
 
 
 class _NoEvents:
