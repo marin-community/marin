@@ -305,7 +305,7 @@ def build_experiment(
 
 
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
-    return preset.checkpoints != "none" and any(
+    return isinstance(preset.recipe.layout.workload, presets.Training) and any(
         not fact["holds"] for row in snapshot["runs"] for fact in row.get("evaluation_invariants", ())
     )
 

@@ -1285,6 +1285,25 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     }
     assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
     replace_evaluations(source, evaluations)
+
+    live_preset = replace(preset, checkpoints="none", checkpoint_every=None, export="none")
+    live = snowball.build_experiment(
+        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+    )
+    assert live.runs[0].name != built.runs[0].name
+    with monkeypatch.context() as live_record:
+        live_record.setattr(snowball_model, "SNOWBALL", replace(table, presets=(live_preset,)))
+        recorded_runs(preset.name, live.runs[0].name, fingerprint=live.runs[0].fingerprint(), inputs=live.inputs)
+    live_args = [*planning_args, "--checkpoints", "none", "--checkpoint-every", "0", "--export", "none"]
+    result = CliRunner().invoke(
+        snowball.command(table, argv=tuple(live_args), init=initializer, forward_env=("HF_TEST_KEY",)), live_args
+    )
+    assert result.exit_code == 1, (result.output, result.exception)
+    facts = {
+        fact["name"]: fact for row in printed_status(result.output)["runs"] for fact in row["evaluation_invariants"]
+    }
+    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")
     with edit_receipt(source) as receipt:

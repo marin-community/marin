@@ -560,6 +560,8 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
         ("pin", "does not pin released source"),
         ("size", "Found 49 of 49 graded"),
         ("coverage", "Found 44 of 50 graded"),
+        ("repeated-task", "Found 1 of 1 graded"),
+        ("different-content", "Found 0 of 0 graded"),
     ],
 )
 def test_selection_requires_matching_released_task_admission(tmp_path, monkeypatch, fault, error):
@@ -568,6 +570,10 @@ def test_selection_requires_matching_released_task_admission(tmp_path, monkeypat
     release = released_training(tmp_path / "release.parquet", *tasks)
     if fault != "missing":
         admitted = tasks[:49] if fault == "size" else tasks
+        if fault == "repeated-task":
+            admitted = (tasks[0],) * 50
+        if fault == "different-content":
+            admitted = tuple(task.model_copy(update={"tags": ("different",)}) for task in tasks)
         graded = 44 if fault == "coverage" else len(admitted)
         probe = released_probe(tmp_path, release, admitted, graded=graded, pin=fault != "pin")
         if fault == "hash":

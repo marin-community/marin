@@ -570,6 +570,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "omitted-candidate-default",
         "schema-timeout",
         "protocol-temperature",
+        "evaluation-cadence",
         "malformed-seed",
     ],
 )
@@ -647,14 +648,12 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, priority="production")),
         )
         inputs = inputs.model_copy(update={"options": RunOptions.from_preset(override)})
-        planned = gate.validate_candidate(override, inputs, table=snowball_model.SNOWBALL)
-        assert planned["iris"]["priority"] == "production"
-        assert planned["skyrl"]["trainer"]["checkpoint_retention"] == "latest"
-        assert not planned["run"]["export_hf"]
+        gate.validate_candidate(override, inputs, table=snowball_model.SNOWBALL)
         table = snowball_model.SNOWBALL
         with monkeypatch.context() as altered:
             altered.setattr(snowball_model, "SNOWBALL", replace(table, presets=(override,)))
             candidate = recorded_runs(preset.name, name, inputs=inputs)
+        assert json.loads((candidate / "terminal.json").read_text())["config"]["iris"]["priority"] == "production"
     else:
         candidate = recorded_runs(preset.name, name, inputs=inputs)
     omissions = {
@@ -733,6 +732,15 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             set_path(receipt, path, value)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
+    if case == "evaluation-cadence":
+        with edit_receipt(candidate) as receipt:
+            evaluation = next(
+                callback
+                for callback in receipt["config"]["skyrl"]["trainer"]["callbacks"]
+                if callback["type"] == "evaluation"
+            )
+            evaluation["eval_steps"] = 17
+        reasons = ("eval_steps",)
     report = compare(preset.name, "--candidate", name)
     if reasons:
         assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), report

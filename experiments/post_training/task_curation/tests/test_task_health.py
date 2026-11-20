@@ -176,6 +176,7 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path):
     assert {(row["selection"], row["task_digest"]) for row in rows.values()} == {
         ("fixture@2026.11.20.1", selection_digest(task))
     }
+    assert extract_attempts(StoragePath(str(run_output)), "fixture-run@2026.11.20.1", output) == path
 
     write_attempt(store, "later", task, trial_result(), setup_receipt(True), {})
     with pytest.raises(FileExistsError):

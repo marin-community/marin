@@ -301,7 +301,7 @@ def _session_invariants(
     counts = Counter(row["task_id"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/answers_complete", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if evaluation == preset.guarded or (preset.checkpoints == "best" and evaluation.held_out):
+    if _checks_task_coverage(preset, evaluation):
         coverage = len({row["task_id"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
@@ -313,6 +313,12 @@ def _session_invariants(
             )
         )
     return result
+
+
+def _checks_task_coverage(preset: presets.Preset, evaluation: presets.Evaluation) -> bool:
+    return evaluation == preset.guarded or (
+        evaluation.held_out and isinstance(preset.recipe.layout.workload, presets.Training)
+    )
 
 
 @dataclass(frozen=True)
@@ -417,7 +423,7 @@ def read_measurements(
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
-        quality = evaluation.held_out and (evaluation == preset.guarded or preset.checkpoints == "best")
+        quality = evaluation.held_out and _checks_task_coverage(preset, evaluation)
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         )
