@@ -113,8 +113,8 @@ and live sandbox capacity are separate limits. A successful GPU allocation prove
 neither is available.
 
 `shellbox-daytona-usage` reads every page of the sandbox inventory and reports
-organization headroom. It uses the account-owner limits from
-`experiments/active/DAYTONA-QUOTAS.md` (2026-11-19); it does not call the
+organization headroom. The preset table below is the source of record for the
+limits supplied by the account owner (2026-11-19); it does not call the
 organization-usage endpoint, which rejects API keys with 403.
 
 ```bash
@@ -147,16 +147,27 @@ The report converts decimal GB quotas to GiB to match inventory allocations.
 when the account owner changes these limits; the command does not fetch live
 quotas. `--target` configures the SDK connection and does not filter inventory.
 
-The report counts every state and sums allocations for `started`, `starting`
-and `creating` sandboxes. For each resource, `remaining` is `max(0, quota - used)`,
+The report counts every state. Compute is charged for `creating`, `restoring`,
+`started`, `starting`, `stopping`, `pending_build`, `building_snapshot`,
+`unknown`, `pulling_snapshot`, `forking`, `pausing` and `resuming`.
+`resizing` and `snapshotting` also charge compute when their desired state is
+`started`. Disk is charged for every compute state plus `stopped`, `paused`,
+`archiving`, `resizing` and `snapshotting`, regardless of desired state.
+These rules follow the provider's
+[compute](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-compute.constant.ts)
+and [disk](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-disk.constant.ts)
+quota state definitions. Unrecognized API states and missing desired states for
+conditional compute fail the reading. For each resource, `remaining` is `max(0, quota - used)`,
 and `available` is `max(0, quota * (1 - headroom) - used)`. The default
 `--headroom 0.2` reserves 20% of the total quota. `max_concurrency.limit` is the
 minimum of `floor(available / per_sandbox_request)` across CPU, RAM and disk.
 A profile above any per-sandbox maximum gets a zero limit.
 
 JSON includes `organization_id`, `observed_at`, `usage_source`, `quota_source`,
-`org_limits`, `headroom_fraction`, `charged_states`, `resources`, and
-`sandboxes` (`total`, `started`, `charged`, `by_state`). A supplied profile adds
+`org_limits`, `headroom_fraction`, `compute_charged_states`,
+`conditional_compute_charged_states`, `conditional_compute_desired_state`,
+`disk_charged_states`, `resources`, and `sandboxes` (`total`, `started`,
+`compute_charged`, `disk_charged`, `by_state`). A supplied profile adds
 `max_concurrency` (`profile`, `by_resource`, `exceeds_per_sandbox_maximum`,
 `limit`). Resource fields are `quota`, `used`, `remaining` and `available`.
 An empty inventory reports zero usage and a null organization ID, without
