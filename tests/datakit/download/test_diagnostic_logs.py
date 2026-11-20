@@ -4,9 +4,7 @@
 import gzip
 import http.client
 import io
-import json
 import tarfile
-import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -22,11 +20,8 @@ from marin.datakit.download.diagnostic_logs import (
     MaterializedDiagnosticLogParquet,
     assign_partition,
     download_ghalogs_step,
-    extract_ghalogs,
     ghalogs_member_to_records,
     ghalogs_public_normalize_steps,
-    logchunks_example_to_record,
-    loghub_file_to_record,
     materialize_ghalogs_partition_to_parquet,
     materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
@@ -39,11 +34,6 @@ from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 
 from experiments.datasets.diagnostic_logs import _ghalogs_normalized, ghalogs_dataset
-
-
-def _read_jsonl(path: str) -> list[dict[str, object]]:
-    with open(path, encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
 
 
 def _read_parquet_rows(directory: Path) -> list[dict[str, object]]:
@@ -197,38 +187,6 @@ def test_ghalogs_member_to_records_rejects_an_unexpected_member_layout():
         list(ghalogs_member_to_records("logs/owner/repo/build_1234/11-1.txt", b"plain job log line"))
 
 
-def test_logchunks_example_to_record_sanitizes():
-    example = ET.fromstring(
-        """
-        <Example>
-          <Log>JavaScript/example@repo/failed/1.log</Log>
-          <Keywords>Error</Keywords>
-          <Category>0</Category>
-          <Chunk>Error token=abc123456789 path=/home/alice/project</Chunk>
-        </Example>
-        """
-    )
-
-    record = logchunks_example_to_record("annotations.xml", 0, example)
-
-    assert record is not None
-    assert record["source"] == "logchunks"
-    assert record["log_path"] == "JavaScript/example@repo/failed/1.log"
-    assert "abc123456789" not in record["text"]
-    assert "<REDACTED_SECRET>" in record["text"]
-    assert "/home/<USER_0>/project" in record["text"]
-
-
-def test_loghub_file_to_record_sanitizes():
-    record = loghub_file_to_record("Linux/Linux_2k.log", b"FAILED contact alice@example.com")
-
-    assert record is not None
-    assert record["source"] == "loghub"
-    assert record["source_path"] == "Linux/Linux_2k.log"
-    assert "alice@example.com" not in record["text"]
-    assert "<USER_0_EMAIL>" in record["text"]
-
-
 def test_source_inventory_uses_shared_manifest_policy_metadata():
     inventory = {source.source_label: source for source in SOURCE_INVENTORY}
 
@@ -261,42 +219,6 @@ def test_ghalogs_dataset_reads_datakit_normalized_output():
     cfg = materialized_config(step, "gs://prefix")
     assert cfg.train_paths == [f"{normalized.path('gs://prefix')}/outputs/main/*.parquet"]
     assert cfg.validation_paths == []
-
-
-def test_extract_ghalogs_caps_run_archives_not_records(tmp_path):
-    """max_members bounds run archives; one capped run still yields all of its job logs."""
-    archive_dir = tmp_path / "zenodo.org" / "records" / "14796970" / "files"
-    archive_dir.mkdir(parents=True)
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        for member_path in ("logs/owner/repo-a/w_1/1-1.tar.gz", "logs/owner/repo-b/w_1/2-1.tar.gz"):
-            archive.writestr(
-                member_path,
-                _run_archive_member(
-                    {
-                        "0_build.txt": b"build job log",
-                        "1_test.txt": b"test job log",
-                        "2_deploy.txt": b"deploy job log",
-                        # Per-step files repeat the job text, so they are not records.
-                        "0_build/1_checkout.txt": b"build job log",
-                    }
-                ),
-            )
-
-    extracted = extract_ghalogs(str(tmp_path), str(tmp_path / "output"), max_members=1)
-
-    metadata = json.loads((tmp_path / "output" / "metadata.json").read_text())
-    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
-    assert extracted.record_count == 3
-    records = []
-    for partition in DiagnosticPartition:
-        records.extend(_read_jsonl(str(tmp_path / "output" / partition.value / "data-00000-of-00001.jsonl")))
-    assert sorted(record["archive_path"] for record in records) == [
-        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt#0",
-        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt#0",
-        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt#0",
-    ]
-    # All job logs of one run share the run's partition.
-    assert len({record["partition"] for record in records}) == 1
 
 
 def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):

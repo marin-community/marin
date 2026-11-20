@@ -678,6 +678,3 @@ def tulu_3_in_dolma() -> ArtifactStep[Artifact]:
         ),
         deps=(tulu3,),
     )
-
-
-# levanter treats validation and training as separate so we tokenize twice.
