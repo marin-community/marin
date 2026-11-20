@@ -7,6 +7,7 @@ import json
 
 import pytest
 from finelog.rpc import logging_pb2
+from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -28,7 +29,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.schema import tasks_table
+from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.controller.writes import delete_job, set_user_budget
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -43,6 +44,7 @@ from iris.testing.controller import (
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
 from iris.testing.transitions import commit_dispatch_updates, commit_observed_dispatch_updates
 from rigging.timing import RateLimiter, Timestamp
+from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
 
@@ -145,6 +147,7 @@ def test_drain_pending_creates_attempt_rows(state):
     attempt = query_attempt(state, task_id, 0)
     assert attempt is not None
     assert attempt.worker_id is None
+    assert attempt.state == job_pb2.TASK_STATE_ASSIGNED
 
 
 def test_drain_stamps_attempt_uid(state):
@@ -499,6 +502,7 @@ def test_drain_executing_goes_to_running_tasks(state):
             [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
             now=Timestamp.now(),
         )
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
     with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur)
@@ -508,6 +512,38 @@ def test_drain_executing_goes_to_running_tasks(state):
     assert batch2.running_tasks[0].task_id == task_id
     assert batch2.running_tasks[0].attempt_id == attempt_id
     assert batch2.running_tasks[0].state == job_pb2.TASK_STATE_RUNNING
+
+
+def _count_pending(state: ControllerTestState) -> int:
+    with state._db.read_snapshot() as q:
+        row = q.execute(
+            select(func.count().label("c"))
+            .select_from(tasks_table)
+            .where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+        ).first()
+    return int(row.c)
+
+
+def test_drain_caps_promotions_per_cycle(state):
+    """``max_promotions`` caps how many PENDING rows are promoted per cycle.
+    Redrives of already-ASSIGNED rows do not count against the cap."""
+    submit_direct_job(state, "big-job", replicas=250)
+    assert _count_pending(state) == 250
+
+    with state._db.transaction() as cur:
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=100)
+    assert len(batch1.tasks_to_run) == 100
+    assert _count_pending(state) == 150
+
+    with state._db.transaction() as cur:
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=100)
+    assert len(batch2.tasks_to_run) == 200
+    assert _count_pending(state) == 50
+
+    with state._db.transaction() as cur:
+        batch3 = dispatch.drain_for_dispatch(cur, max_promotions=100)
+    assert len(batch3.tasks_to_run) == 250
+    assert _count_pending(state) == 0
 
 
 # =============================================================================
@@ -611,6 +647,120 @@ def test_apply_worker_failed_from_assigned(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 0
+
+
+def _run_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
+    """Drain and transition attempt 0 of each task to RUNNING."""
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
+            now=Timestamp.now(),
+        )
+
+
+def test_apply_failed_with_retry(state):
+    """FAILED with retries remaining returns task to PENDING."""
+    [task_id] = submit_direct_job(state, "fail-retry", max_retries_failure=1, max_task_failures=1)
+    _run_tasks(state, [task_id])
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
+            ],
+            now=Timestamp.now(),
+        )
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_PENDING
+
+    # The dead attempt 0 must have finished_at_ms stamped even though the task
+    # itself rolled back to PENDING. Otherwise the row is indistinguishable from
+    # a still-assigned attempt. Regression guard for the terminal_ms conflation.
+    with state._db.read_snapshot() as tx:
+        attempts = tx.execute(
+            select(task_attempts_table.c.state, task_attempts_table.c.finished_at_ms)
+            .where(task_attempts_table.c.task_id == task_id)
+            .order_by(task_attempts_table.c.attempt_id.asc())
+        ).all()
+    assert len(attempts) == 1
+    assert attempts[0].state == job_pb2.TASK_STATE_FAILED
+    assert attempts[0].finished_at_ms is not None
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].attempt_id == 1
+
+
+def test_apply_failed_no_retry(state):
+    """FAILED from RUNNING with no retries remaining leaves task in FAILED terminal state."""
+    [task_id] = submit_direct_job(state, "fail-no-retry")
+    _run_tasks(state, [task_id])
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
+            ],
+            now=Timestamp.now(),
+        )
+
+    task = query_task(state, task_id)
+    assert task.state == job_pb2.TASK_STATE_FAILED
+    assert task.failure_count == 1
+    assert task.finished_at_ms is not None
+
+
+def test_apply_worker_failed_from_running(state):
+    """WORKER_FAILED on a RUNNING task increments preemption_count and retries if allowed."""
+    [task_id] = submit_direct_job(state, "wf-running", max_retries_preemption=1)
+    _run_tasks(state, [task_id])
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
+            ],
+            now=Timestamp.now(),
+        )
+
+    task = query_task(state, task_id)
+    assert task.state == job_pb2.TASK_STATE_PENDING
+    assert task.preemption_count == 1
+
+
+def test_cancel_job_kills_dispatch_tasks(state):
+    """cancel_job moves NULL-worker_id (direct-provider) tasks to KILLED."""
+    task_ids = submit_direct_job(state, "cancel-direct", replicas=2)
+    _run_tasks(state, task_ids)
+
+    with state._db.transaction() as cur:
+        ops.job.cancel(cur, job_id=JobName.root("test-user", "cancel-direct"), reason="test cancel")
+
+    for tid in task_ids:
+        assert query_task(state, tid).state == job_pb2.TASK_STATE_KILLED
+
+
+def test_max_failures_kills_dispatch_tasks(state):
+    """When a failed task exhausts the job's failure budget, its direct-provider siblings are killed."""
+    task_ids = submit_direct_job(state, "max-failures", replicas=2)
+    _run_tasks(state, task_ids)
+
+    with state._db.transaction() as cur:
+        result = commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
+            now=Timestamp.now(),
+        )
+
+    killed_task_ids = {tid for tid, delta in result.tasks.items() if delta.state == job_pb2.TASK_STATE_KILLED}
+    assert task_ids[1] in killed_task_ids
 
 
 # =============================================================================
@@ -916,6 +1066,9 @@ def test_apply_ignores_finished_task(state):
             ],
             now=Timestamp.now(),
         )
+    succeeded = query_task(state, task_id)
+    assert succeeded.exit_code == 0
+    assert succeeded.finished_at_ms is not None
 
     # Try to move to FAILED after already succeeded.
     with state._db.transaction() as cur:

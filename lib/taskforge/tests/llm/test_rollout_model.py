@@ -36,12 +36,13 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
 from taskforge.ledger.records import EntryKind
+from taskforge.ledger.test_support import ListLedger
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.test_support import fake_source
-from taskforge.sandbox.factories import MachineHost
+from taskforge.sandbox.test_support import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 from taskforge.spec.draft import (
     assemble,
     file,
@@ -52,8 +53,6 @@ from taskforge.spec.draft import (
     rollout_engine,
     rollout_limits,
 )
-from tests.conftest import ListLedger
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
 # Grading runs on the grader-base verifier machine, here served by ShellSim through the fixture factory.
@@ -129,7 +128,6 @@ def shellsim(task: TaskSpec, max_turns: int = 6) -> TaskRolloutSpec:
     )
     spec = lower(
         task,
-        host=MachineHost.LAPTOP,
         task_machine=machine(startup_timeout=30),
         verifier_machine=machine(startup_timeout=30),
         limits=limits,

@@ -96,12 +96,11 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
     "setting",
     (
         "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
-        "trainer.seed=23",
-        "trainer.max_ckpts_to_keep=2",
+        "generator.engine_init_kwargs.user_option=1",
         "generator.chat_template={source: name, name_or_path: other}",
     ),
 )
-def test_owned_settings_reject_parent_and_canonical_overrides(setting):
+def test_settings_reject_protected_and_unknown_overrides(setting):
     with pytest.raises(click.BadParameter):
         training_config(settings=(setting,))
 
@@ -152,7 +151,9 @@ def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatc
         terminal_manifest_uri=str(output / "terminal.json"),
         iris_job_id="/atqamar/canary-test",
     )
-    monkeypatch.setattr("experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config: result)
+    monkeypatch.setattr(
+        "experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config, *, env_vars: result
+    )
     run = build_run(version="2026.10.01", preset="gate", export=export)
     config = run.build_config(
         StepContext.for_run(output_path=str(output), prefix=str(tmp_path), runtime_args=run.runtime_args, deps=run.deps)

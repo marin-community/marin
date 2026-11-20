@@ -115,6 +115,13 @@ destination file to avoid another complete copy. A transaction's `max_bytes` lim
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
 
+`ReadView.blob_metadata(name)` reads a named object's metadata from the same pinned
+snapshot as its bytes. It returns `None` for an absent object and a dictionary for
+an existing object. `EvaluationStore.add_source_artifacts` commits one attempt's
+native files and their metadata together, including chunked files that exceed the
+normal transaction buffer limit. A caller can publish completion after this method
+returns; a failed transaction publishes none of its files.
+
 Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
 their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
 with one batch and one fragment of readahead per shard, single-threaded decoding,
@@ -343,3 +350,14 @@ shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
 relative updates and absolute trainer steps are typed provenance fields. This
 contract sits next to `finestore.eval` so producers need only `marin-finestore`
 and CPU report readers need no trainer or inference-engine dependencies.
+
+`finestore.rl.run_records` defines numeric metrics keyed by `(attempt_id, step, name)`
+and typed attempt fields keyed by `(attempt_id, field)` in the same store under
+`<export_root>/run-records`. The evaluations table stores scored task rows keyed by
+`(attempt_id, step, evaluation, task_id)`. `update_attempt` commits a writer's supplied fields;
+omitted fields remain stored and explicit null clears a field. Native configuration,
+terminal result, startup information and checkpoint ancestry have separate fields.
+`read_attempt_metrics` joins only that attempt and its known bounded ancestors;
+joined steps expose `metric_attempt_ids` for per-metric attribution. A step reset
+starts a fresh metric history while retaining its checkpoint provenance.
+`attempt_lineage` exposes those bounded attempt records to history and timing readers.

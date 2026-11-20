@@ -28,9 +28,6 @@ class EnvironmentPaths:
     /
     ├── setup_files/    # Copied over before the agent runs (if present).
     │   └── ...
-    ├── solution/       # Copied over by the OracleAgent only.
-    │   ├── solve.{sh,ps1,cmd,bat}
-    │   └── ...
     ├── tests/          # Copied over by the Verifier after the agent runs.
         ├── test.{sh,ps1,cmd,bat}
         └── ...
@@ -38,7 +35,6 @@ class EnvironmentPaths:
 
     logs_dir: PurePosixPath = PurePosixPath("/logs")
     agent_dir: PurePosixPath = logs_dir / "agent"
-    user_agent_dir: PurePosixPath = logs_dir / "user-agent"
     verifier_dir: PurePosixPath = logs_dir / "verifier"
     artifacts_dir: PurePosixPath = logs_dir / "artifacts"
     setup_files_dir: PurePosixPath = PurePosixPath("/setup_files")
@@ -71,7 +67,6 @@ class EnvironmentPaths:
         return cls(
             logs_dir=logs_dir,
             agent_dir=logs_dir / "agent",
-            user_agent_dir=logs_dir / "user-agent",
             verifier_dir=verifier_dir,
             artifacts_dir=logs_dir / "artifacts",
             tests_dir=root / "tests",
@@ -124,9 +119,6 @@ class TrialPaths:
     Environment copy structure:
     /
     ├── setup_files/    # Copied over before the agent runs (if present).
-    │   └── ...
-    ├── solution/       # Copied over by the OracleAgent only.
-    │   ├── solve.{sh,ps1,cmd,bat}
     │   └── ...
     ├── tests/          # Copied over by the Verifier after the agent runs.
         ├── test.{sh,ps1,cmd,bat}
@@ -200,11 +192,6 @@ class TrialPaths:
         Useful for saving trajectories and debugging agent behavior.
         """
         return self.trial_dir / "agent"
-
-    @property
-    def user_agent_dir(self) -> UPath:
-        """Logs written by the simulated-user agent."""
-        return self.trial_dir / "user-agent"
 
     @property
     def artifacts_dir(self) -> UPath:

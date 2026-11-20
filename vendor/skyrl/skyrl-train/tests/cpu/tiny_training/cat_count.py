@@ -2,14 +2,22 @@
 
 import json
 import os
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from examples.cat_count.cpu_canary import HELD_OUT_N, PROMPT, TRAIN_N
 from omegaconf import DictConfig, OmegaConf
+from rolloutengine.models import ModelTurn
+from taskcompendium.grading_result import GradeResult, Outcome
+from skyrl_gym.answer_tasks import grade_cat_count
+from skyrl_gym.task_records import TaskTransition
+from skyrl_gym.task_sessions import AnswerTaskSession
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.algorithm_registry import AdvantageEstimatorRegistry
 
-from tests.cpu.tiny_training.experiment import run_tiny_training
+from skyrl_train.config.rollout_validation import EntrypointOperation
+from tests.cpu.tiny_training.experiment import TinyGenerateExp, run_tiny_training, run_with_exp
 
 FAST_STEPS = 10
 RUN_TIMEOUT_SECONDS = 300
@@ -87,7 +95,7 @@ def cat_count_config(
                 "resume_mode": "latest" if resume else "none",
                 "ckpt_path": str(root / "ckpts"),
                 "export_path": str(root / "exports"),
-                "logger": "console",
+                "logger": "records",
                 "training_metrics": True,
                 "policy_train_spans": True,
                 "rollout_spans": True,
@@ -117,3 +125,17 @@ def run_cat_count(cfg: DictConfig, worker_env: dict[str, str]) -> None:
         "cat_count_flipped_grpo", flipped_grpo, group_contract=AdvantageEstimatorRegistry.group_contract("grpo")
     )
     run_tiny_training(cfg)
+
+
+def bounded_cat_count_grade(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
+    transition = grade_cat_count(turn, config, extras)
+    return replace(transition, grade=GradeResult(Outcome.GRADED, 3.0, passed=False, score_min=1.0, score_max=5.0))
+
+
+def run_cat_count_generate(cfg: DictConfig, worker_env: dict[str, str]) -> None:
+    os.environ.update(worker_env)
+    run_with_exp(
+        cfg,
+        partial(TinyGenerateExp, sessions={"cat_count": partial(AnswerTaskSession, grader=bounded_cat_count_grade)}),
+        operation=EntrypointOperation.GENERATE,
+    )

@@ -23,6 +23,8 @@ jobs:
   grug-multislice-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    outputs:
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
     concurrency:
       group: grug-multislice-smoke
       cancel-in-progress: true
@@ -139,6 +141,12 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
+      - name: Note a skipped day
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "::notice title=Grug multislice smoke skipped::Iris cancelled the smoke because it could not get capacity."
+          echo "Skipped: Iris cancelled the smoke because it could not get capacity." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Capture failure diagnostics
         if: failure() || cancelled()
         continue-on-error: true
@@ -195,3 +203,17 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Grug multislice smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # A day skipped for lack of capacity finishes green, so it gets its own, non-failure message.
+  notify-skipped:
+    needs: grug-multislice-smoke
+    if: always() && needs.grug-multislice-smoke.outputs.resource_exhausted == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":white_circle: *Grug multislice smoke skipped*: no capacity, so it did not run. This is not a failure.\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

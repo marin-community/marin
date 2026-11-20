@@ -51,6 +51,7 @@ from levanter.dpo import (
     reference_eval_cache_path,
 )
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
+from levanter.models.loss import next_token_ids
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -92,8 +93,7 @@ def _initialize_policy_model_from_source(
             Vocab=Vocab,
             model_key=policy_key,
             parameter_axis_mapping=parameter_axis_mapping,
-            compute_dtype=trainer.mp.compute_dtype,
-            cast_to_param=trainer.mp.cast_to_param,
+            mp=trainer.mp,
             hf_ref=config.initialize_from_hf,
         )
     elif config.initialize_from_checkpoint_path is not None:
@@ -102,8 +102,7 @@ def _initialize_policy_model_from_source(
             Vocab=Vocab,
             model_key=policy_key,
             parameter_axis_mapping=parameter_axis_mapping,
-            compute_dtype=trainer.mp.compute_dtype,
-            cast_to_param=trainer.mp.cast_to_param,
+            mp=trainer.mp,
             checkpoint_path=config.initialize_from_checkpoint_path,
         )
     else:
@@ -321,6 +320,7 @@ class TrainDpoConfig:
     hf_save_steps: int | None = 10000
     hf_save_dtype: Optional[str] = None
     hf_generation_eos_token_ids: Optional[list[int]] = None
+    hf_generation_config_defaults: dict[str, Any] | None = None
 
     peft_save_path: Optional[str] = None
     peft_hf_upload: bool | str = False
@@ -422,8 +422,7 @@ def _load_separate_reference_model(
         Vocab=Vocab,
         model_key=reference_model_key,
         parameter_axis_mapping=parameter_axis_mapping,
-        compute_dtype=trainer.mp.compute_dtype,
-        cast_to_param=trainer.mp.cast_to_param,
+        mp=trainer.mp,
         hf_ref=config.reference.model_path if config.reference.is_hf else False,
         checkpoint_path=None if config.reference.is_hf else config.reference.model_path,
     )
@@ -562,6 +561,8 @@ def _install_separate_reference_export_hooks(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=export.generation_config,
+            generation_config_defaults=export.generation_config_defaults,
+            field_dtype_overrides=trainer.config.field_dtype_overrides,
             **hf_upload_kwargs,
         )
         last_saved_update = step.next_step
@@ -798,7 +799,7 @@ def main(config: TrainDpoConfig):
                     policy_model = trainer.mp.cast_to_compute(policy_model)
                     per_pos_loss = policy_model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
                     per_pos_weight = batch.loss_weight.array
-                    per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+                    per_pos_token_id = next_token_ids(policy_model.Pos.name, batch.tokens).array
                     return per_pos_loss, per_pos_weight, per_pos_token_id
 
                 lm_eval_callback = levanter.eval.cb_tagged_lm_evaluate(
@@ -863,6 +864,7 @@ def main(config: TrainDpoConfig):
             hf_save_steps=config.hf_save_steps,
             hf_save_dtype=config.hf_save_dtype,
             generation_config=generation_config,
+            generation_config_defaults=config.hf_generation_config_defaults,
             peft_save_path=config.peft_save_path,
             peft_hf_upload=config.peft_hf_upload,
             merged_hf_save_path=config.merged_hf_save_path,

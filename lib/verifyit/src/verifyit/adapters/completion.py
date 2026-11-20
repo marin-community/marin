@@ -5,10 +5,25 @@
 
 import re
 from dataclasses import dataclass
-from enum import StrEnum
+
+from verifyit.compat import StrEnum
 
 REASONING_END_MARKERS = ("</think>", "<|end_think|>")
 BOX_START = re.compile(r"\\(?:boxed|fbox)\s*\{")
+END_OF_TURN = (
+    "<|im_end|>",
+    "<|eot_id|>",
+    "<|end_of_text|>",
+    "<|endoftext|>",
+    "</s>",
+    "\nYou are an AI assistant",
+    "\nQuestion:",
+    "\nQ:",
+    "\n[Question]",
+    "\nUser:",
+    "\nuser\n",
+    "\nAssistant:",
+)
 
 
 class CompletionStatus(StrEnum):

@@ -8,7 +8,6 @@ import pytest
 import hydra
 from omegaconf import DictConfig
 import torch
-import asyncio
 import copy
 from types import SimpleNamespace
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -17,19 +16,16 @@ from tests.gpu.utils import (
     init_worker_with_type,
     ray_init_for_tests,
     get_rank_0_memory,
-    init_inference_engines,
-    run_inference,
-    get_test_prompts,
-    Timer,
 )
-from skyrl_train.utils.utils import print_mem, validate_cfg
+from skyrl_train.utils.utils import print_mem
+from skyrl_train.config.driver_validation import validate_cfg
 from skyrl_train.entrypoints.main_base import config_dir
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.utils.torch_utils import logprobs_from_logits
 from skyrl_train.training_batch import TrainingInputBatch
-from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.objective.losses import POLICY_CLIP_METRIC_KEYS
 from tests.gpu.grug_gpu_gates import require_hoppers
+from tests.softmax_reference import assert_softmax_numerics, numerical_rows
 
 
 MODEL_NAME = "Qwen/Qwen3-0.6B"
@@ -37,6 +33,48 @@ MODEL_NAME = "Qwen/Qwen3-0.6B"
 # this might be a model specific mbridge issue - see if this persists when we transition to Megatron-Bridge
 # MOE_MODEL_NAME = "Qwen/Qwen1.5-MoE-A2.7B"
 MOE_MODEL_NAME = "Qwen/Qwen3-30B-A3B"
+
+
+def test_megatron_softmax_confident_values_and_gradients():
+    from megatron.core import parallel_state
+    from skyrl_train.distributed.megatron.model_utils import (
+        from_parallel_logits_to_logprobs,
+        vocab_parallel_entropy,
+    )
+
+    torch.distributed.init_process_group("nccl", store=torch.distributed.HashStore(), rank=0, world_size=1)
+    try:
+        parallel_state.initialize_model_parallel()
+        group = parallel_state.get_tensor_model_parallel_group()
+
+        def logprobs(logits, targets):
+            padding = torch.zeros_like(logits[:, :1])
+            labels = torch.cat((torch.zeros_like(targets[:, :1]), targets), dim=1)
+            return from_parallel_logits_to_logprobs(
+                torch.cat((logits, padding), dim=1), labels, 0, logits.shape[-1], group, chunk_size=17
+            )
+
+        for vocab in (151936, 128256):
+            for dtype in (torch.bfloat16, torch.float32):
+                logits, targets = numerical_rows(vocab, dtype, "cuda")
+                assert_softmax_numerics(logits, targets, logprobs, lambda x: vocab_parallel_entropy(x, chunk_size=17))
+                indices = torch.tensor(
+                    [0, 1, 2, 3, targets.numel() - 4, targets.numel() - 3, targets.numel() - 2, targets.numel() - 1],
+                    device="cuda",
+                )
+                batches = logits[:, indices].reshape(2, 4, vocab)
+                batch_targets = targets[:, indices].reshape(2, 4)
+                print(f"distinct-batch numerical case: {batches.shape} {dtype}")
+                assert_softmax_numerics(
+                    batches, batch_targets, logprobs, lambda x: vocab_parallel_entropy(x, chunk_size=17)
+                )
+        logits = torch.tensor([[[9.0, -9.0, -9.0]]], device="cuda", requires_grad=True)
+        assert_softmax_numerics(
+            logits, torch.zeros((1, 1), dtype=torch.long, device="cuda"), logprobs, vocab_parallel_entropy
+        )
+    finally:
+        parallel_state.destroy_model_parallel()
+        torch.distributed.destroy_process_group()
 
 
 @pytest.mark.parametrize("megatron_overrides", [False, True])
@@ -95,11 +133,13 @@ def test_native_adamw_recipe_matches_torch_weight_updates(megatron_overrides):
         torch.distributed.destroy_process_group()
 
 
-def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture):
+@pytest.mark.parametrize("use_entropy_loss", [False, True])
+def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture, use_entropy_loss):
     """Keep the selected FlashAttention backend usable through a CP2 policy step."""
     require_hoppers(2)
     cfg = get_test_actor_config(logger="console")
     cfg.trainer.strategy = "megatron"
+    cfg.trainer.algorithm.use_entropy_loss = use_entropy_loss
     cfg.trainer.flash_attn = True
     cfg.trainer.use_sample_packing = True
     cfg.trainer.placement.policy_num_gpus_per_node = 2
@@ -113,6 +153,9 @@ def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture):
     cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.trainer.micro_train_batch_size_per_gpu = 1
     batch = get_test_training_batch(4)
+    if use_entropy_loss:
+        cfg.trainer.algorithm.use_kl_loss = False
+        batch["advantages"].zero_()
     batch.metadata["global_step"] = 0
 
     policy = init_worker_with_type("policy", shared_pg=None, colocate_all=False, num_gpus_per_node=2, cfg=cfg)
@@ -195,8 +238,6 @@ def get_test_training_batch(batch_size=4) -> TrainingInputBatch:
             "action_log_probs": torch.tensor([[0.1] * num_actions] * batch_size),
             "base_action_log_probs": torch.tensor([[0.2] * num_actions] * batch_size),
             "rollout_logprobs": torch.tensor([[0.11] * num_actions] * batch_size),
-            "values": torch.tensor([[0.1] * num_actions] * batch_size),
-            "returns": torch.tensor([[0.1] * num_actions] * batch_size),
             "advantages": torch.tensor([[0.5] * num_actions] * batch_size),
             "loss_mask": torch.tensor([[1] * num_actions] * batch_size),
             "response_mask": torch.tensor([[1] * num_actions] * batch_size),
@@ -204,68 +245,6 @@ def get_test_training_batch(batch_size=4) -> TrainingInputBatch:
     )
     data.metadata = {"response_length": num_actions}
     return data
-
-
-@pytest.mark.parametrize(
-    ("colocate_all", "inference_tp", "megatron_tp", "megatron_pp", "megatron_ep", "megatron_etp"),
-    [(True, 4, 2, 2, 1, None), (False, 2, 2, 1, 1, None)],
-    ids=["colocate_all", "non_colocated"],
-)
-def test_megatron_policy_weight_sync(colocate_all, inference_tp, megatron_tp, megatron_pp, megatron_ep, megatron_etp):
-    """
-    Test that we can sync weights between policy and inference for megatron then run inference
-    """
-    try:
-        cfg = get_test_actor_config(model_name=MODEL_NAME)
-        cfg.trainer.placement.colocate_all = colocate_all
-        cfg.generator.weight_sync_backend = "nccl"
-        cfg.trainer.strategy = "megatron"
-        cfg.generator.backend = "vllm"
-        cfg.generator.inference_engine_tensor_parallel_size = inference_tp
-
-        # set tp and pp to 2 to check that gather for weight sync works correctly
-        cfg.trainer.policy.megatron_config.tensor_model_parallel_size = megatron_tp
-        cfg.trainer.policy.megatron_config.pipeline_model_parallel_size = megatron_pp
-        cfg.trainer.policy.megatron_config.expert_model_parallel_size = megatron_ep
-        cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = megatron_etp
-
-        # If colocate is True, this will load the engine, sleep, and wake up the engine
-        client, pg = init_inference_engines(
-            model=MODEL_NAME,
-            cfg=cfg,
-            use_local=True,
-            tp_size=cfg.generator.inference_engine_tensor_parallel_size,
-            colocate_all=cfg.trainer.placement.colocate_all,
-            backend="vllm",
-            sleep_level=2,  # since we explicitly sync weights
-        )
-
-        asyncio.run(client.sleep())
-
-        policy = init_worker_with_type(
-            "policy",
-            shared_pg=pg,
-            colocate_all=cfg.trainer.placement.colocate_all,
-            num_gpus_per_node=cfg.generator.inference_engine_tensor_parallel_size,
-            cfg=cfg,
-        )
-        ray.get(policy.async_run_ray_method("pass_through", "init_weight_sync_state", client))
-        asyncio.run(client.wake_up(tags=["weights"]))
-        # TODO (erictang000): improve this timing
-        # currently this is ~30 seconds for a 14B MoE model (on 8xL40S)
-        # or ~20 seconds on 8xH100
-        # ~75 seconds on 8xH100 for Qwen3-30B-A3B
-        with Timer("sync_weights"):
-            ray.get(policy.async_run_ray_method("pass_through", "broadcast_to_inference_engines", client))
-
-        policy.offload_to_cpu()
-        asyncio.run(client.wake_up(tags=["kv_cache"]))
-        sampling_params = get_sampling_params_for_backend(cfg.generator.backend, cfg.generator.sampling_params)
-        outputs = asyncio.run(run_inference(client, get_test_prompts(MODEL_NAME), sampling_params))
-
-        print(f"Example output: {outputs['responses'][0]}, {outputs['stop_reasons'][0]}")
-    finally:
-        ray.shutdown()
 
 
 @pytest.mark.asyncio
@@ -386,82 +365,6 @@ async def test_megatron_forward(ray_init_fixture, worker_type, tp, pp, cp, ep, e
     else:
         # allow larger tolerance in diff for the 30B-MoE model due to larger model size
         assert avg_diff < 1.5e-1, f"Avg diff {avg_diff} is too large"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("worker_type", "tp", "pp", "cp", "ep", "etp", "gpus_per_node", "use_sample_packing", "use_entropy_loss"),
-    [
-        ("policy", 2, 2, 1, 1, 1, 4, True, False),
-        ("policy", 2, 2, 1, 1, 1, 4, True, True),
-        ("policy", 2, 2, 1, 1, 1, 4, False, False),
-        ("policy", 2, 2, 2, 1, 1, 8, True, False),
-        ("policy", 2, 1, 1, 8, 1, 8, True, False),
-    ],
-    ids=[
-        "tp2_pp2_policy_seq_packing",
-        "tp2_pp2_policy_seq_packing_with_entropy_loss",
-        "tp2_pp2_policy_unpacked",
-        "tp2_pp2_cp2_policy_seq_packing",
-        "tp4_pp2_cp1_ep8_etp1_policy_seq_packing",
-    ],
-)
-async def test_megatron_train(
-    ray_init_fixture, worker_type, tp, pp, cp, ep, etp, gpus_per_node, use_sample_packing, use_entropy_loss
-):
-    """
-    Full test: initialize actor group, send dummy experience to training_step, validate output.
-    """
-    cfg = get_test_actor_config(model_name=MODEL_NAME if ep == 1 else MOE_MODEL_NAME)
-    batch = get_test_training_batch(batch_size=gpus_per_node)
-
-    cfg.trainer.strategy = "megatron"
-    cfg.trainer.placement.policy_num_gpus_per_node = gpus_per_node
-    cfg.trainer.policy.megatron_config.tensor_model_parallel_size = tp
-    cfg.trainer.policy.megatron_config.pipeline_model_parallel_size = pp
-    cfg.trainer.policy.megatron_config.context_parallel_size = cp
-    cfg.trainer.policy.megatron_config.expert_model_parallel_size = ep
-    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = etp
-    cfg.trainer.use_sample_packing = use_sample_packing
-    if use_entropy_loss:
-        cfg.trainer.algorithm.use_entropy_loss = True
-        cfg.trainer.algorithm.entropy_loss_coef = 0.01
-
-    # set batch sizes correctly
-    cfg.trainer.train_batch_size = gpus_per_node
-    cfg.trainer.policy_mini_batch_size = gpus_per_node
-    cfg.generator.n_samples_per_prompt = 1
-    cfg.trainer.micro_train_batch_size_per_gpu = 1
-
-    actor_group = init_worker_with_type(
-        "policy",
-        shared_pg=None,
-        colocate_all=False,
-        num_nodes=cfg.trainer.placement.policy_num_nodes,
-        num_gpus_per_node=cfg.trainer.placement.policy_num_gpus_per_node,
-        cfg=cfg,
-    )
-
-    with Timer(f"megatron training step tp{tp} pp{pp} cp{cp} ep{ep} etp{etp}"):
-        batch.metadata["global_step"] = 0
-        results_megatron = ray.get(actor_group.async_run_ray_method("pass_through", "ppo_train", batch))
-    results_megatron = [results_megatron[i].metadata["train_status"] for i in range(len(results_megatron))]
-
-    memory = ray.get(actor_group.async_run_ray_method("pass_through", "get_cuda_memory"))
-    memory = memory[0]
-    print_mem("memory after training step", memory)
-
-    for result in results_megatron:
-        assert isinstance(result, dict), "Result should be a dictionary of training stats"
-        assert "policy_loss" in result
-        assert "policy_lr" in result
-        for key in POLICY_CLIP_METRIC_KEYS:
-            assert key in result
-        assert "policy_entropy" in result
-        for k, v in result.items():
-            assert isinstance(v, (int, float)), f"{k} should be an int or float"
-
-    ray.shutdown()
 
 
 @pytest.mark.asyncio

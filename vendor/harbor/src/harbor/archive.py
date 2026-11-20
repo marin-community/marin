@@ -5,18 +5,21 @@
 
 Harbor's job and trial directories remain operational state for resume, inspection, and retry.
 FineStore is the configured evaluation-output sink: this module writes the typed result received from
-the trial lifecycle, preserves trajectory and job artifacts, and appends normalized rows.
+each attempt's lifecycle and normalizes only the final selected trial results.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import ExitStack
 from multiprocessing import get_context
 from pathlib import Path
+from uuid import UUID
 
 from upath import UPath
 
@@ -32,13 +35,20 @@ from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.job.config import ArchiveConfig
 
 try:
+    from finestore.admin import drop_table
     from finestore.eval import (
+        ARCHIVE_ROLLOUTS_TABLE,
+        ARCHIVE_SAMPLES_TABLE,
+        ARCHIVE_STEPS_TABLE,
         EvalSample,
         EvaluationStore,
         Grading,
         SampleKind,
+        SourceArtifact,
         StepRecord,
     )
+    from finestore.reader import ReadView
+    from finestore.store import DataStore
 
     _FINESTORE_IMPORT_ERROR: ImportError | None = None
 except ImportError as error:
@@ -49,6 +59,44 @@ logger = logging.getLogger(__name__)
 SOLVED_REWARD = 0.99
 _JSON_CONTENT_TYPE = "application/json"
 _JOB_SOURCE_NAMES = (JOB_CONFIG_FILENAME, JOB_LOCK_FILENAME, JOB_RESULT_FILENAME)
+
+
+def _attempt_is_complete(reader: ReadView, prefix: str) -> bool:
+    metadata = reader.blob_metadata(f"{prefix}/result.json")
+    if metadata is None or not isinstance(metadata.get("trajectory_present"), bool):
+        return False
+    raw = reader.read_blob(f"{prefix}/result.json")
+    if raw is None:
+        return False
+    result = TrialResult.model_validate_json(raw)
+    if (
+        result.completion is None
+        or result.finished_at is None
+        or result.completion.trajectory_present != metadata["trajectory_present"]
+    ):
+        return False
+    if (
+        metadata["trajectory_present"]
+        and reader.blob_metadata(f"{prefix}/trajectory.json") is None
+    ):
+        return False
+    return True
+
+
+def _validate_native_result(native: TrialResult, selected: TrialResult) -> None:
+    if (
+        native.id != selected.id
+        or native.trial_name != selected.trial_name
+        or native.task_name != selected.task_name
+        or not native.config.matches_identity(selected.config)
+    ):
+        raise ValueError(
+            f"Native attempt identity differs for trial {selected.trial_name}, attempt {selected.id}"
+        )
+    if native.completion is None or native.finished_at is None:
+        raise ValueError(
+            f"Attempt {selected.id} has no finalized native result after teardown; retry the attempt"
+        )
 
 
 def _numeric_rewards(result: TrialResult) -> dict[str, float]:
@@ -134,34 +182,40 @@ def _trajectory_step_rows(
                 source=step.source,
                 model_name=step.model_name,
                 message=_content_to_text(step.message),
-                reasoning_content=_content_to_text(step.reasoning_content)
-                if step.reasoning_content is not None
-                else None,
-                tool_calls_json=json.dumps(
-                    [
-                        tool_call.model_dump(mode="json")
-                        for tool_call in step.tool_calls
-                    ],
-                    ensure_ascii=True,
-                )
-                if step.tool_calls is not None
-                else None,
-                observation_json=json.dumps(
-                    step.observation.model_dump(mode="json"), ensure_ascii=True
-                )
-                if step.observation is not None
-                else None,
+                reasoning_content=(
+                    _content_to_text(step.reasoning_content)
+                    if step.reasoning_content is not None
+                    else None
+                ),
+                tool_calls_json=(
+                    json.dumps(
+                        [
+                            tool_call.model_dump(mode="json")
+                            for tool_call in step.tool_calls
+                        ],
+                        ensure_ascii=True,
+                    )
+                    if step.tool_calls is not None
+                    else None
+                ),
+                observation_json=(
+                    json.dumps(
+                        step.observation.model_dump(mode="json"), ensure_ascii=True
+                    )
+                    if step.observation is not None
+                    else None
+                ),
                 prompt_tokens=metrics.prompt_tokens if metrics is not None else None,
-                completion_tokens=metrics.completion_tokens
-                if metrics is not None
-                else None,
+                completion_tokens=(
+                    metrics.completion_tokens if metrics is not None else None
+                ),
                 cost_usd=metrics.cost_usd if metrics is not None else None,
-                prompt_token_ids=metrics.prompt_token_ids
-                if metrics is not None
-                else None,
-                completion_token_ids=metrics.completion_token_ids
-                if metrics is not None
-                else None,
+                prompt_token_ids=(
+                    metrics.prompt_token_ids if metrics is not None else None
+                ),
+                completion_token_ids=(
+                    metrics.completion_token_ids if metrics is not None else None
+                ),
                 logprobs=metrics.logprobs if metrics is not None else None,
             )
         )
@@ -169,30 +223,30 @@ def _trajectory_step_rows(
 
 
 class TrialArchive:
-    """A job-scoped writer that defers ungraded attempts until the final result set."""
+    """Preserve native attempts, then normalize the selected final trial set."""
 
     def __init__(
         self,
         store: EvaluationStore,
         dataset: str,
         trials_dir: Path | UPath | None,
+        *,
+        root: str,
     ) -> None:
         self._store = store
         self._dataset = dataset
         self._trials_dir = trials_dir
+        self._root = root
+        self._attempt_digests: dict[UUID, str] = {}
         self._written_trial_ids: set[str] = set()
         self._errors: list[Exception] = []
         self._lock = threading.Lock()
 
     async def on_trial_end(self, event: TrialHookEvent) -> None:
-        """Archive one scored trial result at the end of its run."""
-        if (
-            event.event != TrialEvent.END
-            or event.result is None
-            or not _is_scored(event.result)
-        ):
+        """Capture the full native attempt before the queue retries or slims it."""
+        if event.event != TrialEvent.END or event.result is None:
             return
-        await asyncio.to_thread(self._write_result_safely, event.result)
+        await asyncio.to_thread(self._write_attempt_safely, event.result)
 
     async def finalize(self, trial_results: list[TrialResult]) -> None:
         """Complete the archive from the final trial set and job metadata."""
@@ -210,15 +264,46 @@ class TrialArchive:
         self._store.close()
 
     def _write_final_results(self, trial_results: list[TrialResult]) -> None:
+        previous = ReadView(self._root)
+        for result in trial_results:
+            with self._lock:
+                archived = result.id in self._attempt_digests
+            if not archived:
+                prefix = f"sources/harbor/{result.trial_name}/attempts/{result.id}"
+                if _attempt_is_complete(previous, prefix):
+                    continue
+                # Resumed results did not emit END in this writer. Their persisted
+                # attempt result retains the payload that the job may have slimmed.
+                path = result.resolve_trial_path(self._trials_dir) / "result.json"
+                if not path.exists():
+                    raise ValueError(
+                        f"Missing persisted attempt {result.id} for trial {result.trial_name}: {path}"
+                    )
+                native = TrialResult.model_validate_json(path.read_bytes())
+                _validate_native_result(native, result)
+                self._write_attempt_safely(native)
+        self._store.flush()
+        reader = ReadView(self._root)
         for result in trial_results:
             with self._lock:
                 written = result.trial_name in self._written_trial_ids
             if not written:
-                self._write_result_safely(result)
+                self._write_result_safely(result, reader)
 
-    def _write_result_safely(self, result: TrialResult) -> None:
+    def _write_attempt_safely(self, result: TrialResult) -> None:
         try:
-            self._write_result(result)
+            self._write_attempt(result)
+        except Exception as error:
+            self._record_error(error)
+            logger.warning(
+                "FineStore attempt archive write failed for trial %s; the job will fail before sealing",
+                result.trial_name,
+                exc_info=True,
+            )
+
+    def _write_result_safely(self, result: TrialResult, reader: ReadView) -> None:
+        try:
+            self._write_result(result, reader)
         except Exception as error:
             self._record_error(error)
             logger.warning(
@@ -253,12 +338,80 @@ class TrialArchive:
                     content_type=_JSON_CONTENT_TYPE,
                 )
 
-    def _write_result(self, result: TrialResult) -> None:
-        trajectory_uri = None
+    def _write_attempt(self, result: TrialResult) -> None:
+        prefix = f"harbor/{result.trial_name}/attempts/{result.id}"
+        native = result.model_dump_json(indent=4).encode()
         trial_dir = result.resolve_trial_path(self._trials_dir)
         trajectory_path = trial_dir / "agent" / "trajectory.json"
-        if trajectory_path.exists():
+        trajectory_present = (
+            result.completion.trajectory_present
+            if result.completion is not None
+            else None
+        )
+        # Unconfirmed teardown still leaves useful native evidence. Its trajectory
+        # state stays unknown until a finalized result selects a complete pair.
+        if trajectory_present is True:
             raw = trajectory_path.read_bytes()
+        elif trajectory_present is False:
+            raw = None
+        else:
+            try:
+                raw = trajectory_path.read_bytes()
+            except FileNotFoundError:
+                raw = None
+        digest = hashlib.sha256(native)
+        digest.update(b"\0no-trajectory" if raw is None else b"\0trajectory\0")
+        if raw is not None:
+            digest.update(raw)
+        fingerprint = digest.hexdigest()
+        with self._lock:
+            previous = self._attempt_digests.get(result.id)
+            if previous is not None:
+                if previous != fingerprint:
+                    raise ValueError(
+                        f"Native result or trajectory changed for immutable attempt {result.id}"
+                    )
+                return
+            sources = [
+                SourceArtifact(
+                    name=f"{prefix}/result.json",
+                    raw=native,
+                    content_type=_JSON_CONTENT_TYPE,
+                    metadata={"trajectory_present": trajectory_present},
+                )
+            ]
+            if raw is not None:
+                sources.append(
+                    SourceArtifact(
+                        name=f"{prefix}/trajectory.json",
+                        raw=raw,
+                        content_type=_JSON_CONTENT_TYPE,
+                    )
+                )
+            self._store.add_source_artifacts(sources)
+            self._attempt_digests[result.id] = fingerprint
+
+    def _write_result(self, selected: TrialResult, reader: ReadView) -> None:
+        prefix = f"sources/harbor/{selected.trial_name}/attempts/{selected.id}"
+        if not _attempt_is_complete(reader, prefix):
+            raise ValueError(
+                f"Incomplete archived attempt {selected.id} for trial {selected.trial_name}"
+            )
+        native = reader.read_blob(f"{prefix}/result.json")
+        if native is None:
+            raise ValueError(
+                f"Missing archived attempt {selected.id} for trial {selected.trial_name}"
+            )
+        result = TrialResult.model_validate_json(native)
+        _validate_native_result(result, selected)
+        trajectory_uri = None
+        assert result.completion is not None
+        raw = (
+            reader.read_blob(f"{prefix}/trajectory.json")
+            if result.completion.trajectory_present
+            else None
+        )
+        if raw is not None:
             # Preserve the original JSON artifact, including surrogate escapes;
             # normalized Arrow text needs a UTF-8-safe representation.
             trajectory = Trajectory.model_validate(json.loads(raw))
@@ -282,13 +435,14 @@ class TrialArchive:
 
         self._store.add_source_artifact(
             f"harbor/{result.trial_name}/result.json",
-            result.model_dump_json(indent=4).encode(),
+            native,
             content_type=_JSON_CONTENT_TYPE,
         )
         self._store.add_sample(
             _trial_sample(result, self._dataset, trajectory_uri=trajectory_uri),
             trial_id=result.trial_name,
         )
+        self._store.flush()
         with self._lock:
             self._written_trial_ids.add(result.trial_name)
 
@@ -300,8 +454,25 @@ def _initialize_archive_process(
     config: ArchiveConfig, trials_dir: Path | UPath | None
 ) -> None:
     global _PROCESS_ARCHIVE
-    store = EvaluationStore.open(config.root, writer_id=config.writer_id)
-    _PROCESS_ARCHIVE = TrialArchive(store, config.dataset, trials_dir)
+    # One Harbor job exclusively owns this root. Reopening first clears the old
+    # seal; reset derived rows before registering their handles. Native blobs
+    # remain available, and finalize rebuilds rows from the selected trial set.
+    with ExitStack() as cleanup:
+        store = cleanup.enter_context(
+            DataStore.open(config.root, writer_id=config.writer_id)
+        )
+        existing = ReadView(config.root).table_names()
+        for table in (
+            ARCHIVE_SAMPLES_TABLE,
+            ARCHIVE_STEPS_TABLE,
+            ARCHIVE_ROLLOUTS_TABLE,
+        ):
+            if table in existing:
+                drop_table(config.root, table)
+        _PROCESS_ARCHIVE = TrialArchive(
+            EvaluationStore(store), config.dataset, trials_dir, root=config.root
+        )
+        cleanup.pop_all()
 
 
 def _archive_process_ready() -> None:
@@ -309,10 +480,10 @@ def _archive_process_ready() -> None:
         raise RuntimeError("Archive process was not initialized")
 
 
-def _write_process_result(result: TrialResult) -> None:
+def _write_process_attempt(result: TrialResult) -> None:
     if _PROCESS_ARCHIVE is None:
         raise RuntimeError("Archive process was not initialized")
-    _PROCESS_ARCHIVE._write_result_safely(result)
+    _PROCESS_ARCHIVE._write_attempt_safely(result)
 
 
 def _finalize_process_archive(results: list[TrialResult]) -> None:
@@ -334,7 +505,11 @@ def _close_process_archive() -> None:
 
 
 class ProcessTrialArchive:
-    """Stream results through a writer isolated from sandbox SDK environment changes."""
+    """Archive one exclusively owned job root in an isolated writer process.
+
+    Reopening retains native artifacts and rebuilds normalized tables at finalization.
+    Concurrent jobs must use distinct roots.
+    """
 
     def __init__(self, config: ArchiveConfig, trials_dir: Path | UPath | None) -> None:
         # Daytona's image uploader temporarily clears os.environ. Spawn before
@@ -352,14 +527,10 @@ class ProcessTrialArchive:
             raise
 
     async def on_trial_end(self, event: TrialHookEvent) -> None:
-        if (
-            event.event != TrialEvent.END
-            or event.result is None
-            or not _is_scored(event.result)
-        ):
+        if event.event != TrialEvent.END or event.result is None:
             return
         await asyncio.wrap_future(
-            self._executor.submit(_write_process_result, event.result)
+            self._executor.submit(_write_process_attempt, event.result)
         )
 
     async def finalize(self, trial_results: list[TrialResult]) -> None:

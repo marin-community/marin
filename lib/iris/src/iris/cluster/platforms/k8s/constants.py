@@ -12,6 +12,7 @@ CW_REPO_NAME = "coreweave"
 CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
 
 DEFAULT_TASK_CACHE_DIR = "/cache"
+DEFAULT_SANDBOX_RUNTIME_CLASS = "gvisor"
 NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
 RDMA_RESOURCE = "rdma/ib"
 

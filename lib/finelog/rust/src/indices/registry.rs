@@ -17,9 +17,12 @@ use crate::indices::cache::IndexCache;
 use crate::indices::exact::ExactSection;
 use crate::indices::format::{BundleHeader, SectionKind};
 use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
+use crate::indices::input::{BundleInput, IndexReadScope, ObjectInputs};
 use crate::indices::trigram::ColumnIndex;
 use crate::indices::{write_index_artifacts, SegmentIndexConfig, TrigramCoverage};
+use crate::store::object_store::{ObjectReference, ObjectStore};
 use crate::store::segment::segment_id_and_row_group_rows;
+use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table_state::LocalArtifacts;
 
 /// The artifacts each snapshotted segment advertises, keyed by the local path
@@ -61,7 +64,7 @@ pub struct OpenedIndexes {
 /// without opening the source Parquet footer.
 pub struct OpenedIndexSummary {
     bundle_path: PathBuf,
-    header: Arc<BundleHeader>,
+    pub header: Arc<BundleHeader>,
 }
 
 impl OpenedIndexes {
@@ -72,6 +75,7 @@ impl OpenedIndexes {
 
 pub struct IndexRegistry {
     cache: Arc<IndexCache>,
+    objects: Option<Arc<ObjectInputs>>,
 }
 
 impl std::fmt::Debug for IndexRegistry {
@@ -85,7 +89,52 @@ impl std::fmt::Debug for IndexRegistry {
 
 impl IndexRegistry {
     pub fn new(cache: Arc<IndexCache>) -> Self {
-        Self { cache }
+        Self {
+            cache,
+            objects: None,
+        }
+    }
+
+    /// Bind this query's immutable artifact references without performing I/O.
+    pub fn with_object_sources(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        segments: &SegmentObjectMap,
+    ) -> Self {
+        let references = segments
+            .values()
+            .flat_map(|segment| {
+                std::iter::once(segment.source.clone()).chain(
+                    segment
+                        .artifacts
+                        .bundle
+                        .iter()
+                        .filter_map(|bundle| ObjectReference::try_from(bundle).ok()),
+                )
+            })
+            .filter_map(|reference| {
+                Some((store.planned_local_path(&reference.id).ok()?, reference))
+            })
+            .collect();
+        Self {
+            cache: Arc::clone(&self.cache),
+            objects: Some(Arc::new(ObjectInputs::new(store, references))),
+        }
+    }
+
+    fn input<'a>(&'a self, path: &'a Path) -> BundleInput<'a> {
+        BundleInput {
+            path,
+            objects: self.objects.as_deref(),
+        }
+    }
+
+    /// Source layout used to map index spans and postings onto Parquet groups.
+    pub fn source_layout(&self, source: &Path) -> Option<(uuid::Uuid, Arc<[usize]>)> {
+        match &self.objects {
+            Some(objects) => objects.source_layout(source),
+            None => segment_id_and_row_group_rows(source),
+        }
     }
 
     pub fn cache(&self) -> &Arc<IndexCache> {
@@ -111,9 +160,11 @@ impl IndexRegistry {
     /// it is bound to a different physical segment than the one on disk.
     pub fn open(&self, source: &Path, artifacts: &LocalArtifacts) -> Option<OpenedIndexes> {
         let bundle = artifacts.bundle.as_ref()?;
-        let (source_id, row_group_rows) = segment_id_and_row_group_rows(source)?;
+        let (source_id, row_group_rows) = self.source_layout(source)?;
         let source_rows = row_group_rows.iter().sum::<usize>() as u64;
-        let header = self.cache.get_header(bundle, source_id, source_rows)?;
+        let header = self
+            .cache
+            .get_header(&self.input(bundle), source_id, source_rows)?;
         Some(OpenedIndexes {
             bundle_path: bundle.clone(),
             header,
@@ -139,7 +190,9 @@ impl IndexRegistry {
         let bundle_path = artifacts.bundle.clone()?;
         let source_id = uuid::Uuid::parse_str(artifacts.binding.segment_uuid.as_deref()?).ok()?;
         let row_count = u64::try_from(artifacts.binding.row_count).ok()?;
-        let header = self.cache.get_header(&bundle_path, source_id, row_count)?;
+        let header = self
+            .cache
+            .get_header(&self.input(&bundle_path), source_id, row_count)?;
         Some(OpenedIndexSummary {
             bundle_path,
             header,
@@ -152,7 +205,62 @@ impl IndexRegistry {
         column: &str,
     ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
         self.cache
-            .get_trigram(&opened.bundle_path, &opened.header, column)
+            .get_trigram(&self.input(&opened.bundle_path), &opened.header, column)
+    }
+
+    pub(crate) async fn open_summary_async(
+        &self,
+        artifacts: &LocalArtifacts,
+        scope: &IndexReadScope,
+    ) -> Option<OpenedIndexSummary> {
+        let Some(bundle_path) = artifacts.bundle.clone() else {
+            scope
+                .stats
+                .missing_bundle
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        };
+        let source_id = uuid::Uuid::parse_str(artifacts.binding.segment_uuid.as_deref()?).ok()?;
+        let row_count = u64::try_from(artifacts.binding.row_count).ok()?;
+        let header = self
+            .cache
+            .get_header_async(&self.input(&bundle_path), source_id, row_count, scope)
+            .await?;
+        Some(OpenedIndexSummary {
+            bundle_path,
+            header,
+        })
+    }
+
+    pub(crate) async fn summary_trigram_async(
+        &self,
+        opened: &OpenedIndexSummary,
+        column: &str,
+        scope: &IndexReadScope,
+    ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
+        self.cache
+            .get_trigram_async(
+                &self.input(&opened.bundle_path),
+                &opened.header,
+                column,
+                scope,
+            )
+            .await
+    }
+
+    pub(crate) async fn summary_exact_async(
+        &self,
+        opened: &OpenedIndexSummary,
+        scope: &IndexReadScope,
+    ) -> Option<Arc<ExactSection>> {
+        self.cache
+            .get_exact_async(
+                &self.input(&opened.bundle_path),
+                &opened.header,
+                SectionKind::ExactPostings,
+                scope,
+            )
+            .await
     }
 
     /// The local covering-projection file `name` resolves to for the segment at
@@ -178,12 +286,12 @@ impl IndexRegistry {
         column: &str,
     ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
         self.cache
-            .get_trigram(&opened.bundle_path, &opened.header, column)
+            .get_trigram(&self.input(&opened.bundle_path), &opened.header, column)
     }
 
     pub fn exact(&self, opened: &OpenedIndexes, kind: SectionKind) -> Option<Arc<ExactSection>> {
         self.cache
-            .get_exact(&opened.bundle_path, &opened.header, kind)
+            .get_exact(&self.input(&opened.bundle_path), &opened.header, kind)
     }
 
     pub fn group_extrema(
@@ -192,7 +300,7 @@ impl IndexRegistry {
         config: &GroupExtremaConfig,
     ) -> Option<Arc<GroupExtremaSection>> {
         self.cache
-            .get_group_extrema(&opened.bundle_path, &opened.header, config)
+            .get_group_extrema(&self.input(&opened.bundle_path), &opened.header, config)
     }
 
     /// Drop every parsed section cached for a bundle file that was replaced.

@@ -4,8 +4,8 @@
 """A bounded-context Snowball SFT recipe using the standard Levanter chat trainer.
 
 The pinned Hugging Face checkpoint initializes ``SnowballLMHeadModel`` directly;
-the optimizer starts fresh. Conversations stay separate because Snowball does
-not yet consume Levanter's packed-document attention mask.
+the optimizer starts fresh. This recipe keeps conversations separate (``pack=False``).
+Snowball also supports Levanter's packed-document attention mask.
 """
 
 from levanter.optim.config import AdamConfig
@@ -23,7 +23,6 @@ SPEC = SFTSpec(
     version="2026.09.23",
     model=HFModel(
         model_ref=f"{HF_MODEL}@{HF_REVISION}",
-        tokenizer_path=HF_MODEL,
         model_type="snowball",
         eos_token_ids=(128001, 128009),
     ),

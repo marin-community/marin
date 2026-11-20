@@ -20,7 +20,9 @@ plus a magpie/warmup mixture).
 Init sources (the :class:`ModelSource` implementations):
 
 - :class:`HFModel` — SFT of an HF checkpoint used verbatim (``initialize_from_hf`` +
-  ``use_hf_model_config``); Levanter re-derives the arch from the checkpoint.
+  ``use_hf_model_config``); Levanter re-derives the arch from the checkpoint. A pinned Hub ref is
+  first copied to the regional prefix by a CPU download step, so the accelerator reads its weights
+  (and, by default, its tokenizer) from the bucket rather than the Hub.
 - :class:`PreparedModel` — like :class:`HFModel`, but the base checkpoint + tokenizer are produced
   by an upstream preparation :class:`ArtifactStep` (e.g. the Delphi reserved-slot rename), resolved
   to that step's output directory. The step becomes a dependency.
@@ -68,7 +70,7 @@ import hashlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Protocol, runtime_checkable
 
@@ -77,6 +79,7 @@ import jax.numpy as jnp
 import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import is_hf_model_id
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
@@ -92,7 +95,8 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.levanter import run_levanter_train_lm
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.instruction import (
@@ -100,6 +104,7 @@ from experiments.datasets.instruction import (
     multi_turn_adapter,
     transform_dataset_step,
 )
+from experiments.models import ModelConfig, download_model
 
 # Runtime-arg key for the accelerator the job is dispatched onto (excluded from the fingerprint).
 _TRAIN_RESOURCES = "train_resources"
@@ -113,6 +118,7 @@ _GPU_HOST_CPU_PER_DEVICE = 8
 _GPU_HOST_RAM_GB_PER_DEVICE = 96
 _GPU_HOST_DISK_GB_PER_DEVICE = 48
 LLAMA3_CHAT_EOS_TOKEN_IDS = (128001, 128009)  # <|end_of_text|> and <|eot_id|>
+_HF_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 @dataclass(frozen=True)
@@ -223,8 +229,11 @@ def _levanter_train_config(
         # A converted checkpoint emits a tokenizer already padded to its model vocab. Native init
         # has no HF reference from which the generic padding helper could re-derive that vocab.
         pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
-        hf_save_steps=num_train_steps,  # one HF export at the end
+        # One HF export: the trainer's forced end-of-run hook pass. A period equal to the run
+        # length would also fire on the last step and export the same step twice.
+        hf_save_steps=num_train_steps + 1,
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )
@@ -273,33 +282,59 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
     remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
 
 
+def _hf_mirror_step(model_ref: str) -> ArtifactStep[LevanterCheckpoint] | None:
+    """The CPU step that copies a pinned Hub repo to the regional prefix, or None for a path ref.
+
+    Hub-vs-path uses Levanter's own rule (:func:`is_hf_model_id`), so the launcher and the loader agree. An
+    ``hf://org/model@<sha>`` ref is the same Hub ref and is mirrored too.
+    """
+    hub_ref = model_ref.removeprefix("hf://")
+    if not is_hf_model_id(hub_ref):
+        return None
+    repo, _, revision = hub_ref.partition("@")
+    if not _HF_COMMIT_SHA.fullmatch(revision):
+        raise ValueError(f"HFModel needs a Hub ref pinned to a full commit sha (org/model@<sha>), got {model_ref!r}")
+    return download_model(ModelConfig(hf_repo_id=repo, hf_revision=revision))
+
+
 @dataclass(frozen=True)
 class HFModel:
     """Init from an HF checkpoint used verbatim: ``initialize_from_hf`` + ``use_hf_model_config``.
 
-    ``model_ref`` is an HF hub id or a staged directory; ``tokenizer_path`` defaults to it (the
-    common case). ``model_type`` is the Levanter model-registry key; ``use_hf_model_config``
-    re-derives the arch from the checkpoint, so it only has to match the architecture (Delphi and
-    the Qwen3 smoke are both ``qwen3``).
+    ``model_ref`` is a Hub repo pinned to a commit (``org/model@<40-hex sha>``) or an object-store or
+    local directory holding an HF snapshot. A Hub ref is copied to the regional prefix by a CPU
+    download step (:func:`experiments.models.download_model`) that becomes a dependency, so the
+    accelerator task loads weights from the bucket rather than the Hub. A path is loaded in place.
+    ``tokenizer_path`` defaults to the loaded checkpoint. ``model_type`` is the Levanter
+    model-registry key; ``use_hf_model_config`` re-derives the arch from the checkpoint, so it only has
+    to match the architecture (Delphi and the Qwen3 smoke are both ``qwen3``).
     """
 
-    model_ref: str  # HF id or staged prepared-checkpoint dir
-    tokenizer_path: str | None = None  # defaults to model_ref
+    model_ref: str  # pinned Hub ref, or a bucket/local HF snapshot dir
+    tokenizer_path: str | None = None  # defaults to the loaded checkpoint
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
+    # Built once: ArtifactStep compares by identity, so init_deps and build_train_config must share it.
+    _mirror: ArtifactStep[LevanterCheckpoint] | None = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_mirror", _hf_mirror_step(self.model_ref))
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
 
     def resolve_tokenizer(self, ctx: StepContext) -> str:
-        return self.tokenizer_path or self.model_ref
+        return self.tokenizer_path or self._checkpoint_path(ctx)
+
+    def _checkpoint_path(self, ctx: StepContext) -> str:
+        return self.model_ref if self._mirror is None else ctx.artifact_path(self._mirror)
 
     @property
     def run(self) -> Callable[..., None]:
         return _levanter_train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
-        return ()
+        return () if self._mirror is None else (self._mirror,)
 
     def build_train_config(
         self,
@@ -317,7 +352,7 @@ class HFModel:
             num_train_steps,
             # use_hf_model_config re-derives the arch from the checkpoint, so only the class matters.
             model_config=LmConfig.get_choice_class(self.model_type)(),
-            initialize_from_hf=self.model_ref,
+            initialize_from_hf=self._checkpoint_path(ctx),
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
             eos_token_ids=self.eos_token_ids,
@@ -537,6 +572,16 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
+    checkpointer: CheckpointerConfig = field(
+        default_factory=lambda: CheckpointerConfig(
+            save_interval=timedelta(minutes=30), keep=None, keep_last_temporary_checkpoints=1
+        )
+    )
+    """Rolling resume checkpoints every 30 minutes; only the final checkpoint is permanent.
+
+    Set ``keep=[{"every": N}]`` to retain intermediate permanent checkpoints explicitly.
+    Marin resolves permanent and temporary paths from the run's output directory at launch.
+    """
 
     def __post_init__(self) -> None:
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
@@ -648,6 +693,12 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=False)
 
 
+def sft_run_id(spec: SFTSpec) -> str:
+    """Include the artifact name so a shared version does not merge tracker histories."""
+    identity = hashlib.sha256(f"{spec.name}@{spec.version}".encode()).hexdigest()[:12]
+    return f"{spec.name.split('/')[-1]}-{spec.version}-{identity}"
+
+
 def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
@@ -658,6 +709,7 @@ def _trainer(
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        id=sft_run_id(spec),
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
         steps_per_eval=500,
@@ -670,12 +722,7 @@ def _trainer(
             project=spec.wandb_project,
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
-        checkpointer=CheckpointerConfig(
-            base_path="checkpoints/",
-            save_interval=timedelta(minutes=30),
-            keep=[{"every": 5000}],
-            append_run_id_to_base_path=True,
-        ),
+        checkpointer=spec.checkpointer,
     )
 
 

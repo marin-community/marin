@@ -225,12 +225,35 @@ async def task_machine(
     ``RuntimeError`` after the body returns. If the body raises, its exception propagates with a note that names
     the failed closes.
     """
+    async with prepare_machine(
+        task.environment_requirements,
+        task.resources.all + task.resources.worker,
+        factory,
+        runtime,
+        cleanup_timeout=cleanup_timeout,
+    ) as machine:
+        yield machine
+
+
+@asynccontextmanager
+async def prepare_machine(
+    requirements: EnvironmentRequirements,
+    resources: tuple[TaskResource, ...],
+    factory: MachineFactory,
+    runtime: MachineRuntimeSpec,
+    *,
+    cleanup_timeout: float,
+) -> AsyncIterator[Machine]:
+    """Install resources and run setup on a machine, closing it when the context exits.
+
+    Cleanup failures propagate after a successful body, or are attached to its exception as a note.
+    ``runtime.cleanup_timeout`` overrides the supplied cleanup deadline when set.
+    """
     cleanup = _Cleanup(cleanup_timeout)
-    resources = task.resources.all + task.resources.worker
     try:
         async with AsyncExitStack() as owned:
             machine = await _prepare_machine(
-                task.environment_requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned
+                requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned
             )
             assert machine is not None
             yield machine

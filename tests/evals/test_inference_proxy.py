@@ -21,7 +21,6 @@ from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
 from marin.evaluation.runner import _inference_session
-from marin.execution.lazy import lower
 from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -37,6 +36,7 @@ from marin.inference.config import (
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.iris import (
     InferenceBackendState,
+    PreparedInference,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -58,10 +58,10 @@ from marin.inference.types import (
     StreamStart,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from rigging.secrets import SecretBehavior
 from rigging.timing import ExponentialBackoff
 
 from experiments.evals.federated_inference_proxy_demo import _redacted_url
-from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
     assert_completions_scoring_contract,
@@ -88,23 +88,18 @@ def test_capability_url_redaction(url: str, expected: str) -> None:
     assert _redacted_url(url) == expected
 
 
+@pytest.fixture(autouse=True)
+def _no_model_cache(monkeypatch) -> None:
+    """Serving tests here use placeholder model ids; model cache preparation has its own tests."""
+    monkeypatch.setattr(iris_module, "prepare_hf_models", lambda model, engine, *_args, **_kwargs: (model, engine))
+
+
 def _json_bytes(payload: object) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode()
 
 
 def _json_payload(payload: bytes) -> dict:
     return json.loads(payload)
-
-
-def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
-    step = lower(QWEN3_GPU_EVAL_RESULTS)
-    fingerprint = json.loads(step.fingerprint_payload)
-
-    # Artifact lowering replaces runtime resources with a symbolic value. Backend validation must
-    # remain at the serving boundary, where the concrete ResourceConfig is available.
-    assert fingerprint["inference"]["iris"]["worker_resources"] == "<worker_resources>"
-    assert fingerprint["inference"]["instances"] == 1
-    assert fingerprint["inference"]["engine"]["launcher"] == "cuda"
 
 
 def test_remote_topology_selection() -> None:
@@ -162,7 +157,9 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=pipeline_size),
         worker_environment=create_environment(docker_image="test"),
-        serving_geometry=ServingGeometry(8, 1, pipeline_size, 8),
+        serving_geometry=ServingGeometry(
+            tensor_parallel_size=8, data_parallel_size=1, pipeline_parallel_size=pipeline_size, gpus_per_task=8
+        ),
     )
 
     with remote_inference(
@@ -313,7 +310,7 @@ def test_eval_inference_failed_cleanup_prevents_replacement(monkeypatch, failed_
     )
 
     with ExitStack() as stack, pytest.raises((RuntimeError, TimeoutError)):
-        _inference_session(stack, config)
+        _inference_session(stack, PreparedInference(config))
 
     assert len(jobs) == (1 if failed_cleanup == "direct_worker" else 2)
     assert len(groups) == (0 if failed_cleanup == "direct_worker" else 1)
@@ -1062,7 +1059,11 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 
 
 @pytest.mark.parametrize("instances", [1, 2])
-def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, instances) -> None:
+def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp_path, instances) -> None:
+    # The broker task holds the dashboard-only Parallel key beside ordinary worker credentials.
+    (tmp_path / "PARALLEL_API_KEY").write_text("parallel-key")
+    (tmp_path / "HF_TOKEN").write_text("hf-token")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
     broker_actor.register_worker("worker-0", InferenceWorkerMetadata(1, "vllm", "http://unused"))
     proxy_models: list[str] = []
@@ -1166,6 +1167,9 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, ins
     for worker_request in client.submissions:
         assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
+        assert worker_request.environment.secrets["HF_TOKEN"] == "hf-token"
+        assert "PARALLEL_API_KEY" not in worker_request.environment.secrets
+        assert worker_request.environment.secret_behavior is SecretBehavior.ISOLATE
         assert worker_request.resources.regions == ["us-east5"]
         assert worker_request.resources.zone == "us-east5-a"
 

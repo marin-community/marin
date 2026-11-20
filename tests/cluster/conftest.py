@@ -34,8 +34,9 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import JobRequest, JobStatus
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.resources.state import TaskState
 from iris.test_util import wait_for_condition
 from rigging.auth import IapCredentialsUnavailable
 from rigging.filesystem.cluster_config import load_cluster_config, use_data_config
@@ -84,6 +85,12 @@ def open_cluster_client(cluster_name: str) -> Iterator[IrisClient]:
     Resolves the cluster config and credentials, verifies a credential is available (see the
     module docstring), then yields a connected client bundling ``MARIN_ROOT`` as the job workspace.
     """
+    info = get_job_info()
+    if info is not None and cluster_name == MARIN_TPU_CLUSTER:
+        # Nested pytest must act as its task owner, not the worker's IAP identity.
+        with IrisClient.in_cluster(info.controller_address, workspace=MARIN_ROOT, bundle_id=info.bundle_id) as client:
+            yield client
+        return
     with contextlib.ExitStack() as stack:
         try:
             endpoint = stack.enter_context(connect_controller(cluster_name=cluster_name))
@@ -154,9 +161,9 @@ def _task_left_queue(client: IrisClient, task_id: JobName) -> bool:
             return False
         raise
     return state not in (
-        job_pb2.TASK_STATE_PENDING,
-        job_pb2.TASK_STATE_ASSIGNED,
-        job_pb2.TASK_STATE_BUILDING,
+        TaskState.PENDING,
+        TaskState.ASSIGNED,
+        TaskState.BUILDING,
     )
 
 

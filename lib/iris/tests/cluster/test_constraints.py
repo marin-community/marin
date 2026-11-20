@@ -98,6 +98,10 @@ def test_evaluate_constraint_in():
             PlacementRequirements(None, None, None, frozenset({"us-central1"}), None),
         ),
         (
+            [eq_constraint("zone", "us-central2-b")],
+            PlacementRequirements(None, None, None, None, frozenset({"us-central2-b"})),
+        ),
+        (
             [in_constraint("zone", ["us-central1-a", "us-central1-b"])],
             PlacementRequirements(None, None, None, None, frozenset({"us-central1-a", "us-central1-b"})),
         ),
@@ -119,12 +123,21 @@ def test_extract_placement_requirements_parameterized(constraints, expected):
 # --- merge_constraints canonical override ---
 
 
-def test_merge_canonical_key_child_overrides_parent():
-    parent = [Constraint.create(key="device-type", op=ConstraintOp.EQ, value="gpu")]
-    child = [Constraint.create(key="device-type", op=ConstraintOp.EQ, value="tpu")]
+@pytest.mark.parametrize(
+    "key, parent_value, child_value",
+    [
+        (WellKnownAttribute.DEVICE_TYPE, "gpu", "tpu"),
+        (WellKnownAttribute.REGION, "us-west4", "eu-west4"),
+        (WellKnownAttribute.PREEMPTIBLE, "true", "false"),
+        (WellKnownAttribute.ZONE, "a", "b"),
+    ],
+)
+def test_merge_canonical_key_child_overrides_parent(key, parent_value, child_value):
+    parent = [Constraint.create(key=key, op=ConstraintOp.EQ, value=parent_value)]
+    child = [Constraint.create(key=key, op=ConstraintOp.EQ, value=child_value)]
     merged = merge_constraints(parent, child)
     assert len(merged) == 1
-    assert merged[0].values[0].value == "tpu"
+    assert merged[0].values[0].value == child_value
 
 
 def test_merge_non_canonical_key_appends():
@@ -132,6 +145,7 @@ def test_merge_non_canonical_key_appends():
     child = [Constraint.create(key="tpu-name", op=ConstraintOp.EQ, value="pod-b")]
     merged = merge_constraints(parent, child)
     assert len(merged) == 2
+    assert {c.values[0].value for c in merged} == {"pod-a", "pod-b"}
 
 
 # --- ANY-region marker (region EXISTS) ---

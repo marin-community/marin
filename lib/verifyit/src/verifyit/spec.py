@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The verifier contract: ``tests/verifier.toml`` is one flat table, ``mode`` plus that mode's fields.
+"""The verifier contract: ``tests/verifier.toml`` contains ``mode`` plus that mode's fields.
 
 Structured references and predicted-action arguments use JSON strings in TOML to preserve JSON null and nested values.
 
@@ -12,14 +12,13 @@ or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, 
 
 import dataclasses
 import json
-import tomllib
 from dataclasses import dataclass, field, fields
-from enum import StrEnum
-from typing import Any
+from typing import Any, get_origin
 
 import tomli_w
 
 from verifyit.closure_scoring import ClosureFormat
+from verifyit.compat import StrEnum, tomllib
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
 
@@ -37,6 +36,7 @@ class Mode(StrEnum):
     NUMERIC = "numeric"
     EXACT = "exact"
     STRUCTURE_CLOSURE = "structure_closure"
+    REASONING_MARKUP = "reasoning_markup"
     JSON_SCHEMA = "json-schema"
     XML_ELEMENTS = "xml-elements"
     CSV_COLUMNS = "csv-columns"
@@ -90,6 +90,17 @@ class EmptyOutputPolicy(StrEnum):
     GRADE = "grade"
 
 
+class McqExtraction(StrEnum):
+    """How an MCQ grader finds the chosen option in the output.
+
+    ``ANSWER_LINE`` reads the last ``Answer: X`` line or a bare letter. ``SUPERGPQA_REFERENCE``
+    reproduces the SuperGPQA runner's zero-shot extraction, including its option-text fallback.
+    """
+
+    ANSWER_LINE = "answer_line"
+    SUPERGPQA_REFERENCE = "supergpqa_reference"
+
+
 @dataclass(frozen=True)
 class FunctionCall:
     """A function name and decoded JSON argument object, without a harness call ID."""
@@ -101,6 +112,14 @@ class FunctionCall:
 @dataclass(frozen=True)
 class UnsolvableSpec:
     """A private task label requiring a validated terminal ejection for credit."""
+
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
+class ReasoningMarkupSpec:
+    """Grade decoded reply markers, assuming the prompt opened no span. Length stops excuse open spans."""
 
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
@@ -128,6 +147,9 @@ class McqSpec:
     options: int = 4
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    extraction: McqExtraction = field(default=McqExtraction.ANSWER_LINE, kw_only=True)
+    # The text of each option, in letter order; the SuperGPQA extraction maps matched option text to its letter.
+    option_texts: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -296,6 +318,11 @@ RUBRIC_LABELS = "labels"
 RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
 
 
+class JudgeCompletionPolicy(StrEnum):
+    COMPLETED_TEXT = "completed_text"
+    CONTENT = "content"
+
+
 @dataclass(frozen=True)
 class JudgeSpec:
     """An LLM judge over the answer file.
@@ -316,11 +343,15 @@ class JudgeSpec:
     model: str = ""
     exact_gate: bool = True
     request_timeout: float = 120.0
+    transport_attempts: int = field(default=1, kw_only=True)
+    transport_budget: float = field(default=180.0, kw_only=True)
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     system_prompt: str = ""
     prompt_template: str = ""
     label_scores: dict[str, float] = field(default_factory=dict)
+    label_metrics: dict[str, dict[str, float]] = field(default_factory=dict, kw_only=True)
+    completion_policy: JudgeCompletionPolicy = field(default=JudgeCompletionPolicy.COMPLETED_TEXT, kw_only=True)
     exact_gate_answers: tuple[str, ...] = ()
     exact_gate_label: str = ""
     strip_reasoning_blocks: bool = False
@@ -358,6 +389,7 @@ Spec = (
     | NumericSpec
     | ExactSpec
     | StructureClosureSpec
+    | ReasoningMarkupSpec
     | JsonSchemaSpec
     | XmlElementsSpec
     | CsvColumnsSpec
@@ -416,6 +448,11 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
         "grade_structure_closure",
         CandidateEntrypoints("validate_structure_closure", "grade_structure_closure_candidate"),
     ),
+    Mode.REASONING_MARKUP: ModeDescriptor(
+        ReasoningMarkupSpec,
+        "grade_reasoning_markup",
+        CandidateEntrypoints("validate_reasoning_markup", "grade_reasoning_markup_candidate"),
+    ),
     Mode.JSON_SCHEMA: ModeDescriptor(
         JsonSchemaSpec,
         "grade_json_schema",
@@ -463,7 +500,19 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
         return tuple(value)
     if annotation == tuple[Constraint, ...]:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
-    if isinstance(annotation, type) and issubclass(annotation, StrEnum):
+    if annotation == dict[str, float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"field {name!r} expects a table of numbers")
+        return {key: _coerced_float(name, item) for key, item in value.items()}
+    if annotation == dict[str, dict[str, float]]:
+        if not isinstance(value, dict) or any(not isinstance(inner, dict) for inner in value.values()):
+            raise ValueError(f"field {name!r} expects a table of number tables")
+        return {
+            key: {inner_key: _coerced_float(name, item) for inner_key, item in inner.items()}
+            for key, inner in value.items()
+        }
+    # typing.get_origin excludes parameterized generics: on 3.10 they still report as ``type``.
+    if get_origin(annotation) is None and isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return annotation(value)
     if annotation is float and type(value) is int:
         try:
@@ -481,9 +530,18 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
             raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation is int and type(value) is not int:
         raise ValueError(f"field {name!r} expects an integer")
-    if isinstance(annotation, type) and not isinstance(value, annotation):
+    if get_origin(annotation) is None and isinstance(annotation, type) and not isinstance(value, annotation):
         raise ValueError(f"field {name!r} expects {annotation.__name__}, got {type(value).__name__}")
     return value
+
+
+def _coerced_float(name: str, value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError(f"field {name!r} expects a number")
+    try:
+        return float(value)
+    except OverflowError as error:
+        raise ValueError(f"field {name!r} is outside the float range") from error
 
 
 def spec_from_table(table: dict[str, Any]) -> Spec:

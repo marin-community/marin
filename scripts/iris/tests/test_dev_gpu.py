@@ -13,17 +13,15 @@ from iris.cluster.config import (
 )
 from iris.resources.state import JobState, TaskState
 
-from scripts.iris.dev_gpu import (
+from scripts.iris.coreweave_dev_pod import (
     CoreweaveTarget,
-    DevGpuState,
     PodRef,
     Priority,
     parse_running_pod,
     require_coreweave_platform,
-    resolve_coscheduling,
-    session_summary,
     wait_for_running_tasks,
 )
+from scripts.iris.dev_gpu import DevGpuState, resolve_coscheduling, session_summary
 
 JOB_ID = "/dev/dev-gpu-devbox"
 

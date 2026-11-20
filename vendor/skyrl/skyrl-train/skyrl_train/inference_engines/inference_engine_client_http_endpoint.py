@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from skyrl_train.inference_engines.inference_http_backend import InferenceHTTPBackend
 from skyrl_train.inference_engines.vllm.stats import HTTPBridgeStatsAccumulator
+from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ class _RequestOutcomeMiddleware:
 
 
 def is_engine_error_response(response: Dict[str, Any]) -> bool:
-    """Recognize the error response shapes returned by vLLM and SGLang."""
+    """Recognize nested and flat OpenAI-compatible error responses."""
     return "error" in response or response.get("object", "") == "error"
 
 
@@ -345,7 +346,15 @@ async def handle_openai_request(
 
         # ── Streaming branch ──────────────────────────────────────────────
         if request_json.get("stream", False) and endpoint == "/chat/completions":
-            raw_gen = _global_inference_engine_client.chat_completion_stream(payload)
+            if isinstance(_global_inference_engine_client, AgentInferenceBackend):
+                # Installed agents need an HTTP error before SSE starts so their clients can compact and retry.
+                response = await _await_with_disconnect(raw_request, _global_inference_engine_client.chat_completion(payload))
+                if is_engine_error_response(response):
+                    error_code = response["error"]["code"]
+                    return _json_response(response, endpoint=endpoint, bridge_stats=bridge_stats, status_code=error_code)
+                raw_gen = _global_inference_engine_client.stream_chat_completion(response)
+            else:
+                raw_gen = _global_inference_engine_client.chat_completion_stream(payload)
             return StreamingResponse(
                 content=_safe_sse_stream(raw_gen, endpoint=endpoint, bridge_stats=bridge_stats),
                 media_type="text/event-stream",
@@ -362,7 +371,6 @@ async def handle_openai_request(
         response = await _await_with_disconnect(raw_request, backend_request)
 
         if is_engine_error_response(response):
-            # former is vllm format, latter is sglang format
             error_code = response["error"]["code"] if "error" in response else response["code"]
             return _json_response(response, endpoint=endpoint, bridge_stats=bridge_stats, status_code=error_code)
         else:
@@ -549,7 +557,7 @@ def create_app(
 
         Note that the specific fields inside the request and response depend on the backend you use.
         If `config.generator.backend` is `vllm`, then the request and response will be vLLM's.
-        Same for SGLang. SkyRL does not perform field validation beyond `model` and `session_id`,
+        SkyRL does not perform field validation beyond `model` and `session_id`,
         and otherwise depends on the underlying engines' validation.
 
         Make sure you add in `session_id` (a string or an integer) to ensure load balancing and
@@ -559,7 +567,6 @@ def create_app(
 
         API reference:
         - https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
-        - https://docs.sglang.ai/basic_usage/openai_api_completions.html
         """
         return await handle_openai_request(
             raw_request,
@@ -587,7 +594,6 @@ def create_app(
 
         API reference:
         - https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
-        - https://docs.sglang.ai/basic_usage/openai_api_completions.html
         """
         return await handle_openai_request(raw_request, endpoint="/completions", bridge_stats=bridge_stats)
 

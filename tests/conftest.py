@@ -9,6 +9,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from levanter.testing.tokenizer import stage_gpt2_tokenizer
 from levanter.tokenizers import load_tokenizer
+from rigging.pytest_config import hermetic_cluster_config as hermetic_cluster_config
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"

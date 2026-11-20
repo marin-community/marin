@@ -1,18 +1,97 @@
 """Shared Hugging Face model lifecycle utilities."""
 
 import contextlib
+from collections.abc import Mapping
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Any, Protocol
 
 import huggingface_hub.constants
 
-from marinskyrl.environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
+from .environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
 
 TOKENIZER_CONFIG_NAME = "tokenizer_config.json"
 TOKENIZER_JSON_NAME = "tokenizer.json"
+GENERATION_CONFIG_NAME = "generation_config.json"
+END_OF_TURN_TOKENS = ("<|eot_id|>", "<|eom_id|>", "<|im_end|>", "<end_of_turn>")
+DEFAULT_GENERATION_TEMPERATURE = 0.6
+DEFAULT_GENERATION_TOP_P = 0.95
 _OFFLINE_ENVIRONMENT_VARIABLES = (HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV)
+
+
+MODEL_CACHE_SUFFIXES = (".safetensors", ".json", ".txt", ".model", ".py", ".jinja")
+
+
+class GenerationConfigTokenizer(Protocol):
+    """Tokenizer fields needed to derive generation stop tokens."""
+
+    @property
+    def bos_token_id(self) -> int | None: ...
+
+    @property
+    def eos_token_id(self) -> int | None: ...
+
+    def get_vocab(self) -> dict[str, int]: ...
+
+    def __len__(self) -> int: ...
+
+
+def _token_ids(value: int | list[int] | None) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, int):
+        return [value]
+    return list(value)
+
+
+def export_generation_config(
+    tokenizer: GenerationConfigTokenizer,
+    *,
+    chat_template: str | None,
+    explicit: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Complete preserved generation settings for a standalone SkyRL export."""
+    config = dict(explicit or {})
+    eos_ids = set(_token_ids(config.get("eos_token_id")))
+    if tokenizer.eos_token_id is not None:
+        eos_ids.add(tokenizer.eos_token_id)
+    if chat_template:
+        vocab = tokenizer.get_vocab()
+        eos_ids.update(vocab[token] for token in END_OF_TURN_TOKENS if token in chat_template and token in vocab)
+    vocab_size = len(tokenizer)
+    for token_id in eos_ids:
+        if not isinstance(token_id, int) or not 0 <= token_id < vocab_size:
+            raise ValueError(f"eos_token_id {token_id!r} is outside the tokenizer vocabulary [0, {vocab_size})")
+    if eos_ids:
+        config["eos_token_id"] = sorted(eos_ids)
+    if "bos_token_id" not in config and tokenizer.bos_token_id is not None:
+        config["bos_token_id"] = tokenizer.bos_token_id
+    if config.get("do_sample", True):
+        config.setdefault("do_sample", True)
+        config.setdefault("temperature", DEFAULT_GENERATION_TEMPERATURE)
+        config.setdefault("top_p", DEFAULT_GENERATION_TOP_P)
+    return config
+
+
+def write_generation_config(directory: str, config: Mapping[str, Any]) -> Path:
+    """Write a deterministic generation config in a local model directory."""
+    path = Path(directory) / GENERATION_CONFIG_NAME
+    path.write_text(json.dumps(dict(config), indent=2, sort_keys=True) + "\n")
+    return path
+
+
+@dataclass(frozen=True)
+class HuggingFaceModelCache:
+    """CPU mirror bound to an immutable commit and its requested ref alias."""
+
+    model_id: str
+    revision: str
+    uri: str
+    identity: str
+    resolved_revision: str
 
 
 def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_json: bool, source: str) -> bytes:

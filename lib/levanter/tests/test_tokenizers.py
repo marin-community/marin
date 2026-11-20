@@ -12,7 +12,10 @@ import json
 import os
 import pathlib
 import re
+import selectors
 import shutil
+import subprocess
+import sys
 from typing import cast
 from unittest.mock import patch
 
@@ -35,7 +38,6 @@ from levanter.tokenizers import (
     _try_load_tokenizer_from_dir,
     load_tokenizer,
 )
-
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B"
 
@@ -1351,6 +1353,73 @@ def test_stage_tokenizer_file_url_excludes_checkpoint_weights(fake_tokenizer_dir
     assert os.path.isfile(os.path.join(staged_dir, "tokenizer.json"))
     assert os.path.isfile(os.path.join(staged_dir, "tokenizer_config.json"))
     assert not os.path.exists(os.path.join(staged_dir, "model.safetensors"))
+
+
+def test_load_tokenizer_concurrent_processes_share_complete_files(fake_tokenizer_dir):
+    # Control only filesystem I/O: hold the first copy halfway through. If a
+    # second downloader truncates it, finishing the first copy leaves a hole.
+    script = """
+import json
+import pathlib
+import sys
+from fsspec.implementations.local import LocalFileSystem
+from levanter.tokenizers import load_tokenizer
+
+original_get = LocalFileSystem.get
+
+def controlled_get(self, source, destination, **kwargs):
+    if not source.endswith("tokenizer.json"):
+        return original_get(self, source, destination, **kwargs)
+    payload = pathlib.Path(source).read_bytes()
+    split = len(payload) // 2 if sys.argv[2] == "first" else 1
+    with open(destination, "wb") as output:
+        output.write(payload[:split])
+        output.flush()
+        print("copying", flush=True)
+        sys.stdin.readline()
+        output.write(payload[split:])
+
+LocalFileSystem.get = controlled_get
+print("ready", flush=True)
+sys.stdin.readline()
+print(json.dumps(load_tokenizer(sys.argv[1]).get_vocab()), flush=True)
+"""
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, f"file://{fake_tokenizer_dir}", role],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for role in ("first", "second")
+    ]
+    first, second = processes
+    try:
+        for process in processes:
+            assert process.stdout.readline().strip() == "ready"
+        first.stdin.write("go\n")
+        first.stdin.flush()
+        assert first.stdout.readline().strip() == "copying"
+        second.stdin.write("go\n")
+        second.stdin.flush()
+        # A correct second loader waits for the process lock. A racing loader
+        # announces that it truncated the partial file before the first resumes.
+        with selectors.DefaultSelector() as selector:
+            selector.register(second.stdout, selectors.EVENT_READ)
+            if selector.select(timeout=2):
+                assert second.stdout.readline().strip() == "copying"
+        first_output, first_error = first.communicate("finish\n", timeout=30)
+        second_output, second_error = second.communicate("finish\n", timeout=30)
+        assert first.returncode == 0, first_error
+        assert second.returncode == 0, second_error
+        assert json.loads(first_output) == {}
+        assert json.loads(second_output) == {}
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
 
 
 def test_as_hf_tokenizer_loads_object_storage_path(fake_tokenizer_dir, clear_stage_cache):

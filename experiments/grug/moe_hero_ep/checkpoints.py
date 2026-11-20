@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import httpx
 from levanter.checkpoint import CheckpointCandidate, discover_checkpoint_candidates
+from levanter.tracker.wandb import _WANDB_FORK_FROM_PATTERN
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
@@ -22,10 +23,11 @@ _WANDB_TIMEOUT = 30.0
 _ENTITY = "marin-community"
 _PROJECT = "marin_moe"
 _PARENT_CHECKPOINT_PATTERN = re.compile(r".*/(?P<run>[^/]+)/[^/]+/checkpoints/step-(?P<step>\d+)/?")
+_CHECKPOINT_STEP_PATTERN = re.compile(r".*/step-(?P<step>\d+)/?")
 _RUN_QUERY = """
 query HeroRun($entity: String!, $project: String!, $run: String!) {
   project(entityName: $entity, name: $project) {
-    run(name: $run) { config(keys: ["trainer", "hero_handoff_checkpoint"]) }
+    run(name: $run) { config(keys: ["trainer", "hero_handoff_checkpoint", "hero_wandb_fork_from"]) }
   }
 }
 """
@@ -62,6 +64,12 @@ def _checkpoint_root(trainer: dict) -> str:
 
 def _parent_run_and_step(config: dict, run_id: str) -> tuple[str, int] | None:
     handoff = config.get("hero_handoff_checkpoint")
+    fork_from = config.get("hero_wandb_fork_from")
+    if handoff and fork_from:
+        # The fork names the parent run, which a merged checkpoint's own path does not.
+        return _WANDB_FORK_FROM_PATTERN.fullmatch(fork_from)["run_id"], int(
+            _CHECKPOINT_STEP_PATTERN.fullmatch(handoff)["step"]
+        )
     paths = handoff or config["trainer"]["trainer"]["load_checkpoint_path"]
     if paths is None:
         return None
@@ -87,9 +95,10 @@ def hero_checkpoint_paths(run_id: str = CURRENT_HERO_RUN_ID) -> list[str]:
     """Return permanent checkpoint paths for a run and its ancestors, in step order.
 
     The default run ID comes from ``current_run.CURRENT_HERO_RUN_ID``.
-    Read parent links from ``hero_handoff_checkpoint`` or explicit foreign
-    checkpoints in ``trainer.trainer.load_checkpoint_path``. Paths must use the
-    hero layout ``<run>/<version>/checkpoints/step-N``. Directory search roots do
+    Read parent links from ``hero_wandb_fork_from`` with the step of
+    ``hero_handoff_checkpoint``, or else from that checkpoint or explicit foreign
+    checkpoints in ``trainer.trainer.load_checkpoint_path``. Without a fork, paths
+    must use the hero layout ``<run>/<version>/checkpoints/step-N``. Directory search roots do
     not identify parents. Parent links supply inclusive phase bounds. Ambiguous
     links and cycles raise an error. Read directory listings and metadata only.
     Keep distinct paths at the same step. Bucket credentials must be available

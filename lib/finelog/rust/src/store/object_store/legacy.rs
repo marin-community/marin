@@ -89,6 +89,26 @@ impl LegacyObjectStore {
 
 #[async_trait]
 impl ObjectStore for LegacyObjectStore {
+    async fn read_ranges(
+        &self,
+        reference: &super::ObjectReference,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        self.provider
+            .read_ranges(self.path(&reference.id), ranges)
+            .await
+    }
+
+    async fn read_range(
+        &self,
+        reference: &super::ObjectReference,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError> {
+        self.provider
+            .read_range(self.path(&reference.id), range)
+            .await
+    }
+
     fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
         Some(self.provider.scan_path(&self.path(id)))
     }
