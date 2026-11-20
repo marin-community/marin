@@ -102,6 +102,12 @@ jobs:
 
       - env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # A job-local JAX compilation cache lets xdist workers and tests reuse each
+          # other's compiled programs. Entries are keyed by host CPU type, which varies
+          # across hosted runners, so the cache is not carried between jobs.
+          JAX_COMPILATION_CACHE_DIR: ${{ runner.temp }}/jax-compilation-cache
+          JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
+          JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES: "-1"
         # pytest exits 5 when it collects no tests. The diff-based selector can hand a lane
         # only tests that its default marker filter deselects (integration, slow,
         # requires_cluster, ...) — e.g. a PR that touches just an integration test file —
