@@ -22,13 +22,14 @@
 //! and reads selected objects from the cache or backing store.
 
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DFSchema, Result as DFResult};
+use datafusion::common::{Column, DFSchema, Result as DFResult, ScalarValue};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -37,7 +38,9 @@ use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource_parquet::source::ParquetSource;
@@ -48,6 +51,7 @@ use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
 use crate::query::indexed_scan::{IndexedParquetSource, ScanInputs, SegmentFile};
 use crate::store::column_bounds::{ColumnBounds, ColumnRange};
 use crate::store::object_store::{ObjectReference, ObjectStore, QueryCacheAdmission};
+use crate::store::schema::IMPLICIT_SEQ_COLUMN;
 use crate::store::table::query_view::SegmentObjectMap;
 
 /// A live namespace as one DataFusion table.
@@ -192,7 +196,7 @@ impl NamespaceProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        let paths = self.segment_paths_for_scan(filters, limit);
+        let paths = self.segment_paths_for_scan(state, filters, limit)?;
         if paths.is_empty() {
             return MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
                 .scan(state, projection, filters, limit)
@@ -331,13 +335,18 @@ impl NamespaceProvider {
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
 
-    pub(crate) fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
-        let int_ranges = crate::query::predicate::int_column_ranges(filters, &self.schema);
+    /// The snapshotted segments a scan with `filters` must open.
+    ///
+    /// Integer bounds (an Int64 key, `seq`, and the `catalog_bounds` columns)
+    /// go to DataFusion's [`PruningPredicate`]; a segment it cannot rule out,
+    /// including one with no bounds for a filtered column, is kept. String key
+    /// bounds and physical partitions are checked here.
+    fn segment_paths_for_filters(
+        &self,
+        state: &dyn Session,
+        filters: &[Expr],
+    ) -> DFResult<Vec<String>> {
         let string_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-        let int_key_range = self
-            .segment_key_column
-            .as_ref()
-            .and_then(|column| int_ranges.get(column));
         let string_key_range = self
             .segment_key_column
             .as_ref()
@@ -346,51 +355,24 @@ impl NamespaceProvider {
         let partition_candidates = self
             .partition_policy
             .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
-        let seq_range = int_ranges.get("seq");
+        let int_matches = match self.int_bounds_predicate(state, filters)? {
+            Some(predicate) => predicate.prune(&SegmentIntStatistics { provider: self })?,
+            None => vec![true; self.segment_paths.len()],
+        };
         let paths = self
             .segment_paths
             .iter()
-            .filter(|path| {
-                let key_matches =
+            .zip(int_matches)
+            .filter(|(path, int_matches)| {
+                let string_key_matches = string_key_range.is_none_or(|range| {
                     self.segment_key_bounds
                         .get(path.as_str())
                         .is_none_or(|(minimum, maximum)| {
-                            let int_matches = int_key_range.is_none_or(|range| {
-                                let Ok(minimum) = minimum.parse::<i64>() else {
-                                    return true;
-                                };
-                                let Ok(maximum) = maximum.parse::<i64>() else {
-                                    return true;
-                                };
-                                minimum > maximum || range.overlaps(minimum, maximum)
-                            });
-                            let string_matches = string_key_range.is_none_or(|range| {
-                                let minimum = minimum.as_bytes();
-                                let maximum = maximum.as_bytes();
-                                minimum > maximum
-                                    || (range.lo.as_deref().is_none_or(|lower| maximum >= lower)
-                                        && range.hi.as_deref().is_none_or(|upper| minimum <= upper))
-                            });
-                            int_matches && string_matches
-                        });
-                // A column with no entry or an unknown range is scanned, as
-                // without bounds.
-                let column_matches =
-                    self.segment_column_bounds
-                        .get(path.as_str())
-                        .is_none_or(|bounds| {
-                            int_ranges.iter().all(|(column, range)| {
-                                bounds.get(column).is_none_or(|bound| match *bound {
-                                    ColumnRange::Range { min, max } => range.overlaps(min, max),
-                                    ColumnRange::Unknown => true,
-                                })
-                            })
-                        });
-                let seq_matches = seq_range.is_none_or(|range| {
-                    self.segment_seq_bounds
-                        .get(path.as_str())
-                        .is_none_or(|&(minimum, maximum)| {
-                            minimum > maximum || range.overlaps(minimum, maximum)
+                            let minimum = minimum.as_bytes();
+                            let maximum = maximum.as_bytes();
+                            minimum > maximum
+                                || (range.lo.as_deref().is_none_or(|lower| maximum >= lower)
+                                    && range.hi.as_deref().is_none_or(|upper| minimum <= upper))
                         })
                 });
                 let partition_matches = partition_candidates.as_ref().is_none_or(|candidates| {
@@ -404,44 +386,81 @@ impl NamespaceProvider {
                                 || candidates.contains(partition)
                         })
                 });
-                key_matches && column_matches && seq_matches && partition_matches
+                *int_matches && string_key_matches && partition_matches
             })
-            .cloned()
+            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         if paths.len() != self.segment_paths.len() {
             tracing::debug!(
                 segments_total = self.segment_paths.len(),
                 segments_selected = paths.len(),
-                "scoped segment planning to key range, column bounds, seq range, and physical partitions"
+                "scoped segment planning to integer bounds, key range, and physical partitions"
             );
         }
-        paths
+        Ok(paths)
     }
 
-    fn segment_paths_for_scan(&self, filters: &[Expr], limit: Option<usize>) -> Vec<String> {
-        let paths = self.segment_paths_for_filters(filters);
+    /// A pruning predicate over the segments' integer bounds, or `None` when
+    /// `filters` cannot rule out any segment.
+    fn int_bounds_predicate(
+        &self,
+        state: &dyn Session,
+        filters: &[Expr],
+    ) -> DFResult<Option<PruningPredicate>> {
+        let Some(filter) = conjunction(filters.iter().cloned()) else {
+            return Ok(None);
+        };
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+        let physical = state.create_physical_expr(filter, &df_schema)?;
+        let predicate = PruningPredicate::try_new(physical, Arc::clone(&self.schema))?;
+        Ok((!predicate.always_true()).then_some(predicate))
+    }
+
+    /// `path`'s recorded `(min, max)` for the Int64 `column`, if it has one.
+    fn segment_int_range(&self, path: &str, column: &str) -> Option<(i64, i64)> {
+        let (minimum, maximum) = if column == IMPLICIT_SEQ_COLUMN {
+            *self.segment_seq_bounds.get(path)?
+        } else if self.segment_key_column.as_deref() == Some(column) {
+            let (minimum, maximum) = self.segment_key_bounds.get(path)?;
+            (minimum.parse().ok()?, maximum.parse().ok()?)
+        } else {
+            match *self.segment_column_bounds.get(path)?.get(column)? {
+                ColumnRange::Range { min, max } => (min, max),
+                ColumnRange::Unknown => return None,
+            }
+        };
+        (minimum <= maximum).then_some((minimum, maximum))
+    }
+
+    fn segment_paths_for_scan(
+        &self,
+        state: &dyn Session,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DFResult<Vec<String>> {
+        let paths = self.segment_paths_for_filters(state, filters)?;
         let Some(limit) = limit else {
-            return paths;
+            return Ok(paths);
         };
         if !filters.is_empty() {
-            return paths;
+            return Ok(paths);
         }
         if limit == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut rows = 0_u64;
         for (index, path) in paths.iter().enumerate() {
             let Some(&segment_rows) = self.segment_row_counts.get(path) else {
                 // A missing count cannot prove any prefix satisfies the LIMIT.
-                return paths;
+                return Ok(paths);
             };
             rows = rows.saturating_add(segment_rows);
             if rows >= limit as u64 {
-                return paths[..=index].to_vec();
+                return Ok(paths[..=index].to_vec());
             }
         }
-        paths
+        Ok(paths)
     }
 
     /// Build a provider from the registered arrow `schema` and a snapshot of
@@ -618,6 +637,54 @@ impl NamespaceProvider {
     }
 }
 
+/// Each snapshotted segment's integer bounds, as DataFusion pruning statistics:
+/// one container per segment, in snapshot order. A segment with no range for a
+/// column reports null, which never rules the segment out.
+struct SegmentIntStatistics<'a> {
+    provider: &'a NamespaceProvider,
+}
+
+impl SegmentIntStatistics<'_> {
+    fn bound(&self, column: &Column, pick: fn((i64, i64)) -> i64) -> Option<ArrayRef> {
+        let field = self.provider.schema.field_with_name(&column.name).ok()?;
+        if *field.data_type() != DataType::Int64 {
+            return None;
+        }
+        let values = self.provider.segment_paths.iter().map(|path| {
+            self.provider
+                .segment_int_range(path, &column.name)
+                .map(pick)
+        });
+        Some(Arc::new(values.collect::<Int64Array>()))
+    }
+}
+
+impl PruningStatistics for SegmentIntStatistics<'_> {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.bound(column, |(minimum, _)| minimum)
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.bound(column, |(_, maximum)| maximum)
+    }
+
+    fn num_containers(&self) -> usize {
+        self.provider.segment_paths.len()
+    }
+
+    fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
+    fn contained(&self, _column: &Column, _values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        None
+    }
+}
+
 #[async_trait]
 impl TableProvider for NamespaceProvider {
     fn as_any(&self) -> &dyn Any {
@@ -655,11 +722,10 @@ impl TableProvider for NamespaceProvider {
         }
         match &self.inner {
             Inner::Listing(t) => {
-                let mut segment_paths = self.segment_paths_for_scan(filters, limit);
+                let mut segment_paths = self.segment_paths_for_scan(state, filters, limit)?;
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-                let integer_ranges =
-                    crate::query::predicate::int_column_ranges(filters, &self.schema);
+                let integer_ranges = crate::query::predicate::int_column_ranges(filters);
                 let admission = state.config().get_extension::<QueryCacheAdmission>();
                 if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
                 {
@@ -824,6 +890,22 @@ mod tests {
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
         crate::test_support::unique_dir(tag)
+    }
+
+    fn planned_paths(provider: &NamespaceProvider, filters: &[Expr]) -> Vec<String> {
+        provider
+            .segment_paths_for_filters(&crate::query::make_ctx().state(), filters)
+            .unwrap()
+    }
+
+    fn scanned_paths(
+        provider: &NamespaceProvider,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Vec<String> {
+        provider
+            .segment_paths_for_scan(&crate::query::make_ctx().state(), filters, limit)
+            .unwrap()
     }
 
     /// Store-form worker arrow schema: seq, worker_id, mem_bytes.
@@ -1185,10 +1267,10 @@ mod tests {
             );
 
         assert_eq!(
-            provider.segment_paths_for_filters(&[col("run_id").eq(lit("run-a"))]),
+            planned_paths(&provider, &[col("run_id").eq(lit("run-a"))]),
             vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
         );
-        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+        assert_eq!(planned_paths(&provider, &[]), paths);
     }
 
     #[test]
@@ -1204,7 +1286,7 @@ mod tests {
             );
         let filter =
             datafusion::logical_expr::cast(col("worker_id"), DataType::Float64).gt(lit(7.5_f64));
-        assert_eq!(provider.segment_paths_for_filters(&[filter]), paths);
+        assert_eq!(planned_paths(&provider, &[filter]), paths);
     }
 
     #[test]
@@ -1222,8 +1304,7 @@ mod tests {
                 (paths[3].clone(), bounds(ColumnRange::Unknown)),
             ]));
         let selected = |filters: &[Expr]| {
-            provider
-                .segment_paths_for_filters(filters)
+            planned_paths(&provider, filters)
                 .into_iter()
                 .map(|path| paths.iter().position(|planned| *planned == path).unwrap())
                 .collect::<Vec<_>>()
@@ -1239,16 +1320,60 @@ mod tests {
                 .and(col("mem_bytes").lt_eq(lit(150_i64)))]),
             vec![0, 2, 3]
         );
-        // The float form keeps a segment whose max is only past the widened bound.
+        // The float form `epoch_ms > extract(epoch from now()) * 1000 - …` folds to.
         let as_float = || datafusion::logical_expr::cast(col("mem_bytes"), DataType::Float64);
-        assert_eq!(selected(&[as_float().gt(lit(299.5_f64))]), vec![1, 2, 3]);
-        assert_eq!(selected(&[as_float().gt(lit(300.5_f64))]), vec![2, 3]);
+        assert_eq!(selected(&[as_float().gt(lit(299.5_f64))]), vec![2, 3]);
+        assert_eq!(
+            selected(&[col("mem_bytes").in_list(vec![lit(150_i64), lit(160_i64)], false)]),
+            vec![0, 2, 3]
+        );
+        assert_eq!(
+            selected(&[col("mem_bytes")
+                .lt(lit(150_i64))
+                .or(col("mem_bytes").gt(lit(400_i64)))]),
+            vec![0, 2, 3]
+        );
         // No filter, or a filter on another column, keeps every segment.
         assert_eq!(selected(&[]), vec![0, 1, 2, 3]);
         assert_eq!(
             selected(&[col("worker_id").eq(lit("w-1"))]),
             vec![0, 1, 2, 3]
         );
+    }
+
+    #[test]
+    fn a_segment_without_integer_bounds_is_kept_by_every_filter() {
+        // seg_0 records nothing; seg_1 records an unknown range. Neither may be
+        // ruled out, whatever the filter says about the column.
+        let paths = vec![
+            "/planned/seg_0.parquet".to_string(),
+            "/planned/seg_1.parquet".to_string(),
+        ];
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_column_bounds(BTreeMap::from([(
+                paths[1].clone(),
+                ColumnBounds::from([("mem_bytes".to_string(), ColumnRange::Unknown)]),
+            )]));
+        let mem = || col("mem_bytes");
+        let filters = [
+            mem().gt_eq(lit(250_i64)),
+            mem().lt(lit(i64::MIN + 1)),
+            mem().eq(lit(7_i64)),
+            mem().between(lit(1_i64), lit(2_i64)),
+            mem().in_list(vec![lit(1_i64), lit(2_i64)], false),
+            mem().lt(lit(0_i64)).or(mem().gt(lit(10_i64))),
+            mem().is_null(),
+            datafusion::logical_expr::cast(mem(), DataType::Float64).gt(lit(1e18_f64)),
+            col("seq").gt(lit(5_i64)),
+        ];
+        for filter in filters {
+            assert_eq!(
+                planned_paths(&provider, std::slice::from_ref(&filter)),
+                paths,
+                "{filter}"
+            );
+        }
     }
 
     #[test]
@@ -1264,9 +1389,9 @@ mod tests {
                 (paths[2].clone(), 100),
             ]));
 
-        assert!(provider.segment_paths_for_scan(&[], Some(0)).is_empty());
-        assert_eq!(provider.segment_paths_for_scan(&[], Some(100)), paths[..2]);
-        assert_eq!(provider.segment_paths_for_scan(&[], None), paths);
+        assert!(scanned_paths(&provider, &[], Some(0)).is_empty());
+        assert_eq!(scanned_paths(&provider, &[], Some(100)), paths[..2]);
+        assert_eq!(scanned_paths(&provider, &[], None), paths);
     }
 
     #[test]
@@ -1281,9 +1406,9 @@ mod tests {
                 (paths[2].clone(), 100),
             ]));
 
-        assert_eq!(provider.segment_paths_for_scan(&[], Some(101)), paths);
+        assert_eq!(scanned_paths(&provider, &[], Some(101)), paths);
         assert_eq!(
-            provider.segment_paths_for_scan(&[col("mem_bytes").gt(lit(0_i64))], Some(1)),
+            scanned_paths(&provider, &[col("mem_bytes").gt(lit(0_i64))], Some(1)),
             paths
         );
     }
@@ -1308,14 +1433,14 @@ mod tests {
             .gt_eq(lit(150i64))
             .and(col("seq").lt_eq(lit(160i64)));
         assert_eq!(
-            provider.segment_paths_for_filters(&[range]),
+            planned_paths(&provider, &[range]),
             vec![paths[1].clone(), paths[2].clone()]
         );
         assert_eq!(
-            provider.segment_paths_for_filters(&[col("seq").gt(lit(500i64))]),
+            planned_paths(&provider, &[col("seq").gt(lit(500i64))]),
             vec![paths[2].clone()]
         );
-        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+        assert_eq!(planned_paths(&provider, &[]), paths);
     }
 
     #[tokio::test]
@@ -1766,7 +1891,7 @@ mod tests {
             );
 
         assert_eq!(
-            provider.segment_paths_for_filters(&[col("key").eq(lit("/job/b/4"))]),
+            planned_paths(&provider, &[col("key").eq(lit("/job/b/4"))]),
             vec![paths[1].clone(), paths[2].clone()]
         );
     }

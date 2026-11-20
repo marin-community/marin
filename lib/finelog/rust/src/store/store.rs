@@ -5443,11 +5443,11 @@ mod tests {
                 .to_string()
         }
 
-        /// How many segments the scan plans for `sql`, from the filters DataFusion
-        /// pushes into it.
+        /// How many segment files the physical scan for `sql` opens.
         async fn planned_segments(&self, sql: &str) -> usize {
             use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-            use datafusion::logical_expr::LogicalPlan;
+            use datafusion::datasource::physical_plan::FileScanConfig;
+            use datafusion::datasource::source::DataSourceExec;
 
             let ctx = crate::query::make_ctx();
             ctx.register_table(
@@ -5455,32 +5455,36 @@ mod tests {
                 Arc::new(self.provider(true)),
             )
             .unwrap();
-            let plan = ctx.sql(sql).await.unwrap().into_optimized_plan().unwrap();
-            let mut filters = Vec::new();
+            let plan = ctx
+                .sql(sql)
+                .await
+                .unwrap()
+                .create_physical_plan()
+                .await
+                .unwrap();
+            let mut files = 0;
             plan.apply(|node| {
-                if let LogicalPlan::TableScan(scan) = node {
-                    filters.extend(scan.filters.iter().cloned());
+                if let Some(config) = node
+                    .as_any()
+                    .downcast_ref::<DataSourceExec>()
+                    .and_then(|exec| exec.data_source().as_any().downcast_ref::<FileScanConfig>())
+                {
+                    files += config
+                        .file_groups
+                        .iter()
+                        .map(|group| group.len())
+                        .sum::<usize>();
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
             .unwrap();
-            self.provider(true)
-                .segment_paths_for_filters(&filters)
-                .len()
+            files
         }
 
         /// Assert each time filter returns the same rows with and without column
-        /// bounds, and plans the expected number of segments with them.
-        async fn assert_results_unchanged(&self, expected_planned: [usize; 5]) {
-            let filters = [
-                "timestamp_ms >= 2000",
-                "timestamp_ms BETWEEN 1200 AND 2100",
-                "timestamp_ms > 2400.5",
-                // The unconverted form OPS.md allows: `extract(epoch ...) * 1000` is a Float64.
-                "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
-                "timestamp_ms < 1000",
-            ];
-            for (filter, expected) in filters.iter().zip(expected_planned) {
+        /// bounds, and that its scan opens the paired number of segments.
+        async fn assert_results_unchanged(&self, cases: &[(&str, usize)]) {
+            for &(filter, expected) in cases {
                 let sql = format!(
                     "SELECT worker_id, mem_bytes, timestamp_ms FROM \"iris.worker\" \
                      WHERE {filter} ORDER BY timestamp_ms, mem_bytes"
@@ -5642,7 +5646,19 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn time_filters_prune_by_column_bounds() {
         let table = TimeBoundedTable::new("column_bounds_pruned", false).await;
-        table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
+        table
+            .assert_results_unchanged(&[
+                ("timestamp_ms >= 2000", 2),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 2),
+                ("timestamp_ms > 2400.5", 2),
+                // The unconverted form OPS.md allows: `extract(epoch ...) * 1000` is a Float64.
+                (
+                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
+                    2,
+                ),
+                ("timestamp_ms < 1000", 0),
+            ])
+            .await;
         table.cleanup();
     }
 
@@ -5653,7 +5669,18 @@ mod tests {
             table.clear_column_bounds(path);
         }
         assert_eq!(table.recorded_bounds(), vec![None, None, None]);
-        table.assert_results_unchanged([3, 3, 3, 3, 3]).await;
+        table
+            .assert_results_unchanged(&[
+                ("timestamp_ms >= 2000", 3),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 3),
+                ("timestamp_ms > 2400.5", 3),
+                (
+                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
+                    3,
+                ),
+                ("timestamp_ms < 1000", 3),
+            ])
+            .await;
         table.cleanup();
     }
 
@@ -5670,7 +5697,18 @@ mod tests {
                 None
             ]
         );
-        table.assert_results_unchanged([2, 3, 2, 2, 2]).await;
+        table
+            .assert_results_unchanged(&[
+                ("timestamp_ms >= 2000", 2),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 3),
+                ("timestamp_ms > 2400.5", 2),
+                (
+                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
+                    2,
+                ),
+                ("timestamp_ms < 1000", 1),
+            ])
+            .await;
         table.cleanup();
     }
 
@@ -5728,7 +5766,18 @@ mod tests {
             sources_after, sources_before,
             "the backfill reuses each object"
         );
-        table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
+        table
+            .assert_results_unchanged(&[
+                ("timestamp_ms >= 2000", 2),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 2),
+                ("timestamp_ms > 2400.5", 2),
+                (
+                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
+                    2,
+                ),
+                ("timestamp_ms < 1000", 0),
+            ])
+            .await;
         table.cleanup();
     }
 

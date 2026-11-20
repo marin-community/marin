@@ -35,7 +35,6 @@ use regex_syntax::Parser;
 
 use crate::indices::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
 use crate::indices::{IndexRegistry, SegmentArtifacts};
-use crate::query::predicate::flip_comparison;
 
 /// An inclusive key range constraining a single column, distilled from a query's
 /// top-level conjuncts. Used to scope which segments' index sections are read: a
@@ -288,6 +287,19 @@ fn col_literal_comparison(be: &BinaryExpr) -> Option<(String, Operator, Vec<u8>)
         }
     }
     None
+}
+
+/// Mirror a comparison operator for `literal <op> column` ⇒ `column <flipped>
+/// literal`. `None` for non-orderings (so they don't constrain the range).
+fn flip_comparison(op: Operator) -> Option<Operator> {
+    match op {
+        Operator::Lt => Some(Operator::Gt),
+        Operator::LtEq => Some(Operator::GtEq),
+        Operator::Gt => Some(Operator::Lt),
+        Operator::GtEq => Some(Operator::LtEq),
+        Operator::Eq => Some(Operator::Eq),
+        _ => None,
+    }
 }
 
 /// Fold one `column <op> value` bound into `range`, tightening to the
