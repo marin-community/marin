@@ -32,12 +32,12 @@ MASKS = {
 }
 
 
-def _qkv(dtype):
-    """Two sequences with 8 query heads sharing 2 KV heads, head_dim 64."""
+def _qkv(dtype, num_q_heads=8, num_kv_heads=2):
+    """Two sequences of query heads sharing KV heads, head_dim 64."""
     kq, kk, kv = jax.random.split(jax.random.key(0), 3)
-    q = jax.random.normal(kq, (2, SEQ_LEN, 8, 64), jnp.float32).astype(dtype)
-    k = jax.random.normal(kk, (2, SEQ_LEN, 2, 64), jnp.float32).astype(dtype)
-    v = jax.random.normal(kv, (2, SEQ_LEN, 2, 64), jnp.float32).astype(dtype)
+    q = jax.random.normal(kq, (2, SEQ_LEN, num_q_heads, 64), jnp.float32).astype(dtype)
+    k = jax.random.normal(kk, (2, SEQ_LEN, num_kv_heads, 64), jnp.float32).astype(dtype)
+    v = jax.random.normal(kv, (2, SEQ_LEN, num_kv_heads, 64), jnp.float32).astype(dtype)
     return q, k, v
 
 
@@ -116,6 +116,27 @@ def test_flash_attention_gradients_match_reference(mask_name, dtype):
     expected = jax.grad(lambda *a: loss(_reference, *a), argnums=(0, 1, 2))(q, k, v)
     actual = jax.grad(lambda *a: loss(_flash, *a), argnums=(0, 1, 2))(q, k, v)
     _assert_gradients_match(actual, expected, tol=TOLERANCE[dtype])
+
+
+# GQA ratios 1, 2, 3, 6 and 8; the dK/dV kernel accumulates each KV head over its whole query-head group.
+@pytest.mark.parametrize("num_q_heads,num_kv_heads", [(2, 2), (4, 2), (6, 2), (6, 1), (8, 1)])
+@pytest.mark.parametrize("mask_name", ["causal", "window"])
+def test_flash_attention_gqa_ratios_match_reference(num_q_heads, num_kv_heads, mask_name):
+    q, k, v = _qkv(jnp.bfloat16, num_q_heads, num_kv_heads)
+    mask = MASKS[mask_name]
+    cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
+
+    def loss(attend, q, k, v):
+        return jnp.sum(attend(q, k, v, mask).astype(jnp.float32) * cotangent)
+
+    tol = TOLERANCE[jnp.bfloat16]
+    actual = _flash(q, k, v, mask)
+    np.testing.assert_allclose(
+        np.asarray(actual, np.float32), np.asarray(_reference(q, k, v, mask)), atol=tol, rtol=tol
+    )
+    expected_grads = jax.grad(lambda *a: loss(_reference, *a), argnums=(0, 1, 2))(q, k, v)
+    actual_grads = jax.grad(lambda *a: loss(_flash, *a), argnums=(0, 1, 2))(q, k, v)
+    _assert_gradients_match(actual_grads, expected_grads, tol=tol)
 
 
 def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding():
@@ -251,14 +272,16 @@ def _zero_padding_rows(x, segment_ids):
 
 
 @pytest.mark.skipif(INTERPRET, reason="production tiles and shapes are too slow for the Pallas interpreter")
-def test_flash_attention_bf16_default_tiles_at_production_shape_matches_reference():
+@pytest.mark.parametrize("num_q_heads,num_kv_heads", [(8, 2), (6, 1)])
+def test_flash_attention_bf16_default_tiles_at_production_shape_matches_reference(num_q_heads, num_kv_heads):
     # The only test that compiles the default tile sizes a training run uses, at moe_hero_ep's sequence length,
-    # window and head size. It passes the mask as moe_hero_ep does, with precomputed bounds.
+    # window and head size, and with the 6:1 head grouping of the Snowball d768 ladder rung. It passes the mask as
+    # moe_hero_ep does, with precomputed bounds.
     seq_len, window = 4096, 2048
     kq, kk, kv, kc = jax.random.split(jax.random.key(0), 4)
-    q = jax.random.normal(kq, (2, seq_len, 8, 128), jnp.float32).astype(jnp.bfloat16)
-    k = jax.random.normal(kk, (2, seq_len, 2, 128), jnp.float32).astype(jnp.bfloat16)
-    v = jax.random.normal(kv, (2, seq_len, 2, 128), jnp.float32).astype(jnp.bfloat16)
+    q = jax.random.normal(kq, (2, seq_len, num_q_heads, 128), jnp.float32).astype(jnp.bfloat16)
+    k = jax.random.normal(kk, (2, seq_len, num_kv_heads, 128), jnp.float32).astype(jnp.bfloat16)
+    v = jax.random.normal(kv, (2, seq_len, num_kv_heads, 128), jnp.float32).astype(jnp.bfloat16)
     segments = jnp.concatenate([jnp.zeros(1500), jnp.ones(2300), -jnp.ones(296)]).astype(jnp.int32)
     segment_ids = jnp.stack([segments, jnp.roll(segments, 700).at[:700].set(0)])
     reference_mask = AttentionMask.causal(sliding_window=window).with_segment_ids(segment_ids)
