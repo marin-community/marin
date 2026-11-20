@@ -50,6 +50,7 @@ def remove_attempt_ids(path, *, legacy=False):
 @pytest.mark.parametrize(
     "model_fields",
     [
+        pytest.param({"location": "s3://checkpoints/unrelated"}, id="location"),
         {"revision": "starter-commit"},
         {"identity": "starter"},
         {"tokenizer": "org/tokenizer"},
@@ -59,7 +60,7 @@ def remove_attempt_ids(path, *, legacy=False):
 def test_evaluate_rejects_invalid_inputs_when_building_the_step(tmp_path, model_fields):
     source = ArtifactHfModel(ArtifactStep.adopt("tests/model", "2026.10.26", str(tmp_path)))
     with pytest.raises(ValueError, match="come from the model"):
-        evaluate_smoke(source, ModelConfig(name="candidate", location="", **model_fields))
+        evaluate_smoke(source, ModelConfig(name="candidate", **{"location": "", **model_fields}))
 
 
 @pytest.mark.parametrize("source_kind", ["rl", "without-ids", "hf"])
@@ -114,7 +115,7 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
 
     monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=Client()))
     monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
-    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=str(root)))
+    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=""))
     result = evaluation.run(materialized_config(evaluation, str(tmp_path)))
 
     assert len(result.run_ids) == 2
