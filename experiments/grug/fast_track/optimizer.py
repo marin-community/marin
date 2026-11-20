@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -439,6 +440,54 @@ def scale_with_grug_muonc(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _law_cap(shape: tuple[int, ...], kappa: float) -> float:
+    """``kappa |U|`` for one slice of a leaf of ``shape``: ``|U| = sqrt(n min(in, out) max(1, out / in))`` is the
+    Frobenius norm of a fan-scaled orthogonalized update of the slice's ``n`` matrices."""
+    fan_in, fan_out = shape[-2:]
+    num_matrices = math.prod(shape[1:-2])
+    return kappa * math.sqrt(num_matrices * min(fan_in, fan_out) * max(1.0, fan_out / fan_in))
+
+
+def scale_with_grug_muon_law_cap(
+    momentum: float,
+    nesterov: bool,
+    steps: int,
+    muon_eps: float,
+    learning_rate,
+    coefficient_type: CoefficientType,
+    pre_norm: str,
+    kappa: float,
+) -> optax.GradientTransformation:
+    """Muon in a Frobenius ball: ``W' = W - lr O``, ``O`` the Muon direction (with its fan scale), then each slice (a
+    2-D matrix, or each slice along a stack's leading axis) with ``|W'| > _law_cap(shape, kappa)`` is rescaled onto the
+    cap. Inside the ball the step is plain Muon: no decay, no projection."""
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        coefficient_type=coefficient_type,
+        pre_norm=pre_norm,
+    )
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muon_law_cap requires params")
+        directions, muon_state = muon_transform.update(updates, state, params)
+        directions = _match_named_sharding_to_params(directions, params)
+
+        def step(p, o):
+            p32 = p.astype(jnp.float32)
+            stepped = _pin_sharding(p32 - learning_rate * o.astype(jnp.float32), p)
+            cap = _law_cap(p.shape, kappa)
+            capped = stepped * jnp.minimum(1.0, cap / jnp.maximum(_slice_norm(stepped), 1e-10))
+            return (capped - p32).astype(p.dtype)
+
+        return jax.tree.map(step, params, directions), muon_state
+
+    return optax.GradientTransformation(muon_transform.init, update_fn)
+
+
 class AdamCState(NamedTuple):
     adam: optax.OptState
     init_radius: optax.Params
@@ -518,6 +567,11 @@ NONSI_RADIUS_B2 = 0.99
 """``muonh_nonsi_anneal``: Adam betas of the log-radius step."""
 MUONC_ANNEAL_ADAMW_DECAY = 0.05
 """``muonc_anneal_decay``: AdamW decoupled decay of the head and of the rank >= 2 leaves of every Adam group."""
+LAW_CAP_TAU = 39.0
+LAW_CAP_LAMBDA = 0.2
+"""``muonh_law_cap_ball``: the ball radius is ``kappa |U|`` with
+``kappa = sqrt(LAW_CAP_TAU lr_max / (2 LAW_CAP_LAMBDA))``, the size MuonC's matrices settle at for decay
+``LAW_CAP_LAMBDA`` (arXiv 2506.02285)."""
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open)$"
@@ -617,6 +671,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``scale_by_adamc`` at ``lr_h = lr_max s(t)^2`` with decay mult ``muonc_anneal_adamc``, so its decay is
     ``(lr_h^2 / lr_max) lambda_h`` with ``lambda_h = muonc_anneal_adamc * lr_max``. The MoE router weights and
     ``token_embed`` move to the ``adamc_adam`` group, as with ``adamc_head_router_embed``. 0: off."""
+    muonh_law_cap_ball: bool = False
+    """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
+    groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
+    ``t0 = round(LATE_ANNEAL_FRAC N)``, then ``lr_t s(t) / s(t0)`` (``kda_beta`` at ``KDA_BETA_LR_MULT`` x), then each
+    slice above its cap ``kappa |U|`` (``LAW_CAP_TAU``, ``LAW_CAP_LAMBDA``, ``lr_max``) is rescaled onto it. The
+    ``adamh`` LR becomes ``lr_max s(t)^2``. The Adam groups are unchanged."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -630,7 +690,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         hyperparams = {"learning_rate": learning_rate_schedule, "adam_lr": adam_lr_schedule}
-        if self.muonh_nonsi_anneal or self.muonc_anneal_decay:
+        if self.muonh_nonsi_anneal or self.muonc_anneal_decay or self.muonh_law_cap_ball:
             late_anneal_start = round(LATE_ANNEAL_FRAC * num_train_steps)
             lr_at_late_anneal_start = learning_rate_schedule(late_anneal_start)
 
@@ -684,6 +744,21 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     coefficient_type=self.coefficient_type,
                     pre_norm=self.muon_pre_norm,
                     decay_mult=self.muonc_decay_mult,
+                ),
+                _match_named_update_sharding(),
+            )
+
+        def muon_law_cap_at(lr):
+            return optax.chain(
+                scale_with_grug_muon_law_cap(
+                    momentum=self.momentum,
+                    nesterov=self.nesterov,
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    learning_rate=lr,
+                    coefficient_type=self.coefficient_type,
+                    pre_norm=self.muon_pre_norm,
+                    kappa=math.sqrt(LAW_CAP_TAU * self.learning_rate / (2 * LAW_CAP_LAMBDA)),
                 ),
                 _match_named_update_sharding(),
             )
@@ -825,6 +900,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         ),
                         _match_named_update_sharding(),
                     )
+            if self.muonh_law_cap_ball:
+                transforms["muonh"] = muon_law_cap_at(matrix_lr)
+                transforms["kda_beta"] = muon_law_cap_at(matrix_lr * KDA_BETA_LR_MULT)
+                transforms["adamh"] = adamh_at(learning_rate * learning_rate / self.learning_rate)
             return _multi_transform_when_used(
                 transforms, {FULL_BANDWIDTH_MUON_GROUP: muon_at(learning_rate)}, self.create_mask
             )
@@ -880,6 +959,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             self.muonc_anneal_adamc and (not self.muonc_anneal_decay or self.router_lr_mult != 1.0)
         ):
             raise ValueError("muonc_anneal_adamc must be non-negative and needs muonc_anneal_decay and router_lr_mult 1")
+        if self.muonh_law_cap_ball and (
+            self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
+        ):
+            raise ValueError(
+                "muonh_law_cap_ball excludes muonh_radial_softcap, muonc_decay_mult, muonh_nonsi_anneal and "
+                "muonc_anneal_decay"
+            )
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
