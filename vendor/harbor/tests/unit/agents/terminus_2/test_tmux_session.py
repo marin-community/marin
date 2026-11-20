@@ -107,6 +107,21 @@ async def test_model_process_kill_is_scoreable(tmux_session, keystrokes):
     assert not is_resume_retryable(name)
 
 
+async def test_bookkeeping_exec_timeout_is_retryable_infrastructure(tmux_session):
+    tmux_session.environment.exec = AsyncMock(
+        side_effect=TimeoutError("Sandbox command timed out")
+    )
+
+    with pytest.raises(TmuxExecTimeoutError) as caught:
+        await tmux_session.capture_pane()
+
+    # Terminus reports a TimeoutError to the model as its own command timing out.
+    assert not isinstance(caught.value, TimeoutError)
+    name = type(caught.value).__name__
+    assert error_category(name) is ErrorCategory.INFRASTRUCTURE
+    assert is_resume_retryable(name)
+
+
 @pytest.mark.parametrize(
     ("keystrokes", "return_code", "sent"),
     [
