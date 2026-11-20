@@ -37,9 +37,9 @@ from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
     daytona_image,
     ensure_snapshot,
-    is_transient_daytona_error,
     snapshot_request_for_spec,
 )
+from shellbox.backends.daytona.transient import is_transient_daytona_error, retry_transient
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -67,7 +67,6 @@ COUNT_PREFIX = "SHELLBOX_COUNT="
 EXIT_PREFIX = "SHELLBOX_EXIT="
 GONE_MARKER = "SHELLBOX_GONE"
 CLAIMED_MARKER = "SHELLBOX_CLAIMED"
-TRANSIENT_RETRIES = 3
 CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 # The exit trap records the command's status, so a request that lost its connection can still read it.
@@ -93,21 +92,6 @@ def _control_command(script: str) -> str:
             f"PATH={CONTROL_PATH}; export PATH; {script}",
         )
     )
-
-
-async def _retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
-    """Repeat a provider request that failed in transit. The request must be safe to run twice."""
-    backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
-    for _ in range(TRANSIENT_RETRIES):
-        try:
-            return await request()
-        except DaytonaError as error:
-            if not is_transient_daytona_error(error):
-                raise
-            delay = backoff.next_interval()
-            logger.warning("Retrying a Daytona request after %s: delay=%.3f", type(error).__name__, delay)
-            await sleep(delay)
-    return await request()
 
 
 async def _create_sandbox(
@@ -226,7 +210,7 @@ class DaytonaMachine:
 
     async def _control(self, script: str):
         """Run a root command that is safe to run twice, repeating a request that failed in transit."""
-        return await _retry_transient(lambda: self.sandbox.process.exec(_control_command(script), cwd=CONTROL_CWD))
+        return await retry_transient(lambda: self.sandbox.process.exec(_control_command(script), cwd=CONTROL_CWD))
 
     async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
         if user in (None, "root", "0"):
@@ -327,15 +311,15 @@ class DaytonaMachine:
         if not size or not limit:
             return b"", truncated
         source = f"{path}{CLIPPED_OUTPUT_SUFFIX}" if truncated else path
-        data = await _retry_transient(lambda: self.sandbox.fs.download_file(source))
+        data = await retry_transient(lambda: self.sandbox.fs.download_file(source))
         assert isinstance(data, bytes)
         return data, truncated
 
-    async def _response_after_lost_request(
+    async def _exit_after_lost_request(
         self, request: Callable[[], Awaitable[ExecuteResponse]], pidfile: str, completed: str
     ) -> tuple[int, str]:
         """Repeat a command request that failed in transit and return the command's exit code and diagnostic."""
-        response = await _retry_transient(request)
+        response = await retry_transient(request)
         diagnostic = response.result or ""
         if CLAIMED_MARKER not in diagnostic.splitlines():
             # No earlier request started the command, so this response is the command's own.
@@ -449,10 +433,10 @@ class DaytonaMachine:
                     raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
                 if command.stdin:
                     stdin = command.stdin
-                    await _retry_transient(lambda: self.sandbox.fs.upload_file_stream(stdin, stdin_path))
+                    await retry_transient(lambda: self.sandbox.fs.upload_file_stream(stdin, stdin_path))
                 # Nested shell quoting can exceed execve's single-argument limit
                 # even when every original command argument fits.
-                await _retry_transient(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
+                await retry_transient(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
                 started = True
 
                 def request():
@@ -470,7 +454,7 @@ class DaytonaMachine:
                     if not is_transient_daytona_error(error):
                         raise
                     logger.warning("Reattaching to a Daytona command after %s", type(error).__name__)
-                    exit_code, diagnostic = await self._response_after_lost_request(request, pidfile, completed_path)
+                    exit_code, diagnostic = await self._exit_after_lost_request(request, pidfile, completed_path)
             async with asyncio.timeout(self.output_collection_timeout):
                 try:
                     return await self._command_result(exit_code, stdout_path, stderr_path, command.output_limit_bytes)
@@ -532,7 +516,7 @@ class DaytonaMachine:
         if self._closed:
             raise RuntimeError("Machine is closed")
         # Each transfer rewrites its target, so a transfer that lost its connection starts over.
-        await _retry_transient(lambda: self._upload(source, target))
+        await retry_transient(lambda: self._upload(source, target))
 
     async def _upload(self, source: Path, target: str) -> None:
         if source.is_dir():
@@ -566,7 +550,7 @@ class DaytonaMachine:
     async def download(self, source: str, target: Path) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
-        await _retry_transient(lambda: self._download(source, target))
+        await retry_transient(lambda: self._download(source, target))
 
     async def _download(self, source: str, target: Path) -> None:
         probe = await self.sandbox.process.exec(_control_command(f"test -d {shlex.quote(source)}"), cwd=CONTROL_CWD)

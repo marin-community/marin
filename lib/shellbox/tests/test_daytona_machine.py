@@ -788,6 +788,7 @@ def no_retry_wait(monkeypatch):
         pass
 
     monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+    monkeypatch.setattr("shellbox.backends.daytona.transient.sleep", wait)
 
 
 @pytest.mark.parametrize("error", [CONNECTION_RESET, BAD_GATEWAY], ids=["reset", "502"])
