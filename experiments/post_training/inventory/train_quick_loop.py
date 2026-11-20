@@ -28,6 +28,8 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.models import MachineRuntimeSpec
+from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
 
@@ -53,29 +55,31 @@ EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 # A task without tools ends at its first reply, so the limit only bounds tool-using tasks.
 MAX_TURNS = 16
-TASK_MACHINE_TIMEOUTS = {"startup_timeout": 600, "cleanup_timeout": 60}
 # Agentic tasks run their shell on a machine that matches the task's command semantics.
 TASK_MACHINES = {
-    "shell_simulator": {
-        "backend": "shellsim",
-        "network": "deny",
-        "cpus": None,
-        "memory_mb": None,
-        "storage_mb": None,
-        "gpus": 0,
-        "user": None,
-        **TASK_MACHINE_TIMEOUTS,
-    },
-    "linux_process": {
-        "backend": "daytona",
-        "network": "allow",
-        "cpus": 1,
-        "memory_mb": 2048,
-        "storage_mb": 10240,
-        "gpus": 0,
-        "user": None,
-        **TASK_MACHINE_TIMEOUTS,
-    },
+    # ShellSim has no guest network.
+    CommandSemantics.SHELL_SIMULATOR: MachineRuntimeSpec(
+        backend=Backend.SHELLSIM,
+        network=NetworkPolicy.DENY,
+        cpus=None,
+        memory_mb=None,
+        storage_mb=None,
+        gpus=0,
+        user=None,
+        startup_timeout=600,
+        cleanup_timeout=60,
+    ),
+    CommandSemantics.LINUX_PROCESS: MachineRuntimeSpec(
+        backend=Backend.DAYTONA,
+        network=NetworkPolicy.ALLOW,
+        cpus=1,
+        memory_mb=2048,
+        storage_mb=10240,
+        gpus=0,
+        user=None,
+        startup_timeout=600,
+        cleanup_timeout=60,
+    ),
 }
 
 
@@ -105,7 +109,9 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
                 "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
                 "task_spec": {
                     "session": {"max_turns": MAX_TURNS},
-                    "task_machine_by_command_semantics": TASK_MACHINES,
+                    "task_machine_by_command_semantics": {
+                        semantics.value: machine.model_dump(mode="json") for semantics, machine in TASK_MACHINES.items()
+                    },
                 },
             }
         ),

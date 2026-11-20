@@ -14,6 +14,14 @@ The selection defines the 100k training allocation. The launcher defaults to
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
+A selection can include tool-using tasks. The launcher runs shell-simulator
+tasks on ShellSim without network access and Linux tasks on a Daytona sandbox
+with 1 CPU, 2 GB of memory and 10 GB of disk. A tool-using task has at most
+16 model turns; an answer-only task ends at its first reply. The Daytona
+sandboxes use the account of `DAYTONA_EVAL_API_KEY`. The optimizer state stays
+on the CPU, because a full-window trajectory needs the GPU memory for the
+policy update.
+
 ## Serving profile
 
 Evaluation samples at temperature 0.6 and top-p 0.95 with seed 20261020.
