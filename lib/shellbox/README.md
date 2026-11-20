@@ -287,6 +287,18 @@ reference or build-context contents and the requested resources. Use immutable
 image references. A mutable tag can select a snapshot built from an earlier image.
 Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
+`DaytonaMachineFactory(auto_stop_interval=30)` sets the idle-stop interval in
+minutes and configures Daytona to delete sandboxes immediately on stop. An open
+machine renews activity at one-third of that interval because a running guest command does not
+reset Daytona's idle timer. Closing the machine stops renewal before deleting
+the sandbox. If the client process exits without cleanup, renewal stops and idle cleanup
+reclaims the sandbox. `auto_stop_interval=0` disables idle stop and renewal.
+`ttl_minutes` remains the hard wall-clock cap, defaulting to 360 minutes,
+including while activity is renewed.
+Pass `labels={"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}`
+to attach ownership metadata to every sandbox the factory creates. Use a job
+prefix and lane, without personal information or credentials. The default
+labels contain only `owner=shellbox`; callers supply the lane and job labels.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.

@@ -209,6 +209,14 @@ data artifacts, a starting native checkpoint, topology, seed, retention, and the
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
+The `records` tracker requires a fresh attempt ID and `iris.max_retries=0`.
+Its Iris jobs also use zero preemption retries. After a preemption, start a fresh
+attempt with `trainer.resume_mode=from_path` and `trainer.resume_path` pointing
+to its saved `global_step_N` checkpoint. Known checkpoint ancestors contribute
+metrics through the resumed boundary; a checkpoint without recorded ancestry
+contributes only the new attempt's metrics. Other tracker backends retain Iris's
+ordinary preemption retry budget.
+
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
 which leaves the Iris default in effect. In-pod sandbox graders need namespace capabilities: use
@@ -339,7 +347,8 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
 For the current curation, training and evaluation recipe, see the
-[quick RL loop](../recipes/quick-rl-loop.md).
+[Snowball RL experiments](../recipes/rl-experiments.md) and the
+[selection handoff](task-curation.md#train-on-a-snowball-selection).
 
 ### NCCL SIMPLE buffers
 
