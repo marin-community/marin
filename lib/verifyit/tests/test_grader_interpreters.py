@@ -61,6 +61,35 @@ if broken:
     raise SystemExit(1)
 """
 
+# Hand-written TOML with integer literals, the way task authors write label tables.
+JUDGE_SPEC_TOML = """\
+mode = "judge"
+model = "pinned-judge"
+label_scores = { yes = 1, no = 0 }
+label_metrics = { yes = { score = 2 } }
+"""
+
+JUDGE_ROUND_TRIP_SCRIPT = """
+import sys
+
+from verifyit.spec import parse_spec, render_spec
+
+with open(sys.argv[1]) as handle:
+    text = handle.read()
+parsed = parse_spec(text)
+scores = parsed.label_scores
+if scores != {"yes": 1.0, "no": 0.0} or any(type(score) is not float for score in scores.values()):
+    raise SystemExit(1)
+metrics = parsed.label_metrics
+if metrics != {"yes": {"score": 2.0}} or any(
+    type(metric) is not float for table in metrics.values() for metric in table.values()
+):
+    raise SystemExit(1)
+replayed = render_spec(parsed)
+if parse_spec(replayed) != parsed or render_spec(parse_spec(replayed)) != replayed:
+    raise SystemExit(1)
+"""
+
 
 @pytest.fixture(scope="session", params=GRADER_INTERPRETERS, ids=lambda version: f"python-{version}")
 def staged_runtime(tmp_path_factory, request):
@@ -127,3 +156,11 @@ def test_entry_grades_on_the_grader_interpreter(tmp_path, staged_runtime):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+
+
+@pytest.mark.timeout(TIMEOUT_SECONDS)
+def test_judge_spec_round_trips_on_the_grader_interpreter(tmp_path, staged_runtime):
+    config = tmp_path / "verifier.toml"
+    config.write_text(JUDGE_SPEC_TOML)
+    result = _run_on_grader(staged_runtime, JUDGE_ROUND_TRIP_SCRIPT, str(config))
+    assert result.returncode == 0, result.stderr

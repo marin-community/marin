@@ -13,7 +13,7 @@ or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, 
 import dataclasses
 import json
 from dataclasses import dataclass, field, fields
-from typing import Any
+from typing import Any, get_origin
 
 import tomli_w
 
@@ -486,7 +486,19 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
         return tuple(value)
     if annotation == tuple[Constraint, ...]:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
-    if isinstance(annotation, type) and issubclass(annotation, StrEnum):
+    if annotation == dict[str, float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"field {name!r} expects a table of numbers")
+        return {key: _coerced_float(name, item) for key, item in value.items()}
+    if annotation == dict[str, dict[str, float]]:
+        if not isinstance(value, dict) or any(not isinstance(inner, dict) for inner in value.values()):
+            raise ValueError(f"field {name!r} expects a table of number tables")
+        return {
+            key: {inner_key: _coerced_float(name, item) for inner_key, item in inner.items()}
+            for key, inner in value.items()
+        }
+    # typing.get_origin excludes parameterized generics: on 3.10 they still report as ``type``.
+    if get_origin(annotation) is None and isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return annotation(value)
     if annotation is float and type(value) is int:
         try:
@@ -504,9 +516,18 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
             raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation is int and type(value) is not int:
         raise ValueError(f"field {name!r} expects an integer")
-    if isinstance(annotation, type) and not isinstance(value, annotation):
+    if get_origin(annotation) is None and isinstance(annotation, type) and not isinstance(value, annotation):
         raise ValueError(f"field {name!r} expects {annotation.__name__}, got {type(value).__name__}")
     return value
+
+
+def _coerced_float(name: str, value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError(f"field {name!r} expects a number")
+    try:
+        return float(value)
+    except OverflowError as error:
+        raise ValueError(f"field {name!r} is outside the float range") from error
 
 
 def spec_from_table(table: dict[str, Any]) -> Spec:
