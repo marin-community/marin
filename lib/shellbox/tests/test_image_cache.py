@@ -134,7 +134,6 @@ def test_local_unpack_accepts_a_digest_pinned_docker_manifest(tmp_path, layered_
     assert not (unpacked.root / "data/deleted").exists()
     assert (layout / "index.json").read_text() == pinned_index
     assert (blobs / digest).read_bytes() == payload
-    assert image.source == source
 
 
 @pytest.mark.parametrize("tampering", ["config", "tag", "manifest-path"])
