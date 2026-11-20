@@ -159,8 +159,8 @@ def convert_livecodebench(row: RawRow, context: ConversionContext) -> TaskSpec |
 
 
 def livecodebench_item(task: TaskSpec) -> EvaluationItem:
-    """A chat request scored on the final answer, or on complete reasoning when there is no final answer."""
-    item = chat_item(task, response_selection="final_or_complete_reasoning")
+    """A chat request scored on the final answer alone."""
+    item = chat_item(task, response_selection="final_only")
     evidence = source_evidence(task)
     return item.model_copy(update={"groups": {"difficulty": evidence["difficulty"], "platform": evidence["platform"]}})
 
