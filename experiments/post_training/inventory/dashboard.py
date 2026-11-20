@@ -11,7 +11,6 @@ import yaml
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.artifact import Artifact
 from marin.rl.skyrl import SkyRLRunConfig
-from rigging.filesystem.buckets import MissingCredentials
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
@@ -42,8 +41,9 @@ def run_dashboard_attempt(
         }
         identity = hashlib.sha256(json_bytes([config.run_id, config.attempt_id])).hexdigest()
         path = StoragePath(marin_prefix()) / DASHBOARD_INBOX / f"{identity}.json"
+        payload = json_bytes(entry).decode()
         try:
-            path.write_text(json_bytes(entry).decode())
-        except (OSError, MissingCredentials):
+            path.write_text(payload)
+        except Exception:
             logger.exception("Could not register Quick RL attempt %s for dashboard publication", config.attempt_id)
     return run(config)
