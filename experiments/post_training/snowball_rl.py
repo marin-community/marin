@@ -329,7 +329,7 @@ _TRAIN_LONG = _snowball(
     evaluations=(replace(_TASK_SET, every=10, at_start=True),),
 )
 
-_CAMPAIGN_PLAN = replace(
+_AGENTIC_PLAN = replace(
     _P40_PLAN,
     policy_num_nodes=10,
     num_inference_engines=22,
@@ -338,17 +338,17 @@ _CAMPAIGN_PLAN = replace(
     n_samples_per_prompt=8,
     entrypoint="taskcompendium",
 )
-_CAMPAIGN_LAYOUT = replace(
+_AGENTIC_LAYOUT = replace(
     P40,
-    name="rno2a-256",
-    workload=Training(_CAMPAIGN_PLAN),
+    name="h100x256",
+    workload=Training(_AGENTIC_PLAN),
     megatron=replace(P40.megatron, context_parallel_size=5),
     cluster="cw-rno2a",
     priority="production",
-    # Each campaign job has a 12-hour allocation and resumes from its committed checkpoint.
+    # Each job has a 12-hour allocation and resumes from its committed checkpoint.
     job_timeout_seconds=12 * 3600,
 )
-_CAMPAIGN_PATCH = RecipePatch(
+_AGENTIC_PATCH = RecipePatch(
     context_budget=ContextBudget(request_window_tokens=102_400, max_new_tokens_per_turn=16_384, max_turns=128),
     trainer=sections.Trainer(
         use_sample_packing=True,
@@ -376,7 +376,7 @@ _TRAIN_LONG_AGENTIC = agentic(
     replace(
         _TRAIN_LONG.with_updates(10_000),
         revision="2026.11.20.4",
-        recipe=replace(_TRAIN_LONG.recipe, layout=_CAMPAIGN_LAYOUT),
+        recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
@@ -385,10 +385,10 @@ _TRAIN_LONG_AGENTIC = agentic(
     name="train-long-agentic",
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
     limits=agentic_limits(
-        attempt_timeout=5400,
+        trial_timeout=5400,
         model_turn_timeout=1800,
         stall_timeout=10_800,
-    ).merge(_CAMPAIGN_PATCH),
+    ).merge(_AGENTIC_PATCH),
 )
 _TRAIN_MEDIUM_AGENTIC = replace(
     _TRAIN_LONG_AGENTIC.with_updates(10),
@@ -396,9 +396,9 @@ _TRAIN_MEDIUM_AGENTIC = replace(
     recipe=replace(
         _TRAIN_LONG_AGENTIC.recipe,
         layout=replace(
-            _CAMPAIGN_LAYOUT,
-            name="rno2a-88",
-            workload=Training(replace(_CAMPAIGN_PLAN, num_inference_engines=1)),
+            _AGENTIC_LAYOUT,
+            name="h100x88",
+            workload=Training(replace(_AGENTIC_PLAN, num_inference_engines=1)),
             priority="interactive",
         ),
     ),

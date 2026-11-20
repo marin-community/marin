@@ -93,7 +93,7 @@ _ONE_TURN = RecipePatch(
         update_epochs_per_batch=1,
         eval_batch_size=120,
         logger=("console", "records", "wandb"),
-        project_name="mochi-rl",
+        project_name="marin-mochi-rl",
         tracker_commit_each_step=True,
         training_metrics=True,
         rollout_spans=True,
@@ -180,7 +180,6 @@ _TRANSFORMER_KWARGS = {"bias_activation_fusion": True, "grug_checkpoint_cpu_offl
 _THREE_RACK_PATCH = RecipePatch(
     context_budget=ContextBudget(request_window_tokens=262_144, max_new_tokens_per_turn=16_384, max_turns=1),
     trainer=sections.Trainer(
-        project_name="mochi-three-rack",
         rollout_buffer=sections.RolloutBuffer(max_in_flight=128),
         policy=sections.Policy(
             megatron_config=sections.PolicyMegatronConfig(transformer_config_kwargs=_TRANSFORMER_KWARGS)
@@ -222,7 +221,7 @@ _EVALUATION = Evaluation(
 
 # Four hours covers the trial; eight hours covers the trial and one retry.
 _AGENTIC_LIMITS = agentic_limits(
-    attempt_timeout=14_400,
+    trial_timeout=14_400,
     model_turn_timeout=10_800,
     stall_timeout=28_800,
 ).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
@@ -230,7 +229,7 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.20.2",
+    revision="2026.11.20.3",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -266,7 +265,7 @@ _TRAIN_MEDIUM = replace(
     export="none",
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.4"
+    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.5"
 )
 
 MOCHI = ModelPresets(

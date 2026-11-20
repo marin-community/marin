@@ -345,6 +345,11 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
 
 @dataclass(frozen=True, kw_only=True)
 class Preset:
+    """Describe an RL preset with an export policy of ``none``, ``latest``, or ``best``.
+
+    The runner enables ``skyrl_step``'s ``export_hf`` flag for ``latest`` and ``best``.
+    """
+
     name: str
     revision: str
     recipe: Recipe

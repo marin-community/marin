@@ -265,7 +265,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     )
 
 
-def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
+def recovery_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
     """Pin the newest retained recovery checkpoint and starting model from a finished run."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):

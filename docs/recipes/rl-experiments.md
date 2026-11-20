@@ -32,11 +32,12 @@ The long loop trains a model and keeps its best checkpoint with `train-long` or 
 | `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
 | `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
 
-## Mochi and mixed-workload Snowball presets
+## Mochi presets and Snowball task mixes
 
 Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
 Build that export first if it is absent, or use `--init NAME@VERSION` with another published model.
 Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
+A preset ending in `-agentic` trains on agent tasks. A preset ending in `-harbor` evaluates with Harbor cohorts.
 
 | Mochi preset | When to use it | Layout | Checkpoints and export |
 | --- | --- | --- | --- |
@@ -58,8 +59,8 @@ occupied 4.3 TB, and saves took 16 to 26 minutes on the single-rack layout. [Sho
 
 | Snowball preset | When to use it | Layout | Checkpoints and export |
 | --- | --- | --- | --- |
-| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | 11 nodes × 8 H100s | Best eligible policy. |
-| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | 32 nodes × 8 H100s | Best eligible policy. |
+| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. |
+| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. |
 
 When a trained step has the best eligible score, a successful waiting run keeps that native
 checkpoint and returns its HF export. When step zero wins, the result points to the starting HF

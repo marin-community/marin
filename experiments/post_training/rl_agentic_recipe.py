@@ -66,14 +66,14 @@ _AGENTIC_RECIPE = RecipePatch(
 )
 
 
-def agentic_limits(*, attempt_timeout: int, model_turn_timeout: int, stall_timeout: int) -> RecipePatch:
+def agentic_limits(*, trial_timeout: int, model_turn_timeout: int, stall_timeout: int) -> RecipePatch:
     return RecipePatch(
         environment=sections.Environment(
             task_sessions={
-                "daytona": {"ttl_minutes": (attempt_timeout + 59) // 60},
+                "daytona": {"ttl_minutes": (trial_timeout + 59) // 60},
                 "task_spec": {
                     "session": {
-                        "attempt_timeout": attempt_timeout,
+                        "attempt_timeout": trial_timeout,
                         "total_turn_timeout": model_turn_timeout,
                         "model_turn_timeout": model_turn_timeout,
                     }
@@ -85,7 +85,7 @@ def agentic_limits(*, attempt_timeout: int, model_turn_timeout: int, stall_timeo
         ),
         terminal_bench={
             "harbor": {
-                "trial_attempt_timeout_sec": attempt_timeout,
+                "trial_attempt_timeout_sec": trial_timeout,
                 "override_timeout_sec": model_turn_timeout,
                 "eval_timeout_override_sec": model_turn_timeout,
             },
@@ -98,7 +98,7 @@ def agentic_limits(*, attempt_timeout: int, model_turn_timeout: int, stall_timeo
 
 
 def agentic(preset: Preset, *, name: str, limits: RecipePatch) -> Preset:
-    """Apply the mixed workload to a model's training preset."""
+    """Apply the task mix to a model's training preset."""
     config = preset.recipe.config.merge(_AGENTIC_RECIPE).merge(limits)
     budget = config.context_budget
     assert budget is not None

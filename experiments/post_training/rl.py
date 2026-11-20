@@ -620,7 +620,7 @@ def command(
             settings=settings,
             tasks=recipe.selection_artifact(tasks_name) if tasks_name else None,
             init=init if init is not None else recipe.published_model(init_name, preset=preset) if init_name else None,
-            resume=recipe.published_checkpoint(resume_name, preset=preset) if resume_name is not None else None,
+            resume=recipe.recovery_checkpoint(resume_name, preset=preset) if resume_name is not None else None,
             replicates=replicates,
             control=control,
             requirements=requirements,

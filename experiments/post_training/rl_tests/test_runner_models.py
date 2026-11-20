@@ -105,17 +105,29 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
         (
             "mochi",
             {
-                "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.1": "674dadce", "2026.11.20.2": "15b0f019"},
-                "train-long": {"2026.11.19.1": "db854d78", "2026.11.20.1": "b6144722", "2026.11.20.2": "d1f75f26"},
+                "train-medium": {
+                    "2026.11.19.1": "8b5a970e",
+                    "2026.11.20.1": "674dadce",
+                    "2026.11.20.2": "15b0f019",
+                    "2026.11.20.3": "83cf1ff6",
+                },
+                "train-long": {
+                    "2026.11.19.1": "db854d78",
+                    "2026.11.20.1": "b6144722",
+                    "2026.11.20.2": "d1f75f26",
+                    "2026.11.20.3": "491fdfff",
+                },
                 "train-long-3rack": {
                     "2026.11.19.1": "a0e17c94",
                     "2026.11.20.1": "bc381480",
                     "2026.11.20.2": "bc381480",
+                    "2026.11.20.3": "4c67c254",
                 },
                 "train-medium-agentic": {
                     "2026.11.19.1": "3f203da5",
                     "2026.11.20.1": "5f0a0fa1",
                     "2026.11.20.2": "d25249f4",
+                    "2026.11.20.3": "56f7ec8d",
                 },
                 "train-long-agentic": {
                     "2026.11.19.1": "bef4849f",
@@ -123,6 +135,7 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.20.2": "335aff0c",
                     "2026.11.20.3": "9f1754cd",
                     "2026.11.20.4": "f29b9e5f",
+                    "2026.11.20.5": "86d2efb3",
                 },
                 "train-long-agentic-3rack": {
                     "2026.11.19.1": "87a6ba8f",
@@ -130,6 +143,7 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.20.2": "0fcb3537",
                     "2026.11.20.3": "fbfd8b6a",
                     "2026.11.20.4": "e1eba83b",
+                    "2026.11.20.5": "13b9c0ac",
                 },
             },
         ),
@@ -353,7 +367,7 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoin
     assert inputs["model"]["uri"] == preset.model.step.path(str(tmp_path))
     assert inputs["starting_checkpoint"]["uri"] == str(stored_checkpoint)
     assert "step-4@2026.11.19.1" in inputs["starting_checkpoint"]["identity"]
-    resume = rl_compose.published_checkpoint(args[1], preset=preset)
+    resume = rl_compose.recovery_checkpoint(args[1], preset=preset)
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
         rl.build_experiment(preset, table=SNOWBALL, resume=resume, init=preset.model)
 
