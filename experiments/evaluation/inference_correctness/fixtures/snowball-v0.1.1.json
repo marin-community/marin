@@ -1,0 +1,78 @@
+{
+  "model": {
+    "weights": "open-athena/Marin-Snowball-67B-A2B-v0.1.1",
+    "revision": "59852d6f07261722bbec1edb6ab148317156b58e",
+    "config_sha256": "c49b753df32bb2efe438c101a2fe9d43ea1ecc081ddab7d1de62a693e3cfa4c5",
+    "tokenizer": "open-athena/Marin-Snowball-67B-A2B-v0.1.1",
+    "tokenizer_revision": "59852d6f07261722bbec1edb6ab148317156b58e",
+    "eos_token_id": 128001
+  },
+  "manifest": {
+    "uri": "s3://marin-us-east-02a/marin/inference/goldens/snowball-v0.1.1-59852d6f0726/4a5a4a2ffe883e06d73a2049fb93541ca62fd1e0dd66fe7f7484ecbcdea25fe7/manifest.json",
+    "sha256": "f296e39eb6f4fae9f1964c92698667d5985bc9d2bfa9dcea16d22b2e0d8e8cd2"
+  },
+  "policy": {
+    "id": "snowball-v0.1.1-bf16-h100-provisional-v1",
+    "provisional": true,
+    "rationale": "Initial BF16 screen for the selected v0.1.1 reference. The step42150 gate is nearby evidence only. Calibrate this policy with the selected checkpoint and current runtime; retain baseline failures. Matched cache splits must agree exactly. These limits do not qualify RL trainer ratios.",
+    "evidence": [
+      "https://github.com/marin-community/marin/issues/7354",
+      "https://github.com/marin-community/marin-logbooks/issues/57"
+    ],
+    "hardware": [
+      "H100"
+    ],
+    "dtype": "bfloat16",
+    "quantization": null,
+    "kv_cache_dtypes": [
+      "auto",
+      "bfloat16"
+    ],
+    "reference": {
+      "representative": {
+        "maximum": 0.25,
+        "p99": 0.125,
+        "p90": 0.05,
+        "fraction_above_0075": 0.05
+      }
+    },
+    "same_split": {
+      "maximum": 0.0,
+      "p99": 0.0,
+      "p90": 0.0,
+      "fraction_above_0075": 0.0
+    },
+    "different_split": {
+      "maximum": 0.2,
+      "p99": 0.12,
+      "p90": 0.06,
+      "fraction_above_0075": 0.15
+    },
+    "batch": {
+      "maximum": 0.2,
+      "p99": 0.18,
+      "p90": 0.15,
+      "fraction_above_0075": 0.5
+    },
+    "decode": {
+      "maximum": 0.25,
+      "p99": 0.15,
+      "p90": 0.075,
+      "fraction_above_0075": 0.15
+    },
+    "batch_size": 4,
+    "decode_tokens": 32,
+    "cache_decode_tokens": 257,
+    "boundary_lengths": [
+      127,
+      128,
+      129,
+      255,
+      256,
+      257,
+      2047,
+      2048,
+      2049
+    ]
+  }
+}
