@@ -137,8 +137,8 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
         (
             "snowball",
             {
-                "train-medium-agentic": {"2026.11.19.1": "756f58ef", "2026.11.20.1": "179f39bb"},
-                "train-long-agentic": {"2026.11.19.1": "72ec851f", "2026.11.20.1": "99a5e8f6"},
+                "train-medium-agentic": {"2026.11.19.1": "756f58ef", "2026.11.20.1": "b557a4f0"},
+                "train-long-agentic": {"2026.11.19.1": "72ec851f", "2026.11.20.1": "6335c530"},
             },
         ),
     ],
