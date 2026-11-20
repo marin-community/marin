@@ -5,6 +5,11 @@
 
 Categories describe the source of a failure. Consumers choose training treatment
 separately from retry settings. Persisted exception names are stable identifiers.
+
+Producers register new persisted names here. Harbor's
+``test_every_persisted_harbor_exception_has_an_explicit_category`` checks its
+exception classes; SkyRL's ``test_terminal_error_treatment_contract`` freezes
+training treatment, including its TaskMachineError and TemplateError names.
 """
 
 from collections.abc import Mapping
@@ -58,10 +63,10 @@ TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
 class ErrorCategory(StrEnum):
     """Semantic category for a persisted task exception."""
 
-    INFRASTRUCTURE = "infrastructure"
-    AGENT = "agent"
-    PASSTHROUGH = "passthrough"
-    UNKNOWN = "unknown"
+    INFRASTRUCTURE = "infrastructure"  # Outside the agent; SkyRL excludes the sample.
+    AGENT = "agent"  # Attributable to the agent; SkyRL assigns zero reward.
+    PASSTHROUGH = "passthrough"  # Usable work remains; SkyRL keeps the verifier reward.
+    UNKNOWN = "unknown"  # Requires the consumer's configured fallback.
 
 
 _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
@@ -207,7 +212,7 @@ class RetrySettings(BaseModel):
     """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
-    include_exceptions: set[str] | None = None
+    include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")
     exclude_exceptions: set[str] | None = Field(
         default_factory=lambda: {
             AGENT_TIMEOUT_ERROR,
@@ -215,7 +220,8 @@ class RetrySettings(BaseModel):
             REWARD_FILE_NOT_FOUND_ERROR,
             REWARD_FILE_EMPTY_ERROR,
             VERIFIER_OUTPUT_PARSE_ERROR,
-        }
+        },
+        description="Excluded names take precedence over included names",
     )
     include_categories: set[ErrorCategory] | None = None
     exclude_categories: set[ErrorCategory] = Field(default_factory=set)
