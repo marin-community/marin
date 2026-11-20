@@ -76,7 +76,7 @@ def test_usable_group_resets_the_count():
 
 
 def test_quarantine_keeps_enough_prompts_for_each_open_batch():
-    families = {str(index): "agentic" if index < 3 else "math" for index in range(10)}
+    families = {str(index): "agentic" if index >= 7 else "math" for index in range(10)}
     prompts = PromptLoader(
         Prompts(len(families)),
         SeededPasses(len(families), seed=0, shuffle=False),
@@ -86,14 +86,14 @@ def test_quarantine_keeps_enough_prompts_for_each_open_batch():
         families=families,
         family_minimums={"agentic": 2, "math": 4},
     )
-    for uid in ("0", "1", "2"):
+    for uid in ("7", "8", "9"):
         prompts.record_disposition(uid, UNUSABLE)
 
     first = prompts.next_prompt(live=(), family="agentic")
     assert first is not None
     second = prompts.next_prompt(live={first["uid"]}, family="agentic")
     assert second is not None
-    assert {first["uid"], second["uid"]} == {"1", "2"}
+    assert {first["uid"], second["uid"]} == {"8", "9"}
 
 
 def test_quarantine_keeps_one_batch_of_prompts():
