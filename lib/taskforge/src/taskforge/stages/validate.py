@@ -127,10 +127,7 @@ async def run_adversary(
                     )
                 )
             )
-            tools = {
-                **config.tools[name],
-                "report": ReportTool(spec.task, config.policy.setting("adversary.max_findings", int)),
-            }
+            tools = {**config.tools[name], "report": ReportTool(spec.task)}
             session = Conversation(
                 (
                     Message(
