@@ -169,18 +169,20 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "stop_token,stop_reason,skip_special_tokens",
+    "stop_token,stop_reason,content,reward,skip_special_tokens",
     [
-        (98, "stop", None),
-        (97, "stop", None),
-        (99, "stop", None),
-        (98, "length", None),
-        (98, "stop", False),
+        (98, "stop", ",2]\n```", 1.0, None),
+        (97, "stop", ",2]\n```", 1.0, None),
+        (99, "stop", ",2]\n```", 1.0, None),
+        (98, "stop", ",2]\n```", 1.0, False),
+        # A length stop never earns reward, even when its last budgeted token is a turn terminator.
+        (98, "length", ",2]\n```<|eot_id|>", 0.0, None),
+        (98, "length", ",2]\n```<|eot_id|>", 0.0, False),
     ],
-    ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop", "retain-special-tokens"],
+    ids=["llama-turn-end", "qwen-turn-end", "eos", "retain-special-tokens", "length-stop", "length-stop-retained"],
 )
-async def test_assistant_prefix_worker_grades_the_closure_without_the_turn_terminator(
-    task_inputs, stop_token, stop_reason, skip_special_tokens
+async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_terminator(
+    task_inputs, stop_token, stop_reason, content, reward, skip_special_tokens
 ):
     config, request = task_inputs
     if skip_special_tokens is not None:
@@ -222,8 +224,8 @@ async def test_assistant_prefix_worker_grades_the_closure_without_the_turn_termi
         (result,) = await worker.generate(request)
     finally:
         await worker.shutdown()
-    assert result.grade.reward == 1.0
-    assert result.messages[-1]["content"] == ",2]\n```"
+    assert result.grade.reward == reward
+    assert result.messages[-1]["content"] == content
     assert result.response_token_ids == (7, stop_token)
 
 
