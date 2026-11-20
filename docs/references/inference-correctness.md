@@ -6,6 +6,9 @@ and cleanup. Enable `VLLM_SERVER_DEV_MODE=1`, prefix caching, compilation and CU
 graphs. The checker reads server settings, resets its cache and sends overlapping
 requests to engine 0.
 
+Use a Marin vLLM build that reports its source commit in `/version` and exposes
+`prefix_cache_retention_interval` in `/server_info`.
+
 The JSON bindings in
 [`experiments/evaluation/inference_correctness/fixtures`](https://github.com/marin-community/marin/tree/main/experiments/evaluation/inference_correctness/fixtures)
 pin the checkpoint, tokenizer, reference manifest and acceptance policy:
@@ -69,7 +72,9 @@ uv run pytest --confcutdir=tests/cluster/vllm \
 ```
 
 `--confcutdir` keeps this endpoint-only test independent of the parent cluster
-fixtures. Neither adapter deploys a server or imports Knotmeter or AgentX.
+fixtures. `-o addopts=` clears the default marker filter and 600-second session
+cap for this manually selected test. Neither adapter deploys a server or imports
+Knotmeter or AgentX.
 
 Verify saved references without an endpoint or GPUs:
 
