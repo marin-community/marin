@@ -1,0 +1,14 @@
+experiment: X0238d1024
+track: competitive-d1024
+runs:
+  seed0:
+    seed: 0
+    variant: exact-match pointer mixture, 8 candidates
+    flags:
+    - --model-set
+    - pointer_mixture=true
+  control:
+    seed: 0
+    variant: competitive-d1024 control
+    control: true
+    shared: s7n-d1024
