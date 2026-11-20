@@ -155,7 +155,6 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
         await worker.shutdown()
     assert observed[0]["prompt_token_ids"] == [[1, 2]]
     assert observed[0].get("prompts") is None and "tools" not in observed[0]
-    assert observed[0]["sampling_params"]["skip_special_tokens"] is False
     assert result.grade.reward == reward
     if parsed_channel:
         assert result.grade.status != Outcome.GRADED
@@ -174,8 +173,8 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
         (98, "stop", ",2]\n```", 1.0, None),
         (97, "stop", ",2]\n```", 1.0, None),
         (99, "stop", ",2]\n```", 1.0, None),
-        (98, "length", ",2]\n```<|eot_id|>", 0.0, None),
-        (98, "stop", ",2]\n```<|eot_id|>", 0.0, False),
+        (98, "length", ",2]\n```", 1.0, None),
+        (98, "stop", ",2]\n```", 1.0, False),
     ],
     ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop", "retain-special-tokens"],
 )
@@ -264,7 +263,9 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
                 REASONING_VIOLATION_TOKENS_KEY: [2],
             }
 
-    worker = TaskRolloutWorker(config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30)
+    worker = TaskRolloutWorker(
+        config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30
+    )
     try:
         (rollout,) = await worker.generate(request)
         batch = await worker.training_batch(request, [rollout])
@@ -335,7 +336,7 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
         "prompts": [list(prompt.messages)],
         "chat_completion_params": [dict(prompt.options)],
         "session_ids": ["one"],
-        "sampling_params": {"max_generate_length": 10, "logprobs": 1},
+        "sampling_params": {"max_generate_length": 10, "logprobs": 1, "skip_special_tokens": False},
         "max_context_length": 8,
         "max_prompt_length": 5,
     }
@@ -351,7 +352,6 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
     lowered = lowered_task(task, "assistant_prefix", max_turns=1)
     assert task_prompt_token_count(tokenizer, {"task_rollout_spec": lowered.model_dump_json()}, "prompt") == 5
     assert observed[0]["sampling_params"]["max_tokens"] == 3
-    assert observed[0]["sampling_params"]["skip_special_tokens"] is False
     assert "extra_body" not in observed[0]["sampling_params"]
     assert output["responses"] == ["</think> </tool_call> trailing"]
     assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> </tool_call> trailing"}]
@@ -363,7 +363,10 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interrupted", [False, True])
-async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_across_retry(interrupted):
+@pytest.mark.parametrize("skip_special_tokens", [False, True])
+async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_across_retry(
+    interrupted, skip_special_tokens
+):
     backend = Tokenizer(
         models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "</think>": 3, "tail": 4}, unk_token="[UNK]")
     )
@@ -386,7 +389,9 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             partial = interrupted and len(submitted) == 1
             ids = [3] if partial else [4] if interrupted else [3, 4]
             return {
-                "responses": [tokenizer.decode(ids, skip_special_tokens=False)],
+                "responses": [
+                    tokenizer.decode(ids, skip_special_tokens=request["sampling_params"]["skip_special_tokens"])
+                ],
                 "response_ids": [ids],
                 "response_logprobs": [[-token / 10 for token in ids]],
                 "stop_reasons": ["abort" if partial else "stop"],
@@ -403,16 +408,14 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "prompts": [list(prompt.messages)],
             "chat_completion_params": [dict(prompt.options)],
             "session_ids": ["assistant_prefix"],
-            "sampling_params": {"max_generate_length": 10, "logprobs": 1},
+            "sampling_params": {"max_generate_length": 10, "logprobs": 1, "skip_special_tokens": skip_special_tokens},
             "max_context_length": 5,
             "max_prompt_length": 2,
-        }
+        },
+        return_raw_text=True,
     )
-    assert [row["prompt_token_ids"] for row in submitted] == (
-        [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
-    )
+    assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
-    assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)
     assert output["prompt_ids"] == [[1, 2]]
     assert output["response_ids"] == [[3, 4]]
@@ -420,8 +423,10 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
     assert output["student_topk_indices"] == [[[3], [4]]]
     assert output["behavior_topk_logprobs"] == [[[-0.3], [-0.4]]]
     assert output["response_policy_steps"] == [[7, 7]]
-    assert output["responses"] == ["</think> tail"]
-    assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> tail"}]
+    expected = "tail" if skip_special_tokens else "</think> tail"
+    assert output["responses"] == [expected]
+    assert output["raw_responses"] == ["</think> tail"]
+    assert output["assistant_messages"] == [{"role": "assistant", "content": expected}]
     assert output["stop_reasons"] == ["stop"]
     assert output["token_provenance"] == TokenProvenance.ENGINE
 
