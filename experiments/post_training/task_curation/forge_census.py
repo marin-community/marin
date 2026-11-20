@@ -138,9 +138,9 @@ def census(output_root: str, converter_revision: str) -> dict:
         "dedup_receipt": json.loads(receipt.model_dump_json()),
         "fingerprint": {
             "uri": str(root / FINGERPRINT_ARTIFACT),
-            "task_count": survey.fingerprints[source_id].task_count
-            if survey.fingerprints.get(source_id) is not None
-            else None,
+            "task_count": (
+                survey.fingerprints[source_id].task_count if survey.fingerprints.get(source_id) is not None else None
+            ),
             "inputs": survey.fingerprints[source_id].inputs if survey.fingerprints.get(source_id) else None,
         },
     }
