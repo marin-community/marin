@@ -6,6 +6,9 @@ window. Start with a plan to confirm the inputs, allocation and output path.
 
 ## Which experiment to run
 
+Each preset name is `<question>-<length>`, with short presets making no training updates,
+medium presets making 10–25, and long presets making 20 or more.
+
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
 | `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate full EvalLite pass. Gated on throughput and EvalLite family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
