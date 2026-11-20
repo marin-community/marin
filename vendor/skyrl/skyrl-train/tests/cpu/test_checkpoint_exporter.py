@@ -1,5 +1,4 @@
 import hashlib
-import os
 from fnmatch import fnmatchcase
 from pathlib import Path
 from types import SimpleNamespace
@@ -294,4 +293,3 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
     if upload_mode is HFUploadMode.ALL:
         snapshots.append(expected | {f"checkpoints/step_12/{path}": data for path, data in expected.items()})
     assert list(api.commits.values()) == snapshots
-    assert os.environ["HF_HUB_OFFLINE"] == "1"

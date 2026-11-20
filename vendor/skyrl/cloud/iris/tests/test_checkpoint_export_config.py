@@ -109,7 +109,6 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
         inference_engine_expert_parallel_size=4,
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
-    raw["skyrl"]["trainer"].update(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
     parser = export_hf_checkpoint.argument_parser()
