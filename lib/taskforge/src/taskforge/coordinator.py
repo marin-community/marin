@@ -23,7 +23,7 @@ from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Accept, BandOutcome, Budget, Decision, Incomplete, Modify, Reject, Retry
 from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import Conversation, Terminal, Workpiece
-from taskforge.policy import Prompt
+from taskforge.policy import Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
@@ -47,7 +47,7 @@ STAGE_REPLAY_ATTEMPTS = 3
 """Bound interrupted-stage reconstruction; effect executors alone own retries."""
 
 
-def decide(wp: Workpiece, decision: Decision, budget: Budget, revision: Prompt) -> Workpiece:
+def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Policy) -> Workpiece:
     """Record a review decision and apply it: terminal, a revision round, or unchanged for a retry.
 
     A ``Modify`` past ``budget.max_modify_rounds`` becomes ``Abandon``. An ``Accept`` with ``revert``
@@ -73,7 +73,7 @@ def decide(wp: Workpiece, decision: Decision, budget: Budget, revision: Prompt) 
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
             system = tuple(message for message in wp.session.messages if message.role == "system")
-            prompt = revision.render(kind="review", detail="\n".join(findings))
+            prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
             return wp.with_(
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), wp.session.tool_schemas),
@@ -85,23 +85,27 @@ def decide(wp: Workpiece, decision: Decision, budget: Budget, revision: Prompt) 
             return wp.with_(terminal=Terminal.HELD)
 
 
-def advance(wp: Workpiece, result: Exit, config: TaskforgeConfig) -> tuple[Workpiece, Stage | None]:
-    """Apply a stage's exit to the workpiece and pick the next stage, or None once the workpiece is terminal."""
-    match result:
-        case Submitted(submission, session):
+def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) -> tuple[Workpiece, Stage | None]:
+    """Apply ``stage``'s exit to the workpiece and pick the next stage, or None once the workpiece is terminal.
+
+    Raises:
+        ValueError: ``result`` is not an exit ``stage`` may return.
+    """
+    match stage, result:
+        case Stage.AUTHOR, Submitted(submission, session):
             return wp.with_(submission=submission, session=session), Stage.VALIDATE
-        case Stopped():
+        case Stage.AUTHOR, Stopped():
             decision = Abandon((f"author stopped: {result.summary}",))
             stopped = wp.with_(session=result.session, terminal=Terminal.ABANDONED, decisions=(*wp.decisions, decision))
             return stopped, None
-        case Validated(evidence):
+        case Stage.VALIDATE, Validated(evidence):
             return wp.with_(evidence=(*wp.evidence, evidence)), Stage.REVIEW
-        case Decided(decision):
-            wp = decide(wp, decision, config.budget, config.policy.prompt("author.revision"))
+        case Stage.REVIEW, Decided(decision):
+            wp = apply_decision(wp, decision, config.budget, config.policy)
             if wp.terminal is not None:
                 return wp, None
             return wp, Stage.VALIDATE if isinstance(decision, Retry) else Stage.AUTHOR
-    raise ValueError(f"No transition for {type(result).__name__}")
+    raise ValueError(f"{stage} returned {type(result).__name__}, which has no transition")
 
 
 async def run_workpiece(
@@ -114,7 +118,7 @@ async def run_workpiece(
 ) -> Workpiece:
     ctx = Context(log=log)
     wp = Workpiece(proposal.header.id, proposal)
-    stage: Stage | None = Stage.AUTHOR
+    stage = Stage.AUTHOR
     config_digest = digest(config.policy)
     interrupted = False
     stage_attempts: dict[tuple[Stage, int], int] = {}
@@ -122,10 +126,9 @@ async def run_workpiece(
         async with ctx.scope("workpiece"):
             install(ctx, resources)
             wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
-            while stage is not None:
+            while True:
                 key = (stage, wp.round)
                 attempt = stage_attempts.get(key, 1)
-                result: Exit | None = None
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:
@@ -139,15 +142,16 @@ async def run_workpiece(
                     )
                     if attempt >= STAGE_REPLAY_ATTEMPTS:
                         raise
-                    stage_attempts[key] = attempt + 1
-                if result is None:  # the stage was interrupted; replay it
-                    continue
-                previous_round = wp.round
-                wp, following = advance(wp, result, config)
-                if wp.round != previous_round:
-                    await resources.close_round()
-                await ctx.emit(StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal))
-                stage = following
+                    stage_attempts[key] = attempt + 1  # replay the interrupted stage
+                else:
+                    previous_round = wp.round
+                    wp, following = advance(wp, stage, result, config)
+                    if wp.round != previous_round:
+                        await resources.close_round()
+                    await ctx.emit(StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal))
+                    if following is None:
+                        break  # keep the terminal stage, which a hold raised while the scope exits records
+                    stage = following
     except* (Hold, Restart, Transient) as error:
         interrupted = True
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))

@@ -4,13 +4,14 @@
 import asyncio
 import json
 import logging
+import shutil
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import override
+from typing import cast, override
 
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
@@ -24,26 +25,39 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge import checkpoint, driver
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, run_workpiece
+from taskforge.effects.context import Context
 from taskforge.effects.events import StageCompleted
-from taskforge.effects.issues import Restart, Transient
+from taskforge.effects.issues import Hold, Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, fold
-from taskforge.harness.protocol import Stopped, StopReason
+from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, FinishReason, ToolCall
+from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
-from taskforge.model.review import Abandon, Accept, BandRules, Budget, Decision, Incomplete, Modify, Retry
-from taskforge.model.stage import Stage
+from taskforge.model.review import (
+    Abandon,
+    Accept,
+    BandOutcome,
+    BandRules,
+    Budget,
+    Decision,
+    Incomplete,
+    Modify,
+    Retry,
+)
+from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
+from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import CommandResult, EnvFactory
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
-from taskforge.resources.inference import InferenceRequest
+from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
+from taskforge.stages.exits import Decided
 from taskforge.wiring import build_config, install
 
 
@@ -114,10 +128,11 @@ def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
     )
 
 
+SETTINGS: Mapping[str, object] = {"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1}
+
+
 def config() -> TaskforgeConfig:
-    root = Path(__file__).parents[1] / "src/taskforge/policy/defaults"
-    policy = load_policy(root).overlaid({"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1})
-    return build_config(policy, {})
+    return build_config(load_policy(DEFAULTS_DIR).overlaid(SETTINGS), {})
 
 
 async def test_workflow_accepts_and_records_stage_sequence(proposal: TaskProposal) -> None:
@@ -228,7 +243,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
-    overlay.write_text('{"proposals.environments": ["container"]}')
+    overlay.write_text(json.dumps({"proposals.environments": ["container"], **SETTINGS}))
     return Namespace(
         proposals=str(source),
         policy=str(overlay),
@@ -316,7 +331,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     async def fake_runtime(
         policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield config(), next(attempts)
+        yield build_config(policy, {}), next(attempts)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     args = driver_args
@@ -347,7 +362,7 @@ def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason:
     previous = Modify(("prior review",))
     wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
     session = Conversation((), ())
-    stopped, following = advance(wp, Stopped(reason, session), config())
+    stopped, following = advance(wp, Stage.AUTHOR, Stopped(reason, session), config())
     assert following is None
     published = WORKPIECE.validate_json(WORKPIECE.dump_json(stopped))
     assert published.terminal == Terminal.ABANDONED
@@ -431,7 +446,7 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
     async def fake_runtime(
         policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield config(), next(attempts)
+        yield build_config(policy, {}), next(attempts)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
@@ -468,7 +483,7 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
     async def fake_runtime(
         policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield config(), resources(envs, script())
+        yield build_config(policy, {}), resources(envs, script())
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
@@ -522,3 +537,116 @@ async def test_driver_holds_an_undecodable_stream_without_touching_it(
     assert isinstance(decision := workpiece.decisions[-1], Incomplete) and "diverged" in decision.reasons[0]
     assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
     assert (destination / "events.jsonl").read_bytes() == published
+
+
+class ScriptedAuthor(Harness):
+    def __init__(self, *results: Exit | None) -> None:
+        self.results = iter(results)
+        self.calls = 0
+
+    @override
+    async def run(
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+    ) -> Exit:
+        self.calls += 1
+        return cast(Exit, next(self.results))
+
+
+@pytest.mark.parametrize(
+    "result, named",
+    [(Decided(Accept(BandOutcome.IN_BAND)), "author returned Decided"), (None, "author returned NoneType")],
+)
+async def test_stage_result_without_a_transition_from_that_stage_fails(
+    proposal: TaskProposal, result: Exit | None, named: str
+) -> None:
+    author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
+    settings = replace(config(), author=author)
+    with pytest.raises(ValueError, match=named):
+        await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
+    assert author.calls == 1
+
+
+async def test_hold_from_a_terminal_stage_observer_records_that_stage(proposal: TaskProposal) -> None:
+    async def hold_when_terminal(event: StageCompleted) -> None:
+        if event.terminal is not None:
+            raise Hold("late observer")
+
+    def observed(ctx: Context, bundle: Resources) -> None:
+        install(ctx, bundle)
+        ctx.observe(StageCompleted, hold_when_terminal)
+
+    log = EventLog()
+    wp = await run_workpiece(proposal, config(), resources(Envs(), script()), log, install=observed)
+    assert wp.terminal is Terminal.HELD and "late observer" in str(wp.decisions[-1])
+    completed = [(r.event.stage, r.event.exit) for r in log.records if isinstance(r.event, StageCompleted)]
+    assert completed == [("author", "Submitted"), ("validate", "Validated"), ("review", "Decided"), ("review", "Held")]
+
+
+PREVIOUS_SUBMIT_INSTRUCTION = (
+    "Use `submit` with `notes` when ready; it submits the current `task.json` and `controls.json`. If `validate` is "
+    "available, it runs the current draft and returns evidence so you can revise before submitting. Use `finish` only "
+    "when you cannot complete the task."
+)
+"""The author system prompt's submit paragraph before the T arm was removed."""
+
+
+class ResolvedTurnGuard(FakeInference):
+    """Fail on any author turn the journal already resolved, matched without the system prompt."""
+
+    def __init__(self, completions: Sequence[Completion], resolved: Sequence[InferenceRequest]) -> None:
+        super().__init__(completions)
+        self.resolved = {self.turn(request) for request in resolved}
+
+    @staticmethod
+    def turn(request: InferenceRequest) -> tuple[Message, ...]:
+        return tuple(message for message in request.conversation if message.role != Role.SYSTEM)
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        if self.turn(request) in self.resolved:
+            raise AssertionError("an already-resolved author turn reached inference")
+        return await super().complete(request)
+
+
+@pytest.mark.parametrize("pin_prompt", [True, False])
+async def test_root_recorded_with_previous_author_prompt_resumes_through_a_prompt_overlay(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pin_prompt: bool
+) -> None:
+    previous = tmp_path / "previous-defaults"
+    shutil.copytree(DEFAULTS_DIR, previous)
+    system = previous / "prompts/author/system.md"
+    current = system.read_text()
+    submit = next(line for line in current.splitlines() if line.startswith("Use `submit`"))
+    assert submit != PREVIOUS_SUBMIT_INSTRUCTION
+    system.write_text(current.replace(submit, PREVIOUS_SUBMIT_INSTRUCTION))
+    first = replace(resources(Envs(), ()), inference=FakeInference((*script()[:2], Hold("relay moved"))))
+    built: list[Resources] = [first]
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), built[-1]
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    monkeypatch.setattr(driver, "DEFAULTS_DIR", previous)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.HELD
+    assert isinstance(first.inference, FakeInference) and len(first.inference.requests) == 3
+
+    monkeypatch.setattr(driver, "DEFAULTS_DIR", DEFAULTS_DIR)
+    if pin_prompt:
+        overlay = json.loads(Path(driver_args.policy).read_text())
+        Path(driver_args.policy).write_text(json.dumps({**overlay, "author.system": system.read_text()[:-1]}))
+    resumed = ResolvedTurnGuard(script()[2:], first.inference.requests[:2])
+    built.append(replace(resources(Envs(), ()), inference=resumed))
+    driver_args.resume_held = True
+    driver_args.work_dir += "-resume"
+    if not pin_prompt:
+        with pytest.raises(AssertionError, match="already-resolved"):
+            await driver.one(driver_args)
+        return
+    await driver.one(driver_args)
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.ACCEPTED
+    assert [ResolvedTurnGuard.turn(request)[-1].tool_call_id for request in resumed.requests] == ["write", "grade"]

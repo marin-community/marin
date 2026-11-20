@@ -178,10 +178,11 @@ payloads (they are in the workdir).
 
 ## Environments
 
-Lowering accepts three task environments: none (the solver answers in the conversation),
-ShellSim, and the one pinned python container (`GRADER_BASE_IMAGE`). Any other image is refused
-at the author's `validate`/`submit` with a message naming the fix. The author and adversary
-always work in the pinned container with the task's resources hydrated.
+A task runs with no machine (the solver answers in the conversation), on ShellSim, or, when it
+names a `docker_image`, on an Iris gVisor machine. The grader's environment is restricted: its
+image must be the one pinned python container (`GRADER_BASE_IMAGE`) or null for ShellSim, and the
+author's `submit` refuses any other grader image with a message naming the fix. The author and
+adversary always work in the pinned container with the task's resources hydrated.
 
 ## Running locally
 

@@ -20,7 +20,7 @@ from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpe
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
-from taskforge.coordinator import decide
+from taskforge.coordinator import apply_decision
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
@@ -359,11 +359,12 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
 
 
 async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) -> None:
+    """Evidence reaches the author's workspace untruncated: an oversized diagnostic and binary candidate files."""
     assert workpiece.submission is not None
     grade = GradeResult(Outcome.GRADED, 1, diagnostics={"stdout": "first line\n" + "x" * 100000})
     finding = AdversaryFinding(
         "wrong answer accepted",
-        Candidate("x", (inline_resource("answer.bin", b"z" * 100000),)),
+        Candidate("x", (inline_resource("answer.bin", b"\x00\xffz"),)),
         RewardBand(Outcome.GRADED, 1),
         grade,
         True,
@@ -374,11 +375,10 @@ async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) ->
         (ControlResult(0, grade, True),),
         (AdversaryResult("finder", AdversaryStatus.REPORTED, (finding,)),),
     )
-    resumed = workpiece.with_(evidence=(evidence,))
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    await author(ctx, resumed, config(harness), bundle)
+    await author(ctx, workpiece.with_(evidence=(evidence,)), config(harness), bundle)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments)
     saved = bundle.envs.created[0].files[PurePosixPath("/workspace/.validation/0.json")]
@@ -505,7 +505,7 @@ def evidence(solved: int = 1, *, controls_met: bool = True) -> ValidationResult:
 def reviewed(wp: Workpiece) -> Workpiece:
     wp = wp.with_(session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
     setup = build_config(load_policy(DEFAULTS_DIR), {})
-    return decide(wp, default_review(wp, setup.band, setup.budget), setup.budget, setup.policy.prompt("author.revision"))
+    return apply_decision(wp, default_review(wp, setup.band, setup.budget), setup.budget, setup.policy)
 
 
 # One hardening attempt uses the shared modification budget, including a prior unrelated repair.
@@ -682,7 +682,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     decision = (await review(ctx, wp, setup, bundle)).decision
     assert isinstance(decision, verdict)
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
-    after = decide(wp.with_(session=author), decision, setup.budget, setup.policy.prompt("author.revision"))
+    after = apply_decision(wp.with_(session=author), decision, setup.budget, setup.policy)
     if isinstance(decision, Accept):
         assert f"finder: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):
