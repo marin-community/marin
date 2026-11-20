@@ -32,7 +32,6 @@ from verifyit.grade import (
     InvalidTask,
     Reward,
     empty_output_policy,
-    invalid_task,
     numeric_tolerance,
     read_output,
     scored,
@@ -441,79 +440,6 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
     """Extract math under the task's parsing profile and grade the result."""
     return grade_math_candidate(spec, math_answer(spec, text))
-
-
-def _numeric_rows(value: object) -> list[list[float]]:
-    if not isinstance(value, (list, tuple)) or not value:
-        raise ValueError("numeric rows must be a nonempty matrix")
-    rows = []
-    for row in value:
-        if not isinstance(row, (list, tuple)) or not row:
-            raise ValueError("numeric rows must have nonempty columns")
-        if any(isinstance(cell, bool) or not isinstance(cell, (int, float)) for cell in row):
-            raise ValueError("matrix cells must be numeric")
-        converted = [float(cell) for cell in row]
-        if not all(math.isfinite(cell) for cell in converted):
-            raise ValueError("matrix cells must be finite")
-        if rows and len(converted) != len(rows[0]):
-            raise ValueError("numeric rows must be rectangular")
-        rows.append(converted)
-    return rows
-
-
-def grade_regression_candidate(expected: object, candidate: object, *, variance_floor: float) -> Reward:
-    """Grade groups of finite prediction matrices by pooled, uniform-output R².
-
-    Group counts and each group shape must match before rows are pooled. Within
-    each group, rows are observations and columns are outputs. A variance at or below
-    the task's explicit floor yields zero because normalized error is undefined.
-    Trusted references are validated before candidate data; no sklearn dependency.
-    """
-    try:
-        if isinstance(variance_floor, bool) or not math.isfinite(variance_floor) or variance_floor < 0:
-            raise ValueError("variance floor must be finite and nonnegative")
-        if not isinstance(expected, (list, tuple)) or not expected:
-            raise ValueError("reference must contain nonempty groups")
-        groups = [_numeric_rows(group) for group in expected]
-        truth = _numeric_rows([row for group in groups for row in group])
-        columns = list(zip(*truth, strict=True))
-        means = [math.fsum(column) / len(column) for column in columns]
-        variances = [
-            math.fsum((x - mean) ** 2 for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-        deviations = [
-            math.fsum(abs(x - mean) for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-    except (ValueError, TypeError, OverflowError) as error:
-        return invalid_task(str(error))
-    try:
-        if not isinstance(candidate, (list, tuple)) or len(candidate) != len(groups):
-            raise ValueError("prediction group count differs from reference")
-        predicted_groups = [_numeric_rows(group) for group in candidate]
-        for reference, prediction in zip(groups, predicted_groups, strict=True):
-            if len(prediction) != len(reference) or len(prediction[0]) != len(reference[0]):
-                raise ValueError("prediction group shape differs from reference")
-        prediction = [row for group in predicted_groups for row in group]
-        if any(variance <= variance_floor for variance in variances):
-            return scored(0, reason="undefined_variance")
-        errors = [
-            [actual - target for actual, target in zip(predicted, column, strict=True)]
-            for predicted, column in zip(zip(*prediction, strict=True), columns, strict=True)
-        ]
-        nmse = math.fsum(
-            math.fsum(x * x for x in error) / len(error) / variance
-            for error, variance in zip(errors, variances, strict=True)
-        ) / len(columns)
-        nmae = math.fsum(
-            math.fsum(abs(x) for x in error) / len(error) / deviation
-            for error, deviation in zip(errors, deviations, strict=True)
-        ) / len(columns)
-        r2 = 1.0 - nmse
-        if not all(math.isfinite(value) for value in (nmse, nmae, r2)):
-            raise ValueError("prediction metrics are nonfinite")
-    except (ValueError, OverflowError, ZeroDivisionError) as error:
-        return scored(0, reason="invalid_predictions", error=str(error))
-    return scored(max(0.0, r2), nmse=nmse, nmae=nmae, r2=r2)
 
 
 def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:
