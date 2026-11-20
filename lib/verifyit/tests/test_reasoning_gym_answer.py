@@ -90,6 +90,23 @@ def test_prime_factorization_bad_reference_is_an_invalid_task(tests_dir, workspa
         grade(tests_dir, workspace, dataset="prime_factorization")
 
 
+@pytest.mark.parametrize(
+    ("dataset", "index", "candidate"),
+    [
+        pytest.param("boxnet", 0, "0", id="boxnet-json-number"),
+        pytest.param("game_of_life", 0, "{}", id="game_of_life-empty-object"),
+        pytest.param("coin_flip", 0, "1e400", id="coin_flip-infinite-float"),
+        pytest.param("propositional_logic", 0, "(" * 5000 + ")" * 5000, id="propositional_logic-deep-nesting"),
+        pytest.param("calendar_arithmetic", 0, "9" * 400, id="calendar_arithmetic-400-digits"),
+        pytest.param("time_intervals", 2, "9" * 400, id="time_intervals-400-digits"),
+    ],
+)
+def test_reply_the_scorer_cannot_parse_scores_zero(dataset, index, candidate):
+    entry = json.loads(json.dumps(reasoning_gym.create_dataset(dataset, size=3, seed=42)[index]))
+    result = grade_reasoning_gym.grade_reasoning_gym_candidate(ReasoningGymSpec(dataset=dataset), entry, candidate)
+    assert (result.reward, result.status) == (0.0, Status.SCORED)
+
+
 def test_partial_credit_from_the_scorer_is_passed_through(tmp_path, workspace):
     # simple_equations keeps reasoning-gym's default scorer, which awards a fraction when the gold
     # answer is buried in a longer response.
