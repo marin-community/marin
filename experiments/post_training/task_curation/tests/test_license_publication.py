@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseBan, LicenseDecision, LicenseReceipt, LicenseSourcePin
@@ -11,7 +12,7 @@ from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation import license_publication, native_quick
+from experiments.post_training.task_curation import license_publication, license_resolution, native_quick
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from infra.marina.apps.rl_data_catalog.server import licensing
 
@@ -56,6 +57,55 @@ def snapshot_hub(tmp_path, monkeypatch, files):
     monkeypatch.setattr(license_publication, "HfApi", SnapshotHub)
     monkeypatch.setattr(license_publication, "hf_hub_download", download)
     return snapshot
+
+
+@pytest.mark.parametrize("use", ["train", "eval"])
+def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tmp_path, monkeypatch, use):
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    receipt = source_receipt(card)
+    (tmp_path / "README.md").write_bytes(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"frozen source task bytes")
+    repo = "open-athena/fixture-publication"
+    revision = "b" * 40
+    writes = []
+
+    class Hub:
+        def dataset_info(self, dataset, *, revision):
+            return SimpleNamespace(sha=revision, siblings=[SimpleNamespace(rfilename="README.md")])
+
+        def create_repo(self, **kwargs):
+            assert kwargs == {"repo_id": repo, "repo_type": "dataset", "private": True, "exist_ok": False}
+            writes.append("create")
+
+        def repo_info(self, dataset, **kwargs):
+            assert dataset == repo and kwargs["repo_type"] == "dataset"
+            return SimpleNamespace(private=True, sha=kwargs.get("revision", "c" * 40))
+
+        def upload_folder(self, **kwargs):
+            assert kwargs["repo_id"] == repo and kwargs["folder_path"] == tmp_path
+            assert set(kwargs["allow_patterns"]) == {"README.md", "tasks.parquet"}
+            assert kwargs["parent_commit"] == "c" * 40
+            writes.append("upload")
+            return SimpleNamespace(oid=revision)
+
+    def download(dataset, name, *, repo_type, revision):
+        assert (dataset, repo_type, revision) == (repo, "dataset", "b" * 40)
+        return str(tmp_path / name)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_resolution, "HfApi", Hub)
+    monkeypatch.setattr(license_resolution, "_fetch", lambda url, **kwargs: card)
+    monkeypatch.setattr(license_publication, "hf_hub_download", download)
+    monkeypatch.setattr(licensing, "license_bans", lambda: {})
+    prepared = license_publication.prepare_private_dataset(
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use=use
+    )
+    assert writes == []
+    result = license_publication.publish_private_dataset(prepared)
+    assert writes == ["create", "upload"]
+    assert result.revision == revision and result.license_check["verdict"] == "PASS"
+    assert result.license_check["receipt"]["dataset_id"] == repo
+    assert result.license_check["receipt"]["revision"] == revision
 
 
 @pytest.mark.parametrize(

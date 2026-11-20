@@ -49,6 +49,76 @@ class LicensePublication:
     attribution: str
 
 
+@dataclass(frozen=True)
+class PreparedPrivateDataset:
+    source_id: str
+    repo: str
+    use: str
+    folder: Path
+    file_hashes: dict[str, str]
+
+
+@dataclass(frozen=True)
+class PublishedPrivateDataset:
+    revision: str
+    license_check: dict
+
+
+def prepare_private_dataset(
+    source_id: str,
+    repo: str,
+    folder: Path,
+    files: tuple[str, ...],
+    license_receipt: LicenseReceipt,
+    *,
+    use: str,
+) -> PreparedPrivateDataset:
+    """Validate the input grant and freeze upload bytes without repository writes."""
+    require_publication_license(license_receipt, source_id, license_receipt.dataset_id, license_receipt.revision, use)
+    check_publication(source_id, license_receipt.dataset_id, license_receipt.revision, use)
+    if "README.md" not in files or len(files) != len(set(files)):
+        raise ValueError("Private publication needs one card and a unique file inventory")
+    if any(Path(name).name != name for name in files):
+        raise ValueError("Private publication files must be immediate children of the upload folder")
+    hashes = {}
+    for name in files:
+        with (folder / name).open("rb") as stream:
+            hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return PreparedPrivateDataset(source_id, repo, use, folder, hashes)
+
+
+def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivateDataset:
+    """Write a prepared private dataset and check every uploaded byte and its grant."""
+    for name, digest in prepared.file_hashes.items():
+        with (prepared.folder / name).open("rb") as stream:
+            observed = hashlib.file_digest(stream, "sha256").hexdigest()
+        if observed != digest:
+            raise ValueError(f"Prepared private publication changed before creation: {name}")
+    api = HfApi()
+    api.create_repo(repo_id=prepared.repo, repo_type="dataset", private=True, exist_ok=False)
+    initial = api.repo_info(prepared.repo, repo_type="dataset")
+    if not initial.private:
+        raise ValueError("Private publication destination is not private")
+    commit = api.upload_folder(
+        repo_id=prepared.repo,
+        repo_type="dataset",
+        folder_path=prepared.folder,
+        allow_patterns=list(prepared.file_hashes),
+        parent_commit=initial.sha,
+        commit_message="Publish verified private dataset",
+    )
+    if not api.repo_info(prepared.repo, repo_type="dataset", revision=commit.oid).private:
+        raise ValueError("Uploaded publication is not private")
+    for name, digest in prepared.file_hashes.items():
+        local = hf_hub_download(prepared.repo, name, repo_type="dataset", revision=commit.oid)
+        with Path(local).open("rb") as stream:
+            observed = hashlib.file_digest(stream, "sha256").hexdigest()
+        if observed != digest:
+            raise ValueError(f"Private publication readback changed: {name}")
+    gate = check_publication(prepared.source_id, prepared.repo, commit.oid, prepared.use)
+    return PublishedPrivateDataset(commit.oid, gate)
+
+
 def _package_wheel_url(receipt: LicenseReceipt, evidence: LicenseEvidence) -> tuple[str, bytes]:
     """Locate the checked wheel's release URL inside the pinned package metadata."""
     content = _fetch(evidence.url)
