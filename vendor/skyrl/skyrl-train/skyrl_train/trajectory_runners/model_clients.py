@@ -305,9 +305,7 @@ class DirectModelClient:
     def __init__(self, inference_engine_client: InferenceEngineClient):
         self._client = inference_engine_client
 
-    async def generate(self, request: InferenceEngineInput) -> ModelClientOutput:
-        request = request.copy()
-        return_raw_text = request.pop("return_raw_text", False)
+    async def generate(self, request: InferenceEngineInput, *, return_raw_text: bool = False) -> ModelClientOutput:
         if request.get("chat_completion_params") is not None:
             output = await self._generate_chat(request)
         else:

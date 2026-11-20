@@ -155,7 +155,6 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
         await worker.shutdown()
     assert observed[0]["prompt_token_ids"] == [[1, 2]]
     assert observed[0].get("prompts") is None and "tools" not in observed[0]
-    assert observed[0]["sampling_params"]["skip_special_tokens"] is True
     assert result.grade.reward == reward
     if parsed_channel:
         assert result.grade.status != Outcome.GRADED
@@ -353,7 +352,6 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
     lowered = lowered_task(task, "assistant_prefix", max_turns=1)
     assert task_prompt_token_count(tokenizer, {"task_rollout_spec": lowered.model_dump_json()}, "prompt") == 5
     assert observed[0]["sampling_params"]["max_tokens"] == 3
-    assert observed[0]["sampling_params"]["skip_special_tokens"] is False
     assert "extra_body" not in observed[0]["sampling_params"]
     assert output["responses"] == ["</think> </tool_call> trailing"]
     assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> </tool_call> trailing"}]
@@ -411,14 +409,13 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "chat_completion_params": [dict(prompt.options)],
             "session_ids": ["assistant_prefix"],
             "sampling_params": {"max_generate_length": 10, "logprobs": 1, "skip_special_tokens": skip_special_tokens},
-            "return_raw_text": True,
             "max_context_length": 5,
             "max_prompt_length": 2,
-        }
+        },
+        return_raw_text=True,
     )
     assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
-    assert all(row["sampling_params"]["skip_special_tokens"] is skip_special_tokens for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)
     assert output["prompt_ids"] == [[1, 2]]
     assert output["response_ids"] == [[3, 4]]

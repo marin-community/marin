@@ -17,6 +17,8 @@ from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 PLAN, CALL, END_OF_TURN, TOOL_CALL_END, END_OF_TEXT = 3, 4, 5, 6, 9
 THINK_START, THINK_END = 1, 2
+HISTORY_CONTEXT_LENGTH = 1024
+AGENT_TRIAL_ID = "pi"
 VOCABULARY = {
     THINK_START: "<think>",
     THINK_END: "</think>",
@@ -139,9 +141,10 @@ def test_agent_output_cap_reaches_the_chat_server(options, effective_cap):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("installed_agent", [False, True], ids=["skyrl", "harbor-pi"])
-async def test_tool_call_history_renders_without_reply_terminators(installed_agent):
-    # Frozen template from the audited Exp4 tokenizer, unchanged since before #11232.
+@pytest.mark.parametrize("agent_transport", [False, True], ids=["skyrl", "pi-transport"])
+async def test_tool_call_history_renders_without_reply_terminators(agent_transport):
+    # Frozen from https://huggingface.co/marin-community/marin-tokenizer-tools/
+    # blob/3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09/chat_template.jinja
     template = (Path(__file__).parent / "fixtures/marin-chat-template.jinja").read_text()
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
@@ -169,26 +172,26 @@ async def test_tool_call_history_renders_without_reply_terminators(installed_age
 
     engine = ToolClient([PLAN, CALL, END_OF_TURN], "tool_calls")
     client = DirectModelClient(engine)
-    backend = AgentInferenceBackend("policy", 1024, engine.tokenize, engine.tokenizer)
+    backend = AgentInferenceBackend("policy", HISTORY_CONTEXT_LENGTH, engine.tokenize, engine.tokenizer)
 
     async def complete(prompt):
         return await _model_turn(
             client,
             ModelRequest(prompt.messages, prompt.options),
             sampling_params={"skip_special_tokens": False},
-            max_context_length=1024,
-            max_prompt_length=1024,
+            max_context_length=HISTORY_CONTEXT_LENGTH,
+            max_prompt_length=HISTORY_CONTEXT_LENGTH,
             chat_template_kwargs={},
-            session_id="pi",
+            session_id=AGENT_TRIAL_ID,
         )
 
     messages = [{"role": "user", "content": "go"}]
     for _ in range(3):
-        if installed_agent:
-            with backend.session("pi", complete):
+        if agent_transport:
+            with backend.session(AGENT_TRIAL_ID, complete):
                 response = await backend.chat_completion(
                     {
-                        "headers": {TRIAL_HEADER: "pi"},
+                        "headers": {TRIAL_HEADER: AGENT_TRIAL_ID},
                         "json": {"messages": list(messages)},
                     }
                 )
@@ -224,7 +227,6 @@ async def test_tool_call_history_renders_without_reply_terminators(installed_age
 def test_raw_text_is_opt_in_and_keeps_exact_completion_delimiters(chat, raw):
     class Client(_InferenceClient):
         async def generate(self, request):
-            assert "return_raw_text" not in request
             return {
                 "responses": ["<think>plan</think>call<|eot_id|>"],
                 "response_ids": [self.response_ids],
@@ -232,12 +234,12 @@ def test_raw_text_is_opt_in_and_keeps_exact_completion_delimiters(chat, raw):
             }
 
     client = DirectModelClient(Client([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop"))
-    request = InferenceEngineInput(sampling_params={"skip_special_tokens": False}, return_raw_text=raw)
+    request = InferenceEngineInput(sampling_params={"skip_special_tokens": False})
     if chat:
         request.update(prompts=[[{"role": "user", "content": "go"}]], chat_completion_params=[{}])
     else:
         request["prompt_token_ids"] = [[PLAN]]
-    output = asyncio.run(client.generate(request))
+    output = asyncio.run(client.generate(request, return_raw_text=raw))
 
     assert output["responses"] == ["call" if chat else "<think>plan</think>call"]
     assert output["response_ids"] == [[THINK_START, PLAN, THINK_END, CALL, END_OF_TURN]]
