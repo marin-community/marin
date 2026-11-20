@@ -169,11 +169,17 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
         ),
         "science": "Reuse the exact qualified V7 science components; existing checked repairs are already present",
         "initial_eval_inputs": {"prefix": INITIAL_EVAL_INPUTS, "files": [asdict(pin) for pin in INITIAL_EVAL_FILES]},
-        "recipe_schema_migrations": ["Remove the unused tis_splice key from the frozen RL recipe"],
+        "recipe_schema_migrations": [
+            "Remove the unused tis_splice key from the frozen RL recipe",
+            "Rename Daytona provisioning keys to image_build keys; preserve snapshot/declarative values",
+        ],
     }
     # The current trainer has no tis_splice option; this frozen key was unused.
     # Recovery rounds apply the same explicit recipe migration.
     del resolved["rl"]["config"]["trainer"]["algorithm"]["tis_splice"]
+    harbor = resolved["rl"]["config"]["terminal_bench"]["harbor"]
+    harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
+    harbor["eval_daytona_image_build"] = harbor.pop("eval_daytona_provisioning")
     buffer = resolved["rl"]["config"]["trainer"]["rollout_buffer"]
     buffer["consumed_route_quotas"] = dict(PREPARATION_ROUTE_QUOTAS)
     buffer["source_routes"] = {
