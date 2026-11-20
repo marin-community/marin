@@ -501,8 +501,8 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "train-long": {"2026.11.20.4": "e105d46c"},
             "train-long-3rack": {"2026.11.20.4": "9734d621"},
             "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe"},
-            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7"},
+            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985"},
+            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "d540f763"},
         }
         with monkeypatch.context() as local:
             local.delenv("MARIN_PREFIX", raising=False)
@@ -584,13 +584,18 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
         },
-        "train-long-harbor": {"2026.11.20.5": "e1f1635a", "2026.11.20.6": "76baa3fb"},
+        "train-long-harbor": {
+            "2026.11.20.5": "e1f1635a",
+            "2026.11.20.6": "76baa3fb",
+            "2026.11.20.7": "9ceb90cb",
+        },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
+            "2026.11.20.5": "aa36f9de",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960"},
+        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
