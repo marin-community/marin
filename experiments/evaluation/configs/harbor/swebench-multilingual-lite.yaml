@@ -1,0 +1,29 @@
+n_concurrent_trials: 4
+retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+    # Sandbox image pulls and result uploads; a retry can't change the score.
+    - SandboxBuildFailedError
+    - ArtifactUploadTimeoutError
+    - ArtifactWriterBacklogError
+    # Daytona connection resets and unresponsive sandboxes.
+    - DaytonaConnectionError
+    - DaytonaOutputUnavailable
+    - TmuxBatchTimeoutError
+  exclude_exceptions: []
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+  kwargs:
+    # Each task has its own image; snapshots would need 300 of the account's 45.
+    image_build: declarative
+agents:
+  - name: terminus-2
+datasets:
+  - name: swebench_multilingual
+    version: "1.0"
