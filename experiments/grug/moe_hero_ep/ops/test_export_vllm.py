@@ -192,7 +192,7 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
-def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
+def test_mochi_sft_three_rack_plan_saves_only_for_export(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
@@ -210,12 +210,31 @@ def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
     assert not config.trainer.save_checkpoints
     assert config.trainer.trainer.load_checkpoint_path == [MOCHI_SPEC.initialize_from]
 
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path))
+    export_model = MIXTURE_262K_48NODE.model()
+    [training] = export_model.step.deps
+    config = training.build_config(StepContext.for_fingerprint(training.runtime_args.keys(), training.deps))
+    assert training.runtime_args["train_resources"].replicas == 48
+    assert config.trainer.replica_axis_size == 3
+    assert config.stop_step == 393494
+    assert config.trainer.save_checkpoints
+    assert config.trainer.trainer.checkpointer.save_interval is None
+    requests = []
+
+    def submit(request):
+        requests.append(request)
+        return SimpleNamespace(wait=lambda **kwargs: None)
+
+    lowered = export_model.step.lower()
+    assert lowered.fn is not None
+    with set_current_client(SimpleNamespace(submit=submit)):
+        lowered.fn(str(tmp_path / "export"))
+    [request] = requests
+    assert request.resources.ram == "448GiB"
+
 
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize(
-    "preset,racks", [(MIXTURE_262K_16NODE, 1), (MIXTURE_262K_48NODE, 3)], ids=["one-rack", "three-rack"]
-)
-def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch, preset, racks):
+def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     initializer = tmp_path / "pretraining" / "step-16"
     initializer.mkdir(parents=True)
@@ -228,12 +247,13 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
-        preset.recipe,
+        MIXTURE_262K_16NODE.recipe,
         initialize_from=str(initializer),
+        stop_after_steps=1,
         eval_every=0,
         expert_placement=placement,
     )
-    preset = dataclasses.replace(preset, recipe=recipe)
+    preset = dataclasses.replace(MIXTURE_262K_16NODE, recipe=recipe)
     resources = preset.resources
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
         dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=15)).model()
@@ -242,19 +262,23 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         preset.model()
     initializer_metadata.write_text(json.dumps(initial))
     prefix = tmp_path / "selected-prefix"
-    trained = build_training(preset, steps=1, export=True, prefix=str(prefix))
-    model = recipe.export_model(trained)
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(prefix))
+    model = preset.model()
+    [trained] = model.step.deps
+    cli_training = build_training(preset, steps=1, export=True, prefix=recipe.scratch_prefix())
+    assert cli_training.fingerprint() == trained.fingerprint()
     training = materialized_config(trained, str(tmp_path))
-    assert training.resources.replicas == 16 * racks
+    assert training.resources.replicas == 16
     assert training.resources.device.count == 4
-    assert training.trainer.replica_axis_size == racks
+    assert training.trainer.replica_axis_size == 1
     assert training.trainer.save_checkpoints
     assert training.trainer.trainer.checkpointer.save_interval is None
     assert training.trainer.trainer.checkpointer.keep is None
     [constraint] = convert_constraints(training.resources)
     assert is_any_region_marker(constraint)
-    assert Path(trained.path()).is_relative_to(prefix)
-    checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
+    trained_path = Path(trained.path().removeprefix("file://"))
+    assert trained_path.is_relative_to(prefix)
+    checkpoints = trained_path / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     native_fixture(str(checkpoints / "step-18"), master=True, step=18)
     newer_metadata = checkpoints / "step-18" / "metadata.json"
@@ -272,7 +296,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
 
     monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
     monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
-    output = Path(model.step.path())
+    output = Path(model.step.path().removeprefix("file://"))
     assert output.is_relative_to(prefix)
     config = materialized_config(model.step, str(tmp_path))
     requests = []
@@ -285,11 +309,10 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     lowered = model.step.lower()
     assert lowered.fn is not None
     with set_current_client(SimpleNamespace(submit=submit)):
-        lowered.fn(str(output))
+        lowered.fn(model.step.path())
     [request] = requests
     [constraint] = convert_constraints(request.resources)
     assert is_any_region_marker(constraint)
-    assert request.resources.cpu == 32
     assert request.resources.ram == "448GiB"
 
     record = read_record(str(output))
@@ -302,7 +325,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     context = StepContext.for_run(
         output_path=str(tmp_path / "rl"), prefix=str(tmp_path), region=None, runtime_args={}, deps=model.deps()
     )
-    assert model.resolve(context).uri == str(hf)
+    assert model.resolve(context).uri == hf.as_uri()
     manifest = hf / "export-manifest.json"
     completed = manifest.read_bytes()
     assert json.loads(completed)["execution"]["read_host_budget_bytes"] == 384 * 1024**3

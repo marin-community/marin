@@ -119,10 +119,10 @@ class MochiSFT:
                 raise ValueError("Set GIT_COMMIT to the source revision when exporting a new Mochi SFT run") from error
         export_fn: Callable[..., None] = _export_final_sft
         export_resources = self.export_resources
-        if self.stop_after_steps is not None:
+        if training.trainer.trainer.checkpointer.save_interval is None:
             gib = 1024**3
             reservation_increment = 64 * gib
-            cache_bytes = full_expert_bank_read_bytes(HERO_MODEL_CONFIG)
+            cache_bytes = full_expert_bank_read_bytes(training.model)
             read_budget = (cache_bytes + reservation_increment - 1) // reservation_increment * reservation_increment
             host_bytes = read_budget + DEFAULT_WRITE_HOST_BUDGET_BYTES + 32 * gib
             export_resources = replace(export_resources, cpu=32, ram=f"{host_bytes // gib}GiB")

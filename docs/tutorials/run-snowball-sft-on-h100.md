@@ -51,7 +51,7 @@ Preset names use `<data>-<seq-len>-<nodes>`.
 
 | Preset | What it reproduces | Training layout | Measured run | Model returned |
 | --- | --- | --- | --- | --- |
-| `mixture-262k-16node` | Three updates using the production recipe. | 1 rack, 16 nodes × 4 GB200s | Three updates and a final native checkpoint used 13.27 GB200-hours. [Training run](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-sft-1rack-4b62-retry) | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-16node` | Three updates using the production recipe. | 1 rack, 16 nodes × 4 GB200s | CPU plan verified. | With `--export`, a schema-3 BF16 HF model. |
 | `mixture-262k-48node` | Three updates using the production recipe. | 3 racks, 48 nodes × 4 GB200s | CPU plan verified. | With `--export`, a schema-3 BF16 HF model. |
 | `mixture-262k-176node` | Full production continuation `hero-sft-fullab-step393k-v2` from its pinned native checkpoint. | 11 racks, 176 nodes × 4 GB200s | 58.0 h of recorded training runtime. [Training run](https://wandb.ai/marin-community/marin_moe_sft/runs/hero-sft-fullab-step393k-v2) · CPU export worker time of 1 h 9 min 53 s. [Export worker](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-step-400407-peer) · [Verified export](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-readback) | With `--export`, a schema-3 BF16 HF export of step `400407`. |
 
