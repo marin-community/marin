@@ -3,7 +3,9 @@
 
 import hashlib
 import json
+import shutil
 import struct
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -61,6 +63,20 @@ class Hub:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(self.files[filename])
         return str(path)
+
+
+@pytest.fixture
+def permanent_storage_root():
+    """Writable stand-in for permanent storage, outside pytest's temporary root.
+
+    The archive checker treats any ``tmp`` path segment as scratch storage, and Linux
+    pytest basetemps sit under ``/tmp``, so permanent-path fixtures need a root without
+    that segment. The directory is removed when the test ends.
+    """
+    root = Path.home() / f".marin-permanent-storage-test-{uuid.uuid4().hex}"
+    root.mkdir()
+    yield root
+    shutil.rmtree(root)
 
 
 @pytest.fixture
