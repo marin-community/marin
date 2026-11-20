@@ -4,6 +4,7 @@
 import hashlib
 import json
 import struct
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -70,3 +71,10 @@ def hub(tmp_path, monkeypatch):
     monkeypatch.setattr(hf_archive, "HfApi", lambda **kwargs: result)
     monkeypatch.setattr(hf_archive, "hf_hub_download", result.download)
     return result
+
+
+@pytest.fixture
+def permanent_path():
+    """Local checkpoint storage outside the system scratch directory."""
+    with tempfile.TemporaryDirectory(prefix=".marin-checkpoint-test-", dir=Path.home()) as directory:
+        yield Path(directory)

@@ -369,6 +369,28 @@ The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
 `<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
 trajectories use the supplied run identity.
 
+Mochi exports use the adopted rounds in
+`experiments/post_training/long_loop/rounds/mochi-{base,sft}-eval.yaml` through
+`experiments.post_training.long_loop.round_runner`. Its serving section declares
+InfiniBand transport, `NCCL_IB_HCA=ibp`, and a 4-MiB NCCL buffer. The historical
+256-KiB qualification predates the NVLSTree corruption finding in #11649.
+
+Preflight the exact command from a clean checkout before adding `--run`:
+
+```bash
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml \
+  --through eval --version <fresh-version> \
+  --source-revision "$(git rev-parse HEAD)" --validation-output /tmp/mochi-eval
+```
+
+Inspect `launch.yaml`, `compiled.yaml`, and the required/allocated GPU counts in
+`graph.json`. Preflight rejects local model rank counts larger than the physical
+allocation. Runtime verifies the API judge's authenticated model catalog before
+allocating rollout GPUs. Historical gate-2 evaluations using the earlier frozen
+MiniMax policy are preserved at `benfeuer/mochi-micro210-gate2-frozen`;
+its commit `da0663fbea` includes the self-hosted judge launch and receipt checks.
+
 ## Pre-launch review
 
 Before submitting a large run:

@@ -163,8 +163,9 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
 @pytest.mark.parametrize("unscored", [False, True])
 @pytest.mark.parametrize("max_checkpoints", [3, -1])
 def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
-    tmp_path, monkeypatch, hub, incomplete, unscored, max_checkpoints
+    permanent_path, monkeypatch, hub, incomplete, unscored, max_checkpoints
 ):
+    tmp_path = permanent_path
 
     report = tmp_path / "report"
     report.mkdir()
@@ -568,7 +569,8 @@ def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatc
     assert not list(tmp_path.glob("scan-history*"))
 
 
-def test_best_rl_checkpoint_assertion(tmp_path):
+def test_best_rl_checkpoint_assertion(permanent_path):
+    tmp_path = permanent_path
     best = tmp_path / "checkpoints" / "global_step_5"
     best.mkdir(parents=True)
     (best / "trainer_state.pt").write_bytes(b"best-state")

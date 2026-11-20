@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, replace
 
 import click
 import draccus
+import httpx
 import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -62,6 +63,7 @@ SERVING_GENERATOR_FIELDS = {
     "vllm_attention_backend",
 }
 SERVING_ENGINE_FIELDS = {"compilation_config", "model_loader_extra_config", "moe_backend"}
+SERVING_NCCL_ENV_FIELDS = {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA"}
 
 
 @dataclass(frozen=True)
@@ -74,14 +76,19 @@ class Micro210ServingProfile:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
+    nccl_env: dict[str, str]
+    nccl_buffer_size_bytes: int
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
     config = runtime_policy_config(frozen).config
     unknown = set(profile.generator) - SERVING_GENERATOR_FIELDS
     unknown_engine = set(profile.engine_init_kwargs) - SERVING_ENGINE_FIELDS
-    if unknown or unknown_engine:
-        raise ValueError(f"Serving profile cannot override protocol fields: {sorted(unknown | unknown_engine)}")
+    unknown_network = set(profile.nccl_env) - SERVING_NCCL_ENV_FIELDS
+    if unknown or unknown_engine or unknown_network:
+        raise ValueError(
+            f"Serving profile cannot override protocol fields: {sorted(unknown | unknown_engine | unknown_network)}"
+        )
     if profile.role_plan.n_samples_per_prompt != frozen["evaluation"]["role_plan"]["n_samples_per_prompt"]:
         raise ValueError("Serving profile cannot change protocol samples per prompt")
     compilation = profile.engine_init_kwargs["compilation_config"]
@@ -95,6 +102,8 @@ def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
         **profile.engine_init_kwargs,
     }
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = profile.cuda_allocator_config
+    config["extra_env"].update(profile.nccl_env)
+    config["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = profile.nccl_buffer_size_bytes
     return config
 
 
@@ -137,6 +146,21 @@ def validate_inputs(
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
+def validate_judge_availability(judge: JudgeConfig, api_key: str) -> None:
+    """Reject an unavailable API judge before allocating rollout GPUs."""
+    try:
+        response = httpx.get(
+            f"{judge.base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        raise ValueError("Micro210 API judge is unreachable before rollout allocation") from None
+    if judge.model not in {model["id"] for model in response.json()}:
+        raise ValueError("Micro210 API endpoint does not serve the frozen judge model")
+
+
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
@@ -162,6 +186,7 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     policy = config.evaluation.policy()["evaluation"]
     judge = draccus.decode(JudgeConfig, policy["judge"])
     api_key = resolve_secret_spec((judge.credential,)).value
+    validate_judge_availability(judge, api_key)
     return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
 
 

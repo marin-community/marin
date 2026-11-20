@@ -6,13 +6,15 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
 import yaml
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.micro210 import micro210_step, run_micro210
+from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.evaluation.micro210 import micro210_step, run_micro210, validate_judge_availability
 from experiments.evaluation.micro210_policy import (
     POLICY_VERSION,
     Micro210Model,
@@ -177,6 +179,12 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         return None
 
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210.httpx.get",
+        lambda url, **kwargs: httpx.Response(
+            200, json=[{"id": protocol["evaluation"]["judge"]["model"]}], request=httpx.Request("GET", url)
+        ),
+    )
     run_micro210(config)
     record = json.loads((output / "canonical-evaluation.json").read_text())
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
@@ -191,6 +199,14 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
     assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    submitted.clear()
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210.httpx.get",
+        lambda url, **kwargs: httpx.Response(503, request=httpx.Request("GET", url)),
+    )
+    with pytest.raises(ValueError, match="unreachable before rollout allocation"):
+        run_micro210(config)
+    assert submitted == []
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
     altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
     submitted.clear()
@@ -240,3 +256,22 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkey
     assert old_record.config == {"sha256": "old-task-digest"}
     assert new_record.source == str(new_inputs)
     assert new_record.config == {"sha256": "fixture-tasks"}
+
+
+@pytest.mark.parametrize("failure", [None, "unreachable", "model"])
+def test_api_judge_availability_rejects_unreachable_or_missing_model(monkeypatch, failure):
+    def models(url, **kwargs):
+        assert url == MICRO210_JUDGE.base_url + "/models"
+        assert kwargs["headers"] == {"Authorization": "Bearer fixture-key"}
+        return httpx.Response(
+            503 if failure == "unreachable" else 200,
+            json=[{"id": "wrong-model" if failure == "model" else MICRO210_JUDGE.model}],
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr("experiments.evaluation.micro210.httpx.get", models)
+    if failure:
+        with pytest.raises(ValueError, match="unreachable" if failure == "unreachable" else "does not serve"):
+            validate_judge_availability(MICRO210_JUDGE, "fixture-key")
+        return
+    validate_judge_availability(MICRO210_JUDGE, "fixture-key")
