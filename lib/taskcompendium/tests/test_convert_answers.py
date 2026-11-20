@@ -44,6 +44,7 @@ def reward(task: TaskSpec | ImportRejection, answer: str) -> float | None:
     [
         (math_answer_task(ROW, prompt=" ", answer="1"), DEFECT, "missing_prompt"),
         (math_answer_task(ROW, prompt="Add.", answer=""), DEFECT, "invalid_reference"),
+        (math_answer_task(ROW, prompt="Solve.", answer=r"$\boxed{\epsilon \approx$"), DEFECT, "invalid_reference"),
         (
             numeric_answer_task(ROW, prompt="Add.", answer="seven", tolerance_abs=0, tolerance_rel=0),
             DEFECT,
@@ -72,6 +73,7 @@ def reward(task: TaskSpec | ImportRejection, answer: str) -> float | None:
     ids=[
         "math_blank_prompt",
         "math_blank_reference",
+        "math_unparseable_reference",
         "numeric_word_reference",
         "numeric_missing_reference",
         "mcq_key_beyond_options",
@@ -92,6 +94,7 @@ def test_unusable_rows_are_rejected_with_the_defect_named(converted, kind, reaso
     [
         (math_answer_task(ROW, prompt="Half of one?", answer=r"\boxed{\frac{1}{2}}"), r"\boxed{\frac{1}{2}}", 1.0),
         (math_answer_task(ROW, prompt="Half of one?", answer=r"\boxed{\frac{1}{2}}"), r"\boxed{\frac{1}{3}}", 0.0),
+        (math_answer_task(ROW, prompt="Solve.", answer=r"$\boxed{y=2x+1}$"), r"\boxed{y=2x+1}", 1.0),
         # An ordered pair stays a tuple, so swapping its components is wrong.
         (math_answer_task(ROW, prompt="Solve.", answer="(1, 2)"), r"\boxed{(1, 2)}", 1.0),
         (math_answer_task(ROW, prompt="Solve.", answer="(1, 2)"), r"\boxed{(2, 1)}", 0.0),
@@ -125,6 +128,7 @@ def test_unusable_rows_are_rejected_with_the_defect_named(converted, kind, reaso
     ids=[
         "math_boxed_reference",
         "math_wrong_value",
+        "math_boxed_equation_reference",
         "math_tuple",
         "math_swapped_tuple",
         "numeric_big_integer",

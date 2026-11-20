@@ -18,7 +18,7 @@ runtime and a live process group at the saved parallel geometry.
 The task enters ``skyrl_train.entrypoints.checkpoint_export`` instead of an RL entrypoint.
 It creates only the saved policy worker group, restores only model tensors, invokes the
 strategy's existing HF converter, and exits. It does not create rollout engines, datasets,
-generators, tracking, reference models, critics, optimizers, or schedulers. ``--timeout``
+generators, tracking, reference models, optimizers, or schedulers. ``--timeout``
 belongs to this export job and is independent of the source training gang's process-group
 timeout.
 
@@ -49,16 +49,16 @@ from rigging.config_discovery import find_project_root, resolve_cluster_config
 from rigging.filesystem.cluster_config import get_bucket_location
 from rigging.timing import Duration
 
-from cloud.iris.artifacts import terminal_checkpoint_step
-from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
+from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
 from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_script
 from cloud.iris.submission import submission_client
-from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_checkpoint
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
-from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
+from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
+from marinskyrl.model_manifest import ModelManifest
 from omegaconf import DictConfig, OmegaConf
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
@@ -168,16 +168,13 @@ def checkpoint_export_launch_config(
 
     # Export is policy-only. Keep the role-plan inputs internally consistent so
     # launch validation derives exactly the saved policy gang, without reserving
-    # rollout/reference/critic/teacher bundles that the export entrypoint never uses.
+    # rollout/reference/teacher bundles that the export entrypoint never uses.
     config.skyrl.trainer.placement.colocate_all = True
     config.skyrl.trainer.placement.colocate_policy_ref = True
     config.skyrl.trainer.offload_optimizer_during_rollouts = False
     algorithm = config.skyrl.trainer.setdefault("algorithm", {})
     algorithm["use_kl_loss"] = False
     algorithm["use_kl_in_reward"] = False
-    critic = config.skyrl.trainer.setdefault("critic", {})
-    critic["model"] = critic.get("model", {})
-    critic["model"]["path"] = None
     config.skyrl.pop("teachers", None)
     config.skyrl.pop("teacher_routing", None)
     if config.skyrl.generator.get("speculative_decoding") is not None:
@@ -224,11 +221,11 @@ def write_checkpoint_export_config(
     return destination
 
 
-def build_command(spec: ExportJobSpec) -> list[str]:
+def build_command(spec: ExportJobSpec, *, forward_env: tuple[str, ...] = ()) -> list[str]:
     """Return the config-native command for an export-only run."""
     if spec.launch_config_path is None:
         raise ValueError("checkpoint export requires a generated launch config")
-    return [
+    command = [
         sys.executable,
         "-m",
         "cloud.iris.launch",
@@ -237,6 +234,10 @@ def build_command(spec: ExportJobSpec) -> list[str]:
         "--config",
         spec.launch_config_path,
     ]
+
+    for name in forward_env:
+        command.extend(("--forward-env", name))
+    return command
 
 
 def _with_checkpoint_export_config(
@@ -396,9 +397,6 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
     exit_code = subprocess.call(command, stdout=sys.stderr)
     if exit_code != 0:
         raise subprocess.CalledProcessError(exit_code, command)
-    if not spec.no_wait:
-        export_path = policy_export_path(spec.request.export_path, spec.request.step)
-        _verify_hf_model_export(export_path)
 
 
 def _run_hub_upload(spec: ExportJobSpec) -> None:
@@ -415,13 +413,13 @@ def _run_hub_upload(spec: ExportJobSpec) -> None:
     )
     cluster = load_config(str(cluster_path))
     scheme = urlsplit(export_path).scheme
-    if scheme == "gs":
-        region = get_bucket_location(export_path)
-    elif scheme == "s3" and cluster.platform.coreweave is not None:
-        region = cluster.platform.coreweave.region
+    if cluster.platform.coreweave is not None and scheme in ("s3", "gs"):
+        # CoreWeave is single-region and its CPU nodes do not satisfy the Iris region selector.
+        constraints = []
+    elif scheme == "gs":
+        constraints = [region_constraint([get_bucket_location(export_path)])]
     else:
         raise ValueError("CPU Hub publication requires a GCS export or an S3 export on its CoreWeave cluster")
-    constraints = [region_constraint([region])]
     workspace = find_project_root(PROJECT_ROOT)
     if workspace is None:
         raise RuntimeError("Hub publication requires a Marin checkout")
@@ -478,28 +476,14 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 
 
-def export_terminal_policy(training_config_path: Path) -> None:
-    """Derive and run the terminal policy export from one training launch document."""
-    training_config = load_launch_config(training_config_path)
-    checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    step = selected_export_step(
-        checkpoint_root,
-        str(training_config.skyrl.trainer.hf_export_checkpoint),
-        terminal_checkpoint_step(checkpoint_root),
-    )
-    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
-    request = _read_hf_export_request(checkpoint_path)
-    if request is None:
-        raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
-    if request.status is HFExportStatus.COMPLETE:
-        return
+def _export_job_spec(training_config: DictConfig, request: HFExportRequest) -> ExportJobSpec:
     allocation = training_config.iris.allocation
-    spec = ExportJobSpec(
+    return ExportJobSpec(
         request=request,
         cluster=str(training_config.iris.cluster),
         priority=str(training_config.iris.priority),
         gpu_variant=str(allocation.gpu_variant),
-        job_name=f"{training_config.iris.job_name}-export-{step}",
+        job_name=f"{training_config.iris.job_name}-export-{request.step}",
         timeout=DEFAULT_HF_EXPORT_TIMEOUT,
         no_wait=False,
         cluster_config=str(training_config.iris.cluster_config),
@@ -510,8 +494,43 @@ def export_terminal_policy(training_config_path: Path) -> None:
         disk=str(allocation.disk),
         allocation_gpus_per_node=int(allocation.gpus_per_node),
     )
+
+
+def validate_checkpoint_export(training_config: DictConfig) -> None:
+    """Validate the derived policy export without reading a checkpoint or submitting a job."""
+    trainer = training_config.skyrl.trainer
+    request = HFExportRequest.from_trainer(
+        trainer,
+        step=trainer.max_steps if trainer.max_steps is not None else 0,
+        checkpoint_root=str(training_config.artifacts.checkpoint_root),
+        export_root=str(training_config.artifacts.export_root),
+    )
+    export = checkpoint_export_launch_config(training_config, request, _export_job_spec(training_config, request))
+    validate_launch_config(export)
+
+
+def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str, ...] = ()) -> None:
+    """Derive and run the terminal policy export from one training launch document."""
+    from cloud.iris.artifacts import terminal_checkpoint_step  # noqa: PLC0415 - artifact IO belongs to execution
+
+    training_config = load_launch_config(training_config_path)
+    checkpoint_root = str(training_config.artifacts.checkpoint_root)
+    selected = selected_export_checkpoint(
+        checkpoint_root,
+        str(training_config.skyrl.trainer.hf_export_checkpoint),
+        terminal_checkpoint_step(checkpoint_root),
+    )
+    if selected is None or selected.initializer_uri is not None:
+        return
+    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{selected.step}")
+    request = _read_hf_export_request(checkpoint_path)
+    if request is None:
+        raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
+    if request.status is HFExportStatus.COMPLETE:
+        return
+    spec = _export_job_spec(training_config, request)
     resolved_spec = _with_checkpoint_export_config(training_config_path, spec)
-    submit_requested_export(resolved_spec, build_command(resolved_spec))
+    submit_requested_export(resolved_spec, build_command(resolved_spec, forward_env=forward_env))
 
 
 def main() -> None:
@@ -540,6 +559,9 @@ def main() -> None:
         return
     if request is None:
         _run_export(spec, cmd)
+        if not spec.no_wait:
+            export_path = policy_export_path(spec.request.export_path, spec.request.step)
+            _verify_hf_model_export(export_path)
         if spec.request.hf_hub_repo_id is not None:
             _run_hub_upload(spec)
     else:

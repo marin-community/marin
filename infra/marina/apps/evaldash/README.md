@@ -6,7 +6,7 @@ the same Marina service.
 
 Cloud Run has a `marina` web service and a separate `marina-evaldash` job.
 The job is the scheduled ingestion worker; it scans evaluation records and
-updates the serving catalog. It serves no web traffic. Both use the Marina
+playground reports and updates the serving catalog. It serves no web traffic. Both use the Marina
 base image, while the released EvalDash package supplies the UI, API and
 ingestion module.
 
@@ -27,6 +27,16 @@ value as `None`. Current writers include the field. For runs with a per-eval Ste
 reads `{run_id}/.executor_status`. A score is eligible only after that step reaches `SUCCESS`; runs
 without a step status retain the record's historical behavior. Run lists show the step state when it
 is still running or has failed, and run detail shows both the evaluator result and the step state.
+
+Historical Evalchemy summaries remain usable alongside native TaskSpec summaries without rerunning
+models or rewriting archives. Comparison columns match the registry benchmark name, canonical metric
+and statistical kind. Recorded few-shot counts must agree when both are known; older unspecified
+counts remain admissible. Metric aliases bridge `acc,none` and `accuracy`, code-task `pass_at_1` and
+MRCR's `mrcr_accuracy` into native `accuracy`. The saved score, coverage and uncertainty are
+preserved. Missing historical corpus identities do not exclude these results. When both runs record
+corpus identities, differing identities remain incompatible. Metric changes such as accuracy versus
+normalized accuracy or exact match versus F1 remain separate, and existing cohort and coverage gates
+still apply. Historical verified-cohort labels keep their original policy requirements.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
@@ -80,6 +90,18 @@ selector, an opt-in qualified aggregate, and archive controls), runs (a "by laun
 expanding each serve group to its evals, plus a flat filterable table), run detail (grade with its
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
+A Playground Reports tab lists the reports described below.
+
+Playground reports are the model-feedback reports that the marin-serve dashboard's Report issue
+button saves, one immutable JSON object per report under `{prefix}/{YYYY-MM-DD}/{id}.json` in
+`gs://marin-eval-metadata/model-feedback` and `s3://marin-us-east-02a/marin/model-feedback`. The
+writer is `marin.inference.model_feedback`; EvalDash cannot import marin at runtime, so it keeps its
+own copy of the format, and a test ingests a report saved by that writer. Each ingest pass, before
+the record pass, copies objects it has not seen into the `playground_reports` table and never rereads
+one it has. An object that fails validation is skipped with a warning on every pass; a listing or
+read failure is logged and reported as a failed prefix, and the other reports are still copied.
+The list shows the newest 1,000 reports and says when older ones were left out. The local store has
+no database for reports, so their endpoints return 503 there.
 
 Run filters search the full catalog before applying the result limit. Model and eval pickers
 search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
@@ -144,10 +166,12 @@ GET  /meta              distinct models / evals / suites / families / users / st
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
 POST /models/{model_name}/archive   set a model's archive flag ({"archived": bool})
+GET  /playground-reports            the newest playground reports without conversations, and whether older ones were left out
+GET  /playground-reports/{report_id}   one stored report with its source URL (404 if absent)
 ```
 
 `/panel` answers one selection request against the statistics engine in
-`marin.evaluation.eval_stats`, which the eval runners share, so the dashboard and the producers apply
+`evalrecords.eval_stats`, which the eval runners share, so the dashboard and the producers apply
 the same rules. Every cell is a measurement: the rate over the items a run graded, the item counts
 behind it, the per-cause counts of items it attempted and never graded, and a 95% interval. When a run
 reports an attempted count, the interval covers the ungraded items by Manski bounds with an
@@ -189,7 +213,7 @@ The evaluator names each task's primary metric, its canonical spelling, and whet
 are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
 a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
-their columns remain populated while benchmarks are rerun.
+their columns remain populated alongside native results.
 
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
@@ -205,8 +229,10 @@ Historical cohort labels remain selectable. `cohort=unversioned` selects runs la
 version label (`version: null`); the selector lists it whenever such runs exist. `cohort=all`
 selects the newest admissible run per benchmark across cohorts. Panel and Compare accept it, so
 models whose newest runs sit in different cohorts can be compared, and each compared cell names its
-cohort and links its source run. The UI marks all-cohort and unverified historical views with an
-asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved
+cohort and links its source run. Comparisons use the same admitted cells as the panel, including
+historical/native metric normalization and protocol checks. The UI marks
+all-cohort and unverified historical views with an asterisk because their settings are not verified
+as comparable. A named verified cohort admits only records with its approved
 benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.
@@ -281,6 +307,7 @@ Resolved once when the kernel mounts the app, from the environment:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `RECORDS_PREFIXES` | the four roots above | Comma-separated record roots, highest precedence first. |
+| `PLAYGROUND_REPORT_PREFIXES` | the two report prefixes above | Comma-separated playground report roots. |
 | `EVALDASH_STORE` | `postgres` | `local` serves from the record snapshot with no database. |
 | `EVALDASH_INGEST_INTERVAL` | `600` | Local-store polling cadence. Production uses the manifest's ten-minute schedule. |
 | `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; Marina derives it from the manifest in production. |
@@ -300,6 +327,7 @@ results_db.py           serving catalog, source inventory, and transactional pro
 db_migrations.py        the migration runner and its schema ledger
 migrations/             frozen numbered database migrations
 record_reconciliation.py  version checks and record validation
+playground_reports.py   playground report ingest, list, and detail
 metrics.py              panel and comparison views over the shared statistics engine
 discovery.py            resolve a VM internal IP from a GCE list filter
 cluster.py              Iris and finelog generated Connect clients over Direct VPC egress
@@ -346,7 +374,7 @@ uv run pytest apps/evaldash                          # unit tests; starts a thro
 uv run marina journey evaldash                          # disposable DB; screenshots under journeys-out/
 ```
 
-The image needs more than the kernel: `marin.evaluation`'s four record and statistics modules, the
+The image needs more than the kernel: `lib/evalrecords` for the record and statistics modules, the
 generated `iris.rpc`/`finelog.rpc` packages, and `lib/finestore`. `infra/marina/Dockerfile` copies
 them and `Dockerfile.dockerignore` allows them into the build context.
 
@@ -368,3 +396,21 @@ Marina deployment and restart do not publish EvalDash or run its migrations.
 Pass `--allow-dirty` to explicitly release branch or uncommitted source
 without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
 Use `--local` to preview in a disposable stack.
+
+## Curated evaluation import
+
+Curated producer records identify a raw FineStore store and leave metrics empty.
+Ingest snapshots its protocols, manifests, selections and attempts, then selects the
+latest finished retry per dataset, source row and trial. The sample browser uses the
+same selection. Zero grades remain scored; failed and unfinished work stays missing
+coverage. Means, instruction weights, classification, perplexity and groups follow
+protocol metadata. Semantic curation identities and the summary revision distinguish
+comparison protocols across regional materializations. Physical manifest hashes retain
+their archive-integrity and resume role. Unidentified older archives use the historical
+metric/kind/shot compatibility rules; they cannot erase known corpus differences.
+PostgreSQL reconciliation checks the raw store HEAD as well as record.json,
+so resumed work can refresh an unchanged producer record. Derived summaries remain in
+Evaldash's catalog.
+
+
+Benchmark selections recorded by the native launcher identify the canonical benchmark, protocol preset, shot count and prompt format. Panels and comparisons expose these as separate variants, so a newer five-shot result cannot displace the same model's zero-shot result. Historical Evalchemy launch labels are interpreted at ingestion using their recorded shot counts and model format where available. Compatible historical scores can join a native variant without rerunning inference; differing known corpus identities remain separate. Raw archives and original launch labels are retained.

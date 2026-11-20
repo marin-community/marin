@@ -10,8 +10,8 @@ multiple-choice source grades the option letter in process.
 """
 
 import re
+from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -26,7 +26,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
 
@@ -245,7 +245,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
                     "in the new grader."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
         (
@@ -262,7 +261,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
                     "data field at conversion."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
     )
@@ -270,12 +268,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         *(
             RlDataSource(
                 pipeline=process_rows,
-                info=info,
+                info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
                 config=CurationRecipe(
                     name=name,
                     source=tasktrove_source(config),
                     convert=TaskTroveConverter(config, convert_openqa),
-                    version="3",
+                    version="4",
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
                     grader=GRADER_PACKAGES,
@@ -296,13 +294,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
                     "and subsample hard: 617k rows is a third of the corpus."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source(MCQA_CONFIG),
                 convert=TaskTroveConverter(MCQA_CONFIG, convert_knowledge_mcqa),
-                version="5",
+                version="6",
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,
                 controls=Controls(golden=reference_reply),

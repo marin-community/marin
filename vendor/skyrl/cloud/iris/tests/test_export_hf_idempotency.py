@@ -1,5 +1,6 @@
 """Exercise conversion, CPU publication, and retry at the Iris/Hub boundaries."""
 
+import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import cloudpickle
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 import numpy as np
@@ -159,15 +161,14 @@ def test_failed_hub_upload_retries_on_cpu_without_reconversion(export_run):
 
 
 @pytest.mark.parametrize("inside_job", [False, True])
-def test_cpu_upload_keeps_the_export_cluster_region(export_run, monkeypatch, inside_job):
+def test_cpu_upload_targets_coreweave_without_a_region_selector(export_run, monkeypatch, inside_job):
     run = export_run
     if inside_job:
         monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://controller")
     export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
     constraints = run.submissions[0]["constraints"]
-    assert region_constraint(["RNO2A"]) in constraints
     cluster_pin = Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a")
-    assert (cluster_pin in constraints) is (not inside_job)
+    assert constraints == ([] if inside_job else [cluster_pin])
     assert run.uploads == [""]
 
 
@@ -246,3 +247,30 @@ def test_corrupt_export_is_reconverted_before_cpu_upload(export_run):
     export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
     assert run.events == ["gpu", "gpu-finished", "cpu"]
     assert run.uploads == [""]
+
+
+
+def test_hub_staging_bounds_concurrent_downloads(tmp_path, monkeypatch):
+    shards = {f"bucket/export/model-{i}.safetensors": f"shard-{i}".encode() for i in range(12)}
+
+    class RemoteExport(AsyncFileSystem):
+        protocol = "s3"
+        active = 0
+        peak = 0
+
+        async def _expand_path(self, path, recursive=False, maxdepth=None):
+            return sorted(name for name in shards if name.startswith(f"{path}/"))
+
+        async def _get_file(self, source, target, **_kwargs):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0)
+            Path(target).write_bytes(shards[source])
+            self.active -= 1
+
+    remote = RemoteExport(skip_instance_cache=True)
+    monkeypatch.setattr(io, "filesystem_and_path", lambda path: (remote, path))
+    with io.local_read_dir("s3://bucket/export", staging_dir=str(tmp_path)) as local_dir:
+        staged = {file.name: file.read_bytes() for file in Path(local_dir).iterdir()}
+        assert staged == {Path(name).name: data for name, data in shards.items()}
+    assert 1 < remote.peak <= 4

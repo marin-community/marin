@@ -26,7 +26,6 @@ from skyrl_train.models.grug_query_bias import (
     GrugQueryBiasObservation,
 )
 from skyrl_train.models.layers.moe_routing import TokenReorderer, grouped_expert_contributions
-from skyrl_train.models.router_instrumentation import NativeRouterObserverEmitter, emit_router_forward
 from skyrl_train.utils.flash_attention import (
     FLASH_ATTN_IMPORT_ERROR,
     flash_attn_func,
@@ -38,7 +37,6 @@ from skyrl_train.utils.flash_attention import (
 
 
 GRUG_MOE_MODEL_TYPE = "grug_moe"
-GRUG_EP_COMM_BACKEND = "torch"
 GRUG_ROUTER_BIAS_SUFFIX = ".mlp.router.bias"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"
@@ -59,6 +57,18 @@ GRUG_QK_RMS_NORM_EPS = 1e-6
 GRUG_XSA_EPS = 1e-6
 GRUG_ROUTER_RENORM_EPS = 1e-9
 GRUG_SUPPORTED_TRAINING_STRATEGIES = frozenset({"megatron"})
+
+
+def select_routed_expert_schema(declared_schema: int, weight_keys: set[str] | None) -> int:
+    """Select the routed layout from checkpoint keys while retaining the declared shared layout."""
+
+    if weight_keys is None:
+        return declared_schema
+    stacked = "model.layers.0.mlp.experts.gate_proj.weight" in weight_keys
+    split = "model.layers.0.mlp.experts.0.gate_proj.weight" in weight_keys
+    if stacked == split:
+        raise ValueError("Grug checkpoint must have exactly one routed-expert weight layout")
+    return GRUG_STACKED_EXPERT_SCHEMA_VERSION if stacked else GRUG_SPLIT_EXPERT_SCHEMA_VERSION
 
 
 def is_grug_router_bias(model_type: str | None, name: str) -> bool:
@@ -97,32 +107,6 @@ def _validate_flash_attention_mask(attention_mask: torch.Tensor) -> None:
         (span_starts == 1).all(),
         "Grug FlashAttention requires valid tokens to form one contiguous span in each attention-mask row",
     )
-
-
-def validate_grug_expert_parallel_options(
-    model_type: str | None,
-    *,
-    expert_model_parallel_size: int,
-    use_grouped_mm: bool,
-    ep_comm_backend: str,
-) -> None:
-    """Reject unsupported execution choices when native Grug EP is enabled."""
-
-    if model_type != GRUG_MOE_MODEL_TYPE or expert_model_parallel_size <= 1:
-        return
-    validate_grug_expert_parallel_runtime(
-        use_grouped_mm=use_grouped_mm,
-        ep_comm_backend=ep_comm_backend,
-    )
-
-
-def validate_grug_expert_parallel_runtime(*, use_grouped_mm: bool, ep_comm_backend: str) -> None:
-    """Validate the execution choices required by native Grug expert sharding."""
-
-    if not use_grouped_mm:
-        raise ValueError("Grug expert_model_parallel_size>1 requires use_grouped_mm=true")
-    if ep_comm_backend != GRUG_EP_COMM_BACKEND:
-        raise ValueError(f"Grug expert parallelism supports only ep_comm_backend={GRUG_EP_COMM_BACKEND}")
 
 
 def jax_top_k(values: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -433,12 +417,6 @@ class GrugMoeExperts(nn.Module, ExpertGradientAveraging):
         self.ep_size = 1
         self._grouped_mm_logged = False
 
-    def validate_expert_parallel_runtime(self, ep_comm_backend: str) -> None:
-        validate_grug_expert_parallel_runtime(
-            use_grouped_mm=self.use_grouped_mm,
-            ep_comm_backend=ep_comm_backend,
-        )
-
     def forward_eager(
         self,
         hidden_states: torch.Tensor,
@@ -491,7 +469,7 @@ class GrugMoeRouterOutput(NamedTuple):
     combine_weights: torch.Tensor
 
 
-class GrugMoeRouter(nn.Module, NativeRouterObserverEmitter):
+class GrugMoeRouter(nn.Module):
     def __init__(self, config: GrugMoeConfig) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.empty(config.num_local_experts, config.hidden_size))
@@ -539,15 +517,6 @@ class GrugMoeRouter(nn.Module, NativeRouterObserverEmitter):
             combine_weights = torch.sigmoid(selected_logits)
             combine_weights = combine_weights * (
                 GRUG_ROUTING_RENORM_SUM / (combine_weights.sum(dim=-1, keepdim=True) + GRUG_ROUTER_RENORM_EPS)
-            )
-
-            emit_router_forward(
-                router=self,
-                router_inputs=hidden_states,
-                selection_logits=biased_logits,
-                natural_selected_experts=selected_experts,
-                selected_experts=selected_experts,
-                combine_weights=combine_weights,
             )
 
             if self._capture_active:

@@ -32,6 +32,7 @@ from skyrl_train.models.grug_moe import (
     GRUG_MOE_MODEL_TYPE,
     GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
     grug_long_layer_flags,
+    select_routed_expert_schema,
 )
 
 GRUG_ROTARY_PERCENT = 0.5
@@ -54,6 +55,7 @@ class GrugModelProvider(GPTModelProvider):
     grug_sconv_sites: tuple[str, ...] = ()
     grug_hero: bool = False
     grug_checkpoint_cpu_offload: bool = False
+    grug_batch_invariant_experts: bool = False
 
     def provide(self, pre_process=None, post_process=None, vp_stage=None) -> GrugGPTModel:
         if self.virtual_pipeline_model_parallel_size:
@@ -300,7 +302,11 @@ class GrugMoeBridge(MegatronModelBridge):
                     AutoMapping(f"{megatron}.linear_fc2.weight", f"{hf}.down_proj.weight"),
                 ]
             )
-        mappings.extend(_routed_expert_mappings(config.grugmoe_artifact_schema_version))
+        hf_pretrained = getattr(self, "hf_pretrained", None)
+        state = getattr(hf_pretrained, "state", None)
+        weight_keys = set(state.source.get_all_keys()) if state is not None else None
+        routed_expert_schema = select_routed_expert_schema(config.grugmoe_artifact_schema_version, weight_keys)
+        mappings.extend(_routed_expert_mappings(routed_expert_schema))
         if config.latent_dim is not None:
             mappings.extend(
                 [

@@ -14,10 +14,11 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
-from harbor.host_capabilities import DaytonaConnection, HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from shellbox.backends.daytona.connection import DaytonaConnection
 from marinskyrl.harbor_environments import (
     HarborTaskBinding,
     apply_task_binding,
@@ -233,7 +234,15 @@ class InstalledAgentRuntime:
                     }
                 )
                 trial = await Trial.create(trial_config, host_capabilities=host_capabilities, guest_environment={})
-                result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
+                result = await run_harbor_trial(
+                    trial,
+                    self.backend,
+                    complete,
+                    evidence / "engine",
+                    setup_commands=lowered.task.environment_requirements.setup_commands,
+                    setup_cwd=lowered.task.environment_requirements.working_directory,
+                    setup_timeout=self.settings.setup_timeout,
+                )
                 return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
         finally:
             await publish_attempt(evidence, destination)

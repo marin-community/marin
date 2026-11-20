@@ -28,6 +28,7 @@ from finestore.rl.curation import (
     ControlCounts,
     ControlSummary,
     CurationCatalog,
+    CurationMode,
     CurationSummary,
     CurrentCatalog,
     JudgmentStatus,
@@ -58,7 +59,7 @@ def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
         )
     return CurationSummary(
         status=manifest["status"],
-        mode=manifest["mode"],
+        mode=CurationMode(manifest["mode"]),
         **{
             key: manifest.get(key)
             for key in (
@@ -220,10 +221,16 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                     if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
                         update["declaration"] = declaration
                     elif declaration.id in by_id:
-                        # The verdict describes runtime cost, not what the pinned assessment graded, so an
-                        # unselected source still picks up the current code's safety assessment.
+                        # The verdict and its measurement describe runtime cost, not what the pinned
+                        # assessment graded, so an unselected source picks up the current measurement.
                         update["declaration"] = prior.declaration.model_copy(
-                            update={"daytona_safety": declaration.daytona_safety}
+                            update={
+                                "daytona_safety": declaration.daytona_safety,
+                                "daytona_snapshot_count": declaration.daytona_snapshot_count,
+                                "daytona_count_basis": declaration.daytona_count_basis,
+                                "daytona_snapshot_threshold": declaration.daytona_snapshot_threshold,
+                                "oracle_validation": declaration.oracle_validation,
+                            }
                         )
                     rows.append(prior.model_copy(update=update))
                     continue

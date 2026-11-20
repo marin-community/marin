@@ -16,6 +16,10 @@ from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 
+GRADING_SECONDS_METRIC = "timing/grading"
+SETUP_SECONDS_METRIC = "timing/setup"
+TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
+
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
@@ -133,7 +137,23 @@ Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 
 
 class ContextWindowExceeded(RuntimeError):
-    """Reject one request while allowing the harness to compact and send another."""
+    """The session rejected one request; the harness may compact and send another."""
+
+
+class ContextRecovery(StrEnum):
+    """When a session lets the harness recover from a transport's context rejection."""
+
+    NEVER = "never"
+    ALWAYS = "always"
+    AFTER_TURN = "after_turn"
+
+
+class ContextRejected(Exception):
+    """A transport context rejection whose original error applies when the harness cannot recover."""
+
+    def __init__(self, error: Exception, message: str):
+        self.error = error
+        super().__init__(message)
 
 
 class GenerationLimitReached(Exception):

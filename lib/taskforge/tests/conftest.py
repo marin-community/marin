@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from taskforge.ledger.records import LedgerEntry
+from taskforge.ledger.test_support import ListLedger
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMProviderConfig
 from taskforge.llm.test_support import GLM_MODEL, fake_source
@@ -105,14 +105,6 @@ def evidence_root() -> Path:
     lands in the checkout.
     """
     return Path(os.environ.get(EVIDENCE_DIR_ENV) or DEFAULT_EVIDENCE_ROOT).expanduser()
-
-
-class ListLedger:
-    def __init__(self) -> None:
-        self.entries: list[LedgerEntry] = []
-
-    def record(self, entry: LedgerEntry) -> None:
-        self.entries.append(entry)
 
 
 @pytest.fixture

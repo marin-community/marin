@@ -10,6 +10,7 @@ harness lives on the marin side (``tests/test_snowball_grug_parity.py``) to resp
 levanter -> experiments dependency direction.
 """
 
+import collections
 import json
 import math
 import subprocess
@@ -30,6 +31,7 @@ import pytest
 from haliax import Axis, named_jit
 from haliax.partitioning import set_mesh
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+from jax.extend import core as jax_core
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from safetensors.numpy import load_file
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -46,10 +48,12 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
+    DenseMLP,
+    GatedNorm,
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballLMHeadModel,
@@ -62,6 +66,7 @@ from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
+from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.mesh import MeshConfig
 
 
@@ -328,6 +333,115 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
     assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
 
 
+def test_hf_reload_keeps_router_combine_fp32():
+    requested = _tiny_config(router_combine_fp32=True)
+    reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
+    assert not reloaded.router_combine_fp32
+    assert preserve_hf_runtime_settings(reloaded, requested).router_combine_fp32
+
+
+def test_snowball_fp32_activations_is_a_runtime_setting():
+    """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
+    cfg = _tiny_config(fp32_activations=True)
+    hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    assert "fp32_activations" not in hf
+    with pytest.raises(ValueError, match="fp32_activations"):
+        _tiny_config(fp32_activations=True, moe_implementation="sonic_cute")
+
+
+def _bf16(key, shape, scale):
+    return (scale * jax.random.normal(key, shape)).astype(jnp.bfloat16)
+
+
+def _walk_eqns(jaxpr, path: tuple = ()):
+    """Yield (enclosing primitive names, eqn) for every eqn, walking nested jaxprs (pjit, custom_jvp, scan, remat,
+    cond, shard_map)."""
+    for eqn in jaxpr.eqns:
+        yield path, eqn
+        for value in eqn.params.values():
+            for sub in value if isinstance(value, (list, tuple)) else (value,):
+                inner = sub.jaxpr if isinstance(sub, jax_core.ClosedJaxpr) else sub
+                if isinstance(inner, jax_core.Jaxpr):
+                    yield from _walk_eqns(inner, (*path, eqn.primitive.name))
+
+
+def test_snowball_fp32_activations_round_once():
+    """On, GatedNorm and the shared MLP equal their activations computed in FP32 by hand and cast to BF16 once; off,
+    they equal the BF16 activations, with no FP32 cast in the program."""
+    k = iter(jax.random.split(jax.random.key(0), 8))
+    x = _bf16(next(k), (3, 5, 32), 2.0)
+    w_down, w_up = _bf16(next(k), (32, 16), 0.5), _bf16(next(k), (16, 32), 0.5)
+    w_gate, w_up2, w_down2 = (
+        _bf16(next(k), (32, 24), 0.5),
+        _bf16(next(k), (32, 24), 0.5),
+        _bf16(next(k), (24, 32), 0.5),
+    )
+
+    def by_hand(fp32):
+        def act(fn, h):
+            return fn(h.astype(jnp.float32)).astype(h.dtype) if fp32 else fn(h)
+
+        hidden = act(jax.nn.silu, jnp.einsum("...d,dr->...r", x, w_down))
+        gated = x * act(jax.nn.sigmoid, jnp.einsum("...r,rd->...d", hidden, w_up))
+        flat = x.reshape(15, 32)
+        mlp = jnp.einsum("tm,md->td", act(jax.nn.silu, flat @ w_gate) * (flat @ w_up2), w_down2)
+        return gated, mlp.reshape(3, 5, 32)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        outputs = {}
+        for flag in (False, True):
+            norm = GatedNorm(w_down=w_down, w_up=w_up, fp32_activations=flag)
+            mlp = DenseMLP(w_gate=w_gate, w_up=w_up2, w_down=w_down2, fp32_activations=flag)
+            outputs[flag] = (norm(x), mlp(x))
+            for got, want in zip(outputs[flag], by_hand(flag)):
+                assert got.dtype == jnp.bfloat16
+                assert np.array_equal(np.asarray(got, np.float32), np.asarray(want, np.float32))
+            program = [eqn for _, eqn in _walk_eqns(jax.make_jaxpr(lambda v: norm(v))(x).jaxpr)]
+            assert any(e.primitive.name == "convert_element_type" for e in program) == flag
+    assert not np.array_equal(np.asarray(outputs[False][0], np.float32), np.asarray(outputs[True][0], np.float32))
+
+
+def _logistic_sites(jaxpr) -> collections.Counter:
+    """Count ``logistic`` eqns (sigmoid; SiLU is ``x * logistic(x)``) by (enclosing primitives, input dtype)."""
+    return collections.Counter(
+        (path, eqn.invars[0].aval.dtype.name) for path, eqn in _walk_eqns(jaxpr) if eqn.primitive.name == "logistic"
+    )
+
+
+def test_snowball_fp32_activations_cover_every_sigmoid():
+    """Traced BF16 forward: with the flag on, every sigmoid and SiLU takes an FP32 input -- the embed/final and block
+    GatedNorms, the attention head gate (both ``cond`` branches), the shared MLP and the routed experts
+    (``shard_map``). Off, all of them take BF16 and only the router combine (always FP32) does not."""
+    sites = {}
+    for flag in (False, True):
+        cfg = _tiny_config(fp32_activations=flag)
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+            model = jax.tree.map(lambda a: a.astype(jnp.bfloat16) if a.dtype == jnp.float32 else a, model)
+            ids = _device_batched_ids(cfg.vocab_size, 8)
+            jaxpr = jax.make_jaxpr(lambda m, i: m(i).array)(model, ids)
+        found = _logistic_sites(jaxpr.jaxpr)
+        sites[flag] = {
+            "top": sum(n for (path, _), n in found.items() if "scan" not in path),
+            "head_gate": sum(n for (path, _), n in found.items() if "cond" in path),
+            "experts": sum(n for (path, _), n in found.items() if "shard_map" in path),
+            "fp32": sum(n for (_, dtype), n in found.items() if dtype == "float32"),
+            "total": sum(found.values()),
+            "dtypes_by_path": found,
+        }
+    on, off = sites[True], sites[False]
+    # Embed + final GatedNorm (2 SiLU, 2 sigmoid); one scanned block: 2 GatedNorms (4), the head gate in both
+    # branches (2), the shared MLP (1), the routed experts (1) and the router combine (1).
+    assert (off["top"], off["head_gate"], off["experts"], off["total"]) == (4, 2, 1, 13)
+    assert {k: on[k] for k in ("top", "head_gate", "experts", "total")} == {
+        k: off[k] for k in ("top", "head_gate", "experts", "total")
+    }
+    assert on["fp32"] == on["total"]
+    assert off["fp32"] == 1, "flag off: only the router combine sigmoid is FP32"
+    router = [(path, dtype) for (path, dtype) in off["dtypes_by_path"] if dtype == "float32"]
+    assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
+
+
 def test_snowball_forward_shapes_and_finite():
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
@@ -384,6 +498,42 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
     np.testing.assert_array_equal(high, [[[0]]])
     np.testing.assert_array_equal(low, [[[1]]])
+
+
+def test_snowball_router_combine_fp32_rounds_the_weighted_sum_once():
+    cfg = _tiny_config(num_experts=4, num_experts_per_token=2, moe_implementation="scatter")
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    with jax.set_mesh(mesh):
+        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, 0].set(1)
+        router = jnp.zeros((cfg.hidden_dim, cfg.num_experts)).at[0].set(jnp.array([0.25, 0, -4, -4]))
+        compute = jmp.get_policy("p=f32,c=bf16")
+        outputs = []
+        for flag in (True, False):
+            model = SnowballMoEMLP.init(replace(cfg, router_combine_fp32=flag), key=jax.random.key(0))
+            experts = model.expert_mlp
+            # SiLU(16) rounds to 16 in BF16. With up=1, the down projection
+            # gives exact expert outputs +1 and -1 in the first coordinate.
+            experts = replace(
+                experts,
+                w_gate=jnp.zeros(experts.w_gate.shape).at[:2, 0, 0].set(16),
+                w_up=jnp.zeros(experts.w_up.shape).at[:2, 0, 0].set(1),
+                w_down=jnp.zeros(experts.w_down.shape).at[:2, 0, 0].set(jnp.array([1 / 16, -1 / 16])),
+            )
+            model = compute.cast_to_compute(replace(model, router=router, expert_mlp=experts))
+            outputs.append(model(inputs)[0, 0, 0])
+
+    # The two selected logits are 1/4 and 0. Their normalized sigmoid
+    # weights multiply +1 and -1, so the combine is their difference.
+    sigmoid = 1 / (1 + math.exp(-0.25))
+    reference = 2.5 * (sigmoid - 0.5) / (sigmoid + 0.5)
+    high, low = outputs
+    assert high.dtype == low.dtype == jnp.bfloat16
+    assert high.item() == jnp.asarray(reference, dtype=jnp.bfloat16).item()
+    assert abs(high.item() - reference) < abs(low.item() - reference)
 
 
 @pytest.mark.parametrize(
@@ -665,7 +815,8 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 assert moment_specs and all(
                     "expert" in spec and ("data", "context") in spec for spec in moment_specs
                 ), moment_specs
-            examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
+            with local_cpu_mesh():
+                examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(
                 components={
                     "direct": DirectDatasetComponent(
@@ -759,7 +910,8 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
                 save_tokenizer=False,
                 save_reference_code=False,
             )
-        examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
+        with local_cpu_mesh():
+            examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
         main(
             TrainLmConfig(
                 data=LmDataConfig(
@@ -809,6 +961,83 @@ def test_snowball_packed_conversations_are_isolated(separate_key_axis):
         np.testing.assert_array_equal(observe(model, changed), after)
     assert not np.allclose(before[:, :4], after[:, :4])
     np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.multidevice
+@pytest.mark.parametrize(
+    "implementation,sequence_length,head_dim",
+    [
+        ("reference", 48, 12),
+        # 48 forces three blocks of 16, so xla_flash cannot fall back to reference attention.
+        ("xla_flash", 48, 12),
+        pytest.param("tpu_splash", 512, 64, marks=pytest.mark.tpu),
+        ("gpu_fa4_cute", 1024, 64),
+    ],
+)
+def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
+    implementation, sequence_length, head_dim
+):
+    if implementation == "tpu_splash" and jax.default_backend() != "tpu":
+        pytest.skip("Splash requires TPU hardware")
+    if implementation == "gpu_fa4_cute" and jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe requires GPU hardware")
+    with use_test_devices(4) as devices:
+        cfg = _tiny_config(
+            num_layers=2,  # One sliding-window layer and one full-causal layer.
+            head_dim=head_dim,
+            max_seq_len=sequence_length,
+            sliding_window=sequence_length // 2,
+            attention_implementation=implementation,
+            moe_implementation="ring",
+            # Eliminate capacity drops, which couple tokens independently of attention.
+            moe_capacity_factor=4,
+        )
+        Batch, Pos = Axis("batch", 4), Axis("position", sequence_length)
+        ids = hax.named(jnp.arange(Batch.size * Pos.size).reshape(Batch.size, Pos.size) % cfg.vocab_size, (Batch, Pos))
+        # Different boundaries per row, away from CP shard and kernel tile boundaries.
+        boundaries = jnp.array([sequence_length // 3 + i for i in range(Batch.size)])[:, None]
+        later = jnp.arange(Pos.size)[None, :] >= boundaries
+        segments = hax.named(later.astype(jnp.int32), ids.axes)
+        packed = AttentionMask.causal().with_segment_ids(segments, segments.rename({"position": "key_position"}))
+        single = AttentionMask.causal().with_segment_ids(hax.zeros(ids.axes, dtype=jnp.int32))
+        changed = hax.named(jnp.where(later, ids.array, (ids.array + 13) % cfg.vocab_size), ids.axes)
+        # Score only next-token predictions wholly inside the second document.
+        weights = hax.named((later & (jnp.arange(Pos.size)[None, :] < Pos.size - 1)).astype(jnp.float32), ids.axes)
+        for context in (1, 4):
+            mesh = Mesh(
+                np.asarray(devices[:context]).reshape(1, 1, 1, context, 1),
+                ("replica_dcn", "data", "expert", "context", "model"),
+                axis_types=(AxisType.Explicit,) * 5,
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(9))
+                if implementation in ("tpu_splash", "gpu_fa4_cute"):
+                    model = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16").cast_to_compute(model)
+
+                # BF16 MoE scatters can vary between identical GPU runs. Compile deterministically
+                # so their rounding noise cannot masquerade as a cross-document dependency.
+                @eqx.filter_jit(compiler_options={"xla_gpu_exclude_nondeterministic_ops": True})
+                def forward(model, tokens, mask):
+                    hidden = model.activations(tokens, mask).array
+                    loss = model.compute_next_token_loss(LmExample(tokens, weights, mask), reduction=None)
+                    return hidden, loss.array
+
+                before = tuple(np.asarray(x) for x in forward(model, ids, packed))
+                repeated = forward(model, ids, packed)
+                for expected, actual in zip(before, repeated, strict=True):
+                    np.testing.assert_array_equal(expected, actual, err_msg="Identical inputs must be deterministic")
+                after = tuple(np.asarray(x) for x in forward(model, changed, packed))
+                assert not np.allclose(before[0][~np.asarray(later)], after[0][~np.asarray(later)])
+                np.testing.assert_array_equal(before[0][np.asarray(later)], after[0][np.asarray(later)])
+                np.testing.assert_array_equal(before[1], after[1])
+                assert np.all(before[1][np.asarray(weights.array, dtype=bool)] > 0)
+
+                # A single document must preserve the pre-packing causal path bit for bit.
+                unpacked = forward(model, ids, None)
+                one_document = forward(model, ids, single)
+                for expected, actual in zip(unpacked, one_document, strict=True):
+                    np.testing.assert_array_equal(expected, actual)
 
 
 @pytest.mark.timeout(120)

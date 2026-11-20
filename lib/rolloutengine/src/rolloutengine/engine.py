@@ -20,6 +20,8 @@ from rolloutengine.grading import _grade_rollout
 from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.models import (
+    GRADING_SECONDS_METRIC,
+    SETUP_SECONDS_METRIC,
     AttemptEnded,
     AttemptStarted,
     Graded,
@@ -67,6 +69,8 @@ class _Attempt:
     events: _EventDelivery
     grade: GradeResult
     outputs: dict[str, bytes]
+    setup_seconds: float = 0.0
+    grading_seconds: float | None = None
 
 
 class RolloutEngine:
@@ -106,13 +110,14 @@ class RolloutEngine:
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
         """
         self.check(spec)
+        harness = self.harnesses[spec.harness]
         run_id = uuid.uuid4().hex if run_id is None else run_id
         events = _EventDelivery(self.observer, run_id, spec.task.id)
         attempt = _Attempt(
             spec,
-            self.harnesses[spec.harness],
+            harness,
             run_id,
-            _Recorder(model, spec.limits, spec.trace, events),
+            _Recorder(model, spec.limits, spec.trace, events, context_recovery=harness.context_recovery),
             _Cleanup(spec.limits.cleanup_timeout),
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
@@ -139,6 +144,13 @@ class RolloutEngine:
             cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
             grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
             metrics["cleanup_error_count"] = float(len(cleanup_errors))
+        if (
+            failure is None
+            and attempt.grading_seconds is not None
+            and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+        ):
+            metrics[GRADING_SECONDS_METRIC] = attempt.grading_seconds - grade.verifier_setup_seconds
+            metrics[SETUP_SECONDS_METRIC] = attempt.setup_seconds + grade.verifier_setup_seconds
         rollout = replace(rollout, metrics=metrics)
         if failure is None:
             return GradedRollout(rollout, grade)
@@ -178,7 +190,8 @@ class RolloutEngine:
         except Exception as error:
             raise _Interrupted(RolloutOperation.START) from error
         if machine is not None:
-            events.emit(MachineReady(time.monotonic() - started))
+            attempt.setup_seconds = time.monotonic() - started
+            events.emit(MachineReady(attempt.setup_seconds))
         # The harness's resources close after grading, before the machines.
         cleanup = _CleanupScope(resources, attempt.cleanup)
         context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id)
@@ -221,4 +234,5 @@ class RolloutEngine:
         except Exception as error:
             raise _Interrupted(RolloutOperation.GRADE) from error
         attempt.grade = grade
-        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, time.monotonic() - started))
+        attempt.grading_seconds = time.monotonic() - started
+        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, attempt.grading_seconds))

@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from harbor_config.errors import ErrorCategory, error_category
+from harbor_config.models.trial.config import TaskConfig
 
 from harbor.agents.factory import AgentFactory
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
@@ -115,6 +116,44 @@ def _log_abandoned_phase_failure(
             )
 
     phase_task.add_done_callback(_log)
+
+
+async def load_task(
+    task: TaskConfig,
+    *,
+    extra_instruction_paths: Sequence[Any] | None = None,
+    disable_verification: bool = False,
+) -> Task:
+    """Materialize one task, downloading remote descriptors as a trial would.
+
+    Git and package tasks are fetched through the task client's cache, which
+    honors the descriptor's ``download_dir`` and returns the cached path on
+    repeat calls. Callers that only inspect task definitions, such as snapshot
+    preflight, use the same acquisition path as trial execution.
+    """
+    if task.is_git_task() or task.is_package_task():
+        client = TaskClient()
+        task_id = task.get_task_id()
+        task_dir = (
+            await client.download_tasks(
+                task_ids=[task_id],
+                overwrite=task.overwrite,
+                output_dir=task.download_dir,
+            )
+        ).paths[0]
+        return Task(
+            task_dir=task_dir,
+            extra_instruction_paths=extra_instruction_paths,
+            disable_verification=disable_verification,
+        )
+
+    if task.path is None:
+        raise ValueError("Task path must be set for a local task.")
+    return Task(
+        task_dir=task.path,
+        extra_instruction_paths=extra_instruction_paths,
+        disable_verification=disable_verification,
+    )
 
 
 class Trial(ABC):
@@ -251,26 +290,8 @@ class Trial(ABC):
         script_not_required = (
             config.verifier.disable or config.verifier.import_path is not None
         )
-        if config.task.is_git_task() or config.task.is_package_task():
-            client = TaskClient()
-            task_id = config.task.get_task_id()
-            task_dir = (
-                await client.download_tasks(
-                    task_ids=[task_id],
-                    overwrite=config.task.overwrite,
-                    output_dir=config.task.download_dir,
-                )
-            ).paths[0]
-            return Task(
-                task_dir=task_dir,
-                extra_instruction_paths=config.extra_instruction_paths,
-                disable_verification=script_not_required,
-            )
-
-        if config.task.path is None:
-            raise ValueError("Task path must be set for a local task.")
-        return Task(
-            task_dir=config.task.path,
+        return await load_task(
+            config.task,
             extra_instruction_paths=config.extra_instruction_paths,
             disable_verification=script_not_required,
         )
@@ -399,6 +420,7 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()
@@ -735,7 +757,9 @@ class Trial(ABC):
             ) from timeout_error
         try:
             await task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
+            if vars(cancellation).get("__notes__"):
+                self.result.secondary_exception_info.append(ExceptionInfo.from_exception(cancellation))
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error
@@ -1142,7 +1166,9 @@ class Trial(ABC):
             extra_kwargs["skills_dir"] = self._effective_skills_dir
 
         self.agent = AgentFactory.create_agent_from_config(
-            self.config.agent,
+            self.config.agent.model_copy(
+                update={"env": {**self.task.config.agent.env, **self.config.agent.env}}
+            ),
             guest_environment=self.guest_environment,
             host_capabilities=self.host_capabilities,
             logs_dir=self.paths.agent_dir,

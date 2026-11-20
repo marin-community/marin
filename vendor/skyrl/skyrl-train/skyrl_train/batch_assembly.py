@@ -1,0 +1,340 @@
+"""Global batch layouts and shared trajectory-to-tensor assembly."""
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import cached_property
+from itertools import accumulate
+
+import numpy as np
+import torch
+from omegaconf import DictConfig
+
+from skyrl_train.batch_metrics import consumed_stop_metrics, rollout_metrics, reward_metrics, rollout_staleness_metrics
+from skyrl_train.batch_sampling import RowOwnership, filter_trajectory_batch
+from skyrl_train.config.objective_spec import rollout_logprobs_required
+from skyrl_train.dataset.preprocess import collate_response_token_channel, convert_prompts_responses_to_batch_tensors
+from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
+from skyrl_train.distillation import validate_distillation_attachment
+from skyrl_train.group_admission import GroupAdvantageInvariant
+from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
+from skyrl_train.rollouts.buffer import RowFacts, AdmittedRollout
+from skyrl_train.metric_reduction import MetricReduction
+from skyrl_train.training_batch import TrainingInputBatch
+from skyrl_train.trajectory_runners.trajectory_processing import (
+    normalize_trajectory_batches,
+    token_reward_rows,
+    validate_trajectory_batch,
+)
+from skyrl_train.trajectory_runners.types import BatchFields, TrajectoryBatch
+from skyrl_train.utils.advantage_estimators import batch_advantages, compute_advantages_and_returns
+from marinskyrl.runtime_options import OUTCOME_ADVANTAGE_ESTIMATORS
+from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
+from skyrl_train.config.driver_validation import moe_router_replay_requested
+
+
+@dataclass(frozen=True)
+class BatchPlan:
+    """Ordered row identity, global widths, and channel policy for one batch."""
+
+    global_step: int
+    uids: tuple[str, ...]
+    facts: tuple[RowFacts, ...]
+    fields: BatchFields
+    rollout_staleness: tuple[int, ...] | None
+    num_experts: int | None
+
+    @property
+    def max_prompt_len(self) -> int:
+        return max(int(facts.prompt_len.max()) for facts in self.facts)
+
+    @property
+    def max_response_len(self) -> int:
+        return max(int(facts.response_len.max()) for facts in self.facts)
+
+    def rank_rows(self, dp: int, dp_size: int) -> range:
+        size = len(self.uids) // dp_size
+        return range(dp * size, (dp + 1) * size)
+
+    @cached_property
+    def group_ranges(self) -> tuple[range, ...]:
+        offsets = tuple(accumulate((len(facts.response_len) for facts in self.facts), initial=0))
+        return tuple(range(start, end) for start, end in zip(offsets, offsets[1:]))
+
+    def group_indices(self, dp: int, dp_size: int) -> tuple[int, ...]:
+        """Return the ordered groups intersecting the rank's contiguous rows."""
+        rows = self.rank_rows(dp, dp_size)
+        return tuple(
+            index
+            for index, group in enumerate(self.group_ranges)
+            if group.start < rows.stop and rows.start < group.stop
+        )
+
+    @property
+    def stop_metrics(self) -> dict[str, float]:
+        return consumed_stop_metrics(
+            tuple(value for group in self.facts for value in group.stop_reasons)
+            if "stop_reasons" in self.fields.first_group_list_fields
+            else None,
+            len(self.uids),
+        )
+
+
+def plan_worker_batch(
+    cfg: DictConfig,
+    groups: Sequence[AdmittedRollout],
+    *,
+    global_step: int,
+    dp_size: int,
+    max_staleness_steps: int,
+    num_experts: int | None,
+) -> tuple[BatchPlan, dict[str, float]]:
+    """Validate admitted groups and retain their global layout and metrics."""
+    facts = tuple(group.row_facts for group in groups)
+    replay = moe_router_replay_requested(cfg)
+    for group, rows in zip(groups, facts, strict=True):
+        for reason, unsupported in (
+            ("nonzero loop credit", rows.loop_credit),
+            (
+                "teacher evidence",
+                bool(
+                    rows.fields.present
+                    & {"teacher_evidence", "distillation", "student_topk_indices", "behavior_topk_logprobs"}
+                ),
+            ),
+            (
+                "route dtype without the model expert count",
+                replay and num_experts is None and "rollout_routed_experts" in rows.fields.present,
+            ),
+        ):
+            if unsupported:
+                raise ValueError(f"trainer.batch_builder=worker group {group.uid!r} does not support {reason}")
+    if sum(len(group.response_len) for group in facts) % dp_size:
+        raise ValueError(
+            f"trainer.batch_builder=worker groups {tuple(group.uid for group in groups)!r}: rows requiring DP padding"
+        )
+    fields = BatchFields.from_groups([group.fields for group in facts])
+    if not replay:
+        fields = fields.without_routes()
+    staleness = [global_step - group.policy_step for group in groups]
+    plan = BatchPlan(
+        global_step=global_step,
+        uids=tuple(group.uid for group in groups for _ in group.row_facts.response_len),
+        facts=facts,
+        fields=fields,
+        rollout_staleness=tuple(
+            age for group, age in zip(groups, staleness, strict=True) for _ in group.row_facts.response_len
+        ),
+        num_experts=num_experts,
+    )
+    metrics = rollout_metrics(facts)
+    metrics.update(reward_metrics(facts, plan.uids, n_samples_per_prompt=cfg.generator.n_samples_per_prompt))
+    metrics.update(
+        rollout_staleness_metrics(staleness, global_step=global_step, max_staleness_steps=max_staleness_steps)
+    )
+    return plan, metrics
+
+
+def _validated_distillation_tensors(
+    trajectory_batch: TrajectoryBatch,
+    response_mask: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """Validate optional teacher evidence and return its learner-only tensors."""
+    evidence = trajectory_batch.get("teacher_evidence")
+    distillation = trajectory_batch.get("distillation")
+    if evidence is None and distillation is None:
+        return {}
+    if evidence is None or distillation is None:
+        raise ValueError("trajectory batches must carry teacher_evidence and prepared distillation together")
+    trajectory_ids = trajectory_batch.get("trajectory_ids")
+    if trajectory_ids is None:
+        raise ValueError("teacher evidence requires stable trajectory_ids")
+    validate_distillation_attachment(
+        evidence,
+        distillation,
+        trajectory_ids=tuple(trajectory_id.to_string() for trajectory_id in trajectory_ids),
+        response_mask=response_mask.to(torch.bool),
+    )
+    return distillation.training_tensors()
+
+
+def _token_staleness(
+    lease_staleness: Sequence[int], policy_steps: torch.Tensor | None, response_mask: torch.Tensor, global_step: int
+) -> torch.Tensor:
+    """Each response token's staleness: its lease's, unless the engine recorded the policy step that sampled it."""
+    lease = torch.tensor(lease_staleness, dtype=torch.int32).unsqueeze(1)
+    staleness = lease * response_mask.to(torch.int32)
+    if policy_steps is None:
+        return staleness
+    stamped = (policy_steps != UNSTAMPED_POLICY_STEP) & (response_mask > 0)
+    staleness = torch.where(stamped, global_step - policy_steps, staleness)
+    assert bool(((staleness >= 0) & (staleness <= lease)).all()), (
+        "a token's policy step must fall between its lease's step and the training step"
+    )
+    return staleness
+
+
+def assemble_slice(
+    plan: BatchPlan,
+    rows: range,
+    trajectory_batch: TrajectoryBatch,
+    *,
+    pad_token_id: int,
+    algorithm: DictConfig,
+) -> TrainingInputBatch:
+    """Build normalized rows at the plan's global widths and retain whole-batch metadata."""
+    batch = trajectory_batch
+    if rows.step != 1 or rows.start < 0 or rows.stop > len(plan.uids) or len(rows) != len(batch["response_ids"]):
+        raise ValueError("normalized rows must match their contiguous batch-plan range")
+    token_channel = bool(algorithm.get("enable_token_reward_channel", False))
+    sequences, attention, response, rewards, losses, logprobs, shaping, tags = (
+        convert_prompts_responses_to_batch_tensors(
+            pad_token_id,
+            batch["prompt_token_ids"],
+            batch["response_ids"],
+            batch["rewards"],
+            batch["loss_masks"],
+            batch.get("rollout_logprobs"),
+            batch.get("token_level_shaping") if token_channel else None,
+            batch.get("response_span_tags") if token_channel else None,
+            max_prompt_len=plan.max_prompt_len,
+            max_response_len=plan.max_response_len,
+        )
+    )
+    if (
+        rollout_logprobs_required(algorithm, loss_spec=PolicyLossRegistry.spec(algorithm.policy_loss_type))
+        and logprobs is None
+    ):
+        raise ValueError("rollout_logprobs are required by the configured objective")
+    if logprobs is not None:
+        assert logprobs.shape == losses.shape, "Logprobs should look like responses"
+    route_rows = None
+    if "rollout_routed_experts" in plan.fields.present:
+        route_rows = RoutedExpertRows(tuple(batch["rollout_routed_experts"]), plan.max_response_len, plan.num_experts)
+        if len(route_rows) != len(batch["response_ids"]):
+            raise ValueError("routed experts must have one row per response")
+    if plan.rollout_staleness is None:
+        staleness = torch.zeros_like(response, dtype=torch.int32)
+    else:
+        policy_steps = collate_response_token_channel(
+            batch.get("rollout_policy_steps"),
+            response,
+            dtype=torch.int32,
+            expected_lengths=[len(row) for row in batch["response_ids"]],
+        )
+        staleness = _token_staleness(
+            plan.rollout_staleness[rows.start : rows.stop], policy_steps, response, plan.global_step
+        )
+    training_input = TrainingInputBatch(
+        {
+            "sequences": sequences,
+            "attention_mask": attention,
+            "response_mask": response,
+            "rewards": rewards,
+            "loss_mask": losses,
+            "rollout_logprobs": logprobs,
+            "rollout_staleness": staleness,
+            "is_last_step": (
+                torch.tensor(batch["is_last_step"], dtype=torch.bool) if batch.get("is_last_step") is not None else None
+            ),
+        },
+        routed_expert_rows=route_rows,
+    )
+    training_input.update(_validated_distillation_tensors(batch, response))
+    pair_roles = batch.get("pair_roles")
+    if pair_roles is not None:
+        if len(pair_roles) != len(batch["response_ids"]):
+            raise ValueError("pair_roles must carry one role per response row")
+        training_input["pair_roles"] = torch.tensor(pair_roles, dtype=torch.float32)
+    if shaping is not None:
+        training_input["token_level_shaping"] = shaping
+    if tags is not None:
+        training_input["response_span_tags"] = tags
+    loop_advantages = collate_response_token_channel(
+        batch.get("loop_advantages"),
+        response,
+        dtype=torch.float,
+        expected_lengths=[len(row) for row in batch["response_ids"]],
+    )
+    if loop_advantages is not None:
+        training_input["loop_advantages"] = loop_advantages
+    response_lengths = np.concatenate([facts.response_len for facts in plan.facts])
+    training_input.metadata = {
+        "uids": list(plan.uids),
+        "response_length": plan.max_response_len,
+        "avg_response_length": int(response_lengths.sum()) / len(plan.uids),
+        "consumed_stop_metrics": plan.stop_metrics,
+    }
+    if "exclude_from_baseline" in plan.fields.present:
+        training_input.metadata["exclude_from_baseline"] = np.concatenate(
+            [facts.exclude_from_baseline for facts in plan.facts]
+        )
+    return training_input
+
+
+def forward_input(data: TrainingInputBatch) -> TrainingInputBatch:
+    """Select forward tensors and available control metadata, retaining compact routes."""
+    keys = ["sequences", "attention_mask"]
+    if data.routed_experts is not None:
+        keys.append("rollout_routed_experts")
+    return data.select(
+        keys=keys, metadata_keys=[key for key in ("response_length", "global_step") if key in data.metadata]
+    )
+
+
+def assemble_rank_slice(
+    plan: BatchPlan,
+    indices: tuple[int, ...],
+    groups: Sequence[TrajectoryBatch],
+    rows: range,
+    *,
+    pad_token_id: int,
+    algorithm: DictConfig,
+) -> TrainingInputBatch:
+    """Normalize intersecting payload groups and assemble their contiguous rank rows."""
+    selected = []
+    for index, payload in zip(indices, groups, strict=True):
+        facts = plan.facts[index]
+        if not np.array_equal(
+            facts.prompt_len, [len(row) for row in payload["prompt_token_ids"]]
+        ) or not np.array_equal(facts.response_len, [len(row) for row in payload["response_ids"]]):
+            raise ValueError("selected rollout row geometry does not match metadata")
+        group = plan.group_ranges[index]
+        local_rows = list(range(max(rows.start - group.start, 0), min(rows.stop - group.start, len(group))))
+        selected.append(filter_trajectory_batch(payload, local_rows, row_ownership=RowOwnership.BORROWED))
+    batch = normalize_trajectory_batches(selected, fields=plan.fields)
+    validate_trajectory_batch(len(batch["response_ids"]), batch)
+    batch["rewards"] = token_reward_rows(batch["rewards"], batch["response_ids"])
+    result = assemble_slice(plan, rows, batch, pad_token_id=pad_token_id, algorithm=algorithm)
+    result.metadata.update(pad_size=0, global_step=plan.global_step)
+    return result
+
+
+def install_plan_advantages(
+    batch: TrainingInputBatch,
+    plan: BatchPlan,
+    rows: range,
+    algorithm: DictConfig,
+    *,
+    reduction: MetricReduction,
+) -> torch.Tensor:
+    """Reduce resident row scores once and install credit from the global outcomes."""
+    scores = batch["rewards"].new_zeros(len(plan.uids))
+    scores[rows.start : rows.stop] = batch["rewards"].sum(-1)
+    scores = reduction.combine(scores, "sum").cpu()
+    invariant = GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage)
+    if algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS:
+        advantages, _ = compute_advantages_and_returns(
+            token_level_rewards=scores.clone()[:, None],
+            response_mask=torch.ones((len(scores), 1), dtype=torch.int64, device=scores.device),
+            index=plan.uids,
+            adv_estimator=algorithm.advantage_estimator,
+            config=algorithm,
+            gamma=algorithm.gamma,
+            grpo_norm_by_std=algorithm.grpo_norm_by_std,
+            exclude_from_baseline=np.concatenate([facts.exclude_from_baseline for facts in plan.facts]),
+            group_advantage_invariant=invariant,
+        )
+        batch["advantages"] = advantages[rows.start : rows.stop] * batch["response_mask"]
+    else:
+        batch["advantages"], _ = batch_advantages(batch, algorithm, invariant=invariant)
+    return scores

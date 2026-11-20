@@ -4,9 +4,13 @@
 import json
 import sys
 import tempfile
+from importlib import import_module
 from pathlib import Path
 
 from cloud.iris import launch_config
+from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
+from skyrlrecipe import RLEntrypoint
+from yaml import safe_load
 
 
 def check_vendored_launcher() -> None:
@@ -23,7 +27,14 @@ def load_documents(source: Path, output: Path) -> None:
             path = Path(directory) / f"{index}.yaml"
             path.write_text(yaml, encoding="utf-8")
             try:
-                launch_config.load_launch_config(path)
+                config = launch_config.load_launch_config(path)
+                if case == "native/generation":
+                    assert config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+                    assert callable(import_module(config.runtime.entrypoint).run)
+                    assert (config.iris.allocation.num_nodes, config.skyrl.generator.num_inference_engines) == (1, 4)
+                loaded = config.run.attempt_id
+                written = safe_load(yaml)["run"]["attempt_id"]
+                assert loaded == written, f"run.attempt_id {written!r} loads as {loaded!r}"
             except Exception as error:
                 failures[case] = f"{type(error).__name__}: {error}"
     output.write_text(json.dumps(failures))

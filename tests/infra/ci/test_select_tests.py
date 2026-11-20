@@ -136,11 +136,36 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
 @pytest.mark.parametrize(
-    "changed_file",
-    ["experiments/moe/test_optimizer.py", "experiments/moe/optimizer.py", "lib/levanter/src/levanter/optim.py"],
+    "changed_file,expected",
+    [
+        (path, ["experiments/moe/test_optimizer.py"])
+        for path in (
+            "experiments/moe/test_optimizer.py",
+            "experiments/moe/optimizer.py",
+            "lib/levanter/src/levanter/optim.py",
+        )
+    ]
+    + [
+        (
+            path,
+            [
+                "experiments/post_training/curriculum_rl/test_launch.py",
+                "experiments/post_training/rl_tests/test_rl.py",
+                "experiments/post_training/rl_tests/test_rl_gate.py",
+                "tests/rl/test_skyrl.py",
+            ],
+        )
+        for path in ("vendor/skyrl/cloud/iris/launch_config.py",)
+    ]
+    + [
+        (
+            "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+            ["experiments/post_training/rl_tests/test_rl.py", "tests/rl/test_skyrl.py"],
+        )
+    ],
 )
 def test_experiment_tests_run_for_test_and_dependency_changes(
-    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str
+    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str, expected: list[str]
 ) -> None:
     write(tmp_path, "lib/levanter/src/levanter/optim.py", "RATE = 1\n")
     write(tmp_path, "experiments/moe/optimizer.py", "from levanter.optim import RATE\n")
@@ -152,9 +177,19 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
     write(tmp_path, "experiments/moe/test_unrelated.py", "def test_other():\n    assert True\n")
     write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
 
+    write(tmp_path, "experiments/post_training/rl_tests/test_rl.py", "def test_native_config():\n    pass\n")
+    write(
+        tmp_path,
+        "experiments/post_training/rl_tests/test_rl_gate.py",
+        "def test_native_protocol():\n    pass\n",
+    )
+    write(
+        tmp_path, "experiments/post_training/curriculum_rl/test_launch.py", "def test_native_allocation():\n    pass\n"
+    )
+    write(tmp_path, "tests/rl/test_skyrl.py", "def test_stored_record_boundary():\n    pass\n")
     selection = select_tests([changed_file], tmp_path)
 
-    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py"]
+    assert leg_paths(selection.matrix, "marin") == expected
 
 
 @pytest.mark.parametrize(
@@ -389,12 +424,25 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
+def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) -> None:
+    census = "tests/rl/test_rl_launch_documents.py"
+    runner = "experiments/post_training/rl_tests/test_rl.py"
+    for path in (census, runner):
+        write(tmp_path, path, "def test_launch(): pass\n")
+    for changed in (
+        "vendor/skyrl/uv.lock",
+        "lib/skyrlrecipe/src/skyrlrecipe/recipe.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/callbacks/builtin.py",
+    ):
+        assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
+
+
 @pytest.mark.parametrize(
     "changed_path,suites",
     [
         (
             "lib/taskcompendium/src/taskcompendium/lowering.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["harbor-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
@@ -432,12 +480,11 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["harbor-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         (
             "lib/rigging/src/rigging/message.py",
             [
-                "evalchemy-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "skyrl-wheel",
@@ -447,7 +494,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
+        ("lib/finestore/src/finestore/table.py", ["harbor-unit", "skyrl-wheel"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
@@ -469,6 +516,10 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
     [
         "experiments/post_training/task_curation/harbor_hub.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+        "experiments/post_training/task_curation/calibforge_rebuild.py",
+        "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+        "experiments/post_training/task_curation/daytona_identity.py",
+        "experiments/post_training/task_curation/tests/test_daytona_identity.py",
     ],
 )
 def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
@@ -487,25 +538,9 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "path",
-    [
-        "vendor/evalchemy/eval/chat_benchmarks/MRCR/eval_instruct.py",
-        "vendor/evalchemy/uv.lock",
-        "lib/finestore/src/finestore/client.py",
-        "lib/marin/src/marin/evaluation/evalchemy/runner.py",
-        "experiments/evaluation/evals.py",
-    ],
-)
-def test_evaluator_changes_select_the_isolated_evalchemy_suite(tmp_path: Path, path: str) -> None:
-    selection = select_changed_tests([path], tmp_path)
-
-    assert "evalchemy-unit" in selection.suites
-
-
-@pytest.mark.parametrize(
     "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
 )
-@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "evalchemy", "harbor"])
+@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "harbor"])
 def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]

@@ -59,7 +59,10 @@ class HuggingFacePublisher:
                 ),
                 operation=f"create Hugging Face repository {self.repo_id}",
             )
+            staging_started = time.monotonic()
             with io.local_read_dir(export_path, staging_dir=self.staging_dir) as local_dir:
+                upload_started = time.monotonic()
+                logger.info("Hub publication staging completed in {:.3f} seconds", upload_started - staging_started)
                 call_with_hugging_face_retry(
                     lambda: api.upload_folder(
                         folder_path=str(local_dir),
@@ -83,3 +86,4 @@ class HuggingFacePublisher:
                         ),
                         operation=f"archive Hugging Face checkpoint {self.repo_id}@{self.revision}",
                     )
+                logger.info("Hub upload completed in {:.3f} seconds", time.monotonic() - upload_started)

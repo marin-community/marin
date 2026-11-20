@@ -44,6 +44,8 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "skyrlrecipe",
+    "evalrecords",
     "verifyit",
     "deploy",
     "iac",
@@ -88,6 +90,20 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
+_NATIVE_CONFIG = ("vendor/skyrl/cloud/iris/", "vendor/skyrl/skyrl-train/skyrl_train/config/")
+MARIN_NATIVE_CONFIG_TESTS = {
+    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/curriculum_rl/test_launch.py": _NATIVE_CONFIG,
+    "tests/rl/test_skyrl.py": (
+        *_NATIVE_CONFIG,
+        "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
+    ),
+    "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
+}
+
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
@@ -101,6 +117,8 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "skyrlrecipe": "marin-skyrlrecipe",
+    "evalrecords": "marin-evalrecords",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -151,7 +169,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -182,7 +200,20 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "rl-progress": (
+        "infra/marina/",
+        "lib/finestore/src/finestore/rl/",
+        "lib/marin/src/marin/rl/",
+        "lib/marin/src/marin/execution/",
+        "experiments/post_training/rl",
+        "experiments/post_training/snowball_rl.py",
+        "experiments/post_training/skyrl_test_support.py",
+        "infra/ci/",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "skyrl-wheel": (
+        "lib/skyrlrecipe/",
         "vendor/skyrl/",
         "vendor/harbor/",
         "lib/finelog/",
@@ -196,23 +227,22 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
-    "evalchemy-unit": (
-        "vendor/evalchemy/",
-        "lib/finestore/",
-        "lib/rigging/",
-        "lib/marin/src/marin/evaluation/evalchemy/",
-        "experiments/evaluation/",
-        "infra/ci/select_tests.py",
-        ".github/workflows/unified-unit.yaml",
-        *DEPENDENCY_MANIFESTS,
-    ),
     "harbor-unit": (
         "vendor/harbor/",
         "lib/shellbox/",
         "lib/finestore/",
         "lib/rigging/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
         "lib/marin/src/marin/evaluation/harbor/",
+        "experiments/post_training/task_curation/calibforge_rebuild.py",
+        "experiments/post_training/task_curation/calibforge_fixtures.py",
+        "experiments/post_training/task_curation/daytona_identity.py",
+        "experiments/post_training/task_curation/task_tars.py",
         "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+        "experiments/post_training/task_curation/tests/test_daytona_identity.py",
+        "experiments/post_training/task_curation/tests/task_tar_fixtures.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "infra/ci/select_tests.py",
         "infra/ci/run_harbor_tests.py",
@@ -769,6 +799,10 @@ def classify(
             continue
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+
+        for owner, prefixes in MARIN_NATIVE_CONFIG_TESTS.items():
+            if filepath.startswith(prefixes) and (repo_root / owner).exists():
+                direct_tests["marin"].append(owner)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
