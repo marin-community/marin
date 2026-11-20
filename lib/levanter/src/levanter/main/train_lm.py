@@ -203,7 +203,6 @@ def main(config: TrainLmConfig):
             raise ValueError("llama_native requires an unchanged tokenizer")
         if any(
             (
-                config.hf_save_path,
                 config.hf_upload,
                 config.peft_save_path,
                 config.peft_hf_upload,
@@ -211,7 +210,9 @@ def main(config: TrainLmConfig):
                 config.merged_hf_upload,
             )
         ):
-            raise ValueError("llama_native HF export is not yet supported by this entrypoint")
+            raise ValueError("llama_native supports local full-model HF export without uploads or adapters")
+        if config.hf_save_path is not None and StoragePath(config.hf_save_path).is_remote:
+            raise ValueError("llama_native HF export requires a local save path")
         if config.log_entropy or config.eval_harness is not None:
             raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
         config = dataclasses.replace(
@@ -257,6 +258,11 @@ def main(config: TrainLmConfig):
         )
         config = dataclasses.replace(config, model=context.model)
         converter = context.converter
+        if config.hf_save_path is not None:
+            assert isinstance(config.model, HFCompatConfig) and converter is not None
+            config.model.validate_hf_export()
+            if not config.initialize_from_hf:
+                converter = dataclasses.replace(converter, reference_checkpoint=None)
     elif config.initialize_from_hf:
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()

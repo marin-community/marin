@@ -281,6 +281,9 @@ draccus.encode.register(RepoRef, str)
 
 
 class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
+    def validate_hf_export(self) -> None:
+        """Raise if this configuration cannot be exported to Hugging Face."""
+
     @abc.abstractmethod
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> HfConfig:
         pass
