@@ -1029,6 +1029,39 @@ def test_retired_curriculum_is_rejected_before_idempotency_or_sql(tmp_path, monk
     assert {file: file.read_bytes() for file in inputs} == original_bytes
 
 
+def test_curriculum_gateway_keeps_large_archived_inventory_out_of_count_reads(catalog_database, catalog_query, tmp_path):
+    path = curriculum_release(tmp_path)
+    load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        expected = client.get("/curriculum/invariants").json()
+    stored = catalog_query("SELECT load_id,manifest FROM curriculum_loads", {})["rows"][0]
+    manifest = stored["manifest"]
+    manifest["inventory"][0]["notes"] = "archived source detail " * 300_000
+    catalog_query(
+        "UPDATE curriculum_loads SET manifest=CAST(:manifest AS JSONB) WHERE load_id=:load_id",
+        {"manifest": json.dumps(manifest), "load_id": stored["load_id"]},
+    )
+    response_limit = 5 * 1024 * 1024
+    assert len(json.dumps(manifest).encode()) > response_limit
+
+    def gateway(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        result = catalog_query(sql, parameters)
+        if len(json.dumps(result, default=str).encode()) > response_limit:
+            raise MarinaRequestError(413, "query response exceeds 5242880 bytes")
+        return result
+
+    candidate = CandidateApi(gateway)
+    try:
+        observed = candidate.get("api/curriculum/invariants")
+    finally:
+        candidate.close()
+    assert observed == expected
+    assert check_curriculum_document(observed) == check_curriculum_document(expected)
+    assert catalog_query("SELECT manifest FROM curriculum_loads WHERE load_id=:load_id", {"load_id": stored["load_id"]})[
+        "rows"
+    ] == [{"manifest": manifest}]
+
+
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status

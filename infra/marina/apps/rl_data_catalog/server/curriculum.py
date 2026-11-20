@@ -46,7 +46,19 @@ def coverage_query(
 
 
 RELEASE_SQL = """
-        SELECT l.* FROM curriculum_loads l JOIN curriculum_current c
+        SELECT l.load_id,l.release_id,l.release_uri,l.loaded_at,
+            jsonb_build_object(
+                'created_at',l.manifest->'created_at',
+                'population',l.manifest->'population',
+                'sample_size',l.manifest->'sample_size',
+                'curriculum_key',l.manifest->'curriculum_key',
+                'coverage',l.manifest->'coverage',
+                'nodes',l.manifest->'nodes',
+                'lineage',l.manifest->'lineage',
+                'confidence',l.manifest->'confidence',
+                'role_projection',l.manifest->'role_projection'
+            ) AS manifest
+        FROM curriculum_loads l JOIN curriculum_current c
             ON l.load_id=c.load_id OR l.load_id=c.previous_load_id
         WHERE c.name='latest' AND ((:release='' AND l.load_id=c.load_id) OR l.release_id=:release)
         ORDER BY l.loaded_at DESC LIMIT 1
