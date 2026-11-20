@@ -4,7 +4,7 @@ name: Exact-match pointer mixture on the output
 category: Output head and loss
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6959043400
@@ -53,6 +53,19 @@ trials:
   steps: 2937
   baseline: belay-X0238-control 3.0452 (same commit, seed 0)
   step_time_change: 0%
+- id: t003
+  variant: exact-match pointer mixture, 8 candidates
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0238
+  date: '2026-11-20'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0238
+  wandb: []
+  settings:
+    pointer_mixture: 'true'
+  commit: 0ef398cb6e
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0123 at equal data, −0.0096 at equal time (+1% s/step); ladder and MFU not run → 7
