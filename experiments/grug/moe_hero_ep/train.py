@@ -800,6 +800,15 @@ def _write_held_out_scores(
     Dropless metrics are logged under ``<prefix>_dropless``, the names a training run's dropless evals use.
     """
     assert config.eval is not None and config.eval_only is not None
+    # Read before scoring, so a failed read cannot discard a finished evaluation.
+    metadata = (StoragePath(config.eval_only.weights_checkpoint) / CHECKPOINT_METADATA_FILE).read_bytes()
+    scored = dropless_evaluator if dropless_evaluator is not None else evaluator
+    assert scored is not None
+    # `tagged_eval_sets` names each set by its last tag. Token counts stay inside the evaluator.
+    set_names = [tags[-1] for _, tags in scored.dataset.datasets]
+    if len(set(set_names)) != len(set_names):
+        raise ValueError(f"eval sets share a last tag: {sorted(set_names)}")
+    sequences_per_set = {tags[-1]: len(dataset.as_sync_dataset()) for dataset, tags in scored.dataset.datasets}
     metrics: dict[str, float] = {}
     if evaluator is not None:
         with jax_config.enable_pgle(False):
@@ -819,15 +828,11 @@ def _write_held_out_scores(
     levanter.tracker.log(metrics, step=0)
     if jax.process_index() != 0:
         return
-    metadata = (StoragePath(config.eval_only.weights_checkpoint) / CHECKPOINT_METADATA_FILE).read_bytes()
-    scored = dropless_evaluator if dropless_evaluator is not None else evaluator
-    assert scored is not None
     record = {
         "weights_checkpoint": config.eval_only.weights_checkpoint,
         "checkpoint_step": int(json.loads(metadata)["step"]),
         "checkpoint_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
-        # `tagged_eval_sets` names each set by its last tag. Token counts stay inside the evaluator.
-        "sequences_per_set": {tags[-1]: len(dataset.as_sync_dataset()) for dataset, tags in scored.dataset.datasets},
+        "sequences_per_set": sequences_per_set,
         "mesh": dict(mesh.shape),
         "eval": dataclasses.asdict(config.eval),
         "metrics": {key: float(value) for key, value in metrics.items()},

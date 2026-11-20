@@ -549,6 +549,37 @@ def test_eval_only_records_the_dropless_metrics_and_the_checkpoint_it_scored(tmp
     assert record["metrics"] == {"eval_dropless/loss": 1.5}
 
 
+@pytest.mark.parametrize("problem", ["missing_metadata", "shared_last_tag"])
+def test_eval_only_refuses_before_scoring(tmp_path, monkeypatch, problem):
+    mesh = _one_device_mesh()
+    checkpoint = tmp_path / "step-400407"
+    checkpoint.mkdir()
+    if problem != "missing_metadata":
+        (checkpoint / "metadata.json").write_bytes(json.dumps({"step": 400407}).encode())
+    last_tag = "c13q3" if problem == "shared_last_tag" else "sft/pooled"
+    config = SimpleNamespace(
+        eval=GrugEvalConfig(eval_current=False, eval_ema=False, dropless_eval=True),
+        eval_only=HeldOutEvalOnly(output=str(tmp_path / "scores.json"), weights_checkpoint=str(checkpoint)),
+    )
+    dropless = SimpleNamespace(
+        dataset=SimpleNamespace(datasets=[(_SequenceSet(8), ["sft", last_tag]), (_SequenceSet(9), ["c13q3"])])
+    )
+    scored = []
+    monkeypatch.setattr(train, "eval_model", lambda evaluator, model, prefix: scored.append(prefix) or {})
+    with jax.set_mesh(mesh):
+        state = initial_state(_tiny_config(), optimizer=optax.identity(), mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        with pytest.raises((FileNotFoundError, ValueError)):
+            train._write_held_out_scores(
+                state,
+                config,
+                mesh,
+                evaluator=None,
+                dropless_evaluator=dropless,
+                dropless_eval_mesh=train.expert_collapsed_eval_mesh(mesh),
+            )
+    assert scored == []
+
+
 def test_launch_refuses_to_reseed_a_checkpoint_that_already_trained_sft(tmp_path):
     base_dir = f"step-{HERO_SFT_BASE_STEP}"
     base = _write_checkpoint_metadata(tmp_path / "base" / base_dir, None, HERO_SFT_BASE_STEP)
