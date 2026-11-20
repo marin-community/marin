@@ -1,6 +1,8 @@
 """Training treatment for terminal task failures."""
 
 from dataclasses import dataclass, field
+from collections.abc import Iterable
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from loguru import logger
@@ -15,7 +17,7 @@ PASSTHROUGH_WITHOUT_LOGPROBS_ERROR = "PassthroughWithoutLogprobs"
 DEFAULT_ERROR_TREATMENT = ErrorTreatment.ZERO
 
 
-def _exception_names(value: Any) -> frozenset[str]:
+def _exception_names(value: str | Iterable[str]) -> frozenset[str]:
     if isinstance(value, str):
         return frozenset(name.strip() for name in value.split(",") if name.strip())
     return frozenset(value)
@@ -57,11 +59,11 @@ class ErrorHandlingConfig:
 DEFAULT_ERROR_HANDLING_CONFIG = ErrorHandlingConfig()
 
 
-_CATEGORY_TREATMENTS = {
+_CATEGORY_TREATMENTS = MappingProxyType({
     ErrorCategory.INFRASTRUCTURE: ErrorTreatment.MASK,
     ErrorCategory.AGENT: ErrorTreatment.ZERO,
     ErrorCategory.PASSTHROUGH: ErrorTreatment.PASSTHROUGH,
-}
+})
 
 
 def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) -> ErrorTreatment:

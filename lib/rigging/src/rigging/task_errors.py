@@ -22,6 +22,37 @@ REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
 REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
 VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
 VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
+API_CONNECTION_ERROR = "APIConnectionError"
+API_TIMEOUT_ERROR = "APITimeoutError"
+AGENT_SETUP_TIMEOUT_ERROR = "AgentSetupTimeoutError"
+ARTIFACT_PERSISTENCE_ERROR = "ArtifactPersistenceError"
+ARTIFACT_UPLOAD_TIMEOUT_ERROR = "ArtifactUploadTimeoutError"
+ARTIFACT_WRITE_TIMEOUT_ERROR = "ArtifactWriteTimeoutError"
+ARTIFACT_WRITER_BACKLOG_ERROR = "ArtifactWriterBacklogError"
+CONTAINER_REGISTRY_THROTTLED_ERROR = "ContainerRegistryThrottledError"
+CONTEXT_BUDGET_EXCEEDED_ERROR = "ContextBudgetExceededError"
+CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR = "ContextManagementInfrastructureError"
+DAYTONA_CONFLICT_ERROR = "DaytonaConflictError"
+DAYTONA_CONNECTION_ERROR = "DaytonaConnectionError"
+DAYTONA_DOCKER_SETUP_ERROR = "DaytonaDockerSetupError"
+DAYTONA_OUTPUT_UNAVAILABLE = "DaytonaOutputUnavailable"
+DAYTONA_PROCESS_ERROR = "DaytonaProcessError"
+ENVIRONMENT_START_TIMEOUT_ERROR = "EnvironmentStartTimeoutError"
+ENVIRONMENT_STOP_ERROR = "EnvironmentStopError"
+INTERNAL_SERVER_ERROR = "InternalServerError"
+LLM_REQUEST_TIMEOUT_ERROR = "LLMRequestTimeoutError"
+MACHINE_TERMINATED = "MachineTerminated"
+OPENAI_TRANSPORT_CONNECT_TIMEOUT_ERROR = "OpenAITransportConnectTimeoutError"
+PHASE_CANCELLATION_ERROR = "PhaseCancellationError"
+RUNTIME_LOG_COLLECTION_ERROR = "RuntimeLogCollectionError"
+RUNTIME_SERVICE_ERROR = "RuntimeServiceError"
+SANDBOX_BUILD_FAILED_ERROR = "SandboxBuildFailedError"
+TAU3_RUNTIME_INFRASTRUCTURE_ERROR = "Tau3RuntimeInfrastructureError"
+TMUX_BATCH_PROTOCOL_ERROR = "TmuxBatchProtocolError"
+TMUX_COMMAND_ERROR = "TmuxCommandError"
+TMUX_EXEC_TIMEOUT_ERROR = "TmuxExecTimeoutError"
+TMUX_SESSION_ENDED_ERROR = "TmuxSessionEndedError"
+TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
 
 
 class ErrorCategory(StrEnum):
@@ -38,50 +69,50 @@ _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
         # --- Task and context-management infrastructure ---
         "TaskMachineError": ErrorCategory.INFRASTRUCTURE,
         "TemplateError": ErrorCategory.INFRASTRUCTURE,
-        "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
+        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
         # --- Artifact persistence infrastructure ---
-        "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_PERSISTENCE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_UPLOAD_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_WRITE_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_WRITER_BACKLOG_ERROR: ErrorCategory.INFRASTRUCTURE,
         # --- Environment / sandbox infrastructure ---
-        "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
-        "RuntimeServiceError": ErrorCategory.INFRASTRUCTURE,
-        "RuntimeLogCollectionError": ErrorCategory.INFRASTRUCTURE,
-        "EnvironmentStopError": ErrorCategory.INFRASTRUCTURE,
-        "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
+        ENVIRONMENT_START_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TRIAL_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        PHASE_CANCELLATION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        RUNTIME_SERVICE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        RUNTIME_LOG_COLLECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ENVIRONMENT_STOP_ERROR: ErrorCategory.INFRASTRUCTURE,
+        SANDBOX_BUILD_FAILED_ERROR: ErrorCategory.INFRASTRUCTURE,
         "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
-        "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
+        CONTAINER_REGISTRY_THROTTLED_ERROR: ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
         "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
         "DaytonaError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaConflictError": ErrorCategory.INFRASTRUCTURE,
-        "MachineTerminated": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaConnectionError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaOutputUnavailable": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaDockerSetupError": ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_CONFLICT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_OUTPUT_UNAVAILABLE: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_PROCESS_ERROR: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_DOCKER_SETUP_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
         "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
         "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
         "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
         # --- Agent lifecycle infrastructure (model never produced a real answer) ---
         "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
-        "AgentSetupTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        AGENT_SETUP_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
         "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
-        "ContextBudgetExceededError": ErrorCategory.INFRASTRUCTURE,
-        "LLMRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "OpenAITransportConnectTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "InternalServerError": ErrorCategory.INFRASTRUCTURE,
-        "APIConnectionError": ErrorCategory.INFRASTRUCTURE,
-        "APITimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxBatchProtocolError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxCommandError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxExecTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxSessionEndedError": ErrorCategory.INFRASTRUCTURE,
-        "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,
+        CONTEXT_BUDGET_EXCEEDED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        LLM_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        OPENAI_TRANSPORT_CONNECT_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        INTERNAL_SERVER_ERROR: ErrorCategory.INFRASTRUCTURE,
+        API_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        API_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_BATCH_PROTOCOL_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_COMMAND_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_EXEC_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_SESSION_ENDED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TAU3_RUNTIME_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
         # --- Verifier infrastructure ---
         "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
         REWARD_FILE_NOT_FOUND_ERROR: ErrorCategory.INFRASTRUCTURE,
@@ -115,35 +146,35 @@ _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
 _RESUME_RETRYABLE_ERROR_TYPES: frozenset[str] = frozenset(
     {
         "CancelledError",
-        "ArtifactPersistenceError",
-        "ArtifactUploadTimeoutError",
-        "ArtifactWriteTimeoutError",
-        "ArtifactWriterBacklogError",
-        "SandboxBuildFailedError",
-        "ContainerRegistryThrottledError",
-        "ContextBudgetExceededError",
-        "ContextManagementInfrastructureError",
-        "DaytonaConflictError",
-        "DaytonaConnectionError",
-        "DaytonaOutputUnavailable",
-        "MachineTerminated",
-        "DaytonaProcessError",
-        "DaytonaDockerSetupError",
-        "LLMRequestTimeoutError",
-        "OpenAITransportConnectTimeoutError",
-        "InternalServerError",
-        "APIConnectionError",
-        "APITimeoutError",
-        "PhaseCancellationError",
-        "RuntimeServiceError",
-        "RuntimeLogCollectionError",
-        "EnvironmentStopError",
-        "TmuxBatchProtocolError",
-        "TmuxCommandError",
-        "TmuxExecTimeoutError",
-        "TmuxSessionEndedError",
-        "Tau3RuntimeInfrastructureError",
-        "TrialTimeoutError",
+        ARTIFACT_PERSISTENCE_ERROR,
+        ARTIFACT_UPLOAD_TIMEOUT_ERROR,
+        ARTIFACT_WRITE_TIMEOUT_ERROR,
+        ARTIFACT_WRITER_BACKLOG_ERROR,
+        SANDBOX_BUILD_FAILED_ERROR,
+        CONTAINER_REGISTRY_THROTTLED_ERROR,
+        CONTEXT_BUDGET_EXCEEDED_ERROR,
+        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR,
+        DAYTONA_CONFLICT_ERROR,
+        DAYTONA_CONNECTION_ERROR,
+        DAYTONA_OUTPUT_UNAVAILABLE,
+        MACHINE_TERMINATED,
+        DAYTONA_PROCESS_ERROR,
+        DAYTONA_DOCKER_SETUP_ERROR,
+        LLM_REQUEST_TIMEOUT_ERROR,
+        OPENAI_TRANSPORT_CONNECT_TIMEOUT_ERROR,
+        INTERNAL_SERVER_ERROR,
+        API_CONNECTION_ERROR,
+        API_TIMEOUT_ERROR,
+        PHASE_CANCELLATION_ERROR,
+        RUNTIME_SERVICE_ERROR,
+        RUNTIME_LOG_COLLECTION_ERROR,
+        ENVIRONMENT_STOP_ERROR,
+        TMUX_BATCH_PROTOCOL_ERROR,
+        TMUX_COMMAND_ERROR,
+        TMUX_EXEC_TIMEOUT_ERROR,
+        TMUX_SESSION_ENDED_ERROR,
+        TAU3_RUNTIME_INFRASTRUCTURE_ERROR,
+        TRIAL_TIMEOUT_ERROR,
     }
 )
 
@@ -158,11 +189,7 @@ def error_category(exception_type: str) -> ErrorCategory:
 
 
 def errors_by_category(category: ErrorCategory) -> frozenset[str]:
-    """Return every persisted exception name mapped to ``category``.
-
-    Consumers derive their default ``mask`` / ``zero`` / ``passthrough`` sets
-    from this rather than duplicating Harbor exception names.
-    """
+    """Return the persisted exception names in a category."""
     return frozenset(name for name, value in _ERROR_CATEGORIES.items() if value == category)
 
 
@@ -171,18 +198,8 @@ def is_resume_retryable(exception_type: str) -> bool:
     return exception_type in _RESUME_RETRYABLE_ERROR_TYPES
 
 
-def resume_retryable_error_types() -> frozenset[str]:
-    """The persisted exception names that trigger a fresh-resume re-run."""
-    return _RESUME_RETRYABLE_ERROR_TYPES
-
-
 def known_error_types() -> frozenset[str]:
-    """Every persisted exception name with an explicit category decision.
-
-    A name absent here resolves to :attr:`ErrorCategory.UNKNOWN` via
-    :func:`error_category`, but the absence itself signals contract drift;
-    Harbor's contract test enforces that every persisted exception is present.
-    """
+    """Return all persisted exception names with an explicit category decision."""
     return frozenset(_ERROR_CATEGORIES)
 
 
@@ -296,7 +313,10 @@ def exception_identity(error: BaseException, *, operation: str | None = None) ->
     )
 
 
-_TASK_RETRYABLE_ERROR_TYPES = _RESUME_RETRYABLE_ERROR_TYPES | {"EnvironmentStartTimeoutError", "AgentSetupTimeoutError"}
+_TASK_RETRYABLE_ERROR_TYPES = _RESUME_RETRYABLE_ERROR_TYPES | {
+    ENVIRONMENT_START_TIMEOUT_ERROR,
+    AGENT_SETUP_TIMEOUT_ERROR,
+}
 
 
 def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries: int) -> float | None:
@@ -304,7 +324,8 @@ def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries:
 
     Exclusions match the outer name, cause name, or category and always win.
     Permanent failures cannot be selected for retry. Unknown failures require
-    an explicit name or category inclusion; transient failures need no inclusion.
+    an explicit name or category inclusion. Transient failures retry by default
+    and must match an inclusion when an include filter is configured.
     """
     if failure is None or retries >= settings.max_retries:
         return None

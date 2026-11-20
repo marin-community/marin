@@ -9,8 +9,8 @@ from typing import Any
 import numpy as np
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizerBase
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 from skyrl_gym.verification import (
-    VERIFIER_RUNTIME_ERROR,
     RewardResult,
     TrainingDisposition,
     VerificationResult,

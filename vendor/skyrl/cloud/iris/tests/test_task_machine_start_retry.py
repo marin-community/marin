@@ -163,7 +163,7 @@ async def test_harbor_task_obeys_the_same_zero_retry_budget(worker_config):
 @pytest.mark.asyncio
 async def test_permanent_provider_failure_does_not_restart_the_machine(worker_config):
     class UnauthorizedFactory(ResettingFactory):
-        async def create(self, spec):
+        async def create(self, _spec):
             self.creations += 1
             raise DaytonaError("unauthorized", status_code=401)
 
@@ -188,7 +188,7 @@ async def test_lost_connection_during_resource_upload_restarts_before_the_model_
 @pytest.mark.asyncio
 async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_config):
     class UnavailableVerifier(DockerMachineFactory):
-        async def create(self, spec):
+        async def create(self, _spec):
             raise DaytonaConnectionError("Connection reset during grading")
 
     factory = ResettingFactory(failures=0)

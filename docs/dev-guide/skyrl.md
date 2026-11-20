@@ -95,8 +95,8 @@ attempt, and backoff is capped at `max_wait_sec`.
 Machine startup connection loss can retry with a fresh machine before any model
 turn. A machine failure during a model command or grading is terminal because
 replaying may duplicate work. SkyRL also keeps passthrough results terminal so
-that retries do not discard usable verifier output. Training treatment is
-applied independently after the retry decision.
+that retries do not discard usable verifier output. Reward and masking treatment
+remain separate from the infrastructure retry classification.
 
 ## Run records
 

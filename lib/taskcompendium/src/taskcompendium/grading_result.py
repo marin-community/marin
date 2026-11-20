@@ -61,7 +61,7 @@ _GRADING_ERROR_TYPES = MappingProxyType(
 
 
 def grading_failure_identity(grade: GradeResult) -> ErrorIdentity | None:
-    """Resolve a verifier outcome to the shared task error identity."""
+    """Return an existing identity or an infrastructure error identity; otherwise None."""
     if grade.error_identity is not None:
         return grade.error_identity
     if grade.status is not Outcome.INFRA_ERROR:

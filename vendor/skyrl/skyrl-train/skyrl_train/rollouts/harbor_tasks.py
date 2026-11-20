@@ -6,6 +6,7 @@ import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
+from rigging.task_errors import VERIFIER_OUTPUT_PARSE_ERROR
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
@@ -236,7 +237,7 @@ def shape_harbor_rollouts(
                 )
         except RewardOutputParseError:
             eligible[index] = False
-            rollouts[index] = replace(rollout, failure=ErrorIdentity(exception_type="VerifierOutputParseError"))
+            rollouts[index] = replace(rollout, failure=ErrorIdentity(exception_type=VERIFIER_OUTPUT_PARSE_ERROR))
     group_metrics = [{} for _ in rollouts]
     if enabled and shaper == IDENTITY_AWARE_SHAPER:
         if identifiers is None:

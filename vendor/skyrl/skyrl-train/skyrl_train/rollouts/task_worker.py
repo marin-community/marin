@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rigging.task_errors import RetryDisposition, RetrySettings, exception_identity, retry_delay
+from rigging.task_errors import ErrorIdentity, RetryDisposition, RetrySettings, exception_identity, retry_delay
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -45,7 +45,7 @@ from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
-from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -264,12 +264,7 @@ def _machine_diagnostics(error: TaskMachineError, status_code: int | None) -> di
     return diagnostics
 
 
-def _failed_rollout(
-    interruption: GradedRolloutInterrupted,
-    lowered: TaskRolloutSpec,
-) -> TrainingRollout:
-    """Retain verified turns and safe diagnostics for the training policy."""
-    task = lowered.task
+def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
     error = interruption.__cause__
     assert isinstance(error, Exception)
     if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
@@ -321,6 +316,31 @@ def _failed_rollout(
     }:
         # Replaying after a model command or grading may duplicate completed work.
         failure = failure.model_copy(update={"retry_disposition": RetryDisposition.PERMANENT})
+    return failure.model_copy(
+        update={
+            "exception_type": exception_type,
+            "diagnostics": diagnostics,
+            "cause_type": failure.cause_type
+            or (failure.exception_type if exception_type != failure.exception_type else None),
+            "retry_disposition": failure.retry_disposition
+            if failure.retry_disposition is RetryDisposition.PERMANENT
+            or exception_type == failure.exception_type
+            or exception_type in {"EnvironmentStartTimeoutError", "AgentSetupTimeoutError", "TrialTimeoutError"}
+            else RetryDisposition.UNKNOWN,
+        }
+    )
+
+
+def _failed_rollout(
+    interruption: GradedRolloutInterrupted,
+    lowered: TaskRolloutSpec,
+) -> TrainingRollout:
+    """Retain verified turns and safe diagnostics for the training policy."""
+    task = lowered.task
+    error = interruption.__cause__
+    assert isinstance(error, Exception)
+    failure = _interruption_identity(interruption)
+    exception_type = failure.exception_type
     rollout = training_rollout(GradedRollout(interruption.rollout, interruption.grade), lowered)
     if (
         interruption.operation == RolloutOperation.ADVANCE
@@ -353,18 +373,7 @@ def _failed_rollout(
         rollout,
         grade=grade,
         stop_reason="error",
-        failure=failure.model_copy(
-            update={
-                "exception_type": exception_type,
-                "diagnostics": diagnostics,
-                "cause_type": failure.cause_type
-                or (failure.exception_type if exception_type != failure.exception_type else None),
-                "retry_disposition": failure.retry_disposition
-                if exception_type == failure.exception_type
-                or exception_type in {"EnvironmentStartTimeoutError", "AgentSetupTimeoutError", "TrialTimeoutError"}
-                else RetryDisposition.UNKNOWN,
-            }
-        ),
+        failure=failure,
     )
 
 
