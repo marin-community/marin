@@ -19,7 +19,13 @@ import jax.numpy as jnp
 import marin.execution.fingerprint as fingerprint_module
 import numpy as np
 import pytest
-from marin.execution.fingerprint import canonical_json, fingerprint_hash, register_fingerprint, set_strict
+from marin.execution.fingerprint import (
+    OMIT_DEFAULT_FROM_IDENTITY,
+    canonical_json,
+    fingerprint_hash,
+    register_fingerprint,
+    set_strict,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -107,23 +113,16 @@ def test_register_fingerprint_gives_an_exact_form():
     assert canonical_json({"s": Special("a")}) != canonical_json({"s": Special("b")})
 
 
-def test_registered_dataclass_form_applies_when_nested():
+def test_marked_field_joins_the_identity_only_when_set():
     @dataclasses.dataclass(frozen=True)
     class Inner:
         kept: int = 1
-        later_addition: str | None = None
+        later_addition: str | None = dataclasses.field(default=None, metadata={OMIT_DEFAULT_FROM_IDENTITY: True})
 
     @dataclasses.dataclass(frozen=True)
     class Outer:
         inner: Inner
 
-    def without_unset_addition(inner: Inner) -> dict[str, object]:
-        fields = {"kept": inner.kept}
-        if inner.later_addition is not None:
-            fields["later_addition"] = inner.later_addition
-        return fields
-
-    register_fingerprint(Inner, without_unset_addition)
     assert canonical_json(Outer(Inner())) == '{"inner": {"kept": 1}}'
     assert canonical_json(Outer(Inner(later_addition="x"))) != canonical_json(Outer(Inner()))
 

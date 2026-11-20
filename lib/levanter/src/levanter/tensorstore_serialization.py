@@ -15,7 +15,7 @@ import threading
 import time
 import urllib.parse
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache, partial
 from typing import Any, Callable, Literal, Optional, Sequence
@@ -229,7 +229,7 @@ class TensorStoreWriteConfig:
     data_copy_concurrency: int = 16
     """Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data."""
 
-    file_io_locking: FileIoLocking | None = None
+    file_io_locking: FileIoLocking | None = field(default=None, metadata={"omit_default_from_identity": True})
     """How TensorStore's file driver locks a key while committing it.
 
     None picks ``lockfile`` when several processes save to a local path, and TensorStore's default
@@ -238,6 +238,9 @@ class TensorStoreWriteConfig:
     exclusively created lock file is enforced by the NFS server. A lock file outlives a process that
     crashes mid-commit and would then block every later save to that directory, so a ``lockfile``
     save first removes lock files abandoned there by an earlier, interrupted save.
+
+    The metadata keeps None out of a Marin artifact fingerprint: the automatic choice depends on
+    where and how a save runs, and does not change what it writes.
     """
 
     def __post_init__(self) -> None:

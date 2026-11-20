@@ -34,11 +34,15 @@ from typing import Any
 
 import jax
 import numpy as np
-from levanter.tensorstore_serialization import TensorStoreWriteConfig
 
 from marin.utilities.json_encoder import scalar_dtype
 
 logger = logging.getLogger(__name__)
+
+# Dataclass field metadata key. A field marked ``{OMIT_DEFAULT_FROM_IDENTITY: True}`` is left out
+# of the fingerprint while it holds its default, so adding such a field to a config keeps the
+# identity of artifacts built without it. Config libraries below marin spell the key literally.
+OMIT_DEFAULT_FROM_IDENTITY = "omit_default_from_identity"
 
 # Custom canonical encoders, keyed by type, consulted before the best-effort fallback.
 _REGISTRY: dict[type, Callable[[Any], object]] = {}
@@ -94,16 +98,12 @@ class _FingerprintEncoder(json.JSONEncoder):
     """Canonical JSON for config fingerprints.
 
     Canonical handlers run first; then registered converters; then either a raise
-    (strict) or a defined best-effort fallback (advisory, the default). A dataclass with a
-    registered converter uses it, at any depth of the config.
+    (strict) or a defined best-effort fallback (advisory, the default).
     """
 
     def default(self, o):
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            encode = _registered_encoder(type(o))
-            if encode is not None:
-                return encode(o)
-            return _dataclass_fields(o)
+            return _dataclass_identity(o)
         if isinstance(o, Enum):
             return o.value
         if isinstance(o, timedelta):
@@ -142,25 +142,13 @@ class _FingerprintEncoder(json.JSONEncoder):
         return _fallback(o)
 
 
-def _dataclass_fields(o: Any) -> dict[str, object]:
-    """One level of a dataclass's fields; the encoder canonicalizes the values."""
-    return {f.name: getattr(o, f.name) for f in dataclasses.fields(o)}
-
-
-def _tensorstore_write_config_fingerprint(config: TensorStoreWriteConfig) -> dict[str, object]:
-    """Leave an unset ``file_io_locking`` out of a training step's identity.
-
-    Unset lets the save choose its locking mode from the checkpoint path and process count,
-    which does not change what the step produces. An explicit mode is part of the identity.
-    """
-    fields = _dataclass_fields(config)
-    if config.file_io_locking is None:
-        del fields["file_io_locking"]
-    return fields
-
-
-# Registered here so the form applies to every fingerprint, whichever modules a launcher imports.
-register_fingerprint(TensorStoreWriteConfig, _tensorstore_write_config_fingerprint)
+def _dataclass_identity(o: Any) -> dict[str, object]:
+    """One level of a dataclass's identity-bearing fields; the encoder canonicalizes the values."""
+    return {
+        f.name: getattr(o, f.name)
+        for f in dataclasses.fields(o)
+        if not (f.metadata.get(OMIT_DEFAULT_FROM_IDENTITY) and getattr(o, f.name) == f.default)
+    }
 
 
 def _fallback(o: object) -> dict[str, object]:
