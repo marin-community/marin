@@ -1,0 +1,8 @@
+{
+  "exit_code": 0,
+  "reason": "exited",
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_sha256": "a7ec6b0e2bb76ce85020a235e00853f9fcc0eebd4a0ce49fa38515204085ed1d",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

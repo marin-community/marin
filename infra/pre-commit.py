@@ -58,6 +58,9 @@ EXCLUDE_PATTERNS = [
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
+    # Production artifacts are hash-bound to producer cursors (catalog_sha256);
+    # byte-level formatting would break every resume check.
+    "experiments/glm_tool_serving/production_data/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",

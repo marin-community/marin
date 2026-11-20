@@ -1,0 +1,7 @@
+{
+  "passed": true,
+  "fixture": "Controlled counter 6 then increment7",
+  "calls": 2,
+  "actual_final_output": "13\n",
+  "scope": "Setup folded into first Bash call; state survives next Bash call."
+}

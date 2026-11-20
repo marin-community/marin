@@ -1,0 +1,11 @@
+{
+  "repository": "zai-org/GLM-5.3",
+  "declared_revision": "ba32f8c19c8738e2c57c71798c601d477a7bf844",
+  "source": "existing EmpireAI model directory via authenticated scp",
+  "serving_usage_verified": false,
+  "files": {
+    "chat_template.jinja": "0e2b6268ac54f04d2bc1157e8cfb896cb66f25c0b5e319ea12e56014c3914f24",
+    "tokenizer.json": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d",
+    "tokenizer_config.json": "98b1271574f41abf89427ae2dda030d94dc9478f0edc5a8bd240db213c6fd5fc"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "batch": "shard-00001-rows-00003072-00003200",
+  "archive_sha256": "ed50b88d988538d37f0d077ba5f13327e1797826405ba7d52e84c906b658e499",
+  "archive_bytes": 19348,
+  "cursor": {
+    "shard": 1,
+    "row": 3072,
+    "batches": 40,
+    "artifact_bytes": 763630,
+    "counts": {
+      "structure_unresolved": 5032
+    },
+    "catalog_sha256": "2a7faf70ea4eafbb2a00583e92a999ab789f4fd6890abd93c9809cd72ab9696d",
+    "updated_at": 1794518820.3845968
+  },
+  "preserved": {},
+  "eligible_unsubmitted_ids": [],
+  "uncertain_requests": [],
+  "origin": "relay bulk-pool outage 2026-11-12; admission guard held the batch; chained recovery per campaign flow; relaunch under user ruling 4f5fed91 with retry-until-success requests",
+  "reconciled_at": "2026-11-13T00:58Z"
+}

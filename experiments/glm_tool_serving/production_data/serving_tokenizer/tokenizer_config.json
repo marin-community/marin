@@ -1,0 +1,33 @@
+{
+  "backend": "tokenizers",
+  "clean_up_tokenization_spaces": false,
+  "do_lower_case": false,
+  "eos_token": "<|endoftext|>",
+  "extra_special_tokens": [
+    "<|endoftext|>",
+    "[MASK]",
+    "[gMASK]",
+    "[sMASK]",
+    "<sop>",
+    "<eop>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|observation|>",
+    "<|begin_of_image|>",
+    "<|end_of_image|>",
+    "<|begin_of_video|>",
+    "<|end_of_video|>",
+    "<|begin_of_audio|>",
+    "<|end_of_audio|>",
+    "<|begin_of_transcription|>",
+    "<|end_of_transcription|>"
+  ],
+  "is_local": true,
+  "model_max_length": 1048576,
+  "model_specific_special_tokens": {},
+  "pad_token": "<|endoftext|>",
+  "padding_side": "left",
+  "remove_space": false,
+  "tokenizer_class": "TokenizersBackend"
+}

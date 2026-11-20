@@ -1,0 +1,85 @@
+{
+  "batch": "shard-00003-rows-00003200-00003328",
+  "cursor": {
+    "shard": 3,
+    "row": 3200,
+    "batches": 442,
+    "artifact_bytes": 2576761571,
+    "counts": {
+      "mapped_calls": 13738,
+      "tool_free": 35381,
+      "structure_unresolved": 6866,
+      "conversion_audit_hold": 2391,
+      "conversion_converted_adapter_checked": 8857,
+      "conversion_review_hold": 2398,
+      "conversion_infrastructure_deferred": 92,
+      "uncommitted_batch_uncertainty_hold": 384,
+      "previously_processed": 260
+    },
+    "catalog_sha256": "9eb57d7667061b032b28af8cd31e7e754e0cfa61f862f5e52c1d948ef9ee389d",
+    "updated_at": 1794586797.2978473,
+    "reconciliation_url": "s3://marin-us-east-02a/marin/users/benfeuer/tool-normalization/h100-eight-20261105/r3/reconciliations/shard-00000-rows-00002560-00002688-held-20261106T0637Z.json"
+  },
+  "archive_sha256": "a51c22ab093b7628e33caaedd75078d5e643ffab5fe6e6f9d904abd2f5a662e6",
+  "archive_bytes": 2014535,
+  "preserved": {},
+  "eligible_unsubmitted_ids": [
+    "e2bbdbf98537f633db6ff0f5fc1fac47ee696ec6089f5b0bc730bee65b625157",
+    "3873207ddeec2a9ab2fc59f3084fbc7323010faf441534e655827c93c283764a",
+    "ee3d935424b3c366fc508438b96414c06118a49c11ea84a6ebf9458834a904e6",
+    "304b0304c87b78a997b1081b37fd1fe840b04c2b0a4ec6070a0d12b94def2ff5",
+    "ad5b325610bfb734e4e7772cd02f482be6dc717623764c14c60bc8eed93ae4c2",
+    "72a417924be7fe8e9782cfec31eaff9d9e76aef118238e3a0f6caf5d4d85c78e",
+    "0c3c3a7d1a174d12ab4095b54154cb96b2ccf6983f2125f504dfcf086b15db49",
+    "526470009172d3f4eae31436112a2cdc1b373410f72395c82ecf25003365d935",
+    "d84425d42fe66211a9372707088bf00608515e252613d7aac7cb061237c632f0",
+    "6bb74c2d6bad0802c4b15816c52e08f978ce7f155e3d98b45592e612d40e6698",
+    "753d0b748f5b2ab2d9564f17f2ef19a8bc0ff3ed2265af089c7274103f1be7ab",
+    "7f35dfdb685d8bdeafc6a711132626af22a63a2ffff3ce4918660b1eb67a5ecc",
+    "2c499188dfbe6b60180d31543b76de8e10eb3075079ca3555f8907e9e51a4cb1",
+    "6ace2ea32ac36748c21fce74151fb9e4843064ceef45c65d6590d4d97afd7cf0",
+    "177166a424c9d4a0058b1408f5a4a1e36fb281369bc5de354d3d389bafe863bc",
+    "13d976385e022a239ec3141e8f7fc2347a4e30baa804a3044a8f3a9a980e1a27",
+    "cc5d7c336f9d22a3ce1bcae25da48357795f1eaa1d4a562fdcd802861a5320d8",
+    "3c1a7e1f9bae5af9bc9706972d5a9ff610806740d1c0d4d75e9f82ee934aac6f",
+    "7cce70ed4f67e7a7d4f1a9ca1f4a3d0fa2733fad8cf40920746e500ea8d8af53",
+    "732734fff6ce0c81d7804a11efa099459efbd120f24d81f78001ca5e9b2673aa",
+    "998e7041e86de1b2009c6075454b3568a3e6e0bb4d72b6c5686d07b03f3d010e",
+    "f6d4397a9d39561eb9f33d700e694dc2d27a44c3fdccda78c8fc2d8539c88e04",
+    "dd1b5ddc8ffe56d0794680736437ebaeea9461016ba3c20c03c378b8fbc3ea3e",
+    "e0e49695a2754f678098622b38e2eac470c657e7da7903b79f3ec028c6b4cf17",
+    "37a29087bcad928a36765695f9865dd1186d806f59f6088f7af22abaffc6effe",
+    "28f65a60509864a84766a58c04e72e74181a973b357b665ddaa32b9a36259fe7",
+    "426fb4ee41dd3d69b9ecc51cdd85a82688a5929e21cbb1f0d92c37802e65bec0",
+    "8913eb0dbee734b271f0bec1cb776632cad9c3a0d864e43bdf739a42f56dfd9f",
+    "6d22f3c138b84519e5d90e899691a23759978b0cb33879c7b6bdc4bcb5c6c965",
+    "330baf6cc1b81241f2f4330e40fa075b3de9b4702e268dc422dec940060b6252",
+    "28ea960f63728074b316aa9801b6527d37326351eba7bb5fb4daffae4b7a0da7",
+    "d66fc4d59e67da3fa871ecf9aa5758637e17e891d8b5e1953ebeb7871d8a2869",
+    "2f0fac63c0a65e4195638feb44b4291d92737f0bb130e106b7d1b5c9f4452c83",
+    "9330640215001418868d3af2ca25f3081e7b99414006628482c94b7186647280",
+    "19bd697df2237f0b516f5299e836e80631ce2dad7f7cd77027df489bb8be2b3a"
+  ],
+  "uncertain_requests": [
+    {
+      "identity": "/tmp/tool-scale-r3/shard-00003-rows-00003200-00003328/run/records/177166a424c9d4a0058b1408f5a4a1e36fb281369bc5de354d3d389bafe863bc/review",
+      "state": "uncertain",
+      "row": "177166a424c9d4a0058b1408f5a4a1e36fb281369bc5de354d3d389bafe863bc"
+    },
+    {
+      "identity": "/tmp/tool-scale-r3/shard-00003-rows-00003200-00003328/run/records/13d976385e022a239ec3141e8f7fc2347a4e30baa804a3044a8f3a9a980e1a27/review",
+      "state": "uncertain",
+      "row": "13d976385e022a239ec3141e8f7fc2347a4e30baa804a3044a8f3a9a980e1a27"
+    },
+    {
+      "identity": "/tmp/tool-scale-r3/shard-00003-rows-00003200-00003328/run/records/19bd697df2237f0b516f5299e836e80631ce2dad7f7cd77027df489bb8be2b3a/review",
+      "state": "uncertain",
+      "row": "19bd697df2237f0b516f5299e836e80631ce2dad7f7cd77027df489bb8be2b3a"
+    },
+    {
+      "identity": "/tmp/tool-scale-r3/shard-00003-rows-00003200-00003328/run/records/0c3c3a7d1a174d12ab4095b54154cb96b2ccf6983f2125f504dfcf086b15db49/audit",
+      "state": "uncertain",
+      "row": "0c3c3a7d1a174d12ab4095b54154cb96b2ccf6983f2125f504dfcf086b15db49"
+    }
+  ]
+}

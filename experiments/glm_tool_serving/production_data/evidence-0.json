@@ -1,0 +1,58 @@
+{
+  "scope": "Controlled tool behavior, not original-task correctness or corpus coverage",
+  "fixtures": [
+    {
+      "fixture": "shell_alias",
+      "actual_output": "42\n",
+      "execution_and_model_receipts_verified": true,
+      "stage2_decision": "pass",
+      "stage2_issues_as_returned": []
+    },
+    {
+      "fixture": "python_state",
+      "actual_output": "13\n",
+      "execution_and_model_receipts_verified": true,
+      "stage2_decision": "pass",
+      "stage2_issues_as_returned": []
+    },
+    {
+      "fixture": "native_edit",
+      "actual_output": "fixture_pass\n",
+      "execution_and_model_receipts_verified": true,
+      "stage2_decision": "pass",
+      "stage2_issues_as_returned": [
+        "None. The legacy str_replace_editor str_replace operation is faithfully mapped to the native edit tool, and all fixture checks agree with the observed replay."
+      ]
+    }
+  ],
+  "error_contracts_verified": true,
+  "tool_behavior_passed": true,
+  "original_automated_run_completed": false,
+  "original_run_failure": "Native-edit auditor returned pass but populated issues with a statement that there were no issues. Original runner rejected it; original summary is preserved.",
+  "followup_code_change": "Review schema now uses decision+rationale; known mappings reviewed without command regeneration. New schema not yet live-tested.",
+  "evidence_sha256": {
+    "independent-error-contracts/checks.json": "819cd6fd27addd60abd93515785dac5a6a451cb2c59afc28564e882003b49bab",
+    "independent-error-contracts/receipt.json": "2aa5409c21787fe0f83f446c1f21ca89f1979e46c66d3e9b4b73f4b1255182e0",
+    "run/native_edit/fixture.json": "97675b892abd246804ac519809c8c5c96fd9775ee300df2aea35b766a6764792",
+    "run/native_edit/proposal.json": "ad7cfd6fbe19df76bd899d6571880cb49d4cee3b5eeb97e57fc8ee550fe71e52",
+    "run/python_state/fixture.json": "b1d68e04e55d12b596d1e77bb267436f614a9cfcf4865cbc0245deb214df887e",
+    "run/python_state/proposal.json": "710e35d2b3b8beff302b1a81acb59d5e22e7631ce365326b14f564b9cc7825f3",
+    "run/shell_alias/fixture.json": "2b3f4403b435ced14ff4c38ec6d60894f8df87ecc9697fc2466f1bda5cda6335",
+    "run/shell_alias/proposal.json": "b6672feada715e5f3b1d5b15e95a2707e7fe2d4af44fb0b1f8d6c66550921ae2",
+    "run/native_edit/audit/value.json": "93a54a480de6a6f5236ad593300e5e9629c47b36486b377df9f52486b80a5cfb",
+    "run/native_edit/audit/receipt.json": "6e5f993ecddb886ef547589aa653ab9d6fdb02f9637537b6abb7fdcfe1c2e5a0",
+    "run/native_edit/execution/receipt.json": "0a623cd45208119a134cd1db5e19ac85551ab80ac6ff11ffd8291bfaab9d44c3",
+    "run/native_edit/convert/value.json": "ad7cfd6fbe19df76bd899d6571880cb49d4cee3b5eeb97e57fc8ee550fe71e52",
+    "run/native_edit/convert/receipt.json": "23c9e96d318df4e4f9f159b9e96e37b7bd2c5566c16bee7e4eac9f4dd51d41bf",
+    "run/python_state/audit/value.json": "23df5dfacaddcb9c4e279960e70eba30e68145d8f3fa5d32bbe4144b82a93a17",
+    "run/python_state/audit/receipt.json": "b884a72a0eb25214e90a8a26345f73de46fa925d12ededb6dde910c408480f0f",
+    "run/python_state/execution/receipt.json": "b563ad17408923dc49b63a1034b187d6a8a3241f015edf471060b174e80a7ea1",
+    "run/python_state/convert/value.json": "23df5dfacaddcb9c4e279960e70eba30e68145d8f3fa5d32bbe4144b82a93a17",
+    "run/python_state/convert/receipt.json": "f2697fae54c4bb94c993104fee2d40ae7c57afa334e3193208f1624fdb3d8d7c",
+    "run/shell_alias/audit/value.json": "23df5dfacaddcb9c4e279960e70eba30e68145d8f3fa5d32bbe4144b82a93a17",
+    "run/shell_alias/audit/receipt.json": "793044a79032076171a61e03af056d3289ba18f8da89bfefed922e8e023a5ee5",
+    "run/shell_alias/execution/receipt.json": "4bce64872bd1cd274958893fdd5cfd7bca5f6bad57a3bbe0c5cdcd65153b31f7",
+    "run/shell_alias/convert/value.json": "23df5dfacaddcb9c4e279960e70eba30e68145d8f3fa5d32bbe4144b82a93a17",
+    "run/shell_alias/convert/receipt.json": "ccde839a668150c2c42962c35f06bcf3bc80645ccbd07d9d0015e890965ce639"
+  }
+}
