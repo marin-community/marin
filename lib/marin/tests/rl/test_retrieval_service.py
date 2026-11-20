@@ -9,19 +9,25 @@ import shutil
 import signal
 import subprocess
 import threading
+from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
+import rolloutengine.harness.retrieval_service as retrieval_runtime
 from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, create_environment
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 from rolloutengine.harness.retrieval_service import OpenResearcherServiceProvider
-from rolloutengine.harness.shell import ToolContext
-from shellbox.machine import Command, ExitReason, Result
+from rolloutengine.harness.shell import ShellHarness, ToolContext
+from rolloutengine.models import GradedRolloutInterrupted, RolloutOperation
+from rolloutengine.test_support import ReplayModel, arithmetic_task, engine, machine_runtime, rollout_spec, tool_call
+from shellbox.machine import Backend, Command, ExitReason, Result
 from shellbox.process_session import SubprocessSession
-from taskcompendium.models import ProviderRequirement
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import AnswerType, CommandSemantics, EnvironmentRequirements, NoGrader, ProviderRequirement
 from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, OpenResearcherState
 
 from marin.rl.retrieval_backend import RetrievalServer, retrieval_handler
@@ -166,3 +172,85 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
     with set_current_client(FrayIrisClient.from_iris_client(IrisSubmission())):
         with pytest.raises(SubmissionCaptured), retrieval_service(launch):
             pytest.fail("Submission capture must stop before service readiness")
+
+
+def test_relay_pump_failure_preserves_the_partial_rollout_and_closes_the_guest(monkeypatch):
+    class MalformedRelayMachine(ProcessMachine):
+        def __init__(self):
+            self.sessions = []
+            self.closed = False
+
+        async def open_process(self, command):
+            script = (
+                'print(\'{"type":"ready"}\', flush=True)\n'
+                'print(\'{"type":"invalid"}\', flush=True)\n'
+                "import sys; sys.stdin.buffer.read()\n"
+            )
+            session = await super().open_process(replace(command, argv=("python3", "-u", "-c", script)))
+            self.sessions.append(session)
+            return session
+
+        async def close(self):
+            self.closed = True
+
+    machine = MalformedRelayMachine()
+
+    class Factory:
+        backend = Backend.LOCAL
+
+        def check_environment(self, requirements, spec):
+            pass
+
+        async def create(self, spec):
+            return machine
+
+    state = OpenResearcherState(
+        implementation_revision="a" * 40,
+        corpus_revision="8367703babe6e080899a48782f365c284c32b668",
+        index_manifest_sha256="b" * 64,
+        tokenizer_revision="c" * 40,
+        top_k=5,
+        snippet_max_tokens=512,
+        include_get_document=True,
+    )
+    requirement = ProviderRequirement(
+        action_interface=OPENRESEARCHER_ACTION_INTERFACE,
+        network_access="service_only",
+        initial_state=state.model_dump(mode="json"),
+    )
+    provider = OpenResearcherServiceProvider("http://retrieval.fixture")
+    task = arithmetic_task(
+        answer_type=AnswerType.TEXT,
+        grader=NoGrader(reason="relay failure fixture"),
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image="fixture@sha256:" + "a" * 64,
+            tool_providers={"retrieval": requirement},
+        ),
+        interaction_tools=provider.tools(requirement),
+    )
+    message = tool_call("search", {"query": "fixture query"}, call_id="search-1")
+    model = ReplayModel([message])
+
+    async def check():
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"state": state.model_dump(mode="json")})
+            )
+        )
+        monkeypatch.setattr(retrieval_runtime.httpx, "AsyncClient", lambda **kwargs: client)
+        runner = engine(
+            model,
+            {Backend.LOCAL: Factory()},
+            harnesses={"shell": ShellHarness(command_timeout=None, tools={OPENRESEARCHER_ACTION_INTERFACE: provider})},
+        )
+        with pytest.raises(GradedRolloutInterrupted) as caught:
+            await runner.run_task(rollout_spec(task, machine=machine_runtime()))
+        interrupted = caught.value
+        assert interrupted.operation is RolloutOperation.ADVANCE
+        assert interrupted.rollout.conversations[0].messages[-1] == message
+        assert interrupted.grade.status is Outcome.UNAVAILABLE and interrupted.grade.reward is None
+        assert client.is_closed and machine.closed
+        assert len(machine.sessions) == 1 and machine.sessions[0].process.returncode is not None
+
+    asyncio.run(check())

@@ -57,7 +57,15 @@ class RetrievalServiceSession:
     machine: Machine
     requirement: ProviderRequirement
     endpoint: str
+    client: httpx.AsyncClient
     cleanup: AsyncExitStack
+
+    async def _relay(self, request: HttpRequest) -> HttpResponse:
+        if request.method != "POST" or request.path not in {"/search", "/document"}:
+            return HttpResponse(404, b"{}")
+        response = await self.client.post(self.endpoint + request.path, content=request.body)
+        response.raise_for_status()
+        return HttpResponse(response.status_code, response.content)
 
     async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult:
         parameter = "query" if name == "search" else "docid"
@@ -67,9 +75,15 @@ class RetrievalServiceSession:
             or not isinstance(arguments[parameter], str)
         ):
             return ToolCallResult(INVALID_ARGUMENTS)
+        # The tool call owns pump failures, so they reach the engine's normal rollout error boundary.
+        async with asyncio.TaskGroup() as group:
+            async with serve_http(self.machine, self._relay, port=RETRIEVAL_RELAY_PORT, task_group=group) as endpoint:
+                return await self._retrieve(name, arguments, endpoint)
+
+    async def _retrieve(self, name: str, arguments: dict[str, JsonValue], endpoint: str) -> ToolCallResult:
         remote = f"/tmp/retrieval-{uuid.uuid4().hex}.json"
         payload = {
-            "endpoint": self.endpoint,
+            "endpoint": endpoint,
             "target": remote,
             "timeout": RETRIEVAL_TIMEOUT,
             "name": name,
@@ -122,23 +136,7 @@ class OpenResearcherServiceProvider:
             if health.json()["state"] != context.requirement.initial_state:
                 raise ValueError("Retrieval service state differs from the frozen task")
 
-            async def relay(request: HttpRequest) -> HttpResponse:
-                if request.method != "POST" or request.path not in {"/search", "/document"}:
-                    return HttpResponse(404, b"{}")
-                response = await client.post(self.endpoint + request.path, content=request.body)
-                response.raise_for_status()
-                return HttpResponse(response.status_code, response.content)
-
-            group = await cleanup.enter_async_context(asyncio.TaskGroup())
-            endpoint = await cleanup.enter_async_context(
-                serve_http(
-                    context.machine,
-                    relay,
-                    port=RETRIEVAL_RELAY_PORT,
-                    task_group=group,
-                )
-            )
-            return RetrievalServiceSession(context.machine, context.requirement, endpoint, cleanup)
+            return RetrievalServiceSession(context.machine, context.requirement, self.endpoint, client, cleanup)
         except BaseException:
             await cleanup.aclose()
             raise
