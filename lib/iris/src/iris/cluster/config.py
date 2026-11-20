@@ -848,6 +848,12 @@ class ClusterFinelogConfig(_Config):
     """
 
     config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
+    # Copy the controller DB's jobs, job_config, tasks and task_attempts rows to
+    # iris.controller_db__*. Set false to stop the copy if it slows the controller;
+    # it takes effect when the controller restarts, and the controller still emits
+    # iris_controller_write_lock_held_seconds to compare against. See
+    # docs/observability-rows.md.
+    controller_rows: bool = True
 
 
 # ---------------------------------------------------------------------------

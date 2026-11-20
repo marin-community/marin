@@ -61,6 +61,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.registry.client import RegistryClientFactory
 from harbor.archive import open_archive
 from harbor.telemetry.observer import (
+    TelemetryRuntime,
     bind_telemetry,
     record_job_terminal,
     shutdown_telemetry,
@@ -1078,21 +1079,12 @@ class Job:
             job_uid=self._id,
             job_name=self.config.job_name,
         )
-        if telemetry is not None:
-            hook = trial_hook(telemetry)
-            for event in TrialEvent:
-                self._trial_queue.add_hook(event, hook)
-        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
-        if archive is not None:
-            self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
         try:
-            with bind_telemetry(telemetry):
-                result = await self._run_job()
-                # Rebuild canonical archive rows from the selected final results,
-                # including resumed trials; native retry attempts stay preserved.
-                if archive is not None:
-                    await archive.finalize(result.trial_results)
-                    await asyncio.to_thread(archive.seal)
+            if telemetry is not None:
+                hook = trial_hook(telemetry)
+                for event in TrialEvent:
+                    self._trial_queue.add_hook(event, hook)
+            result = await self._run_job_with_archive(telemetry)
         except BaseException as error:
             record_job_terminal(telemetry, error)
             raise
@@ -1100,9 +1092,36 @@ class Job:
             record_job_terminal(telemetry)
             return result
         finally:
+            release = asyncio.create_task(
+                asyncio.to_thread(shutdown_telemetry, telemetry)
+            )
+            cancellation: asyncio.CancelledError | None = None
+            while not release.done():
+                try:
+                    await asyncio.shield(release)
+                except asyncio.CancelledError as error:
+                    cancellation = error
+            release.result()
+            if cancellation is not None:
+                raise cancellation
+
+    async def _run_job_with_archive(
+        self, telemetry: TelemetryRuntime | None
+    ) -> JobResult:
+        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
+        try:
+            if archive is not None:
+                self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
+            with bind_telemetry(telemetry):
+                result = await self._run_job()
+                # Canonical archive rows use the selected results, including resumed trials.
+                if archive is not None:
+                    await archive.finalize(result.trial_results)
+                    await asyncio.to_thread(archive.seal)
+            return result
+        finally:
             if archive is not None:
                 await asyncio.to_thread(archive.close)
-            await asyncio.to_thread(shutdown_telemetry, telemetry)
 
     async def _run_job(self) -> JobResult:
         try:

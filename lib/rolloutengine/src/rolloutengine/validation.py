@@ -14,6 +14,7 @@ from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
+    ProviderNetworkAccess,
     ScriptGrader,
     TaskSpec,
     VerifyitGrader,
@@ -59,7 +60,7 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
         if spec.task_machine is None or spec.task_machine.user != str(task.integrity_contract.agent_uid):
             raise ValueError("SHARED task actor user must match the integrity contract agent_uid")
     if any(
-        requirement.network_access == "service_only"
+        requirement.network_access is ProviderNetworkAccess.SERVICE_ONLY
         for requirement in task.environment_requirements.tool_providers.values()
     ):
         if spec.task_machine is not None and spec.task_machine.network is not NetworkPolicy.DENY:

@@ -28,6 +28,15 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.environment import prepare_machine_spec
 
 
+class PythonQualificationInput(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str
+    original_task_sha256: str
+    task_sha256: str
+    task_spec: str
+
+
 class PythonProbe(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -42,7 +51,7 @@ class PythonProbe(BaseModel):
     state_persisted: bool
 
 
-async def qualify(rows: list[dict], factory: LocalMachineFactory) -> tuple[PythonProbe, ...]:
+async def qualify(rows: list[PythonQualificationInput], factory: LocalMachineFactory) -> tuple[PythonProbe, ...]:
     config_path = Path("vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml")
     config = yaml.safe_load(config_path.read_text())["task_spec"]
     runtime = MachineRuntimeSpec.model_validate({**config["required_actor"], "backend": Backend.LOCAL})
@@ -50,9 +59,9 @@ async def qualify(rows: list[dict], factory: LocalMachineFactory) -> tuple[Pytho
     host_network = os.readlink("/proc/self/ns/net")
     results = []
     for row in rows:
-        encoded = row["task_spec"]
+        encoded = row.task_spec
         digest = hashlib.sha256(encoded.encode()).hexdigest()
-        if digest != row["task_sha256"]:
+        if digest != row.task_sha256:
             raise ValueError("Frozen Python qualification task differs from its content hash")
         task = TaskSpec.model_validate_json(encoded)
         if task.environment_requirements.required_backend is not Backend.LOCAL:
@@ -111,8 +120,8 @@ async def qualify(rows: list[dict], factory: LocalMachineFactory) -> tuple[Pytho
                     raise ValueError("LOCAL Python tool does not have a private network-denied namespace")
                 results.append(
                     PythonProbe(
-                        source_id=row["source_id"],
-                        original_task_sha256=row["original_task_sha256"],
+                        source_id=row.source_id,
+                        original_task_sha256=row.original_task_sha256,
                         task_sha256=digest,
                         tool_schema_sha256=hashlib.sha256(tool.model_dump_json().encode()).hexdigest(),
                         backend=Backend.LOCAL.value,
@@ -142,7 +151,7 @@ def main() -> None:
     payload = StoragePath(args.inputs).read_bytes()
     if hashlib.sha256(payload).hexdigest() != args.inputs_sha256:
         raise ValueError("Frozen Python qualification input differs from its sealed SHA")
-    rows = pq.read_table(pa.BufferReader(payload)).to_pylist()
+    rows = [PythonQualificationInput.model_validate(row) for row in pq.read_table(pa.BufferReader(payload)).to_pylist()]
     if len(rows) != args.expected_tasks:
         raise ValueError("Frozen Python qualification input count differs")
     settings = (

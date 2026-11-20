@@ -230,18 +230,45 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_cat_count_launcher_import_keeps_training_dependencies_unloaded() -> None:
+@pytest.mark.parametrize(
+    ("module", "args"),
+    (
+        ("experiments.post_training.cat_count_canary.launcher", ()),
+        ("experiments.post_training.mochi_rl", ("--help",)),
+        ("experiments.post_training.snowball_rl", ("--help",)),
+    ),
+)
+def test_launcher_startup_keeps_training_dependencies_unloaded(module: str, args: tuple[str, ...]) -> None:
+    program = textwrap.dedent(
+        """
+        import importlib, runpy, sys
+
+        sys.argv = sys.argv[1:]
+        module = sys.argv[0]
+        if len(sys.argv) > 1:
+            try:
+                runpy.run_module(module, run_name="__main__")
+            except SystemExit as error:
+                assert error.code == 0, error
+        else:
+            importlib.import_module(module)
+        heavy = {"levanter", "transformers", "torch", "wandb"}
+        loaded = heavy.intersection(name.split(".")[0] for name in sys.modules)
+        assert not loaded, sorted(loaded)
+        assert not any(
+            name.startswith(("experiments.sft.", "experiments.post_training.mochi_sft",
+                             "experiments.post_training.snowball_sft"))
+            for name in sys.modules
+        )
+        """
+    )
     result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; import experiments.post_training.cat_count_canary.launcher; "
-            "heavy = {'levanter', 'transformers', 'torch', 'wandb'}; "
-            "loaded = heavy.intersection(name.split('.')[0] for name in sys.modules); "
-            "assert not loaded, sorted(loaded)",
-        ],
+        [sys.executable, "-c", program, module, *args],
+        env={},
         timeout=30,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
+    if args:
+        assert "Show this message and exit." in result.stdout

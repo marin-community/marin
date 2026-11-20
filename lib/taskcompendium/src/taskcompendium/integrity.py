@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Versioned SHARED grading protections and their agent-facing instructions."""
+"""Versioned SHARED grading protection contracts."""
 
 from enum import StrEnum
 from typing import Literal, Self
@@ -50,8 +50,8 @@ class RootDeliveryContract(BaseModel):
     """Private verifier delivery with the source image's original root actor.
 
     Verifier files keep their original modes and remain absent during the actor
-    phase. ``undeclared_deadline`` preserves the source's unbounded verifier
-    deadline under its outer attempt limit.
+    phase. ``undeclared_deadline`` records that the source supplies no verifier
+    deadline.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

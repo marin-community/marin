@@ -28,6 +28,10 @@ DEFAULT_WORKSPACE = "/app"
 API_DEFAULT_TEMPERATURE = "API default"
 
 
+class JudgeTemperature(StrEnum):
+    RUNTIME_DEFAULT = "runtime default"
+
+
 class Mode(StrEnum):
     UNSOLVABLE = "unsolvable"
     STRUCTURED_EXACT = "structured_exact"
@@ -316,7 +320,8 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
+RUBRIC_PAIRWISE = "pairwise"
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_PAIRWISE})
 
 
 class JudgeCompletionPolicy(StrEnum):
@@ -333,6 +338,12 @@ class JudgeSpec:
     question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside the
     answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
+
+    Rubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once
+    in each position, as Arena-Hard does. ``prompt_template`` places the two answers with
+    ``{answer_a}`` and ``{answer_b}``. The last match of the first ``verdict_patterns`` entry that
+    matches the reply names a verdict, ``label_scores`` gives assistant A's score for it, and
+    ``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).
     """
 
     references: tuple[str, ...] = ()
@@ -365,9 +376,11 @@ class JudgeSpec:
     api: str = "chat_completions"
     context_char_limit: int = field(default=60_000, kw_only=True)
     max_turns: int = field(default=1, kw_only=True)
-    temperature: float | None = field(default=0.0, kw_only=True)
-    parse_attempts: int = field(default=2, kw_only=True)
+    temperature: float | None | JudgeTemperature = field(default=JudgeTemperature.RUNTIME_DEFAULT, kw_only=True)
+    parse_attempts: int | None = field(default=None, kw_only=True)
     chat_template_kwargs: dict[str, str] = field(default_factory=dict, kw_only=True)
+    verdict_patterns: tuple[str, ...] = field(default=(), kw_only=True)
+    label_weights: dict[str, float] = field(default_factory=dict, kw_only=True)
 
 
 class JudgeRuntimeSource(StrEnum):
@@ -527,6 +540,10 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
             raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation == (str | None):
         return value
+    if annotation == (float | None | JudgeTemperature):
+        if value == JudgeTemperature.RUNTIME_DEFAULT:
+            return JudgeTemperature.RUNTIME_DEFAULT
+        annotation = float | None
     if annotation == (float | None):
         if value is not None and type(value) not in (int, float):
             raise ValueError(f"field {name!r} expects a number or null")

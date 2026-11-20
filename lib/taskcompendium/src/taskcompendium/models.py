@@ -331,12 +331,16 @@ class ResourceGroups(BaseModel):
         return self
 
 
+class ProviderNetworkAccess(StrEnum):
+    SERVICE_ONLY = "service_only"
+
+
 class ProviderRequirement(BaseModel):
     """One versioned action interface and literal JSON initial state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    network_access: Literal["service_only"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    network_access: ProviderNetworkAccess | None = Field(default=None, exclude_if=lambda value: value is None)
     action_interface: str = Field(min_length=1)
     initial_state: JsonValue = Field(repr=False)
 

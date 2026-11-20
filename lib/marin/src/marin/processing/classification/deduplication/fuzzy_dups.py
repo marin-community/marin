@@ -48,8 +48,6 @@ from marin.datakit.copartitioned import (
     write_copartitioned_source_manifest,
 )
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
-from marin.execution.artifact import read_artifact
-from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
@@ -409,37 +407,4 @@ def compute_fuzzy_dups_attrs(
         params=params,
         sources=sources,
         counters=dict(outcome.counters),
-    )
-
-
-def compute_fuzzy_dups_attrs_step(
-    *,
-    name: str,
-    minhash_steps: list[StepSpec],
-    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
-    max_parallelism: int,
-    worker_resources: ResourceConfig | None = None,
-    coordinator_resources: ResourceConfig | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
-    return StepSpec(
-        name=name,
-        deps=list(minhash_steps),
-        fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
-            output_path=output_path,
-            cc_max_iterations=cc_max_iterations,
-            max_parallelism=max_parallelism,
-            worker_resources=worker_resources,
-            coordinator_resources=coordinator_resources,
-        ),
-        # Match the identity the Datakit DAG builds, so a step created here
-        # resolves to the artifacts that graph already produced. The MinHash
-        # content parameters reach this hash through the dependency IDs.
-        hash_attrs={
-            "v": FUZZY_DUPS_ATTR_DATA_VERSION,
-            **({"cc_max_iterations": cc_max_iterations} if cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS else {}),
-        },
-        override_output_path=override_output_path,
     )

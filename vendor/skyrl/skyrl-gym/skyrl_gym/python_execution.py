@@ -111,6 +111,6 @@ async def python_tool_output(kernel: PythonKernel, name: str, arguments: JsonVal
     if name != PYTHON_TOOL_NAME:
         return json.dumps({"error": f"Unknown tool: {name}"})
     if not isinstance(arguments, dict) or not isinstance(arguments.get("code"), str):
-        return json.dumps({"error": "stateful_python_code_exec requires a string code argument"})
+        return json.dumps({"error": f"{PYTHON_TOOL_NAME} requires a string code argument"})
     result = await kernel.execute(arguments["code"], timeout=10)
     return (result.stdout + result.stderr).decode().removesuffix("\n")
