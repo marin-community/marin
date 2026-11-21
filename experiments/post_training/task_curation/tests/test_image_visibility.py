@@ -232,6 +232,13 @@ def test_source_map_rows_refuse_a_repeated_task(tmp_path: Path):
         source_map_rows(source_columns(), payload)
 
 
+def test_source_map_rows_sample_stops_after_the_cap(tmp_path: Path):
+    payload = payload_file(tmp_path, [task("task-1"), task("task-2"), task("task-3")])
+    rows, without_image = source_map_rows(source_columns(), payload, tasks_per_source=2)
+    assert [row["task_id"] for row in rows] == ["task-1", "task-2"]
+    assert without_image == 0
+
+
 def test_payload_rows_read_the_lowered_envelope(tmp_path: Path):
     payload = payload_file(tmp_path, [task("task-1"), task("task-2")], encoding="lowered")
     tasks = list(payload_task_rows(payload))

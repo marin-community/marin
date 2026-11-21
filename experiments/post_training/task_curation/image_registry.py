@@ -176,17 +176,23 @@ def payload_task_rows(payload: Path) -> Iterator[dict[str, Any]]:
         raise ValueError(f"Payload carries neither task_spec nor lowered_task_spec: {payload}")
 
 
-def source_map_rows(source: dict[str, str], payload: Path) -> tuple[list[dict[str, str]], int]:
+def source_map_rows(
+    source: dict[str, str], payload: Path, tasks_per_source: int | None = None
+) -> tuple[list[dict[str, str]], int]:
     """The map rows of one served source's payload, and its tasks without an image.
 
     One task yields at most one row: a task environment references one image, and
     a task whose environment carries no image (lock-only or build context) has no
-    registry image to record.
+    registry image to record. ``tasks_per_source`` stops the scan after that many
+    tasks, which samples a source's image set instead of reading its whole
+    population; the caller must say so wherever it reports the result.
     """
     rows: list[dict[str, str]] = []
     without_image = 0
     seen: set[str] = set()
     for task in payload_task_rows(payload):
+        if tasks_per_source is not None and len(seen) >= tasks_per_source:
+            break
         row = image_row(source, task)
         if row is None:
             without_image += 1
@@ -216,8 +222,12 @@ def download_payload(dataset_id: str, dataset_revision: str) -> Path | None:
         return None
 
 
-def build_map_rows(root: str) -> tuple[list[dict[str, str]], str]:
-    """The complete map over the served catalog, with a one-line summary."""
+def build_map_rows(root: str, tasks_per_source: int | None = None) -> tuple[list[dict[str, str]], str]:
+    """The complete map over the served catalog, with a one-line summary.
+
+    ``tasks_per_source`` samples each source's image set with the first that many
+    tasks instead of scanning whole populations; the summary then reports it.
+    """
     rows: list[dict[str, str]] = []
     sources = 0
     unpinned = 0
@@ -232,13 +242,14 @@ def build_map_rows(root: str) -> tuple[list[dict[str, str]], str]:
             else:
                 unavailable += 1
             continue
-        source_rows, skipped = source_map_rows(columns, payload)
+        source_rows, skipped = source_map_rows(columns, payload, tasks_per_source)
         rows.extend(source_rows)
         without_image += skipped
+    sampled = f", sampled to the first {tasks_per_source} tasks per source" if tasks_per_source is not None else ""
     summary = (
         f"{len(rows)} image rows over {sources} served sources "
         f"({unpinned} without a payload pin, {unavailable} whose pin carries no payload, "
-        f"{without_image} tasks without a registry image)"
+        f"{without_image} tasks without a registry image{sampled})"
     )
     return rows, summary
 
@@ -291,13 +302,26 @@ def main() -> int:
     parser.add_argument("--repo", default=REGISTRY_REPO, help="private dataset repo the map is published to")
     parser.add_argument("--pointer", type=Path, default=POINTER_PATH, help="where the revision pointer is written")
     parser.add_argument("--output", type=Path, default=None, help="write the map parquet here and skip publishing")
+    parser.add_argument(
+        "--tasks-per-source",
+        type=int,
+        default=None,
+        help="sample each source with its first that many tasks instead of a full scan",
+    )
     args = parser.parse_args()
 
     configure_coreweave_s3()
-    rows, summary = build_map_rows(args.catalog_root)
+    rows, summary = build_map_rows(args.catalog_root, tasks_per_source=args.tasks_per_source)
     table = pa.Table.from_pylist(rows, schema=MAP_SCHEMA)
     if args.output is not None:
-        pq.write_table(table, args.output)
+        destination = StoragePath(str(args.output))
+        with tempfile.TemporaryDirectory(prefix="image-registry-") as directory:
+            staging = Path(directory) / MAP_FILENAME
+            pq.write_table(table, staging)
+            if destination.is_remote:
+                destination.upload_from(staging)
+            else:
+                shutil.copyfile(staging, args.output)
         print(f"{args.output}: {summary}")
         return 0
 
