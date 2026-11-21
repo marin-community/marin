@@ -84,7 +84,7 @@ DEFAULT_BATCH_ROWS = 10_000
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 # Bounds of one WriteRows request. The server refuses a body above 160 MiB or 1,000,000 rows, and the rows of
 # a refused request are lost. A queued row counts one byte for each character of its strings, and a
-# character can take four bytes on the wire, so the byte bound is a quarter of what the limit allows.
+# character can take four bytes on the wire, so a request of 32 MiB by that count stays near 128 MiB.
 MAX_SEND_BYTES = 32 * 1024 * 1024
 MAX_SEND_ROWS = 500_000
 

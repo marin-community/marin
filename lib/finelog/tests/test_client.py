@@ -1144,20 +1144,6 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
 def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refused_one(monkeypatch):
     sent = []
 
-    class DeferredThread:
-        """Run the flush loop when the table closes, so the whole queue goes to one ``_send``."""
-
-        def __init__(self, target, name, daemon):
-            self._target = target
-
-        def start(self):
-            pass
-
-        def join(self, timeout=None):
-            self._target()
-
-    monkeypatch.setattr(log_client_mod.threading, "Thread", DeferredThread)
-
     def flusher(_namespace, batch):
         workers = batch.column("worker_id").to_pylist()
         if "refused-a" in workers:
@@ -1169,6 +1155,7 @@ def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refuse
     schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
     table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
     names = ["worker-01", "worker-02", "refused-a", "refused-b", "worker-05"]
+    # One write queues the five rows together, so the flush thread takes them as one queue.
     table.write([SimpleNamespace(worker_id=name) for name in names])
     table.close()
 
