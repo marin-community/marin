@@ -60,6 +60,7 @@ EXCLUDE_PATTERNS = [
     "experiments/post_training/task_curation/datasets/*/scorers/**",
     # Harbor package fixtures retain their source bytes, which a dataset's package edits must match.
     "experiments/evaluation/fixtures/harbor/**",
+    "experiments/evaluation/benchmarks/multi_lcb_scorers/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
