@@ -1215,8 +1215,12 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
 
 
 @pytest.mark.multidevice
-@pytest.mark.parametrize("template_kind", ["concrete", "abstract-placed", "abstract-unplaced"])
-def test_expert_weight_import_preserves_template_partitioning(template_kind):
+@pytest.mark.parametrize(
+    "is_abstract,has_placement",
+    [(False, True), (True, True), (True, False)],
+    ids=["concrete", "abstract-placed", "abstract-unplaced"],
+)
+def test_expert_weight_import_uses_template_placement_or_default(is_abstract, has_placement):
     with use_test_devices(8) as devices:
         mesh = Mesh(
             np.asarray(devices).reshape(1, 2, 1, 4, 1),
@@ -1242,12 +1246,12 @@ def test_expert_weight_import_preserves_template_partitioning(template_kind):
                     )
             state_dict = snowball_to_state_dict(template)
             import_template = template
-            if template_kind != "concrete":
+            if is_abstract:
                 import_template = jax.tree.map(
                     lambda array: jax.ShapeDtypeStruct(
                         array.shape,
                         array.dtype,
-                        sharding=array.sharding if template_kind == "abstract-placed" else None,
+                        sharding=array.sharding if has_placement else None,
                     ),
                     template,
                 )
@@ -1256,7 +1260,7 @@ def test_expert_weight_import_preserves_template_partitioning(template_kind):
                 for field in ("w_gate", "w_up", "w_down"):
                     expected = getattr(original.mlp.expert_mlp, field)
                     actual = getattr(loaded.mlp.expert_mlp, field)
-                    if template_kind != "abstract-unplaced":
+                    if has_placement:
                         assert actual.sharding.spec == expected.sharding.spec
                         assert actual.sharding.shard_shape(actual.shape) == expected.sharding.shard_shape(
                             expected.shape
