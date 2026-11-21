@@ -86,7 +86,7 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
 
 
-def test_gate_worker_uses_its_sibling_jobs_own_rendezvous(tmp_path, monkeypatch):
+def test_gate_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, monkeypatch):
     coordinator = JobName.root("test-user", "coordinator")
     first_job, second_job = coordinator.child("first"), coordinator.child("second")
     addresses = {first_job: "127.0.0.1", second_job: "127.0.0.2"}
