@@ -386,6 +386,15 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
     return manifest
 
 
+def stage_release(output: Path, release_root: str) -> None:
+    """Copy the three release artifacts to an object-storage root that holds no manifest yet."""
+    root = StoragePath(release_root)
+    if (root / MANIFEST_FILENAME).exists():
+        raise FileExistsError(f"Release root already holds a manifest: {release_root}")
+    for filename in (LOWERED_FILENAME, SELECTION_FILENAME, MANIFEST_FILENAME):
+        (root / filename).write_bytes((output / filename).read_bytes())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--records", required=True, help="the forge export root holding inputs/ and records/")
@@ -399,11 +408,7 @@ def main() -> None:
     configure_coreweave_s3()
     manifest = write_release(read_records(args.records), args.target, args.output, args.records)
     if args.release_root is not None:
-        root = StoragePath(args.release_root)
-        if (root / MANIFEST_FILENAME).exists():
-            raise FileExistsError(f"Release root already holds a manifest: {args.release_root}")
-        for filename in (LOWERED_FILENAME, SELECTION_FILENAME, MANIFEST_FILENAME):
-            (root / filename).write_bytes((args.output / filename).read_bytes())
+        stage_release(args.output, args.release_root)
     print(json.dumps({key: value for key, value in manifest.items() if key != "rule"}, indent=2))
 
 
