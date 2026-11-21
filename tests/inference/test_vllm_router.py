@@ -27,6 +27,7 @@ from marin.inference.config import (
     ServedModelConfig,
     ServingGeometry,
     VllmEngineConfig,
+    VllmLauncherType,
     VllmRouterConfig,
 )
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
@@ -271,16 +272,17 @@ def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_globa
 
 
 @pytest.mark.parametrize(
-    "with_geometry,native_args,routed,rank_count",
+    "launcher,with_geometry,native_args,routed,rank_count",
     [
-        (False, ("-dp", "4"), True, 4),
-        (True, (), True, 4),
-        (True, (), False, 4),
-        (True, ("-dp", "2"), False, 2),
+        (VllmLauncherType.PREINSTALLED, False, ("-dp", "4"), True, 4),
+        (VllmLauncherType.TPU, False, ("--data-parallel-size", "4"), True, 4),
+        (VllmLauncherType.PREINSTALLED, True, (), True, 4),
+        (VllmLauncherType.PREINSTALLED, True, (), False, 4),
+        (VllmLauncherType.PREINSTALLED, True, ("-dp", "2"), False, 2),
     ],
 )
 def test_iris_serving_preserves_staged_weights_and_rank_routing(
-    monkeypatch, tmp_path, with_geometry, native_args, routed, rank_count
+    monkeypatch, tmp_path, launcher, with_geometry, native_args, routed, rank_count
 ):
     argv_path = tmp_path / "argv.json"
     monkeypatch.setattr(
@@ -319,6 +321,11 @@ def test_iris_serving_preserves_staged_weights_and_rank_routing(
         if with_geometry
         else None
     )
+    worker_resources = (
+        ResourceConfig.with_tpu("v6e-4")
+        if launcher is VllmLauncherType.TPU
+        else ResourceConfig.with_gpu("H100", count=4)
+    )
     service = IrisServiceConfig(
         model=ServedModelConfig(
             weights=str(weights),
@@ -326,9 +333,11 @@ def test_iris_serving_preserves_staged_weights_and_rank_routing(
             chat_template_content="{{ messages }}",
             object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
         ),
-        engine=VllmEngineConfig(router=VllmRouterConfig() if routed else None, extra_args=native_args),
+        engine=VllmEngineConfig(
+            launcher=launcher, router=VllmRouterConfig() if routed else None, extra_args=native_args
+        ),
         iris=IrisConfig(
-            worker_resources=ResourceConfig.with_gpu("H100", count=4),
+            worker_resources=worker_resources,
             worker_environment=create_environment(docker_image="test"),
             serving_geometry=geometry,
             cache_ttl_days=0,

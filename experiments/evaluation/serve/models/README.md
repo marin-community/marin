@@ -172,6 +172,37 @@ uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
   --vllm-arg=--enable-prefix-caching
 ```
 
+Four replicas on one single-host TPU slice (`v6e-4`, TP1/DP4):
+
+```bash
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-4 \
+  --tensor-parallel-size 1 --data-parallel-size 4 \
+  --session-router --vllm-arg=--enable-prefix-caching
+```
+
+For single-host TPU serving with `--data-parallel-size > 1`, `tpu-inference` automatically enables
+multi-process DP (`TPU_MULTIPROCESS_DP=1`) on online `vllm serve` and isolates physical chips per
+DP rank behind the same `vllm-router` consistent-hash frontend (Marin does not set that variable).
+Multi-host TPU serving does not support `--data-parallel-size > 1`.
+On pinned `tpu-inference` (`2f327d385a90`), `tpu_worker.py` sizes chips per rank using
+`get_num_cores_per_chip()` (`2` on `v5p`/`v4`), even though JAX runs `v5p`/`v4` in Megacore mode
+(one JAX device per chip); this breaks `TP > 1` with `DP > 1` on `v5p`/`v4` while single-core-per-chip
+slices (`v6e`, `v5litepod`) and `DP=1` work. `LMCache` is unsupported on TPU because `tpu-inference`
+only accepts `TPUConnector`, `TPUConnectorHMA`, `TPUOffloadConnector`, and `RaidenOffloadConnector`;
+use `TPUOffloadConnector` for TPU-native host-RAM prefix caching.
+
+For large checkpoints with multi-process TPU DP (such as Snowball 67B on `v5p-8`), raise `--memory`
+(for example `--memory 400g`, as the `64g` default can OOM when multiple DP ranks stream weights
+concurrently) and `--wait-timeout` (for example `--wait-timeout 3600`, since it also bounds in-job
+startup during multi-rank XLA compilation). When launching directly from a `gs://` or `s3://` URI
+with `--data-parallel-size > 1`, multiple vLLM `ApiServer` processes can race while rewriting
+`tokenizer.json` in vLLM's shared `model_streamer` cache directory; pass an HF repo ID instead (so
+weights stream from the GCS cache while the tokenizer loads from the locked HF cache) or pass
+`--vllm-arg=--tokenizer=<HF repo>` (with `--vllm-arg=--tokenizer-revision=<sha>`). Minted capability
+URLs (`https://iris.oa.dev/proxy/t/<token>/serve.<name>/...`) forward `X-Session-ID` from
+off-cluster clients including CoreWeave pods; on allowlist-enforced CoreWeave clusters, pass
+`--egress-allow iris.oa.dev:443`.
+
 `--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
 Omitting it uses the normal runtime.
 The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
