@@ -155,6 +155,20 @@ Excluded status. A decision applies only while all of these match. Audit and
 receipt-publication commands never write decisions. A finding without such a
 decision leaves the source's status and filtration counts unchanged.
 
+Ruling 73 (2026-11-20): every consumer-driven Pending or Excluded status needs an
+explicit user decision for that source, recorded in `consumer_decisions.json`. The
+consumer gate itself only records typed findings.
+
+Ruling 74 (2026-11-20): a verifier-deadline finding goes to repair, not to a status
+change. The repaired source uses an effective verifier deadline of
+`max(declared deadline, 1800 s)`, so a repair never shortens a declared deadline.
+
+Ruling 75 (2026-11-20): a missing-tool finding goes to repair. The repair runs the
+tool on the shellbox `LOCAL` backend (bubblewrap on an Iris pod). Such a source can be
+admitted with limited backend support: `LOCAL` supported and Daytona unsupported. If
+the tool cannot run under bubblewrap, the repair hosts it as a service that the
+sandbox reaches through the relay, as OpenResearcher's retrieval index does.
+
 Run `experiments.post_training.task_curation.consumer_audit` in the population's
 storage region. Supply a frozen input inventory, runtime git archive and JSON
 configuration with `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
@@ -192,8 +206,8 @@ uv run python -m experiments.post_training.task_curation.datasets.consumer_recei
 ```
 
 
-Synced to preview revision 31 (2026-11-18). These rules include the admission
-display policy for Atlas preview revision 31. When a later section of this
+Synced to preview revision 36 (2026-11-20). These rules include the admission
+display policy for Atlas preview revision 36. When a later section of this
 reference conflicts with them, this section is current.
 
 **SAMPLE panels across re-pins.** A SAMPLE panel drawn at an earlier pin binds at the
