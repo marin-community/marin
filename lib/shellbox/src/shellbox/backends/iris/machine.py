@@ -102,6 +102,18 @@ CLOSE_DRAIN_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
 # How much of each stuck exec's command ``close`` quotes when the drain times out.
 STUCK_EXEC_PREVIEW_CHARS = 120
+# A command with a timeout runs under the guest's coreutils ``timeout``, which sends TERM to the command's process
+# group at the limit and KILL after this grace; it exits 124, or 137 when it needed the KILL.
+GUEST_KILL_GRACE_SECONDS = 5
+GUEST_TIMEOUT_EXITS = (124, 137)
+# The controller's own exec deadline beyond the guest bound: exec setup and the guest shell's exit. The client's RPC
+# deadline adds RPC_PADDING_SECONDS to it and is the host backstop for an exec that never returns.
+GUEST_EXEC_MARGIN_SECONDS = 25
+# Prints ``bounded`` when the guest has a coreutils (GNU or uutils) ``timeout``; BusyBox's differs in flags and exits.
+GUEST_TIMEOUT_PROBE = 'case "$(timeout --version 2>/dev/null)" in *coreutils*) printf bounded;; esac'
+# Runs "$@" and prints its exit status on fd 3, the exec's own stdout, which the command never sees. A missing
+# status means this shell was killed: by the guest ``timeout`` when it exits 124 or 137.
+REPORT_STATUS = '"$@" 3>&-; echo "$?" >&3'
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
 EGRESS_POLICIES = {
@@ -136,6 +148,24 @@ def _raise_if_unreachable(error: BaseException) -> None:
         error, (ConnectionError, httpx.ConnectError)
     ):
         raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
+
+
+def _deadline_expired(error: BaseException) -> bool:
+    return isinstance(error, ConnectError) and error.code == Code.DEADLINE_EXCEEDED
+
+
+def _rpc_deadline(timeout: float | None, deadline: float | None) -> float:
+    """Seconds one exec RPC may take: ``deadline`` when given, else the controller's exec deadline plus padding."""
+    if deadline is not None:
+        return deadline
+    seconds = math.ceil(timeout) if timeout is not None else -1
+    return seconds + RPC_PADDING_SECONDS if seconds >= 0 else DEFAULT_JOB_TTL
+
+
+def _reported_status(stdout: str) -> int | None:
+    """The command's exit status as ``REPORT_STATUS`` printed it, or ``None`` when its shell was killed first."""
+    lines = stdout.splitlines()
+    return int(lines[-1]) if lines and lines[-1].isdigit() else None
 
 
 def never_connected(error: BaseException) -> bool:
@@ -256,25 +286,38 @@ class IrisMachine:
         self.spec = spec
         self._reset_baseline = ""
         self._closed = False
+        self._closed_because = ""
         self._container_user: tuple[str, str] | None = None
+        self._guest_timeout: bool | None = None
         # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
         # check-then-send; it can only wait for attempts that already passed the check.
         self._admission = threading.Condition()
         self._in_flight: dict[str, list[str]] = {}
 
-    def _send(self, argv: list[str], timeout: float | None) -> controller_pb2.Controller.ExecInContainerResponse:
-        """Send one exec, retrying only the exec pool's admission refusal."""
+    def _closed_error(self) -> MachineTerminated:
+        return MachineTerminated(
+            f"Machine is closed: {self._closed_because}" if self._closed_because else "Machine is closed"
+        )
+
+    def _send(
+        self, argv: list[str], timeout: float | None, deadline: float | None = None
+    ) -> controller_pb2.Controller.ExecInContainerResponse:
+        """Send one exec, retrying only the exec pool's admission refusal.
+
+        ``timeout`` is the controller's exec deadline. Each attempt's RPC deadline is ``deadline`` when given, and
+        otherwise that exec deadline plus ``RPC_PADDING_SECONDS``; refused attempts do not spend it.
+        """
         seconds = math.ceil(timeout) if timeout is not None else -1
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
         )
-        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
+        timeout_ms = math.ceil(_rpc_deadline(timeout, deadline) * 1000)
 
         def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
-            # A timed-out ``run`` closes the machine while this thread may still be retrying.
+            # A cancelled ``run`` closes the machine while this thread may still be retrying.
             with self._admission:
                 if self._closed:
-                    raise MachineTerminated("Machine is closed")
+                    raise self._closed_error()
                 attempt_id = uuid.uuid4().hex
                 self._in_flight[attempt_id] = argv
             try:
@@ -414,12 +457,23 @@ class IrisMachine:
             self._container_user = (uid, name)
         return self._container_user
 
+    async def _bounds_commands(self) -> bool:
+        """Whether the guest bounds commands itself; probed once per machine."""
+        if self._guest_timeout is None:
+            self._guest_timeout = (await self._script(GUEST_TIMEOUT_PROBE)).stdout == "bounded"
+        return self._guest_timeout
+
+    async def _close_because(self, reason: str) -> None:
+        if not self._closed:
+            self._closed_because = reason
+        await self.close()
+
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Iris does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:
-            raise MachineTerminated("Machine is closed")
+            raise self._closed_error()
         if command.user is not None and command.user not in await self._user_identity():
             uid, name = await self._user_identity()
             raise UnsupportedMachineSpec(
@@ -438,41 +492,63 @@ class IrisMachine:
         )
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
+        # The guest bounds a command that has a timeout and keeps the machine, as Docker and Daytona do. Without a
+        # coreutils ``timeout`` the exec's RPC deadline is the timeout itself, and it closes the machine as before.
+        bounded = command.timeout is not None and await self._bounds_commands()
+        limit = f"timeout -k {GUEST_KILL_GRACE_SECONDS} {command.timeout} " if bounded else ""
         script = (
             f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+            f"{limit}sh -c {shlex.quote(REPORT_STATUS)} shellbox {shlex.join(command.argv)} 3>&1 "
+            f"< {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
+        # An exec without a positive deadline falls back to the controller's short Kubernetes default.
+        exec_timeout, deadline = command.timeout, None
+        if command.timeout is not None and bounded:
+            exec_timeout = command.timeout + GUEST_KILL_GRACE_SECONDS + GUEST_EXEC_MARGIN_SECONDS
+        elif command.timeout is not None:
+            exec_timeout, deadline = command.timeout + RPC_PADDING_SECONDS, command.timeout
         # The command may be retried on this machine only when it was positively never sent: the connection was
         # refused before any request bytes were written, or the exec pool refused admission before its handler ran.
+        # Refused attempts do not spend the exec's RPC deadline, so admission queueing never times a command out.
         #   dispatch  never connected, or admission refused  -> MachineUnavailable (retry)
         #             machine closed before admitting it     -> MachineTerminated
-        #             deadline                               -> TIMED_OUT, machine closed
+        #             RPC deadline (the host backstop)       -> TIMED_OUT, machine closed
         #             any other error                        -> unattributed outcome
         #   decide    reply without the command's exit status, including the WebSocket setup-failure text,
         #             which the Kubernetes client reports after an exec whose upgrade reply was lost
         #                                                    -> unattributed outcome
+        #             guest ``timeout`` killed the command   -> TIMED_OUT with its output so far, machine kept
         #   capture   guest helper failed or sandbox gone    -> GuestHelperFailed / MachineTerminated
         #             any other error                        -> CommandOutcomeUnknown
         #   cleanup   any error or nonzero exit              -> logged; outcome unchanged
         # An unattributed outcome is CommandOutcomeUnknown, or MachineTerminated once the sandbox is gone.
+        preview = shlex.join(command.argv)[:STUCK_EXEC_PREVIEW_CHARS]
         try:
             try:
-                # An exec without a positive deadline falls back to the controller's short Kubernetes default.
-                sent = asyncio.to_thread(self._send, ["sh", "-c", script], command.timeout)
-                response = await asyncio.wait_for(sent, timeout=command.timeout)
-            except TimeoutError:
-                await self.close()
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                response = await asyncio.to_thread(self._send, ["sh", "-c", script], exec_timeout, deadline)
             except MachineTerminated:
                 raise  # The machine closed before admitting the exec.
             except Exception as error:
                 if _exec_was_refused(error) or never_connected(error):
                     raise MachineUnavailable(f"Iris exec was never sent: {error}") from error
+                if _deadline_expired(error):
+                    # The guest process state is unknown, so the sandbox cannot be reused.
+                    await self._close_because(
+                        f"command {preview!r} got no exec reply within its "
+                        f"{_rpc_deadline(exec_timeout, deadline):g} s deadline (command timeout {command.timeout} s)"
+                    )
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
                 raise await asyncio.to_thread(self._unattributed_outcome, repr(error), False) from error
             if (failure := _command_failure(response)) is not None:
                 gone = any(marker in response.error for marker in DEAD_CONTAINER_MARKERS)
                 raise await asyncio.to_thread(self._unattributed_outcome, failure, gone)
+            exit_code: int | None = _reported_status(response.stdout)
+            reason = ExitReason.EXITED
+            if exit_code is None and bounded and response.exit_code in GUEST_TIMEOUT_EXITS:
+                reason = ExitReason.TIMED_OUT
+            elif exit_code is None:
+                exit_code = response.exit_code  # The status shell never ran, or something else killed it.
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
@@ -480,9 +556,9 @@ class IrisMachine:
                 raise  # Known outcomes: a broken guest helper holds, and a dead or OOM-killed sandbox keeps its kind.
             except Exception as error:
                 raise CommandOutcomeUnknown(f"The command ran; its output was lost: {error!r}") from error
-            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            return Result(exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
         except asyncio.CancelledError:
-            await self.close()
+            await self._close_because(f"command {preview!r} was cancelled")
             raise
         finally:
             if not self._closed:
@@ -637,9 +713,13 @@ class IrisMachineFactory:
                         raise
                 else:
                     if status.state == TaskState.RUNNING:
-                        created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
+                        # The workdir exec also probes the guest timeout, saving each machine an RPC.
+                        script = f'mkdir -p -- "$1" && {GUEST_TIMEOUT_PROBE}'
+                        argv = ["sh", "-c", script, "shellbox", spec.workdir]
+                        created = await asyncio.to_thread(machine._exec_sync, argv)
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                        machine._guest_timeout = created.stdout == "bounded"
                         return machine
                     if status.state is TaskState.KILLED:
                         raise MachineCancelled(f"Iris sandbox task was killed before running: {status.error_message}")

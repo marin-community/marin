@@ -42,6 +42,12 @@ addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+Iris runs a command that has a timeout under the image's coreutils `timeout`, which sends TERM at the limit and KILL
+5 seconds later. The command returns `TIMED_OUT` with the output it wrote so far, and the machine stays open. The
+exec's RPC deadline is a host backstop of the timeout plus 90 seconds; controller admission refusals and their retries
+do not spend it. An image without a coreutils `timeout` keeps the earlier behaviour: the RPC deadline is the timeout
+itself. When an RPC deadline expires, the guest state is unknown, so the machine closes, and later calls raise
+`MachineTerminated` naming the command and the deadline that closed it.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,
