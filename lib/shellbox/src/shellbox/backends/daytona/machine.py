@@ -30,6 +30,7 @@ from daytona import (
     DaytonaNotFoundError,
     DaytonaRateLimitError,
 )
+from rigging import telemetry
 from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
@@ -124,8 +125,10 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
             try:
                 sandbox = await client.get(name)
                 await client.delete(sandbox)
+                telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "released"})
                 return
             except DaytonaNotFoundError:
+                telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "released"})
                 return
             except DaytonaError as error:
                 if error.status_code not in TRANSIENT_DAYTONA_STATUS:
@@ -646,6 +649,10 @@ class DaytonaMachineFactory:
                     )
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
                 sandbox = await _create_sandbox(client, params, timeout=timeout)
+                telemetry.event(
+                    "daytona_sandbox_lifecycle",
+                    {"sandbox_name": name, "state": "acquired", "vcpu": sandbox.cpu},
+                )
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )
