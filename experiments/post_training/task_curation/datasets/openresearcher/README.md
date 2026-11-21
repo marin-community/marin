@@ -96,9 +96,14 @@ answer belongs only in private verifier resources.
 
 The declared actor image contains `/opt/openresearcher/state.json` and the
 complete pinned BM25 index at `/opt/openresearcher/index/bm25`. The image-local
-provider reads both paths with external network access disabled. The grader uses the smaller runtime base;
-that base contains the Python dependencies and tool code. Keep the actor bound
-to the full-index image when preparing tasks for the image-local provider.
+provider reads both paths with external network access disabled. The grader
+uses the smaller runtime base; that base contains the Python dependencies and
+tool code. Keep the actor bound to the full-index image when preparing tasks
+for the image-local provider.
+
+The full-index actor passed image-local provider QA in an Iris gVisor sandbox
+on `cw-rno2a`. DATA Daytona rejected its 55.19 GB snapshot against the account's
+20 GB maximum on 2026-11-21. Use a backend that accepts the full image.
 
 In a real sandbox, require the parsed `state.json` to equal the TaskSpec's
 `environment_requirements.tool_providers.retrieval.initial_state`,
@@ -106,9 +111,10 @@ then call `search` and `get_document` through the image-local provider. Verify
 the complete returned document text against the pinned corpus. The grounding
 JSON-line replay described above tests a separate transport path.
 
-Before `prepare`, record image-local provider QA in the intake report. Its evidence must
-bind the actor image digest, service runtime, the complete index-file manifest and the two
-production-provider probes above. `prepare` creates the source's QUICK artifact
+Before `prepare`, record image-local provider QA in the intake report. Its
+evidence must bind the actor image digest, image-local tool runtime, complete
+index-file manifest and the two production-provider probes above. `prepare`
+creates the source's QUICK artifact
 after grounding and this QA. Its [`PreparationConfig`](prepare.py) binds the stage,
 question, grounding and benchmark hash receipts by SHA, the retrieval state,
 immutable actor and grader image digests and a
