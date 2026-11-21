@@ -19,19 +19,20 @@ BF16_POLICY = "p=bf16,c=bf16"
 
 @pytest.mark.parametrize("policy", [BF16_POLICY, "f32"])
 def test_optimizer_precision_does_not_change_native_step_input_dtypes(tmp_path, policy):
+    device_count = jax.device_count()
     config = TrainerConfig(
         id="stable-parameter-dtypes",
-        train_batch_size=1,
+        train_batch_size=device_count,
         per_device_parallelism=1,
         mp=jmp.get_policy(policy),
-        mesh=MeshConfig(axes={"data": 1, "model": 1, "replica": 1, "context": 1}),
+        mesh=MeshConfig(axes={"data": -1, "model": 1, "replica": 1, "context": 1}),
         tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
         require_accelerator=False,
         log_jaxprs=False,
         log_xla_hlo=False,
     )
     optimizer = optax.adam(0.1, mu_dtype=jnp.float32)
-    batch = hax.named(jnp.ones(1), hax.Axis("batch", 1))
+    batch = hax.named(jnp.ones(device_count), hax.Axis("batch", device_count))
 
     def loss(model, batch, *, key=None):
         return hax.mean((model - batch) ** 2).scalar()
