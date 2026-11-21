@@ -329,3 +329,135 @@ def test_child_queue_deadline_resets_for_next_child_but_not_a_running_one(monkey
         assert result.status.state.value == "succeeded"
         assert result.resource_exhaustion_reason is None
         assert clock["now"] >= 5  # A running single child outlives the two-second queue budget.
+
+
+def test_preempted_gang_reaches_the_original_queue_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent_id = "/runner/hero-canary"
+    clock = {"now": 0.0}
+
+    class PreemptedCluster(FakeClusterClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.polls = 0
+
+        def list_jobs(self, **kwargs):
+            self.polls += 1
+            self.jobs = [
+                job_pb2.JobStatus(
+                    job_id=parent_id,
+                    state=job_pb2.JOB_STATE_SUCCEEDED if self.polls >= 3 else job_pb2.JOB_STATE_RUNNING,
+                    has_children=True,
+                ),
+                job_pb2.JobStatus(
+                    job_id=f"{parent_id}/train",
+                    state=job_pb2.JOB_STATE_RUNNING,
+                    task_state_counts={"running": 1} if self.polls == 1 else {"building": 16},
+                ),
+            ]
+            return super().list_jobs(**kwargs)
+
+    cluster = PreemptedCluster()
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **kwargs: nullcontext(IrisClient(cluster)))
+    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(iris_monitor.time, "sleep", lambda duration: clock.update(now=clock["now"] + duration))
+    result = iris_monitor.wait_for_child_job(
+        parent_id,
+        iris_config=None,
+        controller_url="http://iris.test",
+        poll_interval=10,
+        child_wait_timeout=1,
+        repo_root=Path.cwd(),
+        resource_exhaustion_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+        child_wait_timeout_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+    )
+    assert cluster.terminated == [parent_id]
+    assert result.resource_exhaustion_reason is not None
+    assert cluster.polls == 2
+
+
+def test_preemption_before_the_queue_deadline_waits_for_readmission(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent_id = "/runner/hero-canary"
+    clock = {"now": 0.0}
+
+    class ReadmittedCluster(FakeClusterClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.polls = 0
+
+        def list_jobs(self, **kwargs):
+            self.polls += 1
+            counts = {"building": 16} if self.polls == 2 else {"running": 1}
+            self.jobs = [
+                job_pb2.JobStatus(
+                    job_id=parent_id,
+                    state=job_pb2.JOB_STATE_SUCCEEDED if self.polls >= 4 else job_pb2.JOB_STATE_RUNNING,
+                    has_children=True,
+                ),
+                job_pb2.JobStatus(
+                    job_id=f"{parent_id}/train",
+                    state=job_pb2.JOB_STATE_RUNNING,
+                    task_state_counts=counts,
+                ),
+            ]
+            return super().list_jobs(**kwargs)
+
+    cluster = ReadmittedCluster()
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **kwargs: nullcontext(IrisClient(cluster)))
+    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(iris_monitor.time, "sleep", lambda duration: clock.update(now=clock["now"] + duration))
+    result = iris_monitor.wait_for_child_job(
+        parent_id,
+        iris_config=None,
+        controller_url="http://iris.test",
+        poll_interval=10,
+        child_wait_timeout=30,
+        repo_root=Path.cwd(),
+        resource_exhaustion_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+        child_wait_timeout_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+    )
+    assert cluster.terminated == []
+    assert result.resource_exhaustion_reason is None
+
+
+def test_preempted_gang_past_the_original_queue_deadline_escalates(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent_id = "/runner/hero-canary"
+    clock = {"now": 0.0}
+
+    class PreemptedCluster(FakeClusterClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.polls = 0
+
+        def list_jobs(self, **kwargs):
+            self.polls += 1
+            self.jobs = [
+                job_pb2.JobStatus(
+                    job_id=parent_id,
+                    state=job_pb2.JOB_STATE_SUCCEEDED if self.polls >= 3 else job_pb2.JOB_STATE_RUNNING,
+                    has_children=True,
+                ),
+                job_pb2.JobStatus(
+                    job_id=f"{parent_id}/train",
+                    state=job_pb2.JOB_STATE_RUNNING,
+                    task_state_counts={"running": 1} if self.polls == 1 else {"building": 16},
+                ),
+            ]
+            return super().list_jobs(**kwargs)
+
+    cluster = PreemptedCluster()
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **kwargs: nullcontext(IrisClient(cluster)))
+    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(iris_monitor.time, "sleep", lambda duration: clock.update(now=clock["now"] + duration))
+    with pytest.raises(TimeoutError, match="No child task reached RUNNING"):
+        iris_monitor.wait_for_child_job(
+            parent_id,
+            iris_config=None,
+            controller_url="http://iris.test",
+            poll_interval=10,
+            child_wait_timeout=1,
+            repo_root=Path.cwd(),
+            resource_exhaustion_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+            child_wait_timeout_policy=iris_monitor.ResourceExhaustionPolicy.ESCALATE,
+        )
+    assert cluster.terminated == []
+    assert cluster.polls == 2

@@ -111,9 +111,9 @@ jobs:
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
-      # A training job that has not started within QUEUE_WAIT_TIMEOUT is
-      # cancelled and reported as resource exhaustion. Once it starts, this
-      # step timeout is the wall clock.
+      # A gang with no running task after QUEUE_WAIT_TIMEOUT is cancelled and
+      # reported as resource exhaustion, including one that started and was
+      # preempted back to admission.
       - name: Wait for hero canary
         id: wait
         timeout-minutes: 340

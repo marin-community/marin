@@ -557,9 +557,9 @@ runs after the last update. A healthy run holds the rack for more than 20 minute
 not exercise cross-rack collectives or checkpoint recovery.
 
 The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
-so neither preempts the other. If the training job has not started within five hours,
-`iris_monitor.py wait --child-wait-timeout-policy shutdown` cancels it and the day is skipped with
-a warning; a failed run alerts through Slack and Loom.
+so neither preempts the other. If the gang has no running task after five hours, including one that
+started and was preempted back to admission, `iris_monitor.py wait --child-wait-timeout-policy shutdown`
+cancels it and the day is skipped with a warning; a failed run alerts through Slack and Loom.
 
 [`hero_canary_report.py`](../../../scripts/ci/hero_canary_report.py) drops 4 warmup steps and
 reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
