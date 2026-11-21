@@ -710,6 +710,31 @@ def test_constraints_to_node_selector_pool():
     assert manifest["spec"]["nodeSelector"] == {"iris.pool": "h100-8x"}
 
 
+def test_nvlink_domain_exclusion_requires_node_affinity_with_pool_selector():
+    request = make_run_req("/excluded-rack/0")
+    add_eq_constraint(request, "pool", "gb200")
+    exclusion = request.constraints.add(key="nvlink.domain", op=job_pb2.CONSTRAINT_OP_NE)
+    exclusion.value.string_value = "dh1-r136-us-east-08a"
+
+    manifest = _build_pod_manifest(request, pod_config())
+
+    assert manifest["spec"]["nodeSelector"] == {"iris.pool": "gb200"}
+    required = manifest["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+    assert required == {
+        "nodeSelectorTerms": [
+            {
+                "matchExpressions": [
+                    {
+                        "key": "ds.coreweave.com/nvlink.domain",
+                        "operator": "NotIn",
+                        "values": ["dh1-r136-us-east-08a"],
+                    }
+                ]
+            }
+        ]
+    }
+
+
 def test_region_constraint_does_not_become_node_selector():
     # Region dispatch is validated against the backend's advertised regions and is
     # never translated to a Node selector: no CoreWeave Node carries `iris.region`.
@@ -746,6 +771,22 @@ def test_region_constraint_matches_backend_without_using_kubernetes_region_label
     assert updates == []
     pod = resources[K8sResource.PODS][0]
     assert "nodeSelector" not in pod["spec"]
+
+
+@pytest.mark.parametrize("regions", [("US-EAST-08A",), (), ("US-EAST-02A", "US-EAST-08A")])
+def test_task_environment_attests_only_the_backends_unambiguous_region(regions):
+    req = make_run_req("/my-job/task-0")
+    req.environment.env_vars["IRIS_WORKER_REGION"] = "forged-region"
+    config = pod_config()
+    config.task_env["IRIS_WORKER_REGION"] = "cluster-env-region"
+    updates, resources = _dispatch(req, config, regions=regions)
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    environment = {entry["name"]: entry.get("value") for entry in pod["spec"]["containers"][0]["env"]}
+    if len(regions) == 1:
+        assert environment["IRIS_WORKER_REGION"] == "US-EAST-08A"
+    else:
+        assert "IRIS_WORKER_REGION" not in environment
 
 
 def test_preferred_region_mismatch_does_not_reject_dispatch():
