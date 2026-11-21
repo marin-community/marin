@@ -550,13 +550,14 @@ class IrisMachine:
         #   decide    reply without the command's exit status, including the WebSocket setup-failure text,
         #             which the Kubernetes client reports after an exec whose upgrade reply was lost
         #                                                    -> unattributed outcome
-        #             guest-timed: ``timer 124``             -> TIMED_OUT with its output so far, machine kept, even
-        #                                                       beside the ``exit`` record of the TERMed command:
-        #                                                       the reporter exits with echo's status, so only the
-        #                                                       timer exits 124
-        #             ``exit`` record                        -> that exit status
-        #             no record, or any other ``timer``      -> unattributed outcome, machine closed; a 137 cannot
-        #                                                       tell the timer's KILL from an independent one
+        #             guest-timed: no ``exit`` record        -> unattributed outcome, machine closed, whatever the
+        #                                                       ``timer``: a 137 cannot tell the timer's KILL from an
+        #                                                       independent one, and uutils exits 124 for a status
+        #                                                       shell that ended before its command
+        #             ``exit`` record and ``timer 124``      -> TIMED_OUT with its output so far, machine kept: the
+        #                                                       reporter exits with echo's status, so only the timer
+        #                                                       exits 124
+        #             ``exit`` record, any other ``timer``   -> that exit status
         #   capture   guest helper failed or sandbox gone    -> GuestHelperFailed / MachineTerminated
         #             any other error                        -> CommandOutcomeUnknown
         #   cleanup   any error or nonzero exit              -> logged; outcome unchanged
@@ -586,16 +587,17 @@ class IrisMachine:
             if command.timeout is not None and timer:
                 records = _completion_records(response.stdout)
                 exit_code, timer_rc = records.get("exit"), records.get("timer")
-                if timer_rc == 124:
-                    exit_code, reason = None, ExitReason.TIMED_OUT
-                elif exit_code is None:
-                    # A cut exec stream or a supervisor killed by something else: the command may still be running.
+                if exit_code is None:
+                    # A cut exec stream, or a status shell that ended before the command did: uutils `timeout` exits
+                    # 124 for any end of its child during the grace, so even a lone `timer 124` may leave it running.
                     state = f"timer {timer_rc}" if timer_rc is not None else f"exit {response.exit_code}"
                     tail = response.stderr.strip()[-300:]
                     detail = f"no completion record ({state})" + (f": {tail}" if tail else "")
                     outcome = await asyncio.to_thread(self._unattributed_outcome, detail, False)
                     await self._close_because(f"command {preview!r} ended with {detail}", outcome)
                     raise outcome
+                if timer_rc == 124:
+                    exit_code, reason = None, ExitReason.TIMED_OUT
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)

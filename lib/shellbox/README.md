@@ -45,9 +45,12 @@ Iris commands and file transfer use the existing `ExecInContainer` RPC and requi
 Iris runs a command that has a timeout under the image's coreutils `timeout`, which sends TERM to the command's
 process group at the limit and KILL 5 seconds later if the command is still running. The command runs in a subshell
 whose parent reports its exit status, so `exit` and `exec` behave as usual; that parent waits through the TERM, and the
-outer shell reports `timeout`'s own exit. A command with neither record, such as one whose exec stream the controller
-cut, is an unknown outcome and the machine closes. A `timeout` exit of 124 returns `TIMED_OUT` with the output so far
-and keeps the machine, including when the command handled the TERM and exited within the grace. A command that ignores
+outer shell reports `timeout`'s own exit. A timeout keeps the machine only when the parent also recorded the command's
+exit: a `timeout` exit of 124 beside that record returns `TIMED_OUT` with the output so far and keeps the machine,
+including when the command handled the TERM and exited within the grace. Without the command's exit record, such as
+when the controller cut the exec stream or the parent ended before its command, the outcome is unknown and the machine
+closes whatever `timeout` returned; uutils `timeout` exits 124 for any end of its child during the grace.
+A command that ignores
 TERM closes the machine at the grace: `timeout` then exits 137, and 137 alone cannot tell the timer's KILL from an
 independent one. GNU `timeout` sends that KILL to the whole group; uutils `timeout`, the default in Ubuntu 26.04,
 sends it to the status shell only, so the command runs on until closing the machine cancels the job and ends its
