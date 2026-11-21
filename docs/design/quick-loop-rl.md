@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 3:10 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 3:23 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,8 +18,8 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 24 more H100 and 24 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
-| Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 17 more H100 and 17 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Two CPU hosts also passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify cross-host native serving and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
@@ -591,7 +591,27 @@ clip range. A local EP2 run on two CPU devices retained exact FP32 router
 and router bias values from a mixed-precision HF export. It completed four
 requests at 128 tokens each including the prompts and rescored all 16 sampled
 targets. The maximum raw score difference was `2.69e-4` and no ratios
-crossed the clip bounds. The production-context result remains open.
+crossed the clip bounds. The pinned 67B accelerator result remains open.
+
+The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
+the 524K-parameter fixture on one four-chip TPUv4 host. Each run used
+four distinct prompts that filled the requested context with 32 generated
+tokens per prompt. An independent decoder checked all token IDs, positions,
+per-layer routes, QB thresholds and the installed checkpoint identity.
+The fused learner scored all 128 targets in each run with zero clip
+crossings and rejected a deliberately misaligned position.
+
+| Context tokens | Replay bytes across four requests | Maximum absolute logprob difference | Generation RPC including cold compilation | Typed fused forward |
+| --- | --- | --- | --- | --- |
+| 8,192 | 854,256 | `6.09e-4` | 44.25 s | 6.19 s |
+| 24,576 | 2,558,232 | `6.11e-4` | 73.73 s | 18.58 s |
+
+The 24,576-token test used 24,544 prompt tokens, a 32-token response and
+local model publication between serial processes. Inventory qualification still
+requires the pinned 67B weights, production response budget, accelerator
+handoff and FA4 scorer.
+[8K TPU context probe][iris-native-8k-context] ·
+[24K TPU context probe][iris-native-24k-context]
 
 On the eight-H100 regional worker, run the probe with the GPU extras
 for `marin-core` and `marin-levanter`.
@@ -771,6 +791,8 @@ arms. [Prior timing comparison][timing]
 [iris-native-tpu-recovery]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-recovery-tpu-20261121-21
 [native-tpu-recovery-results]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.21%2Foutputs.tar.zst
 [native-tpu-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.21%2Ftpu-recovery-source.tar.zst
+[iris-native-8k-context]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-8k-tpu-20261121-22
+[iris-native-24k-context]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-24k-tpu-20261121-23
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
