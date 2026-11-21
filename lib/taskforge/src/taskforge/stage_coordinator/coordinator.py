@@ -47,9 +47,9 @@ The build stage reads ``k`` from the same state and loads the program from
 ``authored/<k>/program.py`` with ``StageFunctions.load_program``. A later author call writes to a
 new directory, so a relaunch resuming at build after a process was killed mid-revision still finds
 the program its ``AUTHORED`` event records. For a program without source, as ``static_author``
-returns, the build stage asks the author again with the revision kept in the state. Such an author
-has to return the same program for the same proposal and revision. Either way, the build stage
-refuses a program whose digest differs from the ``AUTHORED`` event.
+returns, the build stage asks the author again with the context and the revision kept in the state.
+Such an author has to return the same program for the same context, proposal and revision. Either
+way, the build stage refuses a program whose digest differs from the ``AUTHORED`` event.
 
 The layout of the run root is in ``lib/taskforge/README.md``.
 """
@@ -72,6 +72,7 @@ from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
     PROGRAM_MANIFEST_FILE,
+    AuthorContext,
     Revision,
     RevisionKind,
     program_manifest,
@@ -171,6 +172,10 @@ class _Workpiece:
     def authored_dir(self, state: WorkpieceState) -> Path:
         """The directory of the author call made at ``state``, keyed by the build and author failures so far."""
         return self.round_dir(state.round) / AUTHORED_DIR / str(state.build_revisions)
+
+    def author_context(self, state: WorkpieceState) -> AuthorContext:
+        """The context of the author call made at ``state``: the workpiece, its round and its directory."""
+        return AuthorContext(self.workpiece_id, state.round, self.directory)
 
 
 async def run_workpiece(
@@ -284,7 +289,9 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     place at the author stage.
     """
     try:
-        authored = await workpiece.coordinator.stages.author(workpiece.proposal, _revision(workpiece, state))
+        authored = await workpiece.coordinator.stages.author(
+            workpiece.author_context(state), workpiece.proposal, _revision(workpiece, state)
+        )
     except StructuredOutputError as error:
         attrs = _failure_attrs(workpiece, state, error, _error_line(error))
         return WorkpieceEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
@@ -307,7 +314,8 @@ async def _authored_program(workpiece: _Workpiece, state: WorkpieceState) -> RLE
         program = workpiece.coordinator.stages.load_program(source.read_text())
         found = f"{source} holds program {program.digest}"
     else:
-        program = (await workpiece.coordinator.stages.author(workpiece.proposal, _revision(workpiece, state))).program
+        context, revision = workpiece.author_context(state), _revision(workpiece, state)
+        program = (await workpiece.coordinator.stages.author(context, workpiece.proposal, revision)).program
         found = f"the author now returns program {program.digest}"
     if program.digest != state.program_digest:
         raise ValueError(f"{workpiece.workpiece_id}: {found}, not the authored {state.program_digest}")

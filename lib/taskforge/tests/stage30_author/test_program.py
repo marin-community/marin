@@ -208,6 +208,46 @@ def test_the_source_digest_follows_what_the_step_reaches_in_its_module(load_step
     assert edited_nested.source_digest != nested.source_digest
 
 
+EARLIER_STEP = """
+@rl_env_build_step
+async def anchors(context) -> Fixture:
+    return Fixture(path="workspace/anchors.txt")
+"""
+
+STEP_NAMING_A_STEP = """
+@rl_env_build_step
+async def fixtures(context) -> Fixture:
+    assert anchors.name == "anchors"
+    return Fixture(path="workspace/numbers.txt")
+"""
+
+
+def test_a_step_that_names_another_step_digests_that_step_by_its_digest(load_step):
+    """The other step's object is not text: its repr names its function's address, which changes per load."""
+    first = load_step(FIXTURE + EARLIER_STEP + STEP_NAMING_A_STEP)
+    second = load_step(FIXTURE + EARLIER_STEP + STEP_NAMING_A_STEP)
+    edited = load_step(FIXTURE + EARLIER_STEP.replace("anchors.txt", "anchor.txt") + STEP_NAMING_A_STEP)
+
+    assert first.source_digest == second.source_digest
+    assert edited.source_digest != first.source_digest
+
+
+STEP_REACHING_AN_OBJECT = """
+SENTINEL = object()
+
+
+@rl_env_build_step
+async def fixtures(context) -> Fixture:
+    assert SENTINEL is not None
+    return Fixture(path="workspace/numbers.txt")
+"""
+
+
+def test_a_value_with_no_stable_text_is_refused_by_name(load_step):
+    with pytest.raises(TypeError, match="SENTINEL has no text"):
+        load_step(FIXTURE + STEP_REACHING_AN_OBJECT)
+
+
 def test_a_step_returning_a_library_type_digests_its_own_source_only():
     @rl_env_build_step
     async def task(context) -> TaskSpec:
