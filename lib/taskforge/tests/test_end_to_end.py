@@ -1706,13 +1706,7 @@ class ScriptedAuthor(Harness):
 
     @override
     async def run(
-        self,
-        ctx: Context,
-        session: Conversation,
-        client: InferenceClient,
-        tools: Mapping[str, Tool[object]],
-        *,
-        spill: bool = True,
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         self.calls += 1
         return cast(Exit, next(self.results))

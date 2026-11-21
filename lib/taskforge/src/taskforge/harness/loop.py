@@ -50,6 +50,9 @@ class AgenticHarness(Harness):
     output_chars: int
     replay_arguments: Callable[[str], str]
     """The model profile's repair of sampled tool-call arguments, applied before they enter the conversation."""
+    spill: bool = True
+    """Whether a reply longer than ``output_chars`` is saved to a workspace file; a visit without a machine has none,
+    and its replies are clipped instead. The role runner sets it per visit."""
 
     def __post_init__(self) -> None:
         if self.output_chars < 1:
@@ -57,13 +60,7 @@ class AgenticHarness(Harness):
 
     @override
     async def run(
-        self,
-        ctx: Context,
-        session: Conversation,
-        client: InferenceClient,
-        tools: Mapping[str, Tool[object]],
-        *,
-        spill: bool = True,
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         prompt_tokens, empty_completions, degenerate_completions = 0, 0, 0
         turns = sum(message.role == Role.ASSISTANT for message in session.messages)
@@ -138,7 +135,7 @@ class AgenticHarness(Harness):
                     if isinstance(outcome, FinishRequest):
                         return Stopped(StopReason.FINISHED, session, outcome.reason, turns)
                     content = outcome.content
-                    if len(content) > self.output_chars and not spill:  # every reply passes here, diagnostics too
+                    if len(content) > self.output_chars and not self.spill:  # every reply passes here, diagnostics too
                         cut = (
                             f"\n[reply cut at {self.output_chars} characters: "
                             "this session has no machine to hold the rest]"

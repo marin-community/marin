@@ -84,9 +84,4 @@ class Harness(Protocol):
         session: Conversation,
         client: InferenceClient,
         tools: Mapping[str, Tool[object]],
-        *,
-        spill: bool = True,
-    ) -> Exit:
-        """Run ``session`` with ``tools``; a reply longer than the tool-output cap is saved to a workspace file when
-        ``spill`` (the visit has a machine), and clipped to the cap otherwise."""
-        ...
+    ) -> Exit: ...
