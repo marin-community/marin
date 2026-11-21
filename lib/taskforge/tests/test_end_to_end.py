@@ -1372,7 +1372,7 @@ async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    result = published_workpiece(destination)
     assert result.terminal is Terminal.HELD
     assert "wc: not found" in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
 
@@ -1438,7 +1438,7 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    result = published_workpiece(destination)
     assert result.terminal is Terminal.HELD
     assert cause in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
     assert [(workdir / "counter").read_text() for workdir in envs.created] == ["ran\n"] * sandboxes
@@ -1478,7 +1478,7 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    result = published_workpiece(destination)
     assert result.terminal is Terminal.ACCEPTED and result.session is not None
     assert [message.content for message in result.session.messages if message.tool_call_id == "read-proof"] == ["proof"]
     assert len(envs.created) == 2 and (envs.created[1] / "proof.txt").read_bytes() == b"proof"
