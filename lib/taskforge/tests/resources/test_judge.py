@@ -555,7 +555,7 @@ async def test_an_outer_result_replays_only_under_the_judge_profile_that_shaped_
     assert (reward, (solver_calls, judge_calls)) == (clean, calls)
 
 
-# Review 2026-11-21, follow-up 2: a judge provider reporting another model, under the same policy and profile,
+# Review 2026-11-21: a judge provider reporting another model, under the same policy and profile,
 # replayed a grade and a rollout of 1.0 with zero calls where a clean run scored 0.0.
 @pytest.mark.parametrize("role", ["author", "solver", "adversary", "judge"])
 def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role: str) -> None:
@@ -574,7 +574,7 @@ ANSWER = replace(
 )
 
 
-# Review 2026-11-21 (n12 follow-up 3): a context refusal recorded inside the shared inference resource cached the
+# Review 2026-11-21: a context refusal recorded inside the shared inference resource cached the
 # judge's refusal, so after the provider recovered the same grade made no call and raised again.
 @pytest.mark.parametrize("injected", [True, False], ids=["injected client", "provider"])
 async def test_a_judge_context_refusal_is_asked_again_once_the_provider_recovers(injected: bool) -> None:
