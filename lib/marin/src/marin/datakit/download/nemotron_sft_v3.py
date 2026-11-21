@@ -24,6 +24,7 @@ from marin.datakit.chat_normalize import (
     validate_chat_messages,
     validate_tool_definitions,
 )
+from marin.datakit.download.audit_exclusions import audit_exclusion_step, load_excluded_ids
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS, restore_chat_prompts
 from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
@@ -36,6 +37,46 @@ _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
 _RESTORED_CHAT_PARTITION = "chat"
 _SWE_V2_FAMILY = "swe_v2"
 _SWE_V2_AGENTLESS_PARTITION = "agentless"
+_COMPETITIVE_PROGRAMMING_FAMILY = "competitive_programming_v2"
+_COMPETITIVE_PROGRAMMING_REVISION = "778afc98a9e027e10b3cd78020c120e93e142ef2"
+_COMPETITIVE_CPP_PARTITION = "competitive_coding_cpp"
+_COMPETITIVE_PYTHON_PARTITION = "competitive_coding_python"
+_TEXT_TO_SQL_PARTITION = "text_to_sql"
+_UUID_FIELD = "uuid"
+# Row lists from the audit of the pinned competitive-programming revision, keyed by `uuid`. A partition drops the
+# rows on any of its lists. They apply to the pinned source revision only, so a new source revision needs new lists.
+#   exclusions.parquet (C++): the final program fails `g++ -fsyntax-only` under all 36 tested configurations,
+#     GCC 9.5 to 16.2 on Linux and MinGW-w64 GCC 14.2, from C++11 to C++26.
+#   exclusions.parquet (Python): the final program is not valid Python for CPython 3.13, PyPy 3.10, CPython 3.8
+#     or CPython 2.7.
+#   official_tests/failed_rows.parquet: the final program fails the official Codeforces tests of its problem in
+#     every run.
+#   comp_prog_code_contests_taco/<language>/failed_rows.parquet: the row has no official Codeforces tests, and
+#     the final program fails the deepmind/code_contests or BAAI/TACO tests of its problem in every run. A test
+#     set is used only when at least two of its upstream reference solutions pass it.
+#   failed_rows.parquet (text_to_sql): the final SQL fails on the database engine of its dialect.
+#   schema_not_loaded.parquet (text_to_sql): the schema script in the prompt does not load on the database engine
+#     of its dialect, so the final SQL cannot be run.
+COMPETITIVE_PROGRAMMING_EXCLUSION_REVISION = "e6ee081dc5c72a8993566e72fe6f65c9a23f319d"
+_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER = f"pinned_{_COMPETITIVE_PROGRAMMING_REVISION[:8]}"
+COMPETITIVE_PROGRAMMING_EXCLUSION_FILES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        _COMPETITIVE_CPP_PARTITION: (
+            f"comp_prog_cpp/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/exclusions.parquet",
+            "comp_prog_cpp/official_tests/failed_rows.parquet",
+            "comp_prog_code_contests_taco/cpp/failed_rows.parquet",
+        ),
+        _COMPETITIVE_PYTHON_PARTITION: (
+            f"comp_prog_python/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/exclusions.parquet",
+            "comp_prog_python/official_tests/failed_rows.parquet",
+            "comp_prog_code_contests_taco/python/failed_rows.parquet",
+        ),
+        _TEXT_TO_SQL_PARTITION: (
+            f"comp_prog_text_to_sql/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/failed_rows.parquet",
+            f"comp_prog_text_to_sql/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/schema_not_loaded.parquet",
+        ),
+    }
+)
 # The source response uses separate reasoning_content, so this wire-format request conflicts with Marin's template.
 _SWE_V2_AGENTLESS_FORMAT_SUFFIX = (
     "\n\nOutput format requirement: Please put your reasoning tokens in a separate code block, starting with <think> "
@@ -100,14 +141,14 @@ NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, tuple[str, str, Mapping[str, str]]] =
                 "913fd7c803a9378dab0ce4fef80297ce115781f6",
                 {"train": "data/train.jsonl"},
             ),
-            "competitive_programming_v2": (
+            _COMPETITIVE_PROGRAMMING_FAMILY: (
                 "nvidia/Nemotron-SFT-Competitive-Programming-v2",
-                "778afc98a9e027e10b3cd78020c120e93e142ef2",
+                _COMPETITIVE_PROGRAMMING_REVISION,
                 {
                     "exercism": "data/exercism.jsonl",
-                    "text_to_sql": "data/text_to_sql.jsonl",
-                    "competitive_coding_cpp": "data/competitive_programming_cpp_*.jsonl",
-                    "competitive_coding_python": "data/competitive_programming_python_*.jsonl",
+                    _TEXT_TO_SQL_PARTITION: "data/text_to_sql.jsonl",
+                    _COMPETITIVE_CPP_PARTITION: "data/competitive_programming_cpp_*.jsonl",
+                    _COMPETITIVE_PYTHON_PARTITION: "data/competitive_programming_python_*.jsonl",
                 },
             ),
             "instruction_following_chat_v2": (
@@ -346,7 +387,7 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         document = openai_chat_document(
             messages,
             hf_dataset_id,
-            source_id=row.get("uuid") or None,
+            source_id=row.get(_UUID_FIELD) or None,
             chat_template_kwargs=kwargs,
         )
         normalized_messages = [Message.from_dict(message) for message in document["messages"]]
@@ -398,7 +439,9 @@ def download_nemotron_sft_v3_step(family: str) -> StepSpec:
     )
 
 
-def _transform_chat(input_path: str, output_path: str, *, family: str, partition_name: str) -> None:
+def _transform_chat(
+    input_path: str, output_path: str, *, family: str, partition_name: str, excluded_uuids: frozenset[str]
+) -> None:
     _, _, partitions = NEMOTRON_SFT_V3_REPOSITORIES[family]
     file_glob = partitions[partition_name]
     files = Dataset.from_files(prefix_join(input_path, file_glob))
@@ -409,12 +452,14 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
     else:
         rows = files.load_jsonl()
 
-    pipeline = rows.flat_map(
-        lambda row: row_to_chat_doc(row, family=family, partition_name=partition_name)
-    ).write_parquet(
-        prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
-        schema=SOURCE_CHAT_SCHEMA,
-        skip_existing=True,
+    pipeline = (
+        rows.filter(lambda row: row.get(_UUID_FIELD) not in excluded_uuids)
+        .flat_map(lambda row: row_to_chat_doc(row, family=family, partition_name=partition_name))
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
+        )
     )
     ZephyrContext(
         name=f"nemotron-sft-chat-{family}-{partition_name}", resources=ResourceConfig(cpu=1, ram="16g")
@@ -422,12 +467,37 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
+    deps = [download]
+    exclusions = None
+    exclusion_files: tuple[str, ...] = ()
+    if family == _COMPETITIVE_PROGRAMMING_FAMILY:
+        exclusion_files = COMPETITIVE_PROGRAMMING_EXCLUSION_FILES.get(partition_name, ())
+    if exclusion_files:
+        exclusions = audit_exclusion_step(
+            f"raw/nemotron_sft_v3_audit_exclusions/{family}/{partition_name}",
+            revision=COMPETITIVE_PROGRAMMING_EXCLUSION_REVISION,
+            exclusion_files=exclusion_files,
+        )
+        deps.append(exclusions)
+
+    def transform(output_path: str) -> None:
+        excluded_uuids = frozenset()
+        if exclusions:
+            excluded_uuids = load_excluded_ids(
+                exclusions.output_path, exclusion_files=exclusion_files, id_column=_UUID_FIELD
+            )
+        _transform_chat(
+            download.output_path,
+            output_path,
+            family=family,
+            partition_name=partition_name,
+            excluded_uuids=excluded_uuids,
+        )
+
     return StepSpec(
         name=f"processed-chat/nemotron_sft_v3/{family}/{partition_name}",
-        deps=[download],
-        fn=lambda output_path: _transform_chat(
-            download.output_path, output_path, family=family, partition_name=partition_name
-        ),
+        deps=deps,
+        fn=transform,
         hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
     )
 
