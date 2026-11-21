@@ -271,8 +271,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   that are not UTF-8 are named opaque, with no parts). A reply to a session without a machine, a loop
   diagnostic as much as a tool's output, is clipped to `tools.output_chars` where the harness delivers it,
   so nothing spills to a file it cannot read; a cap below one evidence page (240) is refused when the
-  config is built. Everything the reviewer sees, the opening's task manifest and the trial summaries
-  included, renders canonically (sorted JSON, integral floats as integers, tool-call ids kept), and the
+  config is built. Everything the reviewer sees, the opening's task manifest, the trial summaries and the
+  task prompt's historical tool calls included, renders canonically (sorted JSON, integral floats as integers, tool-call ids kept), and the
   opening always ends with the index's digest outside the editable template, so a resumed round, cold or
   warm, replays its review only when the evidence is unchanged. Findings have one of four kinds (`ambiguous_prompt`, `grader_defect`,
   `answer_leak`, `environment_problem`), a description and edit with text beyond whitespace, and citations
