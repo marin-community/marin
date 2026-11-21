@@ -13,8 +13,11 @@ import jax
 import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
+from jax import lax
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+
+_SEQUENTIAL_UPDATE_TOKEN_LIMIT = 8
 
 
 class PageCache(eqx.Module):
@@ -180,6 +183,14 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
         # Match the cache's trailing dimensions before selecting a token and inserting page/slot axes.
         update_spec = cache_sharding.spec.update(partitions=(None, *cache_sharding.spec[2:]))
         kv_ev = jax.reshard(kv_ev, cache_sharding.update(spec=update_spec))
+
+    if t_pages.shape[0] <= _SEQUENTIAL_UPDATE_TOKEN_LIMIT:
+        # On TPU, a scatter can reformat the whole cache even for one decode token.
+        def update_token(i, cache):
+            update = kv_ev[i][None, None, :, :]
+            return lax.dynamic_update_slice(cache, update, (t_pages[i], t_slots[i], 0, 0))
+
+        return lax.fori_loop(0, K, update_token, kv_pages)
 
     rows = jnp.arange(t_pages.shape[0], dtype=jnp.int32)
     active = rows < K

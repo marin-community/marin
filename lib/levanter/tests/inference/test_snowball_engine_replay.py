@@ -83,6 +83,15 @@ def _requests():
     ]
 
 
+def test_unrolled_decode_preserves_snowball_generation(serving_model):
+    requests = _requests()
+    scanned = _engine(serving_model, 3).generate(requests)
+    model = dataclasses.replace(
+        serving_model, _config=dataclasses.replace(serving_model.config, inference_decode_implementation="unrolled")
+    )
+    assert _engine(model, 3).generate(requests) == scanned
+
+
 @eqx.filter_jit
 def _decode(model, cache, tokens, info, positions):
     return model.decode(tokens, cache, info, positions)

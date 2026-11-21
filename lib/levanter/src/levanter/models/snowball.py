@@ -483,6 +483,7 @@ class SnowballConfig(HFCompatConfig):
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
     inference_attention_implementation: PagedAttentionImplementation | None = None
+    inference_decode_implementation: Literal["scan", "unrolled"] = "scan"
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -1950,15 +1951,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
-        if expert_size > 1:
-            experts = dataclasses.replace(
-                stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
-            )
-            stacked = eqx.tree_at(lambda b: b.mlp.expert_mlp, stacked, experts)
         cache_axes = kv_cache.kv_pages.axes[1:]
-        long_schedule = long_attention_layer_mask(num_layers)
+
+        def inference_block(block):
+            if expert_size == 1:
+                return block
+            experts = dataclasses.replace(
+                block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
+            )
+            return eqx.tree_at(lambda b: b.mlp.expert_mlp, block, experts)
 
         def layer_step(carry, layer_data):
             x, pages = carry
@@ -1966,8 +1968,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             layer_pages = jax.lax.dynamic_index_in_dim(pages, layer, keepdims=False)
             cache = KvPageCache(hax.named(layer_pages, cache_axes))
             attn_in = block.attn_gated_norm(block.rms_attn(x))
-            if num_layers == 1:
-                attn_out, cache = block.attn.decode(attn_in, cache, batch_info, pos_ids.array, use_long=True)
+            if isinstance(use_long, bool) or num_layers == 1:
+                attn_out, cache = block.attn.decode(
+                    attn_in, cache, batch_info, pos_ids.array, use_long=True if num_layers == 1 else use_long
+                )
             else:
                 attn_out, cache = jax.lax.cond(
                     use_long,
@@ -1984,9 +1988,21 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             mlp_out, capture = block.mlp(mlp_in, token_valid=token_valid, capture_routes=True)
             return (x + (mlp_out + block.shared(mlp_in)), pages), capture
 
-        (hidden, cache_pages), stacked_captures = jax.lax.scan(
-            layer_step, (hidden, kv_cache.kv_pages.array), (jnp.arange(num_layers), stacked, long_schedule)
-        )
+        initial = (hidden, kv_cache.kv_pages.array)
+        if self.config.inference_decode_implementation == "unrolled" and sample_indices is None and not capture_routes:
+            state = initial
+            for layer, block in enumerate(self.transformer.blocks):
+                use_long = (layer + 1) % _LONG_ATTENTION_INTERVAL == 0 or layer == num_layers - 1
+                state, _ = layer_step(state, (layer, inference_block(block), use_long))
+            hidden, cache_pages = state
+            stacked_captures = None
+        else:
+            stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
+            (hidden, cache_pages), stacked_captures = jax.lax.scan(
+                layer_step,
+                initial,
+                (jnp.arange(num_layers), inference_block(stacked), long_attention_layer_mask(num_layers)),
+            )
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         caches = StackedKvPageCache(hax.named(cache_pages, kv_cache.kv_pages.axes))
         if sample_indices is not None:

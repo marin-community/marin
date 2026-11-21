@@ -31,6 +31,7 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | [Native, vectorized prefill and clean shutdown](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v6) | 3 | 1,602 | 7.75 | 9.11 |
 | [Native, compact sliding-window reads](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v7) | 3 | 1,602 | 8.78 | 10.50 |
 | [Native prototype, stacked KV and fused prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v8) | 4 | 1,917 | 9.13 | 12.10 |
+| [Native prototype, unrolled decode and small KV updates](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v9) | 8 | 2,905 | 16.14 | 26.85 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -79,6 +80,13 @@ tokens and 594 output tokens, time to first token dropped from 21.77 to 9.70
 seconds, and request latency from 77.56 to 59.05 seconds.
 [Kernel precision test](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v3-v5p-20261121-v2)
 
+Unrolling the decode layers gave the compiler direct access to each layer's
+expert weights. Dynamic slice updates for up to eight KV writes also removed the
+small-batch scatter path. Together these changes raised active decode from 12.10
+to 26.85 tokens/s/user. The 594-output-token turn completed in 30.81 seconds
+with an 8.13-second time to first token. The full 67B checkpoint completed the
+diagnostic on the same v5p-8 configuration. [Unrolled decode job](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v9)
+
 ### Reproduce the native diagnostic
 
 Run from the inference branch and point `iris_client` and `iris_config` to
@@ -97,8 +105,11 @@ workload=gs://marin-us-central1/tmp/ttl=30d/agentx-workload/95f345f596f40f84b64c
   --weights "$weights" --workload "$workload"
 ```
 
-Use `--profile-decode` to capture short and long warmed decode after the
-measurement. To rebuild an expired workload receipt on a CPU worker, run
+Use `--decode-layers unrolled` to select the unrolled decode path and
+`--profile-decode` to capture short and long warmed decode after the
+measurement. The fused attention prototypes ran from experimental Iris bundles
+with a locally adapted kernel from the pinned vLLM TPU fork. To rebuild an
+expired workload receipt on a CPU worker, run
 `python -m experiments.evaluation.knotmeter.workload` with the
 `experiments/evaluation/knotmeter/snowball-v01-tpu-64k.yaml` series, a fresh
 local output directory, and a region-local `--cache-root`. It writes the

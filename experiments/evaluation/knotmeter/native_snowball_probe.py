@@ -75,6 +75,7 @@ def main() -> None:
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32"), default="tpu_fp32")
+    parser.add_argument("--decode-layers", choices=("scan", "unrolled"), default="scan")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -112,7 +113,11 @@ def main() -> None:
         model_config = converter.default_config
         if not isinstance(model_config, SnowballConfig):
             raise TypeError(f"Expected a Snowball checkpoint, got {type(model_config).__name__}")
-        model_config = dataclasses.replace(model_config, inference_attention_implementation=args.attention)
+        model_config = dataclasses.replace(
+            model_config,
+            inference_attention_implementation=args.attention,
+            inference_decode_implementation=args.decode_layers,
+        )
         tokenizer = load_tokenizer(series["tokenizer"], revision=series["tokenizer_revision"])
         with trainer.use_device_mesh():
             model = converter.load_pretrained(
@@ -143,6 +148,7 @@ def main() -> None:
             "max_pages": service.max_pages,
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,
+            "decode_layers": args.decode_layers,
             "load_seconds": load_seconds,
             "command": command,
         }
