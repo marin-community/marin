@@ -10,7 +10,9 @@ The failure occurred at the import-readiness barrier, before Adam allocation.
 The owned-buffer donation fix passes local checks and independent review, but
 does not make the full import fit. A follow-up aligns imported tensors one at
 a time to reduce collective scratch; its CPU checks pass and H100 fit remains
-unverified.
+unverified. Fresh BATCH smoke `2026.11.21.7` is submitted from
+`8f19c196456e2f600c0e4edb21f4339c0a8d5129`. At 14:43 PST the CPU coordinator
+was building; GPU allocation had not yet been verified.
 Native Snowball initialization, updates, publication, generation,
 and checkpoint continuation remain unverified on H100. The matched comparison
 is gated on smoke acceptance.
@@ -217,6 +219,12 @@ update/checkpoint/restart cases pass on pinned JAX/JAXLIB `0.11.0`. These tiny
 compiler measurements establish a bounded-memory mechanism; they do not predict
 the full H100 peak or prove that the model fits.
 
+Fresh smoke `2026.11.21.7` uses coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.7-coordinator-e1479295`.
+Its actual priority is BATCH, and its accepted source archive matches all 4,582
+frozen entries, including 42 required runtime files. This is a new import-fit
+and end-to-end acceptance attempt; no hardware acceptance gate has passed yet.
+
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch
@@ -239,7 +247,7 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.6 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.7 \
   --learner levanter --steps 2 --verify-publication \
   --validate-native-checkpoint --coordinator-route regional --run
 ```
