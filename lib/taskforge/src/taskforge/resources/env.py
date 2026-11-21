@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.backends.iris.machine import IrisMachine
+from shellbox.backends.iris.machine import IrisMachine, never_connected
 from shellbox.machine import (
     Command,
     CommandOutcomeUnknown,
@@ -240,11 +240,18 @@ class ShellboxEnv(_RecordedEnv):
 
     @override
     async def write(self, path: PurePosixPath, data: bytes) -> None:
-        async with self._operation(path):
-            with TemporaryDirectory() as directory:
-                source = Path(directory) / "file"
-                source.write_bytes(data)
-                await self.machine.upload(source, str(self.workdir / path))
+        try:
+            async with self._operation(path):
+                with TemporaryDirectory() as directory:
+                    source = Path(directory) / "file"
+                    source.write_bytes(data)
+                    await self.machine.upload(source, str(self.workdir / path))
+        except Transient as issue:
+            # A transfer helper whose reply was lost may still truncate or append after a resend rewrote the file,
+            # so only a request that never connected is resent here; a late helper cannot reach a fresh sandbox.
+            if never_connected(issue):
+                raise
+            raise Restart(f"write outcome unknown: {issue}") from issue
         self._record_write(path, data)
 
     @override

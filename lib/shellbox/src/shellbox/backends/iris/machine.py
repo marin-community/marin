@@ -138,7 +138,7 @@ def _raise_if_unreachable(error: BaseException) -> None:
         raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
 
 
-def _never_connected(error: BaseException) -> bool:
+def never_connected(error: BaseException) -> bool:
     """The request failed to open a connection, so the controller never received it."""
     cause: BaseException | None = error
     while cause is not None:
@@ -467,7 +467,7 @@ class IrisMachine:
             except MachineTerminated:
                 raise  # The machine closed before admitting the exec.
             except Exception as error:
-                if _exec_was_refused(error) or _never_connected(error):
+                if _exec_was_refused(error) or never_connected(error):
                     raise MachineUnavailable(f"Iris exec was never sent: {error}") from error
                 raise await asyncio.to_thread(self._unattributed_outcome, repr(error), False) from error
             if (failure := _command_failure(response)) is not None:
