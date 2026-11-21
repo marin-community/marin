@@ -399,10 +399,11 @@ frozen H100 job.
 ### 2. Close the smallest native RL loop
 
 Port the Snowball paged model/cache path, engine capture, learner replay and
-fixture arithmetic in reviewable slices onto current `main`. Reconcile
-Snowball attention, model and loss changes with the learner branch. The
-snapshot is 766 commits behind the `main` used for this design, and includes
-unrelated Hero and Iris changes. [Source comparison][snowball-compare]
+fixture arithmetic onto `main` in reviewable slices. Reconcile Snowball
+attention, model and loss changes with the learner branch. The reviewed
+Snowball snapshot `5992abd052` was 766 commits behind baseline
+`2bf3f721c9` and included unrelated Hero and Iris changes.
+[Source comparison][snowball-compare]
 
 The bounded run on source `158bd86404` generated the first group and
 scored its replay on four TPUv4 chips. At the first raw logprob comparison,
