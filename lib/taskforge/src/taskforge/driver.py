@@ -161,7 +161,11 @@ async def one(args: argparse.Namespace) -> None:
         raise
     finally:
         if checkpoints.stopped is None:
-            await checkpoints.finish(fold(tuple(record.event for record in log.records)), wp)
+            # A terminal head needs the workpiece that reached it. A cancelled run holds an earlier value, even after
+            # its terminal event is durable, so it publishes a checkpoint that the next launch resumes by replay.
+            status = fold(tuple(record.event for record in log.records))
+            matched = wp.terminal is not None and (status.round, status.terminal) == (wp.round, wp.terminal)
+            await checkpoints.finish(status if matched else Status(), wp)
 
 
 async def run(args: argparse.Namespace) -> None:

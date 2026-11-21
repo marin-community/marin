@@ -1014,6 +1014,47 @@ async def test_a_final_publication_that_keeps_failing_exits_and_a_relaunch_resum
     assert executions(first) == executions(relaunch) == (len(script()), 2)
 
 
+# Review 2026-11-20: the terminal event was durable but the driver finalised its initial workpiece, publishing an
+# accepted head with no submission that every later driver skipped.
+async def test_cancellation_while_the_terminal_event_is_written_leaves_a_resumable_head(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reached, release, draining = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    write, drain = JsonlSink.write, Context.drain
+
+    async def paused(sink: JsonlSink, records: Sequence[Record]) -> None:
+        if any(isinstance(r.event, StageCompleted) and r.event.terminal is Terminal.ACCEPTED for r in records):
+            reached.set()
+            await release.wait()
+        await write(sink, records)
+
+    async def root_drain(ctx: Context) -> None:
+        draining.set()
+        await drain(ctx)
+
+    monkeypatch.setattr(JsonlSink, "write", paused)
+    monkeypatch.setattr(Context, "drain", root_drain)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    launch = asyncio.create_task(driver.one(driver_args))
+    await reached.wait()
+    await draining.wait()
+    launch.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await launch
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published(destination).head.status == Status()
+    assert fold([record.event for record in history(destination)]).terminal is Terminal.ACCEPTED
+    monkeypatch.setattr(JsonlSink, "write", write)
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    accepted = published_workpiece(destination)
+    assert published(destination).head.status.terminal is accepted.terminal is Terminal.ACCEPTED
+    assert accepted.submission is not None
+    assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
 class TakenOverWhileBlocked(FakeInference):
     """On the third call another writer takes the root; the call then blocks like a long model call."""
 
