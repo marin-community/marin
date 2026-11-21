@@ -97,6 +97,6 @@ def agentic_preset(preset: Preset, *, name: str, limits: RecipePatch) -> Preset:
         tasks_input="required",
         batch_mix=_BATCH_MIX,
         harbor=HARBOR_EVALUATION if preset.evaluations else None,
-        then=task_health_step,
+        then=lambda run: (task_health_step(run),),
         recipe=replace(preset.recipe, config=config.replace(context_budget=budget.replace(max_turns=128))),
     )

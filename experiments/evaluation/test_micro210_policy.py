@@ -9,12 +9,19 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-from marin.execution.artifact import read_record
+from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, read_record, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import PREPARED_INPUTS, PREPARED_INPUTS_VERSION, micro210_step, run_micro210
+from experiments.evaluation.micro210 import (
+    PREPARED_INPUTS,
+    PREPARED_INPUTS_VERSION,
+    micro210_policy_step,
+    micro210_step,
+    run_micro210,
+)
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
@@ -23,6 +30,7 @@ from experiments.evaluation.micro210_policy import (
     read_micro210_policy,
 )
 from tests.rl.micro210_fixture import policy_fixture_reference
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 
 @pytest.fixture(autouse=True)
@@ -206,3 +214,36 @@ def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
     prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
     assert prepared.adopt_source == PREPARED_INPUTS
     assert re.fullmatch(r"hf://datasets/open-athena/micro210-prepared-tasks@[0-9a-f]{40}", PREPARED_INPUTS)
+
+
+def test_rl_policy_evaluation_binds_the_selected_export_once_the_run_completes(tmp_path):
+    rl_output = tmp_path / "rl"
+    export = rl_output / "export" / "global_step_7"
+    export.mkdir(parents=True)
+    manifest = b'{"files": ["model.safetensors"]}'
+    (export / MODEL_MANIFEST_FILENAME).write_bytes(manifest)
+    rl_run = ArtifactStep.adopt("tests/rl-run", "2026.11.20.1", str(rl_output), kind=SkyRLRun)
+    step = micro210_policy_step(rl_run)
+    assert rl_run in step.deps
+
+    result = SkyRLRun(
+        path=str(rl_output),
+        hf_model_uri=str(export),
+        global_step=7,
+        tokenizer_uri="fixture/tokenizer",
+        tokenizer_revision="c" * 40,
+        checkpoint_root=str(rl_output / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(rl_output / "terminal.json"),
+        iris_job_id="/test/rl-run",
+    )
+    record = ArtifactRecord(result_type=result_type_name(SkyRLRun), result=result.result_payload())
+    (rl_output / RECORD_FILENAME).write_text(record.model_dump_json())
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path / "evaluation"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    assert config.evaluation.model == Micro210Model(
+        str(export), "sha256:" + hashlib.sha256(manifest).hexdigest(), "fixture/tokenizer", "c" * 40
+    )
+    assert yaml.safe_load(config.skyrl.launch_config_yaml)["inputs"]["model"]["uri"] == str(export)
+    assert config.evaluation.run_id == "evaluation/micro210/tests/rl-run@2026.11.20.1"
