@@ -522,7 +522,7 @@ class TaskRolloutSpec(BaseModel):
     so a spec loaded from them has none. Without it, the engine reads ``VERIFYIT_JUDGE_BASE_URL`` and
     ``VERIFYIT_JUDGE_API_KEY``."""
     decision_model: SkipJsonSchema[DecisionModelConnection | None] = Field(default=None, exclude=True)
-    """The caller's decision model, which grades a decision_model grader; serialized like ``judge_connection``."""
+    """The caller's decision model for a decision_model grader. Dumps, JSON, its schema, and pickle leave it out."""
     limits: RolloutLimits
     trace: TraceMode = TraceMode.EXACT_TOKENS
 

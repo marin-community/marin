@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a ``decision_model`` grader through the caller's read; it shares nothing with the LLM judge path."""
+"""Grade a ``decision_model`` grader by the level that one caller-supplied read returns for the final answer."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
