@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 6:30 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 7:04 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ protocol for internal rollout and learner traffic.
 | 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. | Submit the staged rerun once the inventory task service credentials are authorized for the CoreWeave job. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
+| Native inventory backend | Both inventory presets pass regional read-only plans. The standalone probe loaded the pinned 67B model on eight H100s and ran out of memory at full-size prefill. A query-tiled reference passed CPU parity tests at the same token capacity. | Verify full generation and fused replay on H100, then run the held-learner serving comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -616,8 +616,11 @@ capacity. The long-prompt case uses 24,544 prompt tokens and 32 generated
 tokens for a shorter diagnostic.
 
 The probe checks the regional completion manifest, config and shard index
-against their recorded hashes. It checks the loaded parameter count and
-stored FP32 router and QB dtypes before applying the serving compute cast.
+against their recorded hashes. Safetensors headers from the pinned export
+show BF16 storage for all 26 router weights and all 26 QB biases. Record
+those storage dtypes and apply the inventory learner's exact promotion to
+FP32 for router and QB compute. Check the loaded parameter count and the
+actual compute dtypes.
 It records the weight manifest identity separately from the tokenizer
 revision. The paged generator uses its serving precision, and the FA4
 learner forward uses the learner's launch precision and fused projection.
@@ -636,6 +639,28 @@ control preserved FP32 router and QB values from a mixed-precision export,
 rejected rounded BF16 routing weights and mismatched metadata, and scored
 all targets for two prompt/response splits. The pinned 67B accelerator
 result remains open.
+
+The first eight-H100 attempt verified the pinned weight metadata and
+stopped during model loading when XLA's per-fusion autotuning cache used
+an S3 path. A retry used a worker-local cache and progressed through
+deserialization. It stopped at the probe's original FP32 storage assertion.
+[Initial 67B attempt][iris-native-67b-first] ·
+[Worker-local cache retry][iris-native-67b-local-cache]
+
+The precision-corrected attempt loaded all 67,078,882,816 parameters in
+129.65 seconds and verified FP32 router and QB compute weights. Its first
+prefill requested a 44.01 GiB allocation and failed with a 59.39 GiB
+allocator limit per H100. A retry with the inventory serving allocator
+fraction of 90% measured a 71.26 GiB limit and 24.66 GiB resident per GPU
+before prefill. The same allocation still failed. The reference attention
+now has a staged version that processes queries in tiles while keeping the
+full prompt capacity and each query's page order. CPU compilation reported
+30.94 GiB of temporary memory for the original attention function and
+1.97 GiB with query tiling at the same prefill shape. That measures the
+individual CPU executable. Generation and fused scoring at the full shape
+remain open on H100.
+[67B model-load and prefill attempt][iris-native-67b-router] ·
+[90% allocator attempt][iris-native-67b-cap90]
 
 The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
 the 524K-parameter fixture on one four-chip TPUv4 host. Each run used
@@ -917,6 +942,10 @@ arms. [Prior timing comparison][timing]
 [iris-native-tool-serial-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-serial-tpu-20261121-29
 [iris-native-tool-serial-retry]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-serial-tpu-20261121-30
 [iris-native-tool-split-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-split-tpu-20261121-33
+[iris-native-67b-first]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121
+[iris-native-67b-local-cache]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-local-cache
+[iris-native-67b-router]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-router
+[iris-native-67b-cap90]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-cap90
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
