@@ -702,6 +702,9 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
 
 
 def _download_request(source: RecipeSource, ctx: StepContext) -> DownloadRequest:
+    if isinstance(source, HfSource):
+        # A prepared download can be shared by recipes with different row readers.
+        source = replace(source, read=None)
     return DownloadRequest(source, ctx.output_path)
 
 
