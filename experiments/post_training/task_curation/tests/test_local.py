@@ -122,7 +122,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
         assert environment.packages_lock == planned_lock_url(source.grader)
     catalog = ReadView(str(output / "catalog"))
     recorded = list(catalog.iter_rows("sources"))
-    successful = next(row for row in recorded if row["atlas_id"] == f"fixture:{source.name}")
+    successful = next(row for row in recorded if row["atlas_id"] == f"Marin:{source.name}")
     assert successful["processed_rows"] == 1
     assert successful["admitted"] is None
     assert successful["verification_status"] is None
