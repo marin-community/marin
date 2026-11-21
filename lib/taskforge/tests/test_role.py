@@ -18,9 +18,11 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge.effects.context import Context
 from taskforge.effects.events import ScopeEntered
 from taskforge.effects.log import EventLog
+from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Exit, Harness, Stopped, StopReason, Tool, ToolResult
 from taskforge.harness.role import Answer, Fresh, Visit, sitting
 from taskforge.harness.tools.base import ValidatedTool
+from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.workpiece import Conversation
 from taskforge.policy import load_policy
@@ -131,3 +133,30 @@ async def test_an_injected_four_argument_harness_runs_unchanged(machine: Environ
     async with sitting(ctx, role, Visit("review", "visit", machine), bundle) as session:
         outcome = await session(Fresh("system", "user"))
     assert isinstance(outcome, Stopped) and outcome.detail == "done" and len(harness.sessions) == 1
+
+
+class Constructed(AgenticHarness):
+    """An injected stock-harness subclass with its own constructor, which ``dataclasses.replace`` cannot rebuild."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(262144, LLMPolicy(), "continue", 20000, lambda arguments: arguments)
+        object.__setattr__(self, "detail", detail)
+
+    @override
+    async def run(
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+    ) -> Exit:
+        return Stopped(StopReason.FINISHED, session, self.__dict__["detail"])
+
+
+@pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
+async def test_an_injected_stock_harness_subclass_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
+    """Review 2026-11-21 (n11 follow-up 3): configuring every ``AgenticHarness`` per visit rebuilt an injected subclass
+    through ``dataclasses.replace``, which called its own constructor with the stock fields and raised. Only the exact
+    stock class is configured."""
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), role_inference={"adversary": FakeInference(())})
+    role = replace(build_config(load_policy(DEFAULTS_DIR), {}).adversary, harness=Constructed("its own"))
+    async with sitting(ctx, role, Visit("review", "visit", machine), bundle) as session:
+        outcome = await session(Fresh("system", "user"))
+    assert isinstance(outcome, Stopped) and outcome.detail == "its own"

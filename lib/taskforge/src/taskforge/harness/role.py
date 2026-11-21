@@ -129,7 +129,8 @@ async def sitting(
             tools = {**role.tools, **visit.tools}
 
             harness = role.harness
-            if isinstance(harness, AgenticHarness):  # the stock loop spills only where the visit has a machine
+            if type(harness) is AgenticHarness:  # the stock loop spills only where the visit has a machine; any
+                # injected harness, a subclass included, runs as it was built
                 harness = replace(harness, spill=env is not None)
 
             async def session(opening: Opening) -> Exit:
