@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import httpx
 from fray.current_client import current_client
@@ -87,49 +88,58 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
     stage_index(config)
     logger.info("Retrieval index verified; starting pinned backend")
     port = context.get_port(RETRIEVAL_PORT_NAME)
-    address = f"http://{info.advertise_host}:{port}"
     state_path = Path(config.root) / "service-state.json"
     state_path.write_text(config.state.model_dump_json())
-    command = [
-        config.backend_python,
-        str(Path(__file__).with_name("retrieval_backend.py")),
-        "--root",
-        config.root,
-        "--state",
-        str(state_path),
-        "--port",
-        str(port),
-        "--concurrency",
-        str(config.max_concurrent_requests),
-    ]
-    # The immutable image interpreter owns source dependencies; the control venv must not replace them.
-    with subprocess.Popen(command, env={**os.environ, "PYTHONPATH": "/opt/offline-search"}) as process:
-        try:
-            with httpx.Client(timeout=5, trust_env=False) as client:
-                while True:
-                    if process.poll() is not None:
-                        raise RuntimeError("Pinned retrieval backend ended before readiness")
+    with TemporaryDirectory(prefix="retrieval-ready-") as temporary:
+        port_file = Path(temporary) / "port"
+        command = [
+            config.backend_python,
+            str(Path(__file__).with_name("retrieval_backend.py")),
+            "--root",
+            config.root,
+            "--state",
+            str(state_path),
+            "--port",
+            str(port),
+            "--port-file",
+            str(port_file),
+            "--concurrency",
+            str(config.max_concurrent_requests),
+        ]
+        # The immutable image interpreter owns source dependencies; the control venv must not replace them.
+        with subprocess.Popen(command, env={**os.environ, "PYTHONPATH": "/opt/offline-search"}) as process:
+            try:
+                with httpx.Client(timeout=5, trust_env=False) as client:
+                    while True:
+                        if process.poll() is not None:
+                            raise RuntimeError("Pinned retrieval backend ended before readiness")
+                        if not port_file.exists():
+                            time.sleep(0.1)
+                            continue
+                        # K8s requests port zero; the server reports the kernel's actual bound port.
+                        port = int(port_file.read_text())
+                        try:
+                            response = client.get(f"http://127.0.0.1:{port}{HEALTH_PATH}")
+                        except httpx.ConnectError:
+                            time.sleep(0.1)
+                            continue
+                        response.raise_for_status()
+                        if response.json()["state"] != config.state.model_dump(mode="json"):
+                            raise ValueError("Pinned retrieval backend health differs")
+                        break
+                address = f"http://{info.advertise_host}:{port}"
+                logger.info("Retrieval backend healthy at %s; registering %s", address, config.endpoint_name)
+                with context.registry.registered(config.endpoint_name, address):
+                    if process.wait() != 0:
+                        raise RuntimeError("Pinned retrieval backend failed")
+            finally:
+                if process.poll() is None:
+                    process.terminate()
                     try:
-                        response = client.get(f"http://127.0.0.1:{port}{HEALTH_PATH}")
-                    except httpx.ConnectError:
-                        time.sleep(0.1)
-                        continue
-                    response.raise_for_status()
-                    if response.json()["state"] != config.state.model_dump(mode="json"):
-                        raise ValueError("Pinned retrieval backend health differs")
-                    break
-            logger.info("Retrieval backend healthy; registering %s", config.endpoint_name)
-            with context.registry.registered(config.endpoint_name, address):
-                if process.wait() != 0:
-                    raise RuntimeError("Pinned retrieval backend failed")
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
 
 
 @dataclass(frozen=True)

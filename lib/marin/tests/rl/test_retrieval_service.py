@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 from contextlib import ExitStack
 from dataclasses import replace
@@ -24,6 +25,7 @@ from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
+from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 from rolloutengine.harness.retrieval_service import OpenResearcherServiceProvider
@@ -37,7 +39,12 @@ from taskcompendium.models import AnswerType, CommandSemantics, EnvironmentRequi
 from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, OpenResearcherState
 
 from marin.rl.retrieval_backend import RetrievalServer, retrieval_handler
-from marin.rl.retrieval_service import RetrievalServiceConfig, RetrievalServiceLaunch, retrieval_service
+from marin.rl.retrieval_service import (
+    RetrievalServiceConfig,
+    RetrievalServiceLaunch,
+    retrieval_service,
+    run_retrieval_service,
+)
 
 
 class FixtureIndex:
@@ -248,6 +255,102 @@ def test_service_child_preserves_credentials_and_region_and_resolves_its_run_end
         assert not endpoints
     finally:
         set_job_info(previous)
+
+
+@pytest.mark.timeout(10)
+def test_kubernetes_service_registers_the_actual_kernel_assigned_port(monkeypatch, tmp_path):
+    # The image dependencies are external to this control-plane regression.
+    package = tmp_path / "image" / "browsecomp"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "tool.py").write_text("from contextlib import nullcontext\nsource_diagnostics = nullcontext\n")
+    (package / "retrieval.py").write_text(
+        "class BM25Searcher:\n"
+        "    def __init__(self, args): pass\n"
+        "    def search(self, query, k):\n"
+        "        return [{'docid': '7385', 'score': 1.0, 'text': 'source document'}]\n"
+        "class AutoTokenizer:\n"
+        "    @classmethod\n"
+        "    def from_pretrained(cls, path, **kwargs): return cls()\n"
+        "    def encode(self, text, **kwargs): return text.split()\n"
+        "    def decode(self, tokens, **kwargs): return ' '.join(tokens)\n"
+    )
+    interpreter = tmp_path / "image-python"
+    interpreter.write_text(
+        f"#!{sys.executable}\nimport os, sys\n"
+        f"os.environ['PYTHONPATH'] = {str(package.parent)!r}\n"
+        "os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n"
+    )
+    interpreter.chmod(0o755)
+    manifest = b"[]\n"
+    index_uri = "s3://marin-us-east-08a/retrieval-port-fixture"
+
+    def read_manifest(path):
+        assert str(path) == index_uri + "/index-manifest.json"
+        return manifest
+
+    monkeypatch.setattr(StoragePath, "read_bytes", read_manifest)
+    config = RetrievalServiceConfig(
+        state=OpenResearcherState(
+            implementation_revision="a" * 40,
+            corpus_revision="8367703babe6e080899a48782f365c284c32b668",
+            index_manifest_sha256=hashlib.sha256(manifest).hexdigest(),
+            tokenizer_revision="c" * 40,
+            top_k=5,
+            snippet_max_tokens=512,
+            include_get_document=True,
+        ),
+        index_uri=index_uri,
+        region="US-EAST-08A",
+        root=str(tmp_path / "service"),
+        backend_python=str(interpreter),
+        max_concurrent_requests=4,
+        endpoint_name="retrieval",
+    )
+    observed = []
+
+    class ProbeFinished(RuntimeError):
+        pass
+
+    class ControllerStub:
+        def __init__(self, **kwargs):
+            pass
+
+        def register_endpoint(self, request, **kwargs):
+            response = httpx.post(
+                request.address + "/search",
+                json={
+                    "name": "search",
+                    "arguments": {"query": "physics"},
+                    "state": config.state.model_dump(mode="json"),
+                },
+                trust_env=False,
+            )
+            response.raise_for_status()
+            observed.append(response.json())
+            # Stop the owned infinite service after verifying its published address.
+            raise ProbeFinished
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
+    monkeypatch.setattr("iris.cluster.client.remote_client.EndpointServiceClientSync", ControllerStub)
+    previous = get_job_info()
+    info = JobInfo(
+        task_id=JobName.from_wire("/alice/port-probe/retrieval/0"),
+        advertise_host="127.0.0.1",
+        worker_region="US-EAST-08A",
+        ports={"retrieval": 0},
+    )
+    set_job_info(info)
+    try:
+        with IrisClient.in_cluster("http://controller.fixture", workspace=tmp_path) as client:
+            with iris_ctx_scope(IrisContext.from_job_info(info, client=client)), pytest.raises(ProbeFinished):
+                run_retrieval_service(config)
+    finally:
+        set_job_info(previous)
+    assert observed == [[{"docid": "7385", "score": 1.0, "snippet": "source document"}]]
 
 
 def test_relay_pump_failure_preserves_the_partial_rollout_and_closes_the_guest(monkeypatch):
