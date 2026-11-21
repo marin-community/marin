@@ -164,14 +164,12 @@ async def reproduced(
 
     Its own scope collects observer holds on its grades, so a sibling claim's grade survives them.
     """
-    finding, reasons = AdversaryFinding(claim.claim, claim.candidate, claim.defect, None, False), ()
     try:
-        async with ctx.scope(f"claim:{index}"):
-            graded = await claim_result(ctx, spec, claim)
-        finding = graded
+        async with ctx.scope(f"claim:{index}"):  # its exit may still raise, and then the claim stays ungraded
+            return await claim_result(ctx, spec, claim), ()
     except* (OutputBudgetExhausted, Hold) as error:
         reasons = failure_reasons(error)
-    return finding, reasons
+    return AdversaryFinding(claim.claim, claim.candidate, claim.defect, None, False), reasons
 
 
 def report_of(outcome: object) -> Returned[AdversaryReport] | None:
