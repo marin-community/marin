@@ -217,21 +217,22 @@ def report(
     accounts: Sequence[TrialAccount],
 ) -> ToolResult | ReturnRequest[SolveReview]:
     """The review, once its accounts cover every trial that did not pass and a failure blamed on a task defect has a
-    finding that survives its citations; any other finding whose citations fail is dropped with its reason, never
-    trusted and never refused back to the reviewer."""
+    finding that survives its citations and cites that trial; any other finding whose citations fail is dropped with
+    its reason, never trusted and never refused back to the reviewer."""
     accounted = [account.trial for account in accounts]
     trials = {source.name for source in evidence.sources.values()}
     problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
     kept, dropped = checked(evidence, findings)
-    if not kept:
-        why = "".join(f" ({reason})" for _, reason in dropped)
-        problems += [
-            f"trial {account.trial} is attributed to a task defect, but no finding survived its citation check{why}"
-            for account in accounts
-            if account.attribution is Attribution.DEFECT
-        ]
+    cited = {citation.source for finding in kept for citation in finding.citations}
+    why = "".join(f" ({reason})" for _, reason in dropped)
+    problems += [
+        f"trial {account.trial} is attributed to a task defect, but no surviving finding cites "
+        f"{TRIAL}{account.trial}{why}"
+        for account in accounts
+        if account.attribution is Attribution.DEFECT and f"{TRIAL}{account.trial}" not in cited
+    ]
     if problems:
         return ToolResult("Invalid report: " + "; ".join(problems) + ". Fix these and call report again.")
     review = SolveReview(evidence.version, ReviewEnd.REPORTED, tuple(kept), tuple(dropped), tuple(accounts))

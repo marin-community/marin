@@ -272,7 +272,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   `{source, start, end, quote}`. A finding is kept only when every quote occurs, whitespace collapsed, in
   the parts it addresses; any other is recorded as dropped with its reason. The report must account for
   every trial that did not pass, by a real trial number, and a failure attributed to a task defect needs a
-  finding that survived its citations; otherwise the report goes back to the reviewer. While the shared
+  finding that survived its citations and cites that trial (task files may support it alongside); otherwise the report goes back to the reviewer. While the shared
   budget has a round left, kept findings send the task back for a revision (the author may decline a
   finding by number, with a reason, on `submit`), which is validated again and restores the reviewed
   version through the fallback on a fault; after that they are the acceptance's `notes`. A restore carries

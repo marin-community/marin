@@ -551,7 +551,7 @@ async def test_a_failure_attributed_to_a_defect_needs_a_finding_that_survives_it
     forged = finding(cite("trial/1", 2, 2, "I answer 12."))
     reviewer = FakeInference((report(accounts=(defect,)), report(forged, accounts=(defect,)), report()))
     review = await reviewed(reviewer)
-    refused = "Invalid report: trial 1 is attributed to a task defect, but no finding survived its citation check"
+    refused = "Invalid report: trial 1 is attributed to a task defect, but no surviving finding cites trial/1"
     assert len(replies(reviewer)) == 2 and all(reply.startswith(refused) for reply in replies(reviewer))
     assert "its quote does not occur verbatim" in replies(reviewer)[1]
     assert review.accounts[0].attribution is Attribution.SOLVER and not review.findings
@@ -784,3 +784,16 @@ def test_a_cap_too_small_for_an_evidence_page_is_refused_when_wired() -> None:
         build_config(load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": 239}), {})
     build_config(load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": 240}), {})
     assert evidence(SUBMISSION, (), 1).sources
+
+
+async def test_a_defect_account_needs_a_surviving_finding_that_cites_its_trial() -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): a report blaming failed trial 1 on a defect passed beside a finding
+    that cited only successful trial 0. As in live Forge, a surviving finding must cite the blamed trial; a task-file
+    citation may support it beside the trial's."""
+    defect = {**ACCOUNT, "attribution": "defect", "reason": "the prompt reads two ways"}
+    elsewhere = finding(cite("trial/0", 1, 1, "The answer is 12."))
+    supported = finding(cite("trial/1", 2, 2, "I answer 9."), cite("task/prompt.md", 1, 1, "six plus six"))
+    reviewer = FakeInference((report(elsewhere, accounts=(defect,)), report(supported, accounts=(defect,))))
+    review = await reviewed(reviewer)
+    assert replies(reviewer)[0].startswith("Invalid report: trial 1 is attributed to a task defect, but no surviving")
+    assert len(review.findings) == 1 and review.findings[0].citations[0].source == "trial/1"
