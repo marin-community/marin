@@ -659,17 +659,22 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   The exact overlap assertion stopped the probe before learner scoring.
   The typed learner on CPU then rejected the same archived frames at
   the production overlap check, using the same weights and model binding.
+  With the TPU Splash kernel in CPU interpret mode, the typed learner
+  scored each archived turn independently. The two fused scores were within
+  `1.58e-4` of the corresponding captured raw scores.
   [Cross-host tool-turn probe][iris-native-tool-turn-tpu]
 
   Replay each turn with its own causal prefix and exact captured expert
   routes. Retain the QB thresholds in each captured frame. Scatter its
   sampled target scores back to their original response positions before
-  applying the original batch's
-  RLOO-N advantages and normalized objective weights in one update. Tool
-  tokens carry context with zero direct objective weight. A merged route
-  map has one value per position and cannot represent two distinct captures
-  of the same prefix. Validate exact action coverage and keep the changed
-  observation rejection when qualifying the per-turn path on TPU.
+  applying the original batch's RLOO-N advantages and normalized objective
+  weights in one update. A scratch CPU binder preserved the exact captured
+  routes, including different expert assignments in a shared prefix, and
+  rejected changed observations and missing or duplicate action owners.
+  The production loss gave identical values and gradients for the scattered
+  scores and the sum of globally weighted turn contributions, with zero
+  direct objective gradient at all nine tool tokens. Production learner
+  integration and a two-update TPU rerun remain open.
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
   prompt IDs from SkyRL's chat client and binds the returned binary frame to
   the controller's expected policy identity. The turn records carry those
