@@ -193,11 +193,11 @@ async def one(args: argparse.Namespace) -> int:
     # The decision model's answers (True) and retried failures (False) in this process, in order; the latest decides.
     contact = [
         isinstance(event, Resolved)
-        for record in log.records[len(previous) :]
+        for record in (log.records[len(previous) :] if getattr(args, "probe", False) else ())  # in-process: unset
         if isinstance(event := record.event, Resolved | Retrying) and isinstance(event.request, DecisionModelRead)
         if not (isinstance(event, Resolved) and event.replayed)
     ]
-    return DEFERRED if deferred(wp[0]) else ANSWERED if args.probe and contact[-1:] == [True] else 0
+    return DEFERRED if deferred(wp[0]) else ANSWERED if contact[-1:] == [True] else 0
 
 
 async def recovery(policy: Policy) -> DecisionModelHealth:
@@ -273,14 +273,14 @@ async def run(args: argparse.Namespace) -> None:
                 path, _ = active.pop(task)
                 completed += 1
                 code = task.result()
-                if path == probe:  # only a probe's fresh answer shows the decision model reads
+                if path == probe:  # only a probe's fresh answer shows the decision model reads; from others, a failure
                     probe = None
                     if code == ANSWERED:
-                        ready, parked = ready + parked, []
+                        ready, parked, code = ready + parked, [], 0
                 if code == DEFERRED:  # a fresh outage parks what was released but has not started
                     print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
                     parked, ready = ([*parked, path], ready) if probe else ([*parked, *ready, path], [])
-                elif code not in (0, ANSWERED):
+                elif code != 0:
                     label, action = OUTCOMES.get(code, ("failed", "see its log"))
                     labels[label] += 1
                     print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)

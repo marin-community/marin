@@ -458,8 +458,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         policy=str(overlay),
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
-        resume_held=False,
-        probe=False,
+        resume_held=False,  # and no probe: an in-process caller built before the flag existed (follow-up 2)
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -3321,6 +3320,22 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     assert (launches, len(given)) == (["a", "a*", "b*", "c*", "b"], 3)
     label = "failed" if code == 1 else driver.OUTCOMES[code][0]
     assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
+
+
+# Review 2026-11-21 (n10 follow-up 2, finding 5): an ordinary child exiting 10 was counted a success. Only the
+# designated probe's 10 is an answer; from any other child it is the unexpected exit it is.
+async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"code": [driver.ANSWERED]})
+    with pytest.raises(RuntimeError, match="1 workpieces failed"):
+        await driver.run(driver_args)
+    assert launches == ["code"]
+    assert f"OUTCOME failed exit={driver.ANSWERED} proposal={tmp_path / 'code.proposal.json'}" in capsys.readouterr().out
 
 
 # Review 2026-11-21 (n10 follow-up 1, finding 3): a probe whose grade replayed a cached read exited 0 having made no
