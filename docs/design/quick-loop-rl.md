@@ -1,14 +1,14 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 1:04 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 1:39 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
 67B-A2B Snowball checkpoint on verifiable tasks from the Snowball 100k task
 selection. Once that combination passes the full-model smoke and the matched
-comparison, qualify Levanter's Snowball engine as the rollout backend.
-The learner jobs have first claim on H100 capacity. Small TPU runs can
-qualify the native loop while the learner waits. Use a typed binary
+comparison, qualify Levanter's Snowball engine as the full-model rollout
+backend. The learner jobs have first claim on H100 capacity. Run bounded
+native-loop checks on TPU while the learner jobs wait. Use a typed binary
 protocol for internal rollout and learner traffic.
 
 ## Status
@@ -18,9 +18,9 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations for the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue still needs 21 more GPU and 21 more InfiniBand allocations for the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
-| Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. | Verify the deployed handoff from four learner hosts to one serving host. |
+| Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Two CPU hosts also passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact verification of the installed compute weights. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Native serving commands and reply metadata use protobuf. Generation replies carry bounded, detached binary replay frames. The protocol passed two optimizer updates on one TPUv4 host. The learner command pipe uses pickle, and expert-block publication uses NCCL. | Verify native serving across accelerator hosts. Migrate the learner envelope after learner acceptance. |
 
@@ -464,9 +464,22 @@ earlier Splash run byte for byte. All three policy IDs also matched.
 The final worker answered an evaluation request under policy 2 with seed
 `20261020`, temperature `0.6` and top-p `0.95`. The captured reply held
 sampled tokens, transformed logprobs and an empty replay body. The source bundle applies atop
-`2bf3f721c9`. Concurrent publication between hosts and the 67B production
-shapes remain open.
+`2bf3f721c9`.
 [TPUv4 protobuf run][iris-native-runtime-protobuf] · [Verified output archive][native-runtime-protobuf-archive] · [Source bundle, harness and verifiers][native-runtime-protobuf-source]
+
+In the two-host TPU fixture, Iris scheduled the two single-host v4-8
+replicas independently. The learner reached the regional GCS rendezvous
+and timed out waiting for the serving replica to start. A follow-up
+used two distinct CPU workers in `us-central2-b`. The learner published
+three immutable BF16 TensorStore snapshots to regional GCS across two
+optimizer updates. One serving process installed all three versions,
+rejected stale requests and evaluated policy 2. An independent audit
+verified 128 scored targets, zero clip-boundary crossings and eight
+byte-identical binary replay frames across the two worker archives.
+The accelerator-to-accelerator handoff and the 67B production shapes
+remain open.
+[Two-host TPU attempt][iris-native-cross-host] · [Two-host CPU run][iris-native-cross-host-cpu] ·
+[Learner archive][native-cross-host-learner] · [Serving archive][native-cross-host-serving] · [Harness and verifier][native-cross-host-source]
 
 The maintained learner and native ports share the SPMD policy scorer and
 learner commit `d52fd47db5`. A local merge at `fe0bb85486` preserves the
@@ -671,6 +684,11 @@ arms. [Prior timing comparison][timing]
 [iris-native-runtime-reference]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-reference-tpu-20261121-08
 [iris-native-runtime-splash]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-splash-tpu-20261121-09
 [iris-native-runtime-protobuf]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-protobuf-tpu-20261121-11
+[iris-native-cross-host]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-12
+[iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
+[native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
+[native-cross-host-serving]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fserving.tar.zst
+[native-cross-host-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fsource-inputs.tar.zst
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
