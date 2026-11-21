@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Protocol, override
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest
-from taskforge.effects.issues import Hold, Restart, Transient
+from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
 from taskforge.llm.client import (
     RETRYABLE_STATUSES,
     Attempt,
@@ -117,8 +117,8 @@ class GlmInference(InferenceClient):
             raise Restart(
                 "GLM transport exhausted its retry or hold budget", retries=_retries(error.attempts)
             ) from error
-        except ContextExhausted as error:  # a recorded result, so a resumed request replays the same stop
-            return Completion(error.body, finish_reason=FinishReason.CONTEXT_EXCEEDED)
+        except ContextExhausted as error:
+            raise ContextExceeded(error.body, retries=_retries(error.attempts)) from error
         except ModelRequestRejected as error:
             if error.status not in RETRYABLE_STATUSES:
                 raise
@@ -148,7 +148,7 @@ async def complete(event: InferenceRequest, client: InferenceClient, *, notify: 
     async def attempt() -> Completion:
         try:
             result = await client.complete(event)
-        except (Transient, Restart, Hold) as error:
+        except (Transient, Restart, Hold, ContextExceeded) as error:
             for index, cause in enumerate(error.retries, 1):
                 notify(Retrying(event, index, str(cause)))
             raise

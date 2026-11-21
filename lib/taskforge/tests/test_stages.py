@@ -23,7 +23,7 @@ from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import apply_decision
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart
+from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
@@ -31,7 +31,7 @@ from taskforge.harness.tools import adversary_tools
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from taskforge.lowering import lowering_settings, machine_backend, requirements
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall, Usage
+from taskforge.model.llm import Completion, Message, Role, ToolCall, Usage
 from taskforge.model.proposal import ResearchNeed, TaskProposal, render
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -764,7 +764,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     client = FakeInference(
         (
             (
-                Completion("model window exceeded", finish_reason=FinishReason.CONTEXT_EXCEEDED)
+                ContextExceeded("model window exceeded")
                 if overflow == "provider"
                 else Completion("No report yet", usage=Usage(prompt_tokens=32))
             ),

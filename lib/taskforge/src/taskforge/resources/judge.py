@@ -15,7 +15,6 @@ from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 
 from taskforge.effects.context import Context
-from taskforge.effects.issues import ContextExceeded
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import FinishReason, Message, Role
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
@@ -65,8 +64,6 @@ class JudgeEngine:
             async with self.ctx.scope("judge"):
                 self.ctx.handle(InferenceRequest, partial(complete, notify=self.ctx.notify), self.client)
                 result = await self.ctx.emit(event)
-            if result.finish_reason is FinishReason.CONTEXT_EXCEEDED:
-                raise ContextExceeded(result.content)
             common = {"id": "forge-judge", "model": payload["model"], "created": 0}
             if responses:
                 return {
