@@ -224,15 +224,18 @@ The runtime presents the source turns and function definitions and retains the f
 
 ## What is a grader?
 
-`TaskSpec.grader` declares how an attempt is graded. Its `kind` field selects one of three classes in `taskcompendium.models`:
+`TaskSpec.grader` declares how an attempt is graded. Its `kind` field selects one of four classes in `taskcompendium.models`:
 
 | `kind` | Class | Grading |
 | --- | --- | --- |
 | `verifyit` | `VerifyitGrader` | A stock verifyit `mode` and its `parameters`: the keys of verifyit's `verifier.toml` table other than `mode`. |
 | `script` | `ScriptGrader` | A command run after the attempt in a fresh machine built from a pinned image. |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
+| `decision_model` | `DecisionModelGrader` | A decision model's level for the answer against `deliverable`, `rubric` and `reference`; the answer earns 1 at or above the author's `cut`. |
 
 A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, `structure_closure`, `reasoning_markup`, or `predicted_action`. `reasoning_markup` grades the final assistant message's text, including the text before its function calls, and scores one when its reasoning markup is well formed; the attempt's stop reason excuses a span left open by a length stop. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
+
+A `DecisionModelGrader` is not an LLM judge and shares no code with one. The caller supplies the decision model as a `taskcompendium.decision_model.DecisionModelConnection`: a `model` name and an asynchronous `read(request)` that returns a level on `DECISION_LEVELS`, an index from 0 to 4 or an expected level between. The `DecisionModelRequest` carries the model, `DECISION_QUESTION`, the levels, the grader's deliverable, rubric and reference, and the candidate, so a caller can key recorded reads by it. `grade_decision_model_answer(task, attempt, connection)` grades 1 at or above `cut` and 0 below, recording the model, level and cut in `detail`. A read that raises, or returns no level in that range, is `infra_error`, never a score. Endpoint, health, retries and concurrency belong to the caller. `grade_task` refuses this grader, and curation controls report it unsupported.
 
 A `ScriptGrader` declares:
 

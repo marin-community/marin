@@ -661,7 +661,43 @@ class NoGrader(BaseModel):
         return self
 
 
-Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator="kind")]
+DECISION_QUESTION = (
+    "Compare the whole candidate answer with the reference answer (which earned full credit), against the whole "
+    "rubric. Judge meaning, not wording: accept the listed equivalences; a negated, quoted, hypothetical or "
+    "retracted mention does not count as asserting something; keyword lists without the corresponding claim earn "
+    "nothing; when the answer states several values, the designated final block governs."
+)
+"""The one question a decision model answers about a candidate."""
+DECISION_LEVELS = (
+    "missing: the candidate does not address this (empty, off-task, or only keywords)",
+    "contradicts the reference: the candidate addresses it but its content disagrees with the reference",
+    "partially matches: part agrees with the reference, part is wrong or missing",
+    "equivalent to the reference: different notation, wording, units or order, same correct content",
+    "matches exactly: the same content as the reference",
+)
+"""The ordered answers to ``DECISION_QUESTION``; a read is a level from 0 to 4, or an expected level between."""
+DECISION_CUT_MIN, DECISION_CUT_MAX = 2.0, 3.5
+"""A cut below "partially matches" would credit partial answers; above 3.5 an exact match may not reach it."""
+
+
+class DecisionModelGrader(BaseModel):
+    """A decision model's comparison of the final answer with a reference answer under a rubric.
+
+    The decision model reads ``deliverable``, ``rubric``, ``reference`` and the candidate and returns a level on
+    ``DECISION_LEVELS``; the answer earns 1 at or above the author's ``cut`` and 0 below it. A decision model is
+    not an LLM judge (``VerifyitGrader`` mode ``judge``): the two kinds share no grading code or connection.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    kind: Literal["decision_model"] = "decision_model"
+    deliverable: str = Field(min_length=1)
+    rubric: str = Field(min_length=1)
+    reference: str = Field(min_length=1)
+    cut: float = Field(ge=DECISION_CUT_MIN, le=DECISION_CUT_MAX)
+
+
+Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader | DecisionModelGrader, Field(discriminator="kind")]
 
 
 def grades_in_process(grader: Grader) -> bool:
