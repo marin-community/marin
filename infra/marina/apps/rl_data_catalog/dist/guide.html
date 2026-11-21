@@ -79,7 +79,7 @@
       <dt><span class="chip">MarinSkyRL</span></dt><dd>A small frozen set of Marin-internal blend sources whose payload rows predate the task-directory format. New sources cannot use this layout.</dd>
       <dt><span class="chip">Native TaskSpec</span></dt><dd>The source's payload is TaskSpec rows produced directly by its own recipe or evaluation-harness pipeline, never packaged as task directories. These are non-agentic sources: single-turn benchmarks and evaluation-harness tasks.</dd>
     </dl>
-    <p>Agentic sources always ingest TaskCompendium or Harbor task directories. A source whose payload moves into a published private release adopts that release's layout; the column always reflects the current pin.</p>
+    <p>Agentic sources always ingest TaskCompendium or Harbor task directories. Task format is required at ingestion: the conversion census detects every row's payload structure and a source whose declared format differs, or whose rows span several formats, fails until the author splits or corrects it. A source whose payload moves into a published private release adopts that release's layout; the column always reflects the current pin.</p>
   </section>
 
   <section id="workflows" aria-labelledby="flow-title">

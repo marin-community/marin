@@ -9,6 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import TaskFormat
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -76,6 +77,7 @@ def curated_source(context, root, rows):
         ),
         mode=SourceProcessingMode.FULL,
         canonical_source="fixture",
+        declared_task_format=TaskFormat.NATIVE_TASKSPEC,
     )
     return output
 

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from finestore.rl.curation import TaskFormat
 from finestore.rl.licenses import LicenseReceipt
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
@@ -53,3 +54,5 @@ class PipelineOptions:
     inputs: InputOverrides = field(default_factory=InputOverrides)
     recipe_settings: RecipeSettings | None = None
     license_receipt: LicenseReceipt | None = None
+    declared_task_format: TaskFormat | None = None
+    """The source declaration's task format, threaded to the conversion census enforcement."""

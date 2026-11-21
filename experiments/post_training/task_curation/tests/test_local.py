@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.reader import ReadView
+from finestore.rl.curation import TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -57,6 +58,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
                 upstream_name=name,
                 build_path="test",
                 origin=SourceOrigin.MARIN,
+                task_format=TaskFormat.NATIVE_TASKSPEC,
             ),
             config=pipeline,
         )

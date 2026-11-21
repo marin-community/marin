@@ -282,7 +282,7 @@ def all_sources() -> dict[str, RlDataSource]:
     }
     consumers = consumer_receipts()
     decisions = consumer_decisions()
-    return {
+    registered = {
         source_id: replace(
             source,
             info=replace(
@@ -294,6 +294,13 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source_id, source in selected.items()
     }
+    for source in registered.values():
+        if source.info.task_format is None:
+            raise ValueError(
+                f"Source {source.info.id} declares no task format; "
+                "every source registration states exactly one TaskFormat value"
+            )
+    return registered
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:

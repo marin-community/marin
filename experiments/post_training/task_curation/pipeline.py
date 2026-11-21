@@ -23,7 +23,7 @@ from typing import Any, cast
 
 import click
 import requests
-from finestore.rl.curation import ContentEvidenceReference, LexicalContaminationEvidence
+from finestore.rl.curation import ContentEvidenceReference, LexicalContaminationEvidence, TaskFormat
 from finestore.rl.licenses import LicenseReceipt
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
@@ -486,7 +486,12 @@ def _execution_config(
 def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Construct the reusable source processor's graph from this dataset's recipe."""
     source = licensed_source(source)
-    options = replace(options, license_receipt=source.info.license_receipt)
+    if source.info.task_format is None:
+        raise ValueError(
+            f"Source {source.info.id} declares no task format; "
+            "every source registration states exactly one TaskFormat value"
+        )
+    options = replace(options, license_receipt=source.info.license_receipt, declared_task_format=source.info.task_format)
     recipe = source.config
     assert recipe is not None
     if options.mode == SourceProcessingMode.QUICK:
@@ -631,6 +636,7 @@ def _run_curation(
     config: SourcePipelineConfig | None = None,
     grader_environment: EnvironmentRequirements | None = None,
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
+    declared_task_format: TaskFormat | None = None,
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
@@ -656,6 +662,8 @@ def _run_curation(
                 grader_environment = EnvironmentRequirements(
                     command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=planned_lock_url(environment)
                 )
+    if declared_task_format is None:
+        raise ValueError(f"Source {pipeline.name} declares no task format for its conversion census")
     return run_source_pipeline(
         source_recipe(pipeline, inputs, grader_environment),
         context,
@@ -665,6 +673,7 @@ def _run_curation(
         mode=mode,
         source_overrides=source_overrides,
         canonical_source=pipeline.name,
+        declared_task_format=declared_task_format,
     )
 
 
@@ -920,6 +929,7 @@ def _run_source(
             config=config,
             grader_environment=grader_environment,
             source_overrides=file_overrides,
+            declared_task_format=options.declared_task_format,
         )
         validate_input_identity(pipeline, options.inputs, run.identity)
     envelope = _pipeline_result(result)
@@ -1018,6 +1028,7 @@ def _run_quick_source(pipeline: CurationRecipe, options: PipelineOptions, run: Q
             output_path=run.output_path,
             inputs=run.inputs,
             source_overrides=overrides,
+            declared_task_format=options.declared_task_format,
         )
     envelope = _pipeline_result(result)
     return CampaignArtifact(path=run.output_path, status=envelope.status, result=envelope)

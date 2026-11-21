@@ -28,10 +28,16 @@ Every source declares its task layout through [TaskFormat](../../../lib/finestor
 `TASKCOMPENDIUM` or `HARBOR` task directories for agentic sources, the
 grandfathered `MARINSKYRL` blend rows, or `NATIVE_TASKSPEC` for non-agentic
 sources whose recipe or evaluation-harness pipeline converts raw rows straight to
-TaskSpecs. A catalog declaration without exactly one declared value fails at
-construction, and the Atlas Format column projects the value from the frozen
-declaration. A published private-release binding overwrites the construction-time
-value with the release's declared format.
+TaskSpecs. Task format is required ingestion metadata: every source registration
+states exactly one value at construction, the conversion census classifies every
+converted row with the typed detector
+([task_format.py](../../../lib/taskcompendium/src/taskcompendium/pipeline/task_format.py)),
+and the declared format must equal the detected format for every row. A source
+whose rows span several formats fails with a typed error naming the formats and
+counts and must be split into one source per task format. A catalog declaration
+without exactly one declared value fails at construction, and the Atlas Format
+column projects the value from the frozen declaration. A published private-release
+binding overwrites the construction-time value with the release's declared format.
 
 ## Pinned registry receipts
 

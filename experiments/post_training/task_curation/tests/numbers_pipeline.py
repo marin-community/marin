@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from finestore.rl.curation import TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -126,6 +127,7 @@ def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConf
             daytona_execution_failures=0,
             daytona_count_basis="Fixture ingestion performs arithmetic locally and creates no actor.",
             lexical_contamination=decontamination_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, 1),
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=NumbersConfig(name, path),
         pipeline=numbers_pipeline,

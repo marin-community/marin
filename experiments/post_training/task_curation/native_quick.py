@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import TaskFormat
 from finestore.rl.licenses import LicenseReceipt, require_license
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
@@ -215,6 +216,7 @@ def run_entry(
                 str(output),
                 mode=SourceProcessingMode.QUICK,
                 canonical_source=original_source_id(entry["id"]),
+                declared_task_format=TaskFormat.HARBOR,
             )
     finally:
         client.shutdown()

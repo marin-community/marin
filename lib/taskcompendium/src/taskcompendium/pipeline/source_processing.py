@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
+from finestore.rl.curation import LexicalContaminationEvidence, TaskFormat, require_decontamination
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import Mode
@@ -119,6 +119,12 @@ from taskcompendium.pipeline.stages import (
     skip_source_review,
 )
 from taskcompendium.pipeline.static_retention import NoOracleSourceContext
+from taskcompendium.pipeline.task_format import (
+    FormatRow,
+    MixedTaskFormatSourceError,
+    TaskFormatMismatchError,
+    detect_task_format,
+)
 from taskcompendium.pipeline.transforms import admit_converted_row
 
 SOURCE_PIPELINE_REVISION = "20"
@@ -488,6 +494,7 @@ class _SourceRun:
     telemetry: SourceTelemetry
     source_overrides: Mapping[str, SourceFileOverride] | None
     parquet_shard_bytes: int
+    declared_task_format: TaskFormat
     population: DeduplicatedPopulation | None = None
 
     def scratch(self, phase: str) -> StoragePath:
@@ -999,10 +1006,13 @@ def run_source_pipeline(
     *,
     mode: SourceProcessingMode,
     canonical_source: str,
+    declared_task_format: TaskFormat | None = None,
     parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
 ) -> ConversionResult | SourcePipelineResult:
     """Run one source and persist final execution counters and partial phase evidence."""
+    if declared_task_format is None:
+        raise ValueError(f"Source {recipe.name} declares no task format for its conversion census")
     if mode == SourceProcessingMode.QUICK:
         if config is not None:
             raise ValueError("QUICK takes no review or verification configuration")
@@ -1011,6 +1021,7 @@ def run_source_pipeline(
             context,
             source_input,
             output_path,
+            declared_task_format=declared_task_format,
             parquet_shard_bytes=parquet_shard_bytes,
             source_overrides=source_overrides,
         )
@@ -1026,7 +1037,17 @@ def run_source_pipeline(
     ):
         output = output / "attempts" / uuid4().hex
     telemetry = SourceTelemetry(canonical_source, str(output))
-    run = _SourceRun(recipe, context, source_input, output, config, telemetry, source_overrides, parquet_shard_bytes)
+    run = _SourceRun(
+        recipe,
+        context,
+        source_input,
+        output,
+        config,
+        telemetry,
+        source_overrides,
+        parquet_shard_bytes,
+        declared_task_format,
+    )
     with telemetry.record():
         return _run_source_pipeline(run)
 
@@ -1039,6 +1060,9 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
             grading: Counter[str] = Counter()
             count_grading_environment(grading, row.get("grading_environment"))
             counts.update({"grading:" + key: value for key, value in grading.items()})
+            detected = row.pop("detected_task_format", None)
+            if detected is not None:
+                counts[f"task_format:{detected}"] += 1
             counts["input_rows"] += 1
             if row["task_json"] is not None:
                 counts["converted_rows"] += 1
@@ -1053,11 +1077,22 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
     yield counts
 
 
+def _detected_columns(row: ConvertedRow) -> dict[str, Any]:
+    """Converted columns tagged with the row's detected task format; rejected rows carry none."""
+    columns = converted_columns(row)
+    result = row.result
+    if not isinstance(result, NormalizedTask):
+        return columns
+    columns["detected_task_format"] = detect_task_format(FormatRow(raw=row.raw.data, task=result.task)).value
+    return columns
+
+
 def write_conversion(
     rows: Dataset[ConvertedRow],
     context: ZephyrContext,
     output_path: str,
     *,
+    declared_task_format: TaskFormat,
     telemetry: PhaseTelemetry | None = None,
 ) -> ConversionResult:
     """Write unreviewed converted rows and typed rejections, returning paths and counts.
@@ -1065,6 +1100,9 @@ def write_conversion(
     One execution evaluates the supplied rows and writes ``normalize/`` and
     ``manifest.json``. Other evidence may already exist in the output directory;
     existing conversion outputs are rejected to prevent mixing shards on rerun.
+    Every converted row is detected against its declared task format: a row whose
+    payload detects differently fails the conversion, and a source whose rows span
+    several formats fails with the split requirement.
     """
     output = StoragePath(output_path)
     if (output / "normalize").exists() or (output / "manifest.json").exists():
@@ -1073,12 +1111,19 @@ def write_conversion(
     population = deduplicate_population(rows, context, str(output / "within-source-dedup"), telemetry=telemetry)
     dataset = (
         population.rows()
-        .map(converted_columns)
+        .map(_detected_columns)
         .map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
     )
     counts: Counter[str] = Counter()
     for shard_counts in execute_phase(context, dataset, telemetry=telemetry, operation="conversion").results:
         counts.update(shard_counts)
+    detected = Counter(
+        {key.removeprefix("task_format:"): value for key, value in counts.items() if key.startswith("task_format:")}
+    )
+    if len(detected) > 1:
+        raise MixedTaskFormatSourceError({TaskFormat(name): count for name, count in detected.items()})
+    if detected and declared_task_format.value not in detected:
+        raise TaskFormatMismatchError(declared_task_format, TaskFormat(next(iter(detected))))
     result = ConversionResult(
         normalized_path=str(output / "normalize"),
         manifest_path=str(output / "manifest.json"),
@@ -1103,6 +1148,7 @@ def _run_quick(
     source_input: str,
     output_path: str,
     *,
+    declared_task_format: TaskFormat,
     parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
 ) -> ConversionResult:
@@ -1123,6 +1169,7 @@ def _run_quick(
         ),
         context,
         output_path,
+        declared_task_format=declared_task_format,
     )
     (output / "manifest.json").write_text(
         json.dumps(

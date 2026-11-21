@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel
+from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel, TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -120,6 +120,7 @@ def catalog(monkeypatch, tmp_path):
                         upstream_name=name,
                         build_path="test",
                         origin=SourceOrigin.MARIN,
+                        task_format=TaskFormat.NATIVE_TASKSPEC,
                         license_receipt=fixture_license(
                             f"Marin:{name}", pipeline.dataset.name, pipeline.dataset.revision
                         ),

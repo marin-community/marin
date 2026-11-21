@@ -4,10 +4,23 @@
 """Materialize original native package files without executing or rewriting them."""
 
 import os
+import tomllib
 from pathlib import Path
 
 from taskcompendium.models import NoGrader, TaskSpec
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.staging import resource_files
+
+
+def validate_native_package(task: TaskSpec) -> None:
+    """Require the complete original Harbor task-directory layout inside the TaskSpec."""
+    files = {resource.path: resource for resource in task.resources.verifier}
+    required = {"task.toml", "instruction.md", "tests/test.sh"}
+    if not isinstance(task.grader, NoGrader) or "harbor" not in task.tags or not required <= files.keys():
+        raise ValueError(f"Incomplete native Harbor package: {task.id}")
+    environment = tomllib.loads(resource_bytes(files["task.toml"]).decode()).get("environment", {})
+    if not environment.get("docker_image") and "environment/Dockerfile" not in files:
+        raise ValueError(f"Harbor package declares no environment: {task.id}")
 
 
 def write_native_task(task: TaskSpec, directory: Path) -> None:

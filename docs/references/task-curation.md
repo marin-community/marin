@@ -1809,6 +1809,20 @@ frozen declaration. A source whose payload moves into a published private releas
 adopts the release's declared format (`TaskFormat.HARBOR` or
 `TaskFormat.TASKCOMPENDIUM`) through its release binding, which overwrites the
 construction-time value.
+
+Task format is required ingestion metadata. Every source registration states
+exactly one `TaskFormat` value at construction; a registered source without one
+fails the population build, with no default and no inference from pipeline kind.
+The conversion census classifies every converted row with the typed detector
+(`taskcompendium.pipeline.task_format.detect_task_format`), which reuses the
+existing validators per format: the native-Harbor package contract, the
+TaskCompendium task-directory documents and published cohort carriers, the
+MarinSkyRL blend-record schema, and TaskSpec rows with no task directory. A row
+matching no predicate, or more than one, is a typed error, never a guess. The
+declared format must equal the detected format for every row. A source whose rows
+span several formats fails with `MixedTaskFormatSourceError`, naming the formats
+and their row counts and directing the author to split the source into one source
+per task format.
 `independent_qc` records quality checks performed outside curation. Quality Result
 is computed from recorded SAMPLE/FULL issue counts and remains separate from
 mechanical exclusions and spec fidelity. Daytona is a required measured enum:

@@ -13,6 +13,7 @@ from typing import cast
 
 import click
 import pytest
+from finestore.rl.curation import TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -147,6 +148,7 @@ def source_step(recipe: CurationRecipe, options: PipelineOptions, receipt_root: 
             upstream_name=recipe.name,
             build_path="test",
             origin=SourceOrigin.MARIN,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=recipe,
         pipeline=process_rows,

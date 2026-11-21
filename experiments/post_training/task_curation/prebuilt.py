@@ -17,7 +17,6 @@ source's oversight level and evidence describe the qualification the publish rec
 import hashlib
 import json
 import shutil
-import tomllib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -46,6 +45,7 @@ from taskcompendium.grading_environment import (
     grading_environment_census,
     shared_integrity_issue,
 )
+from taskcompendium.harbor.native_package import validate_native_package
 from taskcompendium.identity import canonical_sha256, task_spec_json
 from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
@@ -55,7 +55,6 @@ from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.static_retention import NoOracleSourceContext
-from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
@@ -164,16 +163,6 @@ def import_harbor_cohort(config: PrebuiltCohort) -> str:
     if seen != controls.keys() or len(seen) != config.expected_rows:
         raise ValueError(f"Harbor population differs from its controls or expected count: {config.repo}")
     return str(local)
-
-
-def validate_native_package(task: TaskSpec) -> None:
-    files = {resource.path: resource for resource in task.resources.verifier}
-    required = {"task.toml", "instruction.md", "tests/test.sh"}
-    if not isinstance(task.grader, NoGrader) or "harbor" not in task.tags or not required <= files.keys():
-        raise ValueError(f"Incomplete native Harbor package: {task.id}")
-    environment = tomllib.loads(resource_bytes(files["task.toml"]).decode()).get("environment", {})
-    if not environment.get("docker_image") and "environment/Dockerfile" not in files:
-        raise ValueError(f"Harbor package declares no environment: {task.id}")
 
 
 def require_runnable_grader(task: TaskSpec) -> None:
