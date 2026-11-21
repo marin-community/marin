@@ -70,7 +70,7 @@ class Slots(Engine):
 def context(engine: Slots, recorded: Sequence[Record] = (), *, resume: bool = False) -> tuple[Context, EventLog]:
     log = EventLog(replay_from=recorded, replayable=replay_rule(recorded, resume))
     ctx = Context(log=log)
-    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(engine, twelve, "solver", 3))
+    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(engine, twelve, "solver"))
     return ctx, log
 
 

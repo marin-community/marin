@@ -18,7 +18,7 @@ def resources(ctx: Context, restart: int | None = None) -> Resources:
     bundle = Resources(
         Environments(),
         FakeInference(()),
-        RolloutResource(SolverEngine(3, restart), solver_model, "solver", 3),
+        RolloutResource(SolverEngine(3, restart), solver_model, "solver"),
         GradingResource(CandidateEngine(), "grader"),
         Ids(),
         {},

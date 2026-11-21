@@ -173,7 +173,7 @@ async def test_grades_and_solver_share_clean_machine_and_rehydrate_resources() -
         for expected, candidate in [(1, event()), (1, event()), (0, event(SCRIPT.replace(b"== '12'", b"== '9'")))]:
             result = await resource.grade(candidate)
             assert result.reward == expected, result
-        solver = RolloutResource(pool.rollouts, twelve, "test", 3)
+        solver = RolloutResource(pool.rollouts, twelve, "test")
         result = await solver.run(SolverRollout(event().spec, 0, 0))
         assert result.grade.reward == 1
         assert result.grade.diagnostics["verifier_lease"] == 4
@@ -417,7 +417,7 @@ async def test_batch_slots_generate_before_verifier_admission_and_a_grade_is_adm
         return await twelve(request)
 
     ctx = Context(log=EventLog())
-    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(pool.rollouts, model, "test", 3))
+    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(pool.rollouts, model, "test"))
     await pool.lock.acquire()  # a grade holds the verifier
     held = True
     try:

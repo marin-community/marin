@@ -74,7 +74,7 @@ class StartingEngine(Engine):
 async def test_rollout_executor_retries_startup_and_returns_grade() -> None:
     notes = Notifications()
     event = SolverRollout(rollout_spec(arithmetic_task()), 1, 0)
-    resource = RolloutResource(StartingEngine(), twelve, "config", 3)
+    resource = RolloutResource(StartingEngine(), twelve, "config")
     assert (await run_rollout(event, resource, notify=notes)).grade.reward == 1
     assert len(notes.events) == 1
     assert isinstance(notes.events[0], Retrying) and notes.events[0].request == event

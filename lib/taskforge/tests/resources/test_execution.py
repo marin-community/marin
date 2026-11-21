@@ -21,7 +21,8 @@ async def test_retry_backoff_is_exponential_capped_and_stops_after_budget(monkey
         raise Transient("controller not ready")
 
     monkeypatch.setattr(execution, "sleep", wait)
+    monkeypatch.setattr(execution, "MAX_ATTEMPTS", 9)
     with pytest.raises(Restart, match="controller not ready"):
-        await execution.retry_effect(RunCommand("true", 1), fail, lambda _: None, 9)
+        await execution.retry_effect(RunCommand("true", 1), fail, lambda _: None)
     assert attempts == 9
     assert delays == [1, 2, 4, 8, 16, 32, 60, 60]

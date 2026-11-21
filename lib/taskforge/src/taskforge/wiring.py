@@ -244,7 +244,6 @@ def build_resources(
             verifiers.rollouts,
             partial(solver_turn, solver, sampling),
             digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + judged),
-            policy.setting("solver.startup_attempts", int),
         ),
         GradingResource(verifiers.grades, digest((execution, *judged)) if judged else execution, base_engine),
         Ids(),

@@ -22,7 +22,6 @@
   "solver.tool_timeout": 120.0,
   "solver.command_timeout": 30.0,
   "solver.cleanup_timeout": 60.0,
-  "solver.startup_attempts": 3,
   "solver.concurrency": 8,
   "solver.heartbeat_interval": 300.0,
   "author.model": "deepseek-v4.1-flash",

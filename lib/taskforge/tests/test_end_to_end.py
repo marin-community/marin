@@ -189,7 +189,7 @@ def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
     return Resources(
         envs,
         FakeInference(responses),
-        RolloutResource(SolverEngine(2), solver_model, "solver", 3),
+        RolloutResource(SolverEngine(2), solver_model, "solver"),
         GradingResource(CandidateEngine(), "grader"),
         Ids(lambda: "workpiece"),
         {},

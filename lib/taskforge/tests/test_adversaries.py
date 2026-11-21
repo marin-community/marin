@@ -532,7 +532,6 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
 N9_SETTINGS = frozenset(
     {
         "budget.max_missing_trials",
-        "solver.startup_attempts",
         "solver.concurrency",
         "solver.heartbeat_interval",
     }
