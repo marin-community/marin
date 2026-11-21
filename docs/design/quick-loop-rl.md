@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 10:39 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 10:57 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,10 +18,10 @@ binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. The first learner task was still scheduling-gated at 10:39 p.m. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. All five tasks were scheduling-gated at 10:57 p.m. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on four TPUv4 chips at `ff1fc5e833` with queued generation and local cache installation. A separate CPU proof installed both optimizer updates in a serving subprocess with fresh KV. | Verify the deployed handoff from four learner hosts to one serving host. |
-| Native inventory backend | The local SkyRL Ray controller admitted two policy windows with binary tool turns. Both inventory presets render and pass the Iris driver checks locally. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
+| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and mixed-precision serving. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Separate Snowball serving and learner processes exchanged protobuf and binary tensor frames through two updates. Native SkyRL trajectory rows carry those frame bytes. The existing learner pipe uses a binary pickle envelope, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the deployed native service boundary. Migrate the learner envelope after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -205,8 +205,11 @@ qualification step.
 
 The first deployed install uses regional TensorStore as a correctness
 baseline. It writes the learner's FP32 weights and verifies the restored
-FP32 slices before casting to BF16 on serving. Verification of each rank's
-installed BF16 shards remains open. At 67.078B parameters one write and one
+FP32 slices. The serving process then casts to BF16 using the learner's FP32
+overrides for routers and router bias. Twelve CPU serving and learner tests
+passed together, including exact checkpoint continuation and installed-policy
+evaluation sampling. Verification of each rank's installed BF16 shards remains
+open. At 67.078B parameters one write and one
 full read move about 537 GB of logical weight data per publication, or
 13.4 TB over 25 updates before compression, initialization and retries.
 Measure upload, restore, byte verification and cache allocation separately.
@@ -228,6 +231,16 @@ frames occupies about 52 MiB. In a five-repeat local codec probe, median
 encode and decode took 17.8 ms and 8.1 ms per frame. Choose a byte budget at
 the service boundary that admits this geometry. Measure frame lifetimes and
 RAM across concurrent production requests before increasing concurrency.
+
+The serving actor groups up to four training requests on the installed
+policy. The child bounds the batch by KV capacity and the existing 65 MiB
+IPC limit. It returns a separate replay frame for each request. Four
+synthetic full-context frames occupied 52.3 MiB in the IPC envelope. On
+four CPU devices, batched and serial calls matched exact tokens, per-layer
+routes, QB thresholds, sampled scores, stop reasons and PRNG keys. The
+actor drains admitted requests before installing the next policy. This
+qualifies the scheduling and wire behavior on CPU. Sustained group
+throughput and memory remain GPU measurements.
 
 ## Implementation and acceptance
 
@@ -416,17 +429,21 @@ CUDA and the TPU path also falls back for BF16. Benchmark that path at the
 current context and compare with a qualified faster kernel before
 concluding that native serving improves time per rollout group.
 
-The local qualification command at `33a2cf432b` uses the pinned regional
-67B export and tokenizer revision. It drives four independently seeded
-requests on a fixed synthetic prompt to 24,576 tokens with 32 targets per
-response, validates their binary frames and runs the fused learner scorer
-on the same loaded model.
-It records load, paged allocation, generation and score timings, peak
+The local qualification command at `c8fb8787cc` uses the pinned regional
+67B export, tokenizer revision and the maintained inventory preset's
+precision and fused projection settings. It drives four independently
+seeded requests on a fixed synthetic prompt to 24,576 tokens with 32
+targets per response, validates their binary frames and runs the fused
+learner scorer on the same loaded model. The full-forward scorer selects
+FA4 on H100. Paged generation selects its own attention kernel.
+
+The probe records load, allocation, generation and score timings, peak
 device bytes when available, raw score deltas and ratios outside the PPO
-clip range. On a small BF16 HF export across eight CPU devices, the same
-path covered all 32 targets at context 128 with a maximum raw score
-difference of `1.21e-4` and zero ratios outside the clip range. The
-full-checkpoint result and the sustained inventory comparison remain open.
+clip range. A local EP2 run on two CPU devices retained exact FP32 router
+and router bias values from a mixed-precision HF export. It completed four
+requests at 128 tokens each including the prompts and rescored all 16 sampled
+targets. The maximum raw score difference was `2.69e-4` and no ratios
+crossed the clip bounds. The production-context result remains open.
 
 On the eight-H100 regional worker, run the probe with the GPU extras
 for `marin-core` and `marin-levanter`.
