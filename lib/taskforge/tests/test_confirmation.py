@@ -45,7 +45,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.issues import DecisionModelUnavailable
+from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
 from taskforge.harness.tools.evidence import (
@@ -58,7 +58,7 @@ from taskforge.harness.tools.evidence import (
 )
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import digest
-from taskforge.model.llm import Completion, FinishReason, Message, Role, Usage
+from taskforge.model.llm import Completion, Message, Role, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -1022,9 +1022,10 @@ async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_
 # past the effect, so a cold resume asked again; when the provider then answered, the restored round's response became
 # a revision and the run bought a second confirmation (16 solves, not 8).
 async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal, tmp_path: Path) -> None:
-    refused = Completion("maximum context length exceeded", finish_reason=FinishReason.CONTEXT_EXCEEDED)
+    refused = ContextExceeded("maximum context length exceeded")  # as the inference resource raises it
     sink, engine = JsonlSink(str(tmp_path / "events.jsonl")), Trials()
-    live = bundle(engine, Reviewer(rounds=[[found(1)]]), (*script(), *script()[:3], refused))
+    author = FakeInference((*script(), *script()[:3], refused))
+    live = replace(bundle(engine, Reviewer(rounds=[[found(1)]]), ()), inference=author)
     done = await run_workpiece(proposal, setup(), live, EventLog(sink=sink), install=install)
     assert done.terminal is Terminal.ACCEPTED
     assert [(r.response, r.discarded) for r in done.responses] == [(Response.STOPPED, True)] and len(engine.runs) == 8
