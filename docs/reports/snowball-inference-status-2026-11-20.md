@@ -29,6 +29,8 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | --- | ---: | ---: | ---: | ---: |
 | [Native, bounded attention tiles](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v5) | 2 | 1,008 | 4.80 | 9.17 |
 | [Native, vectorized prefill and clean shutdown](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v6) | 3 | 1,602 | 7.75 | 9.11 |
+| [Native, compact sliding-window reads](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v7) | 3 | 1,602 | 8.78 | 10.50 |
+| [Native prototype, stacked KV and fused prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v8) | 4 | 1,917 | 9.13 | 12.10 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -62,6 +64,20 @@ softmax tile boundaries. It matched the untrimmed kernel bit for bit in the
 packed-window test on v5p. With one decode query after a 51,870-token prefix,
 the compact 2,048-token window took 0.38 ms and full-context attention took
 1.35 ms on the same synthetic shape. [v5p kernel test](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v5p-window-20261121-v3)
+
+Warmed decode traces at 512 and 51,870 prefix tokens took about 3.1 seconds
+per 32-token round on the device. On one TPU TensorCore, three expert-weight
+slice operations consumed about 870 ms and gate/up packing about 580 ms per
+round. SparseCore scatter activity occupied about another second and
+overlapped TensorCore execution. [In-region device trace analysis](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p-decode-profile-analysis-20261121)
+
+The stacked-cache prototype also used the pinned vLLM TPU fork's RPA v3 kernel
+for short-window prefill with FP32 value accumulation and BF16 KV storage.
+On the synthetic 51,870-token-input case, short-window prefill per layer dropped
+from 822 ms to 24.8 ms. On the matched AgentX turn with roughly 45.5K input
+tokens and 594 output tokens, time to first token dropped from 21.77 to 9.70
+seconds, and request latency from 77.56 to 59.05 seconds.
+[Kernel precision test](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v3-v5p-20261121-v2)
 
 ### Reproduce the native diagnostic
 
