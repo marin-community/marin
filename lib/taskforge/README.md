@@ -121,7 +121,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 4); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 6); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -142,12 +142,15 @@ Readers follow only the chunks the head names. A root in any other journal forma
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
 replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
 defect direction with observed and deserved grades) and format 4 (trials hydrated without a detail, a too-easy
-baseline in place of a digest-bound fallback) and format 5 (whose readers cannot decode an `effect.invalidated` row,
-which names the refused slot result an operator-authorised replacement supersedes, or a `decision_model.read`
-row), fails with an error naming both formats and exits 4
+baseline in place of a digest-bound fallback) and format 5, fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
 lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 6` and reports the
-rest. Such roots are converted once by a separate migration, or rebuilt. Before claiming, the reader
+rest. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
+header cannot tell apart: the previous branch, whose readers cannot decode a `decision_model.read` row, and interim
+commits of this branch, which could write `decision_model.read` rows but had no `effect.invalidated` row (the marker
+naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
+establish an operator's intent. Format 6 refuses both alike, and a previous-branch reader refuses a format-6 root
+the same way instead of misreading its new rows. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
 resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
