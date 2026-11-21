@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 7:04 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 7:27 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ protocol for internal rollout and learner traffic.
 | 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. | Submit the staged rerun once the inventory task service credentials are authorized for the CoreWeave job. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Both inventory presets pass regional read-only plans. The standalone probe loaded the pinned 67B model on eight H100s and ran out of memory at full-size prefill. A query-tiled reference passed CPU parity tests at the same token capacity. | Verify full generation and fused replay on H100, then run the held-learner serving comparison. |
+| Native inventory backend | The standalone probe loaded the pinned 67B model on eight H100s. Query tiling passed CPU parity tests and reduced the failed H100 prefill allocation from 44.01 GiB to 35.50 GiB. Both held-learner plans with the tiled kernel render locally. | Verify full generation and fused replay on H100, then run the held-learner serving comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -657,10 +657,18 @@ now has a staged version that processes queries in tiles while keeping the
 full prompt capacity and each query's page order. CPU compilation reported
 30.94 GiB of temporary memory for the original attention function and
 1.97 GiB with query tiling at the same prefill shape. That measures the
-individual CPU executable. Generation and fused scoring at the full shape
-remain open on H100.
+individual CPU executable. The tiled H100 attempt reduced the failed
+allocation to 35.50 GiB. The allocator reported 24.66 GiB resident and a
+71.26 GiB limit immediately before prefill. A dedicated preallocation
+trial uses the same context and records a focused XLA memory report to
+test whether the allocator's growth behavior contributes to the failure.
+The trial reached execution of the tiled prefill, whose compiler report
+records 59.95 GiB per GPU including arguments and workspace. Generation
+and fused scoring at the full shape remain open on H100.
 [67B model-load and prefill attempt][iris-native-67b-router] ·
-[90% allocator attempt][iris-native-67b-cap90]
+[90% allocator attempt][iris-native-67b-cap90] ·
+[Tiled H100 attempt][iris-native-67b-tiled] ·
+[Dedicated preallocation trial][iris-native-67b-prealloc]
 
 The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
 the 524K-parameter fixture on one four-chip TPUv4 host. Each run used
@@ -865,8 +873,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   task mix, sampling and fixed evaluation panel constant. Record hardware
   and cost, time per admitted group and optimizer update, and fixed-panel
   reward. Both two-update plans at `4fbb38e286` resolved their regional
-  inputs for artifact version `2026.11.21.2`. The primary fixed panel is
-  `eval-lite@2026.11.17.1`. The published 100-task Parquet has SHA-256
+  inputs for artifact version `2026.11.21.2`. The conditional tiled pair
+  renders at `d7dbf0fc47` with artifact version `2026.11.21.3` and the same
+  learner, checkpoint, training tasks and evaluation settings. The primary
+  fixed panel is `eval-lite@2026.11.17.1`. The published 100-task Parquet has SHA-256
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
   Require all four attempt-scoped panels at steps 0 and 2, with each task
   ID, prompt token sequence and score reconciled against the successful
@@ -946,6 +956,8 @@ arms. [Prior timing comparison][timing]
 [iris-native-67b-local-cache]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-local-cache
 [iris-native-67b-router]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-router
 [iris-native-67b-cap90]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-cap90
+[iris-native-67b-tiled]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-tiled
+[iris-native-67b-prealloc]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-prealloc
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
