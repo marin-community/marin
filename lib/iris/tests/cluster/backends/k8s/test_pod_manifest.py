@@ -748,6 +748,22 @@ def test_region_constraint_matches_backend_without_using_kubernetes_region_label
     assert "nodeSelector" not in pod["spec"]
 
 
+@pytest.mark.parametrize("regions", [("US-EAST-08A",), (), ("US-EAST-02A", "US-EAST-08A")])
+def test_task_environment_attests_only_the_backends_unambiguous_region(regions):
+    req = make_run_req("/my-job/task-0")
+    req.environment.env_vars["IRIS_WORKER_REGION"] = "forged-region"
+    config = pod_config()
+    config.task_env["IRIS_WORKER_REGION"] = "cluster-env-region"
+    updates, resources = _dispatch(req, config, regions=regions)
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    environment = {entry["name"]: entry.get("value") for entry in pod["spec"]["containers"][0]["env"]}
+    if len(regions) == 1:
+        assert environment["IRIS_WORKER_REGION"] == "US-EAST-08A"
+    else:
+        assert "IRIS_WORKER_REGION" not in environment
+
+
 def test_preferred_region_mismatch_does_not_reject_dispatch():
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-WEST-04A")

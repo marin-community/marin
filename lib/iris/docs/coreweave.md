@@ -292,6 +292,11 @@ Iris `region` constraints match the backend's advertised region. They do not
 become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
 `topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
 rejected before Pod creation; preferred regions do not restrict placement.
+Task pods receive `IRIS_WORKER_REGION` from the backend's single advertised
+region. This value overrides user and cluster environment values. Backends with
+no region or multiple advertised regions omit it because they cannot attest one
+physical region. Consumers that require worker-region attestation need this
+controller version deployed before their task pods are created.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
