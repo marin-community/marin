@@ -13,14 +13,14 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Protocol, override
+from typing import Protocol, cast, override
 
 import httpx
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from taskcompendium.decision_model import DecisionModelRequest
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest
+from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, GlmEndpoint
 from taskforge.resources.execution import Notify
@@ -45,6 +45,15 @@ class DecisionModelDown(Exception):
     def __init__(self, reason: str, retry_after: float = 0.0) -> None:
         super().__init__(reason)
         self.retry_after = retry_after
+
+
+class OffScale(Exception):
+    """A reader returned ``level``, which is no level of its request: it is never recorded, so a resumed run reads
+    again, and TaskCompendium grades it ``INFRA_ERROR``."""
+
+    def __init__(self, level: object) -> None:
+        super().__init__(f"Decision model returned {level!r}, not a level")
+        self.level = level
 
 
 class DecisionModelReader(Protocol):
@@ -140,6 +149,10 @@ class DecisionModel:
     gate: asyncio.Semaphore = field(init=False)
     down: str | None = field(default=None, init=False)
     """Why the latest attempt failed, until one succeeds: what a read still waiting for a slot reports."""
+    reading: dict[str, asyncio.Task[float]] = field(default_factory=dict, init=False)
+    """Reads in flight by event digest: equal requests share one paid read, and a cancelled waiter leaves it running
+    for the others. A finished read leaves at once, so a failure is never shared with a later request; the event log
+    replays a recorded one."""
 
     def __post_init__(self) -> None:
         self.gate = asyncio.Semaphore(self.policy.concurrency)
@@ -148,6 +161,12 @@ class DecisionModel:
         return Fingerprint("decision_model", digest(self.policy.model), ReplayPolicy.CACHE)
 
     async def read(self, event: DecisionModelRead, *, notify: Notify) -> float:
+        if (shared := self.reading.get(key := event_digest(event))) is None:
+            shared = self.reading[key] = asyncio.ensure_future(self.level(event, notify))
+            shared.add_done_callback(lambda _: self.reading.pop(key))
+        return await asyncio.shield(shared)
+
+    async def level(self, event: DecisionModelRead, notify: Notify) -> float:
         policy = self.policy
         delay, attempt, why = policy.backoff_initial, 1, f"none of its {policy.concurrency} read slots came free"
         try:
@@ -156,8 +175,11 @@ class DecisionModel:
                     why = "its read went unanswered"
                     try:
                         async with asyncio.timeout(policy.request_timeout):
-                            level = await self.reader.read(event.request)
+                            level: object = await self.reader.read(event.request)
                         self.down = None
+                        top = len(event.request.levels) - 1  # TaskCompendium's level contract, checked before recording
+                        if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= top:
+                            raise OffScale(level)
                         return level
                     except DecisionModelDown as error:
                         reason, asked = str(error), error.retry_after
@@ -189,7 +211,10 @@ class DecisionModelEngine:
         if (connection := spec.decision_model) is not None:
 
             async def read(request: DecisionModelRequest) -> float:
-                return await self.ctx.emit(DecisionModelRead(request))
+                try:
+                    return await self.ctx.emit(DecisionModelRead(request))
+                except OffScale as error:
+                    return cast(float, error.level)  # graded INFRA_ERROR; the level was never recorded
 
             spec = spec.model_copy(update={"decision_model": replace(connection, read=read)})
         return await self.engine.run_task(spec, model, run_id=run_id)

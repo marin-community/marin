@@ -6,10 +6,12 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import cast, override
 
 import httpx
 import pytest
+from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
 from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
@@ -21,7 +23,7 @@ from taskcompendium.models import DECISION_LEVELS, DECISION_QUESTION, DecisionMo
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, Retrying
 from taskforge.effects.issues import DecisionModelUnavailable
-from taskforge.effects.log import EventLog, Record
+from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.client import Progress, Segment
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings
@@ -265,18 +267,53 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
     assert [read if isinstance(read, float) else str(read) for read in ended] == outcomes
 
 
-async def test_an_off_scale_level_is_an_infrastructure_error_that_is_read_again_on_resume() -> None:
-    policy = overlaid()
-    reader, ctx = FakeReader(levels={"12": 7}), Context(log=EventLog())
-    installed(policy, reader, ScriptedProvider(()), ctx, VirtualTime())
+# Review 2026-11-21 (n10 finding 4): an override returning "4" was graded INFRA_ERROR, then replayed from the journal as
+# the level 4.0 and passed with no new read; an unconvertible string made the journal unreadable. A level is checked
+# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume.
+@pytest.mark.parametrize("level, shown", [(7, "7"), ("4", "a value of type str"), ("four", "a value of type str")])
+async def test_an_off_scale_level_is_an_infrastructure_error_recorded_nowhere_and_read_again(
+    level: object, shown: str, tmp_path: Path
+) -> None:
+    policy, sink = overlaid(), JsonlSink(str(tmp_path / "events.jsonl"))
+    ctx = Context(log=EventLog(sink=sink))
+    installed(policy, FakeReader(levels={"12": level}), ScriptedProvider(()), ctx, VirtualTime())
     grade = await ctx.emit(GradeCandidate(decision_spec(policy), Candidate("12")))
     await ctx.drain()
     assert (grade.status, grade.reward) == (Outcome.INFRA_ERROR, None)
-    assert grade.error == f"Decision model {MODEL!r} returned 7, not a level in 0..4"
-    resolved = [r.event for r in ctx._log.records if isinstance(r.event, Resolved)]
-    read = next(event for event in resolved if isinstance(event.request, DecisionModelRead))
-    assert not replayable_grade(read)
-    assert replayable_grade(replace(read, value=3.5))
+    assert grade.error == f"Decision model {MODEL!r} returned {shown}, not a level in 0..4"
+    events = [record.event for record in ctx._log.records]
+    assert not [
+        event for event in events if isinstance(event, Resolved) and isinstance(event.request, DecisionModelRead)
+    ]
+    history = local_records(sink)  # the journal decodes
+    repaired, resumed = FakeReader(), Context(log=EventLog(replay_from=history, replayable=replayable_grade))
+    installed(policy, repaired, ScriptedProvider(()), resumed, VirtualTime())
+    assert (await resumed.emit(GradeCandidate(decision_spec(policy), Candidate("12")))).reward == 1.0
+    await resumed.drain()
+    assert repaired.reads == [request("12")]
+
+
+# Review 2026-11-21 (n10 finding 4): three solver answers and two controls bought five reads for two requests, and the
+# round's verifier and a fresh one could see different rewards for one key. Equal requests in flight share one read;
+# a waiter that is cancelled leaves it to the others, and a read that fails is not shared with the next request.
+async def test_equal_reads_in_flight_share_one_paid_read_and_survive_a_cancelled_waiter() -> None:
+    policy = overlaid().overlaid({"decision_model.concurrency": 4})
+    reader, ctx = BarrierReader(), Context(log=EventLog())
+    installed(policy, reader, ScriptedProvider(()), ctx, VirtualTime())
+    spec = decision_spec(policy)
+    grades = [
+        asyncio.create_task(ctx.emit(GradeCandidate(spec, Candidate("12"), fresh_verifier=fresh)))
+        for fresh in (False, False, True, True)
+    ]
+    while not reader.active:
+        await asyncio.sleep(0)
+    for _ in range(20):  # every grade reaches its read
+        await asyncio.sleep(0)
+    grades[0].cancel()
+    reader.release.set()
+    rewards = await asyncio.gather(*grades[1:])
+    await ctx.drain()
+    assert (reader.peak, [grade.reward for grade in rewards]) == (1, [1.0] * 3)
 
 
 async def test_without_a_decision_model_its_grader_is_returned_to_the_author_before_any_validation() -> None:
