@@ -179,7 +179,7 @@ def test_crux_program_accepts_nested_call_and_terminal_turn_token(direction, res
     exec(compile(program, "<candidate>", "exec"), {})
 
 
-def test_crux_program_accepts_unclosed_answer_with_terminal_turn_token():
+def test_crux_program_accepts_untagged_answer_with_terminal_turn_token():
     problem = {"code": "def f(value): return value", "input": "7", "output": "7"}
     program = build_test_program(problem, "assert f(7) == 7<|eot_id|>", "cruxeval", "output")
     exec(compile(program, "<candidate>", "exec"), {})
