@@ -170,7 +170,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
   `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
-  the review counts only claims the grader confirms, re-graded on a fresh machine.
+  the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
+  whose context window or output budget runs out before it reports is `exhausted`: the task can
+  still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
