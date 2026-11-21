@@ -9,15 +9,20 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from taskcompendium.decision_model import DecisionModelConnection, DecisionModelRequest, grade_decision_model_answer
+from taskcompendium.ejection import enable_ejection
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     DECISION_LEVELS,
     DECISION_QUESTION,
     AnswerType,
+    AssistantToolCalls,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     DecisionModelGrader,
     EnvironmentRequirements,
+    FinalAction,
+    FunctionDefinition,
     Grader,
     GradingAttempt,
     PlainText,
@@ -45,10 +50,17 @@ def _task(grader: Grader = GRADER) -> TaskSpec:
     )
 
 
-def _attempt(task: TaskSpec, answer: str) -> GradingAttempt:
-    return GradingAttempt(
-        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
-    )
+def _attempt(task: TaskSpec, answer: str | AssistantToolCalls) -> GradingAttempt:
+    final = TextMessage(role="assistant", content=answer) if isinstance(answer, str) else answer
+    return GradingAttempt(ConversationTrace(events=(*task.context.events, final)))
+
+
+class Outage(Exception):
+    pass
+
+
+async def _unpaid_read(request: DecisionModelRequest) -> float:
+    raise AssertionError("this answer must not reach the decision model")
 
 
 def _connection(level, requests: list[DecisionModelRequest] | None = None) -> DecisionModelConnection:
@@ -105,21 +117,46 @@ async def test_the_read_request_carries_exactly_what_identifies_the_read():
 
 
 @pytest.mark.parametrize(
-    "level,message",
+    "level,shown",
     [
-        pytest.param(5, "returned 5, not a level in 0..4", id="above"),
-        pytest.param(-0.5, "returned -0.5, not a level in 0..4", id="below"),
-        pytest.param(float("nan"), "returned nan, not a level in 0..4", id="nan"),
-        pytest.param(None, "returned None, not a level in 0..4", id="missing"),
-        pytest.param(True, "returned True, not a level in 0..4", id="bool"),
-        pytest.param(ConnectionError("clef unavailable"), "read failed: ConnectionError: clef unavailable", id="raises"),
+        pytest.param(5, "5", id="above"),
+        pytest.param(-0.5, "-0.5", id="below"),
+        pytest.param(float("nan"), "nan", id="nan"),
+        pytest.param(float("inf"), "inf", id="inf"),
+        pytest.param(10**400, "a value of type int", id="huge-int"),
+        pytest.param(None, "a value of type NoneType", id="missing"),
+        pytest.param("4", "a value of type str", id="text"),
+        pytest.param(True, "True", id="bool"),
     ],
 )
-async def test_a_read_without_a_declared_level_is_an_infrastructure_error(level, message):
+async def test_a_returned_level_off_the_scale_is_an_infrastructure_error(level, shown):
     task = _task()
     grade = await grade_decision_model_answer(task, _attempt(task, "100 C"), _connection(level))
     assert (grade.status, grade.reward) == (Outcome.INFRA_ERROR, None)
-    assert grade.error == f"Decision model {MODEL!r} {message}"
+    assert grade.error == f"Decision model {MODEL!r} returned {shown}, not a level in 0..4"
+
+
+async def test_a_failing_read_reaches_the_caller_with_its_type():
+    task = _task()
+    with pytest.raises(Outage):
+        await grade_decision_model_answer(task, _attempt(task, "100 C"), _connection(Outage("down")))
+
+
+async def test_a_valid_ejection_scores_zero_without_a_read():
+    task = enable_ejection(_task())
+    ejection = ConversationToolCall(call_id="eject", name="eject_button", arguments={"reason": "Cannot measure"})
+    attempt = _attempt(task, AssistantToolCalls(calls=(ejection,)))
+    grade = await grade_decision_model_answer(task, attempt, DecisionModelConnection(MODEL, _unpaid_read))
+    assert (grade.status, grade.reward) == (Outcome.GRADED, 0.0)
+
+
+async def test_a_blank_native_final_text_scores_zero_without_a_read():
+    answer = FunctionDefinition(name="answer", parameters={"type": "object"})
+    task = _task().model_copy(
+        update={"answer_type": AnswerType.NATIVE_ACTION, "answer_format": FinalAction(), "final_tools": (answer,)}
+    )
+    grade = await grade_decision_model_answer(task, _attempt(task, "  "), DecisionModelConnection(MODEL, _unpaid_read))
+    assert (grade.status, grade.reward, grade.detail) == (Outcome.GRADED, 0.0, {"reason": "empty_candidate"})
 
 
 async def test_a_blank_answer_fails_submission_without_a_read():

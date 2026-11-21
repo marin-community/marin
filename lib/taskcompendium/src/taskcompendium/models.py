@@ -681,12 +681,7 @@ DECISION_CUT_MIN, DECISION_CUT_MAX = 2.0, 3.5
 
 
 class DecisionModelGrader(BaseModel):
-    """A decision model's comparison of the final answer with a reference answer under a rubric.
-
-    The decision model reads ``deliverable``, ``rubric``, ``reference`` and the candidate and returns a level on
-    ``DECISION_LEVELS``; the answer earns 1 at or above the author's ``cut`` and 0 below it. A decision model is
-    not an LLM judge (``VerifyitGrader`` mode ``judge``): the two kinds share no grading code or connection.
-    """
+    """A decision model's level for the answer on ``DECISION_LEVELS``; 1 at or above ``cut``. Not an LLM judge."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 

@@ -1,13 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a ``decision_model`` grader through a caller-supplied decision-model read.
+"""Grade a ``decision_model`` grader through the caller's read; it shares nothing with the LLM judge path."""
 
-The caller owns the decision model: its endpoint, health, retries and concurrency. This module builds the read
-request, validates the returned level and applies the author's cut. It shares nothing with the LLM judge path.
-"""
-
-import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -21,9 +16,10 @@ from taskcompendium.models import (
     GradingAttempt,
     SubmissionFailure,
     TaskSpec,
+    TextMessage,
     TextSubmission,
 )
-from taskcompendium.submission import native_action_text, require_submission_compatibility
+from taskcompendium.submission import is_ejection, native_action_text, require_submission_compatibility
 
 
 @dataclass(frozen=True)
@@ -41,10 +37,10 @@ class DecisionModelRequest:
 
 @dataclass(frozen=True)
 class DecisionModelConnection:
-    """The caller's decision model, kept outside serialized task specifications.
+    """The caller's decision model, which owns its endpoint, health, retries, concurrency and timeouts.
 
-    ``model`` names the model and version that ``read`` reaches. ``read`` returns a level on ``request.levels``:
-    an index, or an expected level between two indices.
+    ``model`` must identify the deployed revision and any read setting that changes its levels. ``read`` returns an
+    index into ``request.levels`` or an expected level between two indices; what it raises reaches the caller.
     """
 
     model: str
@@ -54,10 +50,7 @@ class DecisionModelConnection:
 async def grade_decision_model_answer(
     task: TaskSpec, attempt: GradingAttempt, connection: DecisionModelConnection
 ) -> GradeResult:
-    """Score the final answer 1 when its level reaches the grader's cut, else 0.
-
-    A read that raises or returns no level on ``DECISION_LEVELS`` is an infrastructure error, never a score.
-    """
+    """Score the final answer 1 when its level reaches the grader's cut, else 0; an off-scale level is infra_error."""
     grader = task.grader
     if not isinstance(grader, DecisionModelGrader):
         raise TypeError(f"Decision-model grading requires a decision_model grader, not {grader.kind}")
@@ -66,13 +59,15 @@ async def grade_decision_model_answer(
         submission = answer_submission(task, attempt)
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    if is_ejection(submission):
+        return GradeResult(Outcome.GRADED, 0.0, detail={})
+    assert isinstance(submission, TextSubmission | ActionSubmission)
     if isinstance(submission, TextSubmission):
-        candidate = submission.value
-    elif isinstance(submission, ActionSubmission):
-        candidate = native_action_text(submission.message)
+        text, candidate = submission.value, submission.value
     else:
-        return GradeResult(Outcome.INVALID_TASK, None, f"A decision model reads text, not a {type(submission).__name__}")
-    if not candidate.strip():
+        text = submission.message.content if isinstance(submission.message, TextMessage) else None
+        candidate = native_action_text(submission.message)
+    if text is not None and not text.strip():
         return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
     request = DecisionModelRequest(
         connection.model,
@@ -83,19 +78,13 @@ async def grade_decision_model_answer(
         grader.reference,
         candidate,
     )
-    try:
-        level = await connection.read(request)
-    except Exception as error:
-        # The caller's read owns retries and outage policy; whatever it raises leaves the answer ungraded.
-        return GradeResult(
-            Outcome.INFRA_ERROR,
-            None,
-            f"Decision model {connection.model!r} read failed: {type(error).__name__}: {error}",
-        )
+    level = await connection.read(request)
     top = len(DECISION_LEVELS) - 1
-    if isinstance(level, bool) or not isinstance(level, int | float) or not (math.isfinite(level) and 0 <= level <= top):
+    if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= top:
+        small = isinstance(level, float) or (isinstance(level, int) and abs(level) < 10**6)
+        shown = repr(level) if small else f"a value of type {type(level).__name__}"
         return GradeResult(
-            Outcome.INFRA_ERROR, None, f"Decision model {connection.model!r} returned {level!r}, not a level in 0..{top}"
+            Outcome.INFRA_ERROR, None, f"Decision model {connection.model!r} returned {shown}, not a level in 0..{top}"
         )
     return GradeResult(
         Outcome.GRADED,
