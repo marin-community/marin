@@ -1324,8 +1324,8 @@ def wait_until_gone(pid: int, seconds: float) -> bool:
     return False
 
 
-# Review 2026-11-21: the status shell died on the timer's TERM, so `timeout` exited 124 without its KILL, and a
-# command that ignored TERM kept running beside the next command on a machine reported as safely timed out.
+# The status shell outlives the timer's TERM, so `timeout` keeps watching and KILLs a command that ignores TERM
+# instead of reporting a clean timeout while the command keeps running on the kept machine.
 @pytest.mark.parametrize("shell", ["dash", "bash"])
 def test_command_ignoring_term_is_killed_at_the_grace_and_closes_the_machine(tmp_path, shell, monkeypatch) -> None:
     timer = guest_timer(shell)

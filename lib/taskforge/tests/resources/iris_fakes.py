@@ -77,7 +77,7 @@ Injection = tuple[str, Fault, bool]
 # Every RPC an ``IrisMachine.run`` without stdin can make once its machine has probed the guest ``timeout``.
 # Status is the sandbox task lookup; the rest are exec scripts.
 RPC_SITES: dict[str, Callable[[str], bool]] = {
-    "command": lambda script: "2> /tmp/.shellbox-" in script,
+    "command": lambda script: re.search(r"[24]> /tmp/\.shellbox-", script) is not None,  # Untimed, or timed.
     "status": lambda script: script == "status",
     "stdout-size": lambda script: script.startswith("wc -c") and script.endswith("-out"),
     "stdout-chunk": lambda script: script.startswith("tail -c") and "-out |" in script,

@@ -317,7 +317,7 @@ async def test_control_grade_on_iris_survives_a_first_copy_queued_past_its_timeo
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.2, maximum=0.2))
-    monkeypatch.setitem(SITES, "first-copy", lambda script: "forge-candidates/0 " in script and "2> /tmp/" in script)
+    monkeypatch.setitem(SITES, "first-copy", lambda script: "forge-candidates/0 " in script and "4> /tmp/" in script)
     factory = LocalIrisFactory(tmp_path, [("first-copy", Fault.ADMISSION_REFUSED, False)] * 2)
     grader = GradingResource(rollout_engine({"iris": factory}, command_timeout=0.1), "config")
     candidate = Candidate("12", (inline_resource("a.txt", b"first"), inline_resource("b.txt", b"second")))
