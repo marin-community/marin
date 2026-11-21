@@ -26,6 +26,7 @@ REWARD_SHAPING_ROW_KEYS = (
     "verification_results",
     "evidence_messages",
     "exception_types",
+    "error_identities",
     "error_treatments",
     "server_errors",
 )

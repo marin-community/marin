@@ -223,7 +223,7 @@ def _training_decision(
             exception_type=missing_logprobs or failure.exception_type,
         )
         error_treatment = treatment.value
-        diagnostics = {**verification.diagnostics, "exception_type": failure.exception_type, **failure.diagnostics}
+        diagnostics = {**verification.diagnostics, **failure.diagnostics}
         verification = (
             replace(verification, diagnostics=diagnostics)
             if graded
@@ -380,7 +380,7 @@ def _training_batch(
         task_outcomes=[rollout.grade.status for rollout in rollouts],
     )
     _attach_reward_channels(batch, decisions)
-    _attach_failure_channels(batch, decisions)
+    _attach_failure_channels(batch, decisions, rollouts)
     _attach_student_topk(batch, rollouts)
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
@@ -419,7 +419,12 @@ def _attach_reward_channels(batch: TrajectoryBatch, decisions: Sequence[_Trainin
         ]
 
 
-def _attach_failure_channels(batch: TrajectoryBatch, decisions: Sequence[_TrainingDecision]) -> None:
+def _attach_failure_channels(
+    batch: TrajectoryBatch, decisions: Sequence[_TrainingDecision], rollouts: Sequence[TrainingRollout]
+) -> None:
+    failures = [rollout.failure for rollout in rollouts]
+    if any(failure is not None for failure in failures):
+        batch["error_identities"] = failures
     exception_types = [decision.disposition.exception_type for decision in decisions]
     if any(value is not None for value in exception_types):
         batch["exception_types"] = exception_types

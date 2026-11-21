@@ -228,9 +228,18 @@ def exception_identity(
         current = current.__cause__
     exception_type = type(error).__name__
     cause_type = None if cause is None else type(cause).__name__
-    if disposition is RetryDisposition.UNKNOWN:
+    named_timeout = (
+        isinstance(error, TimeoutError)
+        and exception_type in categories
+        and status_code is None
+        and disposition is not RetryDisposition.PERMANENT
+    )
+    if named_timeout or disposition is RetryDisposition.UNKNOWN:
         disposition = record_retry_disposition(
-            exception_type, cause_type, status_code, retryable_error_types=retryable_error_types
+            exception_type,
+            None if named_timeout else cause_type,
+            status_code,
+            retryable_error_types=retryable_error_types,
         )
     return ErrorIdentity(
         exception_type=exception_type,

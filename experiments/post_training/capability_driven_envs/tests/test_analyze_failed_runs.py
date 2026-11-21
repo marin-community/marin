@@ -41,7 +41,6 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeli
     merge_ideas,
     yield_ideas,
 )
-from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import FAILURE_OPERATION
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
 from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
 
@@ -95,14 +94,14 @@ ROLLOUTS = [
         Outcome.GRADED,
         0.0,
         {"role": "assistant", "content": "1"},
-        failure=ErrorIdentity(exception_type="ConnectionError", diagnostics={FAILURE_OPERATION: "model"}),
+        failure=ErrorIdentity(exception_type="ConnectionError", operation="model"),
     ),
     evaluated(
         "deadline",
         Outcome.UNAVAILABLE,
         None,
         {"role": "assistant", "content": "Let me count: one, two, three"},
-        failure=ErrorIdentity(exception_type="TimeoutError", diagnostics={FAILURE_OPERATION: "attempt"}),
+        failure=ErrorIdentity(exception_type="TimeoutError", operation="attempt"),
     ),
 ]
 

@@ -1,5 +1,6 @@
 from typing import List, Dict, Union, Callable, Optional
 from omegaconf import DictConfig
+from rigging.task_errors import ErrorIdentity
 from enum import Enum
 import ray
 from skyrl_train.workers.worker import PPORayActorGroup
@@ -29,12 +30,8 @@ from skyrl_train.batch_metrics import consumed_stop_metrics
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
-        "exception_type",
-        "cause_error_type",
-        "operation",
         "timed_out",
         "machine_operation",
-        "provider_status_code",
         "provider_sdk_call",
         "provider_rate_limits",
     }
@@ -295,6 +292,7 @@ def dump_per_dataset_eval_results(
         with io.open_file(filename, "w") as f:
             for i in indices:
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
+                failure = (trajectory_batch.get("error_identities") or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
                     "attempt_id": attempt_id,
@@ -313,6 +311,9 @@ def dump_per_dataset_eval_results(
                     "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
                     "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
+                    "failure": None if failure is None else failure.model_dump(
+                        mode="json", include=ErrorIdentity.model_fields.keys() - {"diagnostics"}
+                    ),
                     "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
                     "env_class": concat_all_envs[i],
                     "data_source": data_source,

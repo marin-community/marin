@@ -101,7 +101,10 @@ The shared `ErrorIdentity` records the task error name, category, provider cause
 provider status, and retry disposition. Native Harbor exception records extend
 this identity with message and traceback details. TaskCompendium grades preserve
 the identity when a trial supplies one. Consumers use its stored category and
-disposition without loading the producer framework.
+disposition without loading the producer framework. Evaluation JSONL exports these
+fields under `failure`; diagnostics retain only additional allowlisted metadata.
+Named phase timeouts use the producer's timeout policy. Structured provider status
+and permanent causes take precedence.
 
 Configure task retries at `environment.task_sessions.retry`. The settings apply
 across Harbor and other task kinds. The base budget is zero retries; the

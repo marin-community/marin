@@ -24,6 +24,7 @@ from rigging.task_errors import (
     RetrySettings,
     error_category,
     exception_identity,
+    record_retry_disposition,
     retry_delay,
 )
 from jinja2 import TemplateError
@@ -239,16 +240,13 @@ async def _model_turn(
     )
 
 
-def _machine_diagnostics(error: TaskMachineError, status_code: int | None) -> dict[str, Any]:
+def _machine_diagnostics(error: TaskMachineError) -> dict[str, Any]:
     """Return only provider metadata allowed in rollout diagnostics."""
     assert error.__cause__ is not None
     diagnostics: dict[str, Any] = {}
-    diagnostics["cause_error_type"] = type(error.__cause__).__name__
     diagnostics["machine_operation"] = error.operation.value
     provider_error = error.__cause__
     if isinstance(provider_error, DaytonaError):
-        if status_code is not None:
-            diagnostics["provider_status_code"] = status_code
         rate_limits = {
             name.lower(): int(value)
             for name, value in (provider_error.headers or {}).items()
@@ -289,7 +287,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         raise error
     failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
     exception_type = type(error).__name__
-    diagnostics = {"operation": interruption.operation.value, TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
+    diagnostics = {TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
         provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
         failure = failure.model_copy(update={
@@ -297,7 +295,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             "provider_status_code": provider.provider_status_code,
         })
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
-        diagnostics.update(_machine_diagnostics(error, failure.provider_status_code))
+        diagnostics.update(_machine_diagnostics(error))
     if isinstance(error, TimeoutError):
         exception_type = {
             RolloutOperation.ATTEMPT: TRIAL_TIMEOUT_ERROR,
@@ -307,7 +305,6 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         }.get(interruption.operation, AGENT_TIMEOUT_ERROR)
     elif isinstance(error, TemplateError):
         exception_type = TEMPLATE_ERROR
-        diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
         exception_type = TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
@@ -315,7 +312,6 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
         exception_type = VERIFIER_RUNTIME_ERROR
-        diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = CONTEXT_LENGTH_EXCEEDED_ERROR
@@ -330,6 +326,12 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
     }:
         # Replaying after a model command or grading may duplicate completed work.
         failure = failure.model_copy(update={"retry_disposition": RetryDisposition.PERMANENT})
+    disposition = failure.retry_disposition
+    if disposition is not RetryDisposition.PERMANENT:
+        if isinstance(error, TimeoutError):
+            disposition = record_retry_disposition(exception_type, None, failure.provider_status_code)
+        elif exception_type != failure.exception_type:
+            disposition = RetryDisposition.UNKNOWN
     return failure.model_copy(
         update={
             "exception_type": exception_type,
@@ -337,11 +339,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             "diagnostics": diagnostics,
             "cause_type": failure.cause_type
             or (failure.exception_type if exception_type != failure.exception_type else None),
-            "retry_disposition": failure.retry_disposition
-            if failure.retry_disposition is RetryDisposition.PERMANENT
-            or exception_type == failure.exception_type
-            or exception_type in {ENVIRONMENT_START_TIMEOUT_ERROR, AGENT_SETUP_TIMEOUT_ERROR, TRIAL_TIMEOUT_ERROR}
-            else RetryDisposition.UNKNOWN,
+            "retry_disposition": disposition,
         }
     )
 
