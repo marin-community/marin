@@ -36,6 +36,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -324,7 +325,7 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     package = verifyit_package(
         ReasoningGymSpec(dataset=dataset),
         (inline_resource("entry.json", json.dumps(data).encode()),),
-        environment=required_grader_environment(context),
+        placement=GraderMachine(environment=required_grader_environment(context)),
     )
     task = TaskSpec(
         id=row.id,

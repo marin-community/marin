@@ -18,8 +18,10 @@ from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
     Grader,
+    GraderMachine,
     ScriptGrader,
     TaskSpec,
+    VerifyitGrader,
     judge_spec,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
@@ -147,7 +149,7 @@ def lower(
     """The ``TaskRolloutSpec`` that runs ``task`` on ``factories`` under ``TOOL_HARNESS``.
 
     Supply a task machine exactly when the task offers shell tools, and a verifier machine exactly
-    when its grader declares an environment. Backend selection and software requirements are bound
+    when its grader uses a separate machine. Backend selection and software requirements are bound
     to this host. Validation checks factory support without starting a machine. The spec keeps the
     engine's exact-token trace; callers can select ``TraceMode.MESSAGES`` for text-only evidence.
 
@@ -159,7 +161,7 @@ def lower(
     if (task_machine is None) != (SHELL_CAPABILITY not in task.environment_requirements.capabilities):
         raise ValueError("A task machine is given exactly when the task has the shell capability")
     if (verifier_machine is None) != (grading_environment(task) is None):
-        raise ValueError("A verifier machine is given exactly when the task's grader has an environment")
+        raise ValueError("A verifier machine is given exactly when the task's grader uses a separate machine")
     task = _hosted_task(task)
     grading = grading_environment(task)
     spec = TaskRolloutSpec(
@@ -216,7 +218,10 @@ def _hosted_task(task: TaskSpec) -> TaskSpec:
     update: dict[str, object] = {"environment_requirements": host_requirements(task.environment_requirements)}
     grading = grading_environment(task)
     if grading is not None:
-        update["grader"] = task.grader.model_copy(update={"environment": host_requirements(grading)})
+        grader = task.grader
+        assert isinstance(grader, ScriptGrader | VerifyitGrader) and isinstance(grader.placement, GraderMachine)
+        placement = grader.placement.model_copy(update={"environment": host_requirements(grading)})
+        update["grader"] = grader.model_copy(update={"placement": placement})
     return task.model_copy(update=update)
 
 

@@ -31,6 +31,7 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    GraderMachine,
     ResourceGroups,
     ScriptGrader,
     StdoutReward,
@@ -218,7 +219,7 @@ print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/w
     grader = ScriptGrader(
         argv=("python3", "/tests/grade.py"),
         reward=StdoutReward(),
-        environment=requirements(image=None),
+        placement=GraderMachine(environment=requirements(image=None)),
         answer_path="/app/answer.txt",
         timeout=120,
     )

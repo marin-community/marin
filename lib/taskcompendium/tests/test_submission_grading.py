@@ -35,6 +35,7 @@ from taskcompendium.models import (
     FinalAction,
     FunctionDefinition,
     Grader,
+    GraderMachine,
     GradingAttempt,
     JsonAnswer,
     JsonValueAnswer,
@@ -49,16 +50,18 @@ from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import submission_compatibility
 
+ANSWER_FILE = "/app/answer.txt"
 GRADING_ENVIRONMENT = EnvironmentRequirements(
     docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
 )
 
 
-def _task(grader: Grader, answer_type=AnswerType.TEXT, answer_format=PlainText()) -> TaskSpec:
+def _task(grader: Grader, answer_type=AnswerType.TEXT, answer_format=PlainText(), output_paths=()) -> TaskSpec:
     return TaskSpec(
         id="submission-grading",
         context=ConversationInput(events=(TextMessage(role="user", content="Complete the task."),)),
         environment_requirements=EnvironmentRequirements(),
+        output_paths=output_paths,
         answer_type=answer_type,
         answer_format=answer_format,
         grader=grader,
@@ -175,6 +178,51 @@ def test_captured_null_state_is_a_submission_but_missing_state_is_not():
     assert (captured.status, captured.reward) == (Outcome.GRADED, 1.0)
 
 
+@pytest.mark.parametrize(
+    "files,status,reward",
+    [
+        ({ANSWER_FILE: b"204"}, Outcome.GRADED, 1.0),
+        ({ANSWER_FILE: b"205"}, Outcome.GRADED, 0.0),
+        ({}, Outcome.SUBMISSION_FAILURE, 0.0),
+        ({ANSWER_FILE: b"\xff"}, Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+def test_host_grader_grades_the_captured_answer_file_not_the_reply(files, status, reward):
+    task = _task(
+        _grader(ExactSpec(expected=("204",), empty_output=EmptyOutputPolicy.GRADE)),
+        AnswerType.FILE,
+        output_paths=(ANSWER_FILE,),
+    )
+    attempt = GradingAttempt(_conversation(task, "204" if files else " "), files)
+
+    result = grade_answer(task, attempt)
+
+    assert (result.status, result.reward) == (status, reward)
+
+
+def test_remote_judge_grades_the_captured_answer_file(judge_server):
+    package = verifyit_package(
+        JudgeSpec(
+            references=("204",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        )
+    )
+    task = _task(package.grader, AnswerType.FILE, output_paths=(ANSWER_FILE,))
+    attempt = GradingAttempt(_conversation(task, "I wrote the file."), {ANSWER_FILE: b"The answer is 204."})
+
+    result = grade_remote_judge_answer(
+        task, attempt, JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret")
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert "The answer is 204." in json.dumps(judge_server.requests[0])
+    assert "I wrote the file." not in json.dumps(judge_server.requests[0])
+
+
 def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoint(judge_server):
     response = AssistantToolCalls(
         calls=(ConversationToolCall(call_id="transport-id", name="lookup", arguments={"query": "weather"}),)
@@ -188,7 +236,7 @@ def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoin
             label_scores={"PASS": 1.0, "FAIL": 0.0},
             model="fixture-judge",
         ),
-        environment=GRADING_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADING_ENVIRONMENT),
     )
     task = TaskSpec(
         id="judged-native-action",
@@ -229,7 +277,11 @@ def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoin
 
 
 def test_runtime_requires_an_explicit_connection_for_judge_grading():
-    task = _task(verifyit_package(JudgeSpec(references=("answer",)), environment=GRADING_ENVIRONMENT).grader)
+    task = _task(
+        verifyit_package(
+            JudgeSpec(references=("answer",)), placement=GraderMachine(environment=GRADING_ENVIRONMENT)
+        ).grader
+    )
     result = grade_task(task, _attempt(task, "candidate"))
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
 
@@ -243,7 +295,7 @@ def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
             prompt_template="Reference: {reference}\nCandidate: {candidate}",
             label_scores={"PASS": 1.0, "FAIL": 0.0},
         ),
-        environment=GRADING_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADING_ENVIRONMENT),
     )
     task = TaskSpec(
         id="empty-judged-native-action",
@@ -290,7 +342,7 @@ def test_remote_judge_grades_blank_plain_text_when_its_policy_requires_it(judge_
             empty_output=EmptyOutputPolicy.GRADE,
             model="fixture-judge",
         ),
-        environment=GRADING_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADING_ENVIRONMENT),
     )
     task = _task(package.grader)
 
@@ -315,7 +367,7 @@ def test_remote_judge_provider_error_is_retryable_infrastructure_failure(judge_s
             label_scores={"PASS": 1.0, "FAIL": 0.0},
             model="fixture-judge",
         ),
-        environment=GRADING_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADING_ENVIRONMENT),
     )
     task = _task(package.grader)
 
@@ -353,7 +405,7 @@ def test_invalid_captured_state_never_becomes_a_submission(state):
     ],
 )
 def test_sandbox_grader_never_awards_in_process_credit(spec):
-    task = _task(verifyit_package(spec, environment=GRADING_ENVIRONMENT).grader)
+    task = _task(verifyit_package(spec, placement=GraderMachine(environment=GRADING_ENVIRONMENT)).grader)
     task = TaskSpec.model_validate_json(task.model_dump_json())
     attempt = _attempt(task, "done")
     # The answer format can carry the answer, but only the grading environment may score it.

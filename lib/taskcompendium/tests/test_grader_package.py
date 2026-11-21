@@ -26,6 +26,7 @@ from taskcompendium.models import (
     FileReward,
     FinalAction,
     FunctionDefinition,
+    GraderMachine,
     GradingAttempt,
     PlainText,
     ResourceGroups,
@@ -46,12 +47,12 @@ GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
 
 
 class FixtureImageFactory(DockerMachineFactory):
-    """Run the pinned fixture image's commands on the ShellSim built-ins."""
+    """Run the pinned fixture image's commands on the ShellSim built-ins; the image's WORKDIR is the root."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec):
-        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec(), workdir=spec.workdir or "/"))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):
@@ -94,11 +95,12 @@ jq --argjson expected "$expected" '{
 """
 
 
-def _state_task(environment=GRADING_ENVIRONMENT):
+def _state_task(environment=GRADING_ENVIRONMENT, cwd="/app"):
     """A state-graded task whose script grader reads a private config and the captured state."""
     grader = ScriptGrader(
         argv=("sh", "/tests/grade.sh"),
-        environment=environment,
+        cwd=cwd,
+        placement=GraderMachine(environment=environment),
         answer_path=None,
         reward=FileReward(
             files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5
@@ -120,16 +122,20 @@ class RecordingImageFactory(FixtureImageFactory):
 
 
 @pytest.mark.parametrize(
-    "environment,workdir",
+    "environment,cwd,workdir",
     [
-        (GRADING_ENVIRONMENT, "/app"),
-        (GRADING_ENVIRONMENT.model_copy(update={"working_directory": "/grading"}), "/grading"),
+        (GRADING_ENVIRONMENT, "/app", "/app"),
+        (GRADING_ENVIRONMENT.model_copy(update={"working_directory": "/grading"}), "/app", "/grading"),
+        (GRADING_ENVIRONMENT, None, ""),
     ],
-    ids=["grader-workspace", "named-by-the-environment"],
+    ids=["grader-workspace", "named-by-the-environment", "image-workdir"],
 )
-def test_grading_machine_starts_in_the_grader_workspace(environment, workdir):
-    """The grading machine starts in the grader's workspace unless its environment names a directory."""
-    task = _state_task(environment)
+def test_grading_machine_starts_in_the_grader_workspace(environment, cwd, workdir):
+    """The grading machine starts in the grader's workspace unless its environment names a directory.
+
+    A grader without a workspace keeps the image's own working directory, which an empty workdir selects.
+    """
+    task = _state_task(environment, cwd)
     factory = RecordingImageFactory()
     result = grade_task(
         task,
@@ -227,7 +233,7 @@ def _lookup(index, content="A native action"):
     ],
 )
 def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected):
-    grader = ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=GRADING_ENVIRONMENT)
+    grader = ScriptGrader(argv=("sh", "/tests/grade.sh"), placement=GraderMachine(environment=GRADING_ENVIRONMENT))
     task = _task(
         GraderPackage(grader, (inline_resource("grade.sh", NATIVE_ACTION_GRADER),)),
         AnswerType.NATIVE_ACTION,

@@ -3030,18 +3030,22 @@ name = "marin-rolloutengine"
 version = "0.1.0"
 source = { editable = "../../lib/rolloutengine" }
 dependencies = [
+    { name = "jinja2" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "marin-shellbox", editable = "../../lib/shellbox" },
     { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [package.metadata.requires-dev]
@@ -3130,6 +3134,7 @@ dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "tomli" },
     { name = "tomlkit" },
 ]
@@ -3146,6 +3151,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomli", specifier = ">=2.0.1" },
     { name = "tomlkit", specifier = ">=0.13" },

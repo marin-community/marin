@@ -30,3 +30,4 @@ agent:
     thinking_format: chat-template
     extra_body: '{"chat_template_kwargs":{"reasoning_effort":"high"}}'
     interleaved_thinking: true
+    model_format: k2_horizon

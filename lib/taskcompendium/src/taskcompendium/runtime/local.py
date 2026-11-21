@@ -35,7 +35,7 @@ from shellbox.backends.local.python_environment import (
 )
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mount, NetworkPolicy
 
-from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
+from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
 
 # Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
 # pure-Python sources, so the runtime identity, image, and exports stay platform-neutral.
@@ -269,7 +269,6 @@ class LocalGraderMachines:
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
-        require_resolved_environment(environment)
         if environment.packages_lock is None and environment.package_spec is None:
             raise ValueError("A local grader requires a package spec or packages lock")
         spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)

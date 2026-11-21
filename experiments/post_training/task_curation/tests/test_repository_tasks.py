@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.models import DockerBuildContext, EnvironmentRequirements, ScriptGrader, TaskSpec
+from taskcompendium.models import DockerBuildContext, EnvironmentRequirements, TaskSpec, grader_environment
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes import grade_pytest
@@ -52,8 +52,8 @@ def test_swesmith_keeps_build_and_private_roles(repository_fixture: RepositoryFi
     build = {item.path: resource_bytes(item) for item in context.files}
     assert build["helper.sh"] == b"#!/bin/sh\nexit 0\n"
     assert "taskcompendium-repository-setup.sh" not in build
-    grader_environment = cast(EnvironmentRequirements, cast(ScriptGrader, task.grader).environment)
-    grader_context = cast(DockerBuildContext, grader_environment.docker_build)
+    grader_requirements = cast(EnvironmentRequirements, grader_environment(task.grader))
+    grader_context = cast(DockerBuildContext, grader_requirements.docker_build)
     grader_build = {item.path: resource_bytes(item) for item in grader_context.files}
     assert grader_build["taskcompendium-public/setup_files/requirements.txt"] == public["setup_files/requirements.txt"]
     assert (

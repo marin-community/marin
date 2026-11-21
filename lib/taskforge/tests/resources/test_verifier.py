@@ -22,7 +22,7 @@ from shellbox.machine import (
     Result,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import ResourceGroups, ScriptGrader, StdoutReward
+from taskcompendium.models import GraderMachine, ResourceGroups, ScriptGrader, StdoutReward
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
@@ -147,7 +147,7 @@ def event(script: bytes = SCRIPT, *, grader_timeout: float = 5) -> GradeCandidat
     grader = ScriptGrader(
         argv=("python3", "/tests/grade.py"),
         reward=StdoutReward(),
-        environment=requirements(image=None),
+        placement=GraderMachine(environment=requirements(image=None)),
         answer_path="/app/answer.txt",
         timeout=grader_timeout,
     )

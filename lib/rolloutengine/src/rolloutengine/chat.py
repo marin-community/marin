@@ -10,10 +10,24 @@ from typing import Any
 import openai
 from openai.types.chat import ChatCompletion
 
-from rolloutengine.models import ModelRequest, ModelResponseError, ModelTurn, TokenUsage
+from rolloutengine.models import ContextRejected, ModelRequest, ModelResponseError, ModelTurn, TokenUsage
 
 RESERVED_OPTIONS = frozenset({"model", "messages", "stream", "n"})
 """Request fields that the adapter sets itself. A prompt option or ``extra_body`` key with one of these names fails."""
+
+CONTEXT_LENGTH_CODE = "context_length_exceeded"
+CONTEXT_LENGTH_PHRASES = (
+    "context length exceeded",
+    "maximum context length",
+    "model's context length",
+    "prompt is too long",
+    "input is too long for requested model",
+)
+"""Lowercase phrases of context-length rejections: vLLM's, and those of proxies for other providers."""
+
+
+def _rejects_context_length(error: openai.BadRequestError) -> bool:
+    return error.code == CONTEXT_LENGTH_CODE or any(phrase in str(error).lower() for phrase in CONTEXT_LENGTH_PHRASES)
 
 
 @dataclass(frozen=True)
@@ -24,9 +38,11 @@ class ChatModel:
     ``usage`` that the endpoint reports. A ``max_tokens`` of ``None`` sends no output limit. The prompt options go
     into the request: they can set ``max_tokens`` and other sampling parameters, and their ``extra_body`` keys
     replace the keys of ``extra_body``. With a ``context_window``, a ``tool_calls`` reply whose prompt and
-    completion tokens fill the window is a ``"length"`` stop, since the next request could not be served. A
-    failed request, or a response with no usage, is a model failure of the attempt. The client is async, so
-    the session can cancel a request at its deadline. The caller owns the client and closes it.
+    completion tokens fill the window is a ``"length"`` stop, since the next request could not be served. A 400
+    response that reports an exceeded context length raises ``ContextRejected``, so a harness that recovers from
+    context rejections can send a shorter request. Another failed request, or a response with no usage, is a
+    model failure of the attempt. The client is async, so the session can cancel a request at its deadline. The
+    caller owns the client and closes it.
     """
 
     client: openai.AsyncOpenAI
@@ -50,7 +66,12 @@ class ChatModel:
             "messages": list(request.messages),
             "extra_body": extra_body,
         }
-        response = await self.client.chat.completions.create(stream=False, **arguments)
+        try:
+            response = await self.client.chat.completions.create(stream=False, **arguments)
+        except openai.BadRequestError as error:
+            if _rejects_context_length(error):
+                raise ContextRejected(error, str(error)) from error
+            raise
         assert isinstance(response, ChatCompletion)  # The adapter rejects `stream`, so the response is one completion.
         usage = response.usage
         if usage is None:
