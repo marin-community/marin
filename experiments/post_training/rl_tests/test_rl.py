@@ -526,12 +526,12 @@ def test_published_init_binds_export_tokenizer(
 def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, request):
     if model == "mochi":
         revisions = {
-            "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.2": "15b0f019", "2026.11.20.4": "08ba7390"},
-            "train-long": {"2026.11.20.4": "e105d46c"},
-            "train-long-3rack": {"2026.11.20.4": "9734d621"},
-            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985"},
-            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "d540f763"},
+            "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.2": "15b0f019", "2026.11.20.4": "0ead6201"},
+            "train-long": {"2026.11.20.4": "2e83d9d5"},
+            "train-long-3rack": {"2026.11.20.4": "09e7d6b3"},
+            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "69fcb862"},
+            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "05b50751"},
+            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "2e66becf"},
         }
         with monkeypatch.context() as local:
             local.delenv("MARIN_PREFIX", raising=False)
@@ -563,21 +563,21 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.17.1": "363225a9",
             "2026.11.19.1": "371233d9",
             "2026.11.20.1": "8f532da2",
-            "2026.11.20.3": "dc52613e",
+            "2026.11.20.3": "5847c3e2",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
             "2026.11.17.1": "772467a8",
             "2026.11.19.1": "cb07d91c",
             "2026.11.20.1": "a379319d",
-            "2026.11.20.3": "d4749482",
+            "2026.11.20.3": "301f5f72",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
             "2026.11.17.1": "5cd852f4",
             "2026.11.19.1": "f8281b9d",
             "2026.11.20.1": "8b7e47c8",
-            "2026.11.20.3": "dbc38bdf",
+            "2026.11.20.3": "d14eae4e",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -586,7 +586,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "67306e75",
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "ce8666ce",
-            "2026.11.20.4": "36e0cfd0",
+            "2026.11.20.4": "31134114",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -595,14 +595,14 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "67306e75",
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "ce8666ce",
-            "2026.11.20.4": "36e0cfd0",
+            "2026.11.20.4": "31134114",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
             "2026.11.17.1": "f29155cc",
             "2026.11.19.1": "9edc7b70",
             "2026.11.20.1": "3d1fe22d",
-            "2026.11.20.3": "87feb546",
+            "2026.11.20.3": "7a6d80c5",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -611,25 +611,25 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "22473465",
             "2026.11.20.2": "412d0576",
             "2026.11.20.3": "40c0256e",
-            "2026.11.20.4": "7826cc5a",
+            "2026.11.20.4": "42d7e132",
         },
         "train-long-harbor": {
             "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
-            "2026.11.20.7": "9ceb90cb",
+            "2026.11.20.7": "0ed189bc",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
-            "2026.11.20.5": "aa36f9de",
+            "2026.11.20.5": "9035f939",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
+        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "ea9eb9c1"},
         "train-medium-tools": {"2026.11.20.1": "45b0a101"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
-            "2026.11.20.3": "85b0359d",
+            "2026.11.20.3": "95d623ad",
         },
     }
     configs = assert_revisioned_native_configs(
