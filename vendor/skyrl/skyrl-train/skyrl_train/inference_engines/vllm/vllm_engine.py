@@ -1091,6 +1091,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                         ((event.type.name, event.timestamp) for event in output.events or ()),
                         len(output.new_token_ids),
                         engine_core_timestamp,
+                        prompt_tokens=state.prompt_len,
                     )
             return process_outputs(engine_core_outputs, engine_core_timestamp, iteration_stats)
 

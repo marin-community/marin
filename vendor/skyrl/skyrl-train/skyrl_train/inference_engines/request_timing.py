@@ -13,10 +13,11 @@ class RequestTiming:
     last_token_at: float | None = None
     last_report_at: float | None = None
     generated_tokens: int = 0
+    prompt_tokens: int | None = None
 
 
 class RequestTimings:
-    """Emit queue, first-token and periodic decode evidence without prompt or credential data."""
+    """Emit queue, first-token and periodic decode evidence without text or credentials."""
 
     def __init__(self, emit: Callable[[dict], None]):
         self.emit = emit
@@ -32,12 +33,19 @@ class RequestTimings:
         self.emit({"event": "submitted", "request_id": key, "session_id": session_id})
 
     def observe(
-        self, request_id: str, events: Iterable[tuple[str, float]], token_count: int, sampled_at: float
+        self,
+        request_id: str,
+        events: Iterable[tuple[str, float]],
+        token_count: int,
+        sampled_at: float,
+        *,
+        prompt_tokens: int,
     ) -> None:
         key = self.request_key(request_id)
         timing = self.requests.get(key)
         if timing is None:
             return
+        timing.prompt_tokens = prompt_tokens
         for event, timestamp in events:
             if event == "QUEUED" and timing.queued_at is None:
                 timing.queued_at = timestamp
@@ -66,6 +74,9 @@ class RequestTimings:
                 "event": event,
                 "request_id": request_id,
                 **vars(timing),
+                "context_tokens": (
+                    None if timing.prompt_tokens is None else timing.prompt_tokens + timing.generated_tokens
+                ),
                 "queue_wait": (
                     timing.scheduled_at - timing.queued_at
                     if timing.scheduled_at is not None and timing.queued_at is not None
