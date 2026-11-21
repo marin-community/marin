@@ -532,7 +532,3 @@ class TaskRolloutSpec(BaseModel):
         fields = {**state["__dict__"], "judge_connection": None, "decision_model": None}
         fields_set = state["__pydantic_fields_set__"] - {"judge_connection", "decision_model"}
         return {**state, "__dict__": fields, "__pydantic_fields_set__": fields_set}
-
-    def __setstate__(self, state: dict[Any, Any]) -> None:
-        # A spec pickled before ``decision_model`` existed restores without one.
-        super().__setstate__({**state, "__dict__": {"decision_model": None, **state["__dict__"]}})

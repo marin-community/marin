@@ -3252,18 +3252,6 @@ def test_a_decision_model_connection_never_reaches_the_serialized_spec():
     assert "decision_model" not in TaskRolloutSpec.model_json_schema()["properties"]
 
 
-def test_a_spec_pickled_before_decision_models_restores_without_one(monkeypatch):
-    spec = rollout_spec(arithmetic_task())
-    state = spec.__getstate__()
-    # The state shape of a spec pickled before TaskRolloutSpec.decision_model existed.
-    old = {**state, "__dict__": {k: v for k, v in state["__dict__"].items() if k != "decision_model"}}
-    monkeypatch.setattr(TaskRolloutSpec, "__getstate__", lambda self: old)
-    pickled = pickle.dumps(spec)
-    monkeypatch.undo()
-    restored = pickle.loads(pickled)
-    assert (restored.decision_model, restored.task, restored.limits) == (None, spec.task, spec.limits)
-
-
 async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_loop():
     class SwallowsDeadline:
         context_recovery = ContextRecovery.NEVER
