@@ -26,12 +26,14 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved, event_digest
-from taskforge.effects.issues import Hold, Restart
+from taskforge.effects.issues import Hold, Restart, Unreproducible
 from taskforge.effects.log import EventLog, Record
+from taskforge.llm.client import ModelRequestRejected
 from taskforge.model.review import Cause, TrialResult
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
+from taskforge.stages.classify import replay_rule
 from taskforge.stages.validate import solver_batch
 
 SPEC = rollout_spec(arithmetic_task())
@@ -65,8 +67,8 @@ class Slots(Engine):
         return GradedRollout(Rollout(run_id, (), self.stops.get(trial, "stop")), GradeResult(Outcome.GRADED, 1.0))
 
 
-def context(engine: Slots, recorded: Sequence[Record] = ()) -> tuple[Context, EventLog]:
-    log = EventLog(replay_from=recorded)
+def context(engine: Slots, recorded: Sequence[Record] = (), *, resume: bool = False) -> tuple[Context, EventLog]:
+    log = EventLog(replay_from=recorded, replayable=replay_rule(recorded, resume))
     ctx = Context(log=log)
     ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(engine, twelve, "solver", 3))
     return ctx, log
@@ -178,20 +180,86 @@ async def test_a_long_slot_heartbeats_at_the_policy_cadence_without_touching_its
     assert again == (result,) and not replayed.executed
 
 
+def rejected() -> RolloutInterrupted:
+    """What the engine raises when the model server refuses one slot's request."""
+    error = RolloutInterrupted(Rollout("refused", (), "interrupted"), RolloutOperation.MODEL)
+    error.__cause__ = ModelRequestRejected(400, "malformed request", ())
+    return error
+
+
+REFUSED = "RequestRejected: model server rejected request with HTTP 400: malformed request"
+
+
+def lost() -> RolloutInterrupted:
+    error = RolloutInterrupted(Rollout("lost", (), "interrupted"), RolloutOperation.ADVANCE)
+    error.__cause__ = MachineTerminated("pod lost")
+    return error
+
+
 async def test_a_held_slot_is_typed_missing_evidence_beside_its_finished_siblings() -> None:
-    engine = Slots(failures={1: Hold("model server rejected request with HTTP 400")})
+    engine = Slots(failures={1: rejected()})
     ctx, _ = context(engine)
     results = await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT)
     await ctx.drain()
-    assert results[1] == TrialResult(1, None, Cause.HELD, "Hold: model server rejected request with HTTP 400")
+    assert results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
     assert [trial.grade and trial.grade.reward for trial in (results[0], results[2])] == [1.0, 1.0]
+
+
+# Review 2026-11-21: a sibling's restart discarded the held slot and its cause; the next stage attempt ran the held
+# slot again and accepted under a zero-missing policy, with the hold reason absent from the whole journal.
+async def test_a_held_slot_survives_a_sibling_restart_and_replays_without_running_again() -> None:
+    engine = Slots(failures={1: rejected(), 2: lost()})
+    ctx, log = context(engine)
+    with pytest.raises(ExceptionGroup) as raised:
+        await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=1)
+    await ctx.drain()
+    assert [type(error) for error in raised.value.exceptions] == [Restart]
+    again = Slots(failures={0: AssertionError("slot 0 ran again"), 1: AssertionError("slot 1 ran again")})
+    replayed, _ = context(again, log.records)
+    results = await solver_batch(replayed, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT)
+    await replayed.drain()
+    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
+
+
+async def test_holds_beyond_the_missing_allowance_hold_the_batch_before_a_sibling_restart() -> None:
+    engine = Slots(failures={1: rejected(), 2: lost()})
+    ctx, _ = context(engine)
+    with pytest.raises(Hold, match="solver trial 1: " + REFUSED):
+        await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=0)
+    await ctx.drain()
+    assert sorted(engine.executed) == ["arithmetic:0:0", "arithmetic:1:0", "arithmetic:2:0"]
+
+
+# Review 2026-11-21: an injected Unreproducible became one missing slot and the workpiece published ACCEPTED.
+@pytest.mark.parametrize(
+    "hold", [Unreproducible("history mismatch"), Hold("environment terminated")], ids=["unreproducible", "other"]
+)
+async def test_only_a_slot_local_refusal_is_missing_evidence_and_every_other_hold_holds_the_workpiece(
+    hold: Hold,
+) -> None:
+    ctx, _ = context(Slots(failures={1: hold}))
+    with pytest.raises(ExceptionGroup) as raised:
+        await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=3)
+    await ctx.drain()
+    assert [type(error) for error in raised.value.exceptions] == [type(hold)]
+
+
+@pytest.mark.parametrize("resume", [False, True])
+async def test_a_recorded_slot_refusal_runs_again_only_on_explicit_resume(resume: bool) -> None:
+    ctx, log = context(Slots(failures={1: rejected()}))
+    await solver_batch(ctx, SPEC, "validation", 0, (), 2, concurrency=2, heartbeat=HEARTBEAT, max_missing=1)
+    await ctx.drain()
+    again = Slots(failures={0: AssertionError("slot 0 ran again")})
+    relaunched, _ = context(again, log.records, resume=resume)
+    results = await solver_batch(relaunched, SPEC, "validation", 0, (), 2, concurrency=2, heartbeat=HEARTBEAT)
+    await relaunched.drain()
+    assert again.executed == (["arithmetic:1:0"] if resume else [])
+    assert results[1].cause is (None if resume else Cause.HELD)
 
 
 async def test_a_generation_limit_is_a_failed_slot_and_an_outage_restarts_after_its_siblings() -> None:
     gate = asyncio.Event()
-    lost = RolloutInterrupted(Rollout("lost", (), "interrupted"), RolloutOperation.ADVANCE)
-    lost.__cause__ = MachineTerminated("pod lost")
-    engine = Slots(gates={0: gate}, failures={1: lost}, stops={2: LENGTH_STOP_REASON})
+    engine = Slots(gates={0: gate}, failures={1: lost()}, stops={2: LENGTH_STOP_REASON})
     ctx, log = context(engine)
     run = asyncio.create_task(solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT))
     await resolved(ctx, 1).wait()  # the generation-limited slot; the lost one has already failed

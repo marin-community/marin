@@ -88,7 +88,8 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         ]
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
-        if cause is not None and retries < budget.max_validation_retries:
+        held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
+        if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
     if not isinstance(decision, Modify):
         return decision

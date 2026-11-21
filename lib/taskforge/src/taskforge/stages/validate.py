@@ -68,16 +68,17 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
 
 
 async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
-    """One slot's ``SolverRollout``: a held one is typed missing evidence; a restart propagates and records nothing."""
+    """One slot's ``SolverRollout``: a slot-local hold is recorded missing evidence; any other hold or restart
+    propagates."""
     for retry in range(2):
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
         except OutputBudgetExhausted:
             ctx.notify(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
             continue
-        except Hold as error:
-            return TrialResult(trial, None, Cause.HELD, "; ".join(failure_reasons(error)))
-        return TrialResult(trial, result.grade, trial_cause(result, spec.task))
+        if (cause := trial_cause(result, spec.task)) is Cause.HELD:
+            return TrialResult(trial, None, cause, result.grade.error or "")
+        return TrialResult(trial, result.grade, cause)
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
@@ -91,6 +92,7 @@ async def solver_batch(
     *,
     concurrency: int,
     heartbeat: float,
+    max_missing: int = 0,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[TrialResult, ...]:
@@ -99,7 +101,7 @@ async def solver_batch(
 
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
     enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
-    re-executes only it.
+    re-executes only it; more than ``max_missing`` held slots hold the batch instead.
     """
     first = max(existing, default=-1) + 1
     gate, running = asyncio.Semaphore(concurrency), dict[int, float]()
@@ -129,7 +131,12 @@ async def solver_batch(
         ticker.cancel()
         await asyncio.gather(ticker, return_exceptions=True)
     results = [slot.result() for slot in slots]
+    holds = [
+        f"solver trial {r.trial}: {r.detail}" for r in results if isinstance(r, TrialResult) and r.cause is Cause.HELD
+    ]
     if restarts := [result for result in results if isinstance(result, Restart)]:
+        if len(holds) > max_missing:
+            raise Hold("; ".join(holds))  # what review would decide, before the restart re-buys anything
         raise BaseExceptionGroup(f"Solver {phase} slots restart", restarts)
     return tuple(result for result in results if isinstance(result, TrialResult))
 
@@ -400,6 +407,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                     k,
                     concurrency=config.policy.setting("solver.concurrency", int),
                     heartbeat=config.policy.setting("solver.heartbeat_interval", float),
+                    max_missing=config.budget.max_missing_trials,
                 )
             )
             adversary = [

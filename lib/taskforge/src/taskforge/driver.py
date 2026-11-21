@@ -44,7 +44,7 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.stages.classify import replayable_grade
+from taskforge.stages.classify import replay_rule
 from taskforge.wiring import endpoint_source, install, runtime
 
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
@@ -128,7 +128,7 @@ async def one(args: argparse.Namespace) -> None:
         return
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
     wp = Workpiece(proposal.header.id, proposal)
     try:
         async with checkpoints.running():

@@ -793,6 +793,22 @@ def test_a_solver_slot_without_a_score_holds_by_policy_and_is_never_read_as_a_ze
     assert "1 of 3 solver trials have no score; placed over 2" in placed.findings
 
 
+# Review 2026-11-21: one solved, one held and one timed-out slot under the zero-missing default chose Retry twice,
+# buying every slot three times before the hold.
+def test_holds_beyond_the_missing_allowance_take_precedence_over_a_review_retry(workpiece: Workpiece) -> None:
+    solver = (
+        TrialResult(0, GradeResult(Outcome.GRADED, 1.0)),
+        TrialResult(1, None, Cause.HELD, "RequestRejected: refused"),
+        TrialResult(2, None, Cause.AGENT_TIMEOUT),
+    )
+    wp = workpiece.with_(evidence=(replace(evidence(3), solver=solver),))
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    held = default_review(wp, setup.band, setup.budget)
+    assert isinstance(held, Incomplete) and "solver trial 1: RequestRejected: refused" in held.reasons
+    tolerant = build_config(load_policy(DEFAULTS_DIR).overlaid({"budget.max_missing_trials": 1}), {})
+    assert isinstance(default_review(wp, tolerant.band, tolerant.budget), Retry)  # the hold alone is within it
+
+
 @pytest.mark.parametrize("exhausted", [False, True])
 def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None:
     current = workpiece.with_(round=2 if exhausted else 0, evidence=(evidence(3),))

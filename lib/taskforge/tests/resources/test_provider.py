@@ -27,7 +27,7 @@ from rolloutengine.models import GradedRollout, ModelRequest, TaskRolloutSpec, T
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 
 from taskforge import wiring
-from taskforge.effects.issues import Hold, Restart
+from taskforge.effects.issues import Restart
 from taskforge.llm import glm_provider
 from taskforge.llm.client import (
     CONFIRMATION_INTERVAL,
@@ -299,12 +299,12 @@ async def test_an_outage_that_outlasts_the_turn_deadline_restarts_never_a_trial(
 
 
 # Review 2026-11-21: an unknown 400 wording was restarted twice by the rollout wrapper and the coordinator.
-async def test_a_solver_request_the_server_rejects_holds_at_once_with_its_status_and_reason() -> None:
+async def test_a_solver_request_the_server_rejects_holds_its_slot_at_once_with_its_status_and_reason() -> None:
     reason = "the prompt exceeds the input token budget"
     provider = ScriptedProvider((Fails(AttemptOutcome.REJECTED, status=400, detail=reason), segment("12")))
-    with pytest.raises(Hold, match=f"HTTP 400: {reason}"):
-        await rollout(client(provider, Time()))
-    assert len(provider.bodies) == 1
+    result = await rollout(client(provider, Time()))
+    assert trial_cause(result, SPEC.task) is Cause.HELD and "RequestRejected: " in (result.grade.error or "")
+    assert f"HTTP 400: {reason}" in (result.grade.error or "") and len(provider.bodies) == 1
 
 
 async def test_cancelling_a_solver_rollout_propagates() -> None:
