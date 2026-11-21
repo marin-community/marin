@@ -84,9 +84,14 @@ def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
         return Cause.AGENT_TIMEOUT
     if stop == MAX_TURNS_STOP_REASON:
         return Cause.BUDGET_EXHAUSTED
-    if stop in (LENGTH_STOP_REASON, "context"):
+    if generation_limited(result):
         return Cause.GENERATION_LIMIT
     return grade_cause(result.grade, task)
+
+
+def generation_limited(result: GradedRollout) -> bool:
+    """The solver's generation reached its limit: a definitive failed trial whatever the grade says."""
+    return result.rollout.stop_reason in (LENGTH_STOP_REASON, "context")
 
 
 async def grader_infra_unavailable(event: Resolved[object]) -> None:
@@ -97,8 +102,10 @@ async def grader_infra_unavailable(event: Resolved[object]) -> None:
 
 
 def replayable_grade(event: Resolved[object]) -> bool:
-    """Resume successful evidence and slot holds, but reevaluate unavailable infrastructure."""
+    """Resume successful evidence, generation-limited trials and slot holds, but reevaluate unavailable grading."""
     value = event.value
+    if isinstance(value, GradedRollout) and generation_limited(value):
+        return True
     grade = value.grade if isinstance(value, GradedRollout) else value
     unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
     return refused(event.value) or not unavailable

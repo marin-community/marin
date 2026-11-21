@@ -16,6 +16,7 @@ from lib.taskforge.tests.resources.rollout_fakes import twelve
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
+    ConversationRecord,
     GradedRollout,
     Model,
     Rollout,
@@ -53,8 +54,10 @@ class Slots(Engine):
         gates: Mapping[int, asyncio.Event] | None = None,
         failures: Mapping[int, BaseException] | None = None,
         stops: Mapping[int, str] | None = None,
+        results: Mapping[int, GradedRollout] | None = None,
     ) -> None:
         self.gates, self.failures, self.stops = gates or {}, failures or {}, stops or {}
+        self.results = results or {}
         self.executed: list[str] = []
         self.entered = asyncio.Event()
 
@@ -68,6 +71,8 @@ class Slots(Engine):
             await self.gates[trial].wait()
         if trial in self.failures:
             raise self.failures[trial]
+        if trial in self.results:
+            return self.results[trial]
         return GradedRollout(Rollout(run_id, (), self.stops.get(trial, "stop")), GradeResult(Outcome.GRADED, 1.0))
 
 
@@ -245,6 +250,65 @@ async def test_a_held_slot_survives_a_sibling_restart_and_replays_without_runnin
     results = await solver_batch(replayed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await replayed.drain()
     assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
+
+
+# Review 2026-11-21 (N12 finding 2): generation reaching its limit before the first response is a completed, failed
+# trial whose grade is UNAVAILABLE. The replay rule took it for unavailable grading and ran the slot again whenever a
+# sibling restarted or a held root resumed, and the reviewer was left a grade-only stub without the transcript.
+PROMPT = ({"role": "system", "content": "solve"}, {"role": "user", "content": "what is 6 + 6?"})
+
+
+def cut_off(stop: str) -> GradedRollout:
+    conversation = ConversationRecord(PROMPT, (), (), (), None)
+    return GradedRollout(Rollout("cut", (conversation,), stop), GradeResult(Outcome.UNAVAILABLE, None))
+
+
+def kept(log: EventLog, trial: int) -> Rollout:
+    """The latest resolution the journal holds for ``trial``."""
+    *_, value = [
+        record.event.value.rollout
+        for record in log.records
+        if isinstance(record.event, Resolved)
+        and record.event.request == SolverRollout(SPEC, trial, 0)
+        and isinstance(record.event.value, GradedRollout)
+    ]
+    return value
+
+
+@pytest.mark.parametrize("resume", [False, True])
+async def test_a_generation_limited_slot_replays_with_its_transcript_beside_an_interrupted_sibling(
+    resume: bool,
+) -> None:
+    engine = Slots(failures={2: lost()}, results={0: cut_off(LENGTH_STOP_REASON)})
+    ctx, log = context(engine)
+    with pytest.raises(ExceptionGroup) as raised:
+        await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
+    await ctx.drain()
+    assert [type(error) for error in raised.value.exceptions] == [Restart]
+    again = Slots(failures={0: AssertionError("the cut-off slot ran again"), 1: AssertionError("slot 1 ran again")})
+    restarted, restarted_log = context(again, log.records, resume=resume)
+    results = await solver_batch(restarted, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
+    await restarted.drain()
+    assert again.executed == ["arithmetic:2:0"]
+    assert [(trial.trial, trial.cause) for trial in results] == [(0, Cause.GENERATION_LIMIT), (1, None), (2, None)]
+    assert kept(restarted_log, 0).conversations[0].messages == PROMPT
+    cold = Slots(failures={trial: AssertionError(f"slot {trial} ran again") for trial in range(3)})
+    rebuilt, rebuilt_log = context(cold, restarted_log.records, resume=resume)
+    assert await solver_batch(rebuilt, SPEC, "validation", 0, (), 0, 3, concurrency=1, heartbeat=HEARTBEAT) == results
+    await rebuilt.drain()
+    assert not cold.executed and kept(rebuilt_log, 0).conversations[0].messages == PROMPT
+
+
+async def test_an_unavailable_grade_after_an_ordinary_stop_still_runs_again() -> None:
+    unavailable = GradedRollout(Rollout("ungraded", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+    ctx, log = context(Slots(results={0: unavailable}))
+    (first,) = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
+    await ctx.drain()
+    again = Slots()
+    resumed, _ = context(again, log.records)
+    (second,) = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
+    await resumed.drain()
+    assert first.cause is Cause.NO_GRADE and again.executed == ["arithmetic:0:0"] and second.cause is None
 
 
 async def test_holds_beyond_the_missing_allowance_hold_the_batch_before_a_sibling_restart() -> None:
