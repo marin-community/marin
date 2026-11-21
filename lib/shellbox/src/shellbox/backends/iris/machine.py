@@ -7,6 +7,7 @@ import ast
 import asyncio
 import base64
 import errno
+import logging
 import math
 import os
 import re
@@ -44,6 +45,7 @@ from shellbox.machine import (
     ExecSetupFailed,
     ExecutionRequirements,
     ExitReason,
+    GuestHelperFailed,
     GuestPathError,
     MachineCancelled,
     MachineResourceExhausted,
@@ -61,21 +63,32 @@ from shellbox.machine import (
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
 # `sh -c` script, so 64 KiB of data (87,384 encoded bytes) leaves room for the target path.
 TRANSFER_CHUNK_BYTES = 64 * 1024
-# Path probe exit statuses, above those sh and coreutils use for their own failures, and the errno each reports.
-PROBE_ERRNOS = {101: errno.EISDIR, 102: errno.ENOENT, 103: errno.ENOTDIR, 104: errno.EACCES}
-# Neither probe sees a link loop: a dangling or looping symlink reads as missing.
-NEAREST_ANCESTOR = 'a=$(dirname {path}); while [ ! -e "$a" ]; do a=$(dirname "$a"); done; '
-# A missing target names the nearest existing ancestor's fault: a regular file, or a directory it cannot search.
-READ_PROBE = (
-    "test -d {path} && exit 101; if [ ! -e {path} ]; then "
-    + NEAREST_ANCESTOR
-    + 'test -d "$a" || exit 103; test -x "$a" || exit 104; exit 102; fi; test -r {path} || exit 104; '
+# Guest path classes, as exit statuses above those sh and coreutils use for their own failures, and their errnos.
+PATH_ERRNOS = {101: errno.EISDIR, 102: errno.ENOENT, 103: errno.ENOTDIR, 104: errno.EACCES, 106: errno.ENAMETOOLONG}
+# Classifies why "$p" cannot be used, with sh builtins and ``test`` only; falling through means no path fault.
+# The walk drops one trailing component per pass, so it ends within the path's depth. ``test`` cannot tell a
+# looping link from a dangling one, so both report ENOENT.
+CLASSIFY_PATH = (
+    'if [ ${{#p}} -ge 4096 ]; then exit 106; fi; if [ -d "$p" ]; then exit 101; fi; '
+    'if [ -e "$p" ]; then [ -{access} "$p" ] || exit 104; else a=$p; while :; do '
+    'leaf=${{a##*/}}; [ ${{#leaf}} -le 255 ] || exit 106; [ ! -L "$a" ] || exit 102; '
+    "case $a in */*) a=${{a%/*}}; a=${{a:-/}};; *) a=.;; esac; "
+    '[ ! -e "$a" ] || break; done; [ -d "$a" ] || exit 103; [ -x "$a" ] || exit 104; {missing}; fi; '
 )
-# The nearest existing ancestor must be a searchable, writable directory, or the target itself writable.
-WRITE_PROBE = (
-    "test -d {path} && exit 101; " + NEAREST_ANCESTOR + 'test -d "$a" || exit 103; test -x "$a" || exit 104; '
-    'if [ -e {path} ]; then test -w {path}; else test -w "$a"; fi || exit 104; '
+# Prints the size of a readable file; a directory exits 101 before anything is read.
+READ_FILE = 'if [ ! -d "$p" ] && [ -r "$p" ]; then wc -c < "$p"; exit; fi; ' + (
+    CLASSIFY_PATH.format(access="r", missing="exit 102") + "exit 1"
 )
+# Creates or truncates a file, then classifies only a failed attempt: a dangling link may still be writable.
+WRITE_FILE = (
+    "case $p in */*) d=${p%/*}; d=${d:-/};; *) d=.;; esac; "
+    'if { [ -d "$d" ] || mkdir -p -- "$d"; } && : > "$p"; then exit 0; fi; '
+    + CLASSIFY_PATH.format(access="w", missing='[ -w "$a" ] || exit 104')
+    + "exit 1"
+)
+
+logger = logging.getLogger(__name__)
+
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
@@ -302,25 +315,27 @@ class IrisMachine:
     async def _checked(self, script: str) -> str:
         response = await self._script(script)
         if response.exit_code:
-            raise RuntimeError(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
+            raise GuestHelperFailed(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
         return response.stdout
 
-    async def _path_checked(self, path: str, script: str, probe: str) -> str:
-        """Run ``script`` on a caller-chosen ``path`` after ``probe``; a refused path raises ``GuestPathError``.
+    async def _path_checked(self, script: str, path: str) -> str:
+        """Run a ``READ_FILE`` or ``WRITE_FILE`` script on a caller-chosen ``path``.
 
-        Only probed failures carry an errno; a failing helper and transport failures keep their own types.
+        A classified path fault raises ``GuestPathError``; any other failure is the guest helpers'.
         """
-        response = await self._script(probe.format(path=shlex.quote(path)) + script)
-        if (code := PROBE_ERRNOS.get(response.exit_code)) is not None:
+        response = await self._script(f"LC_ALL=C; p={shlex.quote(path)}; {script}")
+        if (code := PATH_ERRNOS.get(response.exit_code)) is not None:
             raise GuestPathError(code, os.strerror(code), path)
         if response.exit_code:
-            raise RuntimeError(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
+            raise GuestHelperFailed(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
         return response.stdout
 
     async def _upload_bytes(self, data: bytes, target: str, *, caller_path: bool = False) -> None:
         quoted = shlex.quote(target)
-        create = f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}"
-        await (self._path_checked(target, create, WRITE_PROBE) if caller_path else self._checked(create))
+        if caller_path:
+            await self._path_checked(WRITE_FILE, target)
+        else:
+            await self._checked(f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}")
         for offset in range(0, len(data), TRANSFER_CHUNK_BYTES):
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
             await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
@@ -329,8 +344,7 @@ class IrisMachine:
         self, source: str, limit: int | None = None, *, caller_path: bool = False
     ) -> tuple[bytes, bool]:
         quoted = shlex.quote(source)
-        measure = f"wc -c < {quoted}"
-        measured = self._path_checked(source, measure, READ_PROBE) if caller_path else self._checked(measure)
+        measured = self._path_checked(READ_FILE, source) if caller_path else self._checked(f"wc -c < {quoted}")
         size = int((await measured).strip())
         count = size if limit is None else min(size, limit)
         chunks = []
@@ -341,8 +355,8 @@ class IrisMachine:
             if len(chunks[-1]) != length:
                 # The pipeline reports only its encoder's status; a file that vanished reads as a short chunk.
                 if caller_path:
-                    await self._path_checked(source, "", READ_PROBE)
-                raise RuntimeError(f"Read {len(chunks[-1])} of {length} bytes at offset {offset} of {source}")
+                    await self._path_checked(READ_FILE, source)
+                raise GuestHelperFailed(f"Read {len(chunks[-1])} of {length} bytes at offset {offset} of {source}")
         return b"".join(chunks), size > count
 
     async def _user_identity(self) -> tuple[str, str]:
@@ -381,31 +395,35 @@ class IrisMachine:
             f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
-        executed = False
+        # Only the command's own exec can fail as never sent. Once it may have run, a lost capture is an unknown
+        # outcome, and cleanup is logged so it never replaces the result or the command's failure.
         try:
             try:
                 # An exec without a positive deadline falls back to the controller's short Kubernetes default.
                 response = await asyncio.wait_for(self._script(script, command.timeout), timeout=command.timeout)
-                executed = True
+            except MachineUnavailable as error:
+                if isinstance(error, CommandOutcomeUnknown) or _never_connected(error):
+                    raise
+                raise CommandOutcomeUnknown(f"The command may have run; its result was lost: {error}") from error
+            try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-                return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
-            except TimeoutError:
-                await self.close()
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-            except asyncio.CancelledError:
-                await self.close()
-                raise
-            finally:
-                if not self._closed:
-                    await self._script(
-                        f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
-                    )
-        except MachineUnavailable as error:
-            # Only an exec that never reached the controller is safe to send again.
-            if isinstance(error, CommandOutcomeUnknown) or (not executed and _never_connected(error)):
-                raise
-            raise CommandOutcomeUnknown(f"The command may have run; its result was lost: {error}") from error
+            except (ExecSetupFailed, MachineUnavailable) as error:
+                raise CommandOutcomeUnknown(f"The command ran; its output was lost: {error}") from error
+            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+        except TimeoutError:
+            await self.close()
+            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        except asyncio.CancelledError:
+            await self.close()
+            raise
+        finally:
+            if not self._closed:
+                paths = shlex.join((stdin_path, stdout_path, stderr_path))
+                try:
+                    await self._script(f"rm -f {paths}")
+                except Exception as error:
+                    logger.warning("Could not remove Iris command capture files %s: %s", paths, error)
 
     async def reset(self) -> None:
         """Exclusively clear task roots and non-runtime processes; preserve mount points."""
@@ -438,24 +456,30 @@ class IrisMachine:
             return
         await self._upload_bytes(source.read_bytes(), target, caller_path=True)
 
-    async def download(self, source: str, target: Path) -> None:
-        probe = await self._script(f"test -d {shlex.quote(source)}")
-        if probe.exit_code == 0:
-            remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
-            await self._checked(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} .")
-            try:
-                data, _ = await self._download_bytes(remote_archive)
-                target.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
-                    Path(archive.name).write_bytes(data)
-                    with tarfile.open(archive.name, "r:gz") as tar:
-                        tar.extractall(target, filter="data")
-            finally:
-                await self._script(f"rm -f {shlex.quote(remote_archive)}")
-            return
+    async def download_file(self, source: str, target: Path) -> None:
+        """Download one file; a directory raises ``GuestPathError`` with ``EISDIR`` before any transfer."""
         data, _ = await self._download_bytes(source, caller_path=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
+
+    async def download(self, source: str, target: Path) -> None:
+        try:
+            await self.download_file(source, target)
+            return
+        except GuestPathError as error:
+            if error.errno != errno.EISDIR:
+                raise
+        remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
+        await self._checked(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} .")
+        try:
+            data, _ = await self._download_bytes(remote_archive)
+            target.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
+                Path(archive.name).write_bytes(data)
+                with tarfile.open(archive.name, "r:gz") as tar:
+                    tar.extractall(target, filter="data")
+        finally:
+            await self._script(f"rm -f {shlex.quote(remote_archive)}")
 
     def _drain_in_flight(self) -> None:
         with self._admission:
