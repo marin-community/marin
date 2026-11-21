@@ -20,7 +20,6 @@ from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
 from taskforge.resources.bundle import Resources
-from taskforge.stages.summary import validation_path
 
 
 def system_prompt(policy: Policy) -> str:
@@ -96,7 +95,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                 )
             )
         writes.extend(
-            (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
+            (workdir / ".validation" / f"{index}.json", VALIDATION_RESULT.dump_json(evidence))
             for index, evidence in enumerate(workpiece.evidence)
         )
         writes.append((workdir / "proposal.json", proposal.encode()))

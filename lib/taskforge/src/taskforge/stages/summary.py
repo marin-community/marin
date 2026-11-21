@@ -4,7 +4,6 @@
 """Small prompt views of workspace artifacts; full payloads remain in files."""
 
 import json
-from pathlib import PurePosixPath
 
 from taskcompendium.models import TaskSpec
 
@@ -27,7 +26,3 @@ def manifest(value: object, role: str = "") -> object:
 
 def task_manifest(task: TaskSpec) -> str:
     return json.dumps(manifest(task.model_dump(mode="json")), separators=(",", ":"))
-
-
-def validation_path(workdir: str, index: int) -> PurePosixPath:
-    return PurePosixPath(workdir, ".validation", f"{index}.json")
