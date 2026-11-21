@@ -681,8 +681,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                         path=model_path, tokenizer_path=tokenizer_path, tokenizer_revision=None
                     )
                 if root == candidate and case == "unbound-staged-tokenizer":
-                    wrong_revision = model_metadata_subpath(source["tokenizer_uri"], "wrong-revision")
-                    set_path(document, "skyrl.trainer.ref.model.tokenizer_path", f"/native-tmp/{wrong_revision}")
+                    wrong_tokenizer_key = tokenizer_metadata_subpath(source["tokenizer_uri"], "wrong-revision")
+                    set_path(document, "skyrl.trainer.ref.model.tokenizer_path", f"/native-tmp/{wrong_tokenizer_key}")
     omissions = {
         "omitted-default": {
             "config.skyrl.generator.chat_template_kwargs": {},
