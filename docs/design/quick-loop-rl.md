@@ -8,8 +8,8 @@ Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
 selection. Once that combination passes the full-model smoke and the matched
 comparison, qualify Levanter's Snowball engine as the full-model rollout
 backend. The learner jobs have first claim on H100 capacity. Run bounded
-native-loop checks on TPU while the learner jobs wait. Use a typed binary
-protocol for internal rollout and learner traffic.
+native-loop checks on available capacity while the learner jobs wait. Use a
+typed binary protocol for rollout replay and isolated worker commands.
 
 ## Status
 
@@ -143,9 +143,11 @@ predictor position and distinguish both kinds of logprob in the header.
 For route replay, require selected expert IDs, per-layer validity and QB
 thresholds. The learner command carries the admitted batch and the same
 policy identity. The response carries optimizer step, publication status or
-an explicit error. Human-readable config, logs and receipts can remain JSON.
-Keep the existing vLLM OpenAI edge and NCCL expert-block transport during
-learner qualification.
+an explicit error. Use protobuf for the native serving and isolated learner
+subprocess contracts. Ray carries actor calls and rank batches, preserving
+the replay frame bytes. Human-readable config, logs and archival receipts can
+remain JSON. Keep vLLM HTTP, NCCL expert-block publication and TensorStore
+snapshots on their existing transports.
 
 Validate frame size before allocating tensor buffers. Validate declared
 length against dtype and shape, tensor bounds and overlap, the supported
@@ -203,8 +205,9 @@ Local CPU tests installed versions 0 through 2 across the worker pipe and
 rejected stale identities. They exercised publication from one and two
 learner processes and a bitwise-identical next update after restoring the
 trainer. A local Ray run installed two mixed-precision snapshots while
-preserving exact binary replay across tool turns. The tool-turn check
-across accelerator hosts remains open.
+preserving exact binary replay across tool turns. The small cross-host
+TPUv4 loop also exercised both tool turns. The pinned 67B deployment still
+needs to pass the same gate.
 
 The local `snowball_rl` artifact main at `2a8cbaf1c7` renders two-update
 presets named `levanter-inventory-native` and `levanter-inventory-vllm`.
@@ -314,11 +317,13 @@ Follow the coordinator if Iris retries the child.
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
 
-Both 25-update recipes passed read-only preflight on the frozen source
-against the regional task selection. Megatron uses version `2026.11.20.6`
-and Levanter uses `2026.11.20.7`. Both enable publication verification.
-The trainer differences are the learner strategy, batch builder and
-Levanter policy configuration. Submit the control first after smoke acceptance.
+Both 25-update recipes passed read-only preflight on the same corrected
+source as the smoke, `dba95c7f84`, against the regional task selection.
+After the smoke passes its receipt and weight-change audits, submit the
+Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
+Use the same regional route and publication verification for both. The
+trainer differences are the learner strategy, batch builder and Levanter
+policy configuration.
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
 ID and the trainer can resume from an existing checkpoint.
@@ -915,14 +920,18 @@ arms. [Prior timing comparison][timing]
 
 ## Open decisions
 
-- Set learner promotion criteria for fixed-panel reward and update time or
-  cost before changing the default learner.
-- Choose the full-model native serving topology after measuring the bounded
-  path and profiling the pinned checkpoint. The current native parity
-  evidence covers one TPUv4 host, and the learner comparison uses H100s.
-- Choose numerical margins and a throughput target from the new vLLM
-  baseline before the native inventory comparison. The historical speed
-  figures describe distinct experiments.
+- Agree on fixed-panel reward and update time or cost margins before the
+  matched runs. Use the frozen comparison to select the learner candidate.
+  Change the default only when the maintained Levanter/vLLM build also
+  meets those margins and passes H100 recovery and weight publication.
+- Keep native serving opt-in until the fixed-checkpoint shape gate and the
+  five-host deployment pass. Use the fresh vLLM baseline to agree on
+  sustained group throughput, update time, reward and recovery criteria
+  before promoting it. Decide on serving topology after measuring the
+  pinned checkpoint and expected concurrency.
+- Decide whether to carry the typed learner batch envelope across Ray as
+  well as the subprocess boundary. The current binary replay frame already
+  crosses both without re-encoding.
 - Decide which checkpoint consumers need HF export before switching the
   default learner. Identify the export artifact and verify it with those
   consumers.
