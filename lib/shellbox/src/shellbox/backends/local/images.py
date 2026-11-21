@@ -5,10 +5,11 @@
 
 import json
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import OCI_TAG, PreparedImage, prepared_image_config
+from shellbox.image import OCI_TAG, PreparedImage, prepare_oci_image, prepared_image_config
 
 
 @dataclass(frozen=True)
@@ -45,21 +46,28 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
     workdir = process.get("WorkingDir") or "/"
     if not PurePosixPath(workdir).is_absolute() or "\0" in workdir:
         raise ValueError("OCI working directory must be absolute")
-    try:
-        subprocess.run(
-            [str(umoci), "unpack", "--rootless", "--image", f"{image.layout}:{OCI_TAG}", str(directory)],
-            check=True,
-            capture_output=True,
-        )
-    except FileNotFoundError as error:
-        raise FileNotFoundError(
-            f"OCI image preparation requires umoci ({umoci}); install it on the host "
-            "or pass LocalMachineFactory(umoci=Path(...))"
-        ) from error
-    metadata = json.loads((directory / "umoci.json").read_text())
-    unpacked_digest = metadata["from_descriptor_path"]["descriptor_walk"][-1]["digest"]
-    if unpacked_digest != image.manifest_digest:
-        raise ValueError("Unpacked image differs from its pinned manifest")
+    with tempfile.TemporaryDirectory(prefix="unpack-image-", dir=directory.parent) as temporary:
+        unpack = prepare_oci_image(image, Path(temporary) / "oci")
+        try:
+            subprocess.run(
+                [str(umoci), "unpack", "--rootless", "--image", f"{unpack.layout}:{OCI_TAG}", str(directory)],
+                check=True,
+                capture_output=True,
+            )
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                f"OCI image preparation requires umoci ({umoci}); install it on the host "
+                "or pass LocalMachineFactory(umoci=Path(...))"
+            ) from error
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(
+                f"Could not unpack OCI image {image.manifest_digest}: "
+                f"umoci exited {error.returncode}: {error.stderr.decode(errors='replace').strip()}"
+            ) from error
+        metadata = json.loads((directory / "umoci.json").read_text())
+        unpacked_digest = metadata["from_descriptor_path"]["descriptor_walk"][-1]["digest"]
+        if unpacked_digest != unpack.manifest_digest:
+            raise ValueError("Unpacked image differs from its verified manifest")
     return PreparedLocalImage(
         root=directory / "rootfs",
         environment=environment,

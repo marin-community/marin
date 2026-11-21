@@ -19,6 +19,7 @@ from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from skyrl_train.hf_export_schema import HFExportRequest
 
 
+@pytest.mark.parametrize("local_region", [None, "US-EAST-08A"])
 @pytest.mark.parametrize(
     "target_cluster,parent_cluster_config,interface,logger,entrypoint,preemption_retries,groups",
     [
@@ -41,6 +42,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     entrypoint,
     preemption_retries,
     groups,
+    local_region,
 ):
     requests = []
     monkeypatch.setenv("HF_TEST_KEY", "test-extra-credential")
@@ -62,6 +64,13 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
     monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
     document = raw_launch_config()
+    if local_region is not None:
+        document["skyrl"].setdefault("environment", {}).setdefault("task_sessions", {})["local"] = {
+            "region": local_region,
+            "image_mirrors": [
+                {"image": "registry.fixture/private@sha256:" + "a" * 64, "uri": "s3://marin-us-east-08a/image"}
+            ],
+        }
     document["run"].update(submission="detach", export_hf=False)
     document["runtime"]["task_env"] = {} if interface is None else {"NCCL_SOCKET_IFNAME": interface}
     document["iris"].update(
@@ -143,6 +152,11 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert tuple(request.coscheduling.group_sizes) == groups
     assert request.coscheduling.group_by == ("nvlink.domain" if groups else "leafgroup")
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
+    regions = [constraint for constraint in request.constraints if constraint.key == "region"]
+    expected_regions = (
+        [] if local_region is None or entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT else [local_region.lower()]
+    )
+    assert [constraint.value.string_value for constraint in regions] == expected_regions
     expected_interface = interface or (
         "^ibs,ibp,lo,docker,veth,cilium,lxc" if config.iris.cluster == "cw-rno2a" else None
     )

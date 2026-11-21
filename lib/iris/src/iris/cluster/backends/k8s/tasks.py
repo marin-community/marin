@@ -116,6 +116,7 @@ from iris.cluster.platforms.k8s.types import (
 from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
+    IRIS_WORKER_REGION_ENV,
     OUTPUT_MOUNT,
     TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
@@ -939,6 +940,8 @@ def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) ->
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
+    *,
+    worker_region: str | None,
 ) -> dict:
     """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
     task_id = JobName.from_wire(run_req.task_id)
@@ -985,6 +988,10 @@ def _build_pod_manifest(
             raise PodManifestError(storage_error)
     job_env = dict(run_req.environment.env_vars)
     combined = {**cluster_env, **job_env, **iris_env}
+    # Location comes from the dispatch backend, never from inherited or user env.
+    combined.pop(IRIS_WORKER_REGION_ENV, None)
+    if worker_region is not None:
+        combined[IRIS_WORKER_REGION_ENV] = worker_region
     if job_secrets:
         combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
         for name, value in secret_file_environment(job_secrets).items():
@@ -2947,11 +2954,10 @@ class K8sTaskProvider:
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
-        if error := _region_constraint_error(
-            run_req.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
-        ):
+        regions = sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        if error := _region_constraint_error(run_req.constraints, regions):
             raise PodManifestError(error)
-        manifest = _build_pod_manifest(run_req, self.pods)
+        manifest = _build_pod_manifest(run_req, self.pods, worker_region=regions[0] if len(regions) == 1 else None)
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)

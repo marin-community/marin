@@ -14,9 +14,21 @@ import uuid
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 OCI_TAG = "image"
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
+
+DOCKER_LAYER_MEDIA_TYPES = MappingProxyType(
+    {
+        "application/vnd.docker.image.rootfs.diff.tar.gzip": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip": (
+            "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +96,49 @@ def prepared_image_workdir(image: PreparedImage) -> str:
     return config.get("config", {}).get("WorkingDir") or "/"
 
 
+def prepare_oci_image(image: PreparedImage, directory: Path) -> PreparedImage:
+    """Convert a Docker manifest to OCI for unpacking, preserving config and layer bytes.
+
+    The caller owns the conversion directory. The source layout and its pinned
+    manifest remain unchanged; only the temporary manifest representation changes.
+    """
+    if _tagged_manifest_digest(image.layout) != image.manifest_digest:
+        raise ValueError("Prepared image tag no longer selects its pinned manifest")
+    original = _oci_json_blob(image.layout, image.manifest_digest)
+    media_type = original.get("mediaType", OCI_MANIFEST_MEDIA_TYPE)
+    if media_type == OCI_MANIFEST_MEDIA_TYPE:
+        return image
+    if media_type != DOCKER_MANIFEST_MEDIA_TYPE:
+        raise ValueError(f"Unsupported unpack manifest: {media_type}")
+    original["mediaType"] = OCI_MANIFEST_MEDIA_TYPE
+    original["config"]["mediaType"] = "application/vnd.oci.image.config.v1+json"
+    for layer in original["layers"]:
+        layer["mediaType"] = DOCKER_LAYER_MEDIA_TYPES[layer["mediaType"]]
+    blobs = directory / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    # Translate descriptors only: reserializing Docker config would change image identity.
+    for descriptor in [original["config"], *original["layers"]]:
+        blob = _oci_blob(image.layout, descriptor["digest"])
+        if blob.stat().st_size != descriptor["size"]:
+            raise ValueError("Prepared image blob size mismatch")
+        destination = blobs / descriptor["digest"].removeprefix("sha256:")
+        if not destination.exists():
+            destination.symlink_to(blob.resolve())
+    manifest = json.dumps(original).encode()
+    manifest_hash = hashlib.sha256(manifest).hexdigest()
+    (blobs / manifest_hash).write_bytes(manifest)
+    descriptor = {
+        "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+        "digest": f"sha256:{manifest_hash}",
+        "size": len(manifest),
+        "annotations": {"org.opencontainers.image.ref.name": OCI_TAG},
+    }
+    (directory / "index.json").write_text(json.dumps({"schemaVersion": 2, "manifests": [descriptor]}))
+    (directory / "oci-layout").write_text(json.dumps({"imageLayoutVersion": "1.0.0"}))
+    digest = _manifest_digest(directory)
+    return PreparedImage(directory, digest, image.source)
+
+
 def image_source_key(source: RegistryImage | DockerfileSource) -> str:
     """Identify a registry reference or the current contents of a build context."""
     if isinstance(source, RegistryImage):
@@ -147,6 +202,10 @@ def process_image_cache(directory: Path, authfile: Path | None, policy: Path | N
     return ImageCache(directory.resolve(), authfile=authfile, policy=policy)
 
 
+def image_cache_path(directory: Path, manifest_digest: str) -> Path:
+    return directory / manifest_digest.replace(":", "-")
+
+
 def _run(*args: str) -> None:
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode:
@@ -188,7 +247,7 @@ def prepare_image(
         if match is not None:
             pinned_digest = match[1]
     if pinned_digest is not None and policy is None:
-        destination = cache / pinned_digest.replace(":", "-")
+        destination = image_cache_path(cache, pinned_digest)
         if destination.exists():
             _manifest_digest(destination, expected=pinned_digest)
             return PreparedImage(destination, pinned_digest, source)
@@ -222,7 +281,7 @@ def prepare_image(
         if isinstance(source, RegistryImage):
             _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
         digest = _manifest_digest(layout)
-        destination = cache / digest.replace(":", "-")
+        destination = image_cache_path(cache, digest)
         if not destination.exists():
             try:
                 layout.rename(destination)

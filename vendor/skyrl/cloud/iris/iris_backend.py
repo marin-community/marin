@@ -28,7 +28,7 @@ from urllib.parse import unquote, urlparse
 import yaml
 from iris.client.client import Job
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.constraints import Constraint, infer_preemptible_constraint
+from iris.cluster.constraints import Constraint, infer_preemptible_constraint, region_constraint
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
 from iris.resources.state import JobState
@@ -50,6 +50,7 @@ from cloud.iris.rl_config_translation import (
 )
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from skyrlrecipe import RLEntrypoint
+from marinskyrl.local_images import LocalMachineSettings
 from marinskyrl.resource_locator import (
     is_cloud_uri,
     join_resource_path,
@@ -859,9 +860,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
 
     replicas = args.num_nodes
     if args.role_topology is not None:
-        coscheduling = CoschedulingConfig(
-            group_by="nvlink.domain", group_sizes=args.role_topology.locality.group_sizes
-        )
+        coscheduling = CoschedulingConfig(group_by="nvlink.domain", group_sizes=args.role_topology.locality.group_sizes)
     else:
         coscheduling = _gpu_multinode(args.gpu_variant, args.gpus_per_node, replicas)
 
@@ -873,6 +872,14 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
         resources_proto,
         replicas=replicas,
     )
+
+    local = OmegaConf.select(args.config, "skyrl.environment.task_sessions.local")
+    if local is not None and not _is_checkpoint_export(args):
+        settings = LocalMachineSettings.model_validate(OmegaConf.to_container(local, resolve=True))
+        if settings.image_mirrors:
+            if settings.region is None:
+                raise ValueError("LOCAL image mirrors require a pinned rollout region")
+            constraints.append(region_constraint([settings.region]))
 
     priority_band = job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{args.priority.upper()}")
 
@@ -959,9 +966,10 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
                     raise ValueError(f"Missing Daytona credential environment variable: {name}")
                 env_vars[name] = value
 
-    with submission_client(
-        args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace
-    ) as (client, cluster_pin):
+    with submission_client(args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace) as (
+        client,
+        cluster_pin,
+    ):
         if cluster_pin is not None:
             constraints.append(cluster_pin)
         entrypoint = Entrypoint.from_command(*command)

@@ -13,6 +13,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+from marinskyrl.local_images import LocalMachineSettings, local_machine_factory
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -49,8 +50,7 @@ class PythonProbe(BaseModel):
     state_persisted: bool
 
 
-async def qualify(rows: list[PythonQualificationInput]) -> tuple[PythonProbe, ...]:
-    factory = LocalMachineFactory()
+async def qualify(rows: list[PythonQualificationInput], factory: LocalMachineFactory) -> tuple[PythonProbe, ...]:
     config_path = Path("vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml")
     config = yaml.safe_load(config_path.read_text())["task_spec"]
     runtime = MachineRuntimeSpec.model_validate({**config["required_actor"], "backend": Backend.LOCAL})
@@ -137,6 +137,7 @@ def main() -> None:
     parser.add_argument("--expected-tasks", type=int, required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--runtime-commit", required=True)
+    parser.add_argument("--local-backend-config")
     args = parser.parse_args()
     configure_coreweave_s3()
     payload = StoragePath(args.inputs).read_bytes()
@@ -145,12 +146,18 @@ def main() -> None:
     rows = [PythonQualificationInput.model_validate(row) for row in pq.read_table(pa.BufferReader(payload)).to_pylist()]
     if len(rows) != args.expected_tasks:
         raise ValueError("Frozen Python qualification input count differs")
-    results = asyncio.run(qualify(rows))
+    settings = (
+        LocalMachineSettings.model_validate_json(StoragePath(args.local_backend_config).read_text())
+        if args.local_backend_config is not None
+        else LocalMachineSettings()
+    )
+    results = asyncio.run(qualify(rows, local_machine_factory(settings)))
     receipt = {
         "inputs": args.inputs,
         "inputs_sha256": args.inputs_sha256,
         "passed": True,
         "runtime_commit": args.runtime_commit,
+        "local_backend": settings.model_dump(mode="json"),
         "scope": "Real frozen repair-candidate tool contracts; LOCAL bubblewrap, image, network and persistence",
         "results": [result.model_dump(mode="json") for result in results],
     }
