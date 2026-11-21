@@ -40,7 +40,8 @@ from taskforge.llm.client import (
     Segment,
 )
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
-from taskforge.llm.policy import GLM_5_3, LLMPolicy, RetryPolicy
+from taskforge.llm.policy import GLM_5_3, LLMPolicy, ReasoningEffort, RetryPolicy
+from taskforge.model.llm import FinishReason
 from taskforge.model.review import Cause
 from taskforge.policy import load_policy
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
@@ -374,3 +375,43 @@ def test_trial_timeouts_outlast_declared_provider_window() -> None:
 def test_inconsistent_provider_deadlines_are_rejected(overlay: dict[str, float], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         provider_policy(load_policy(DEFAULTS).overlaid(overlay))
+
+
+# Review 2026-11-21 (n12 follow-up 3): a 200 stream whose finish reason was the harness's internal `context_exceeded`
+# made the author stop on a context limit and the solver grade its content. It is refused as an unknown reason is.
+@pytest.mark.parametrize("reason", ["context_exceeded", "no_such_reason"])
+async def test_a_served_internal_refusal_marker_fails_as_an_unknown_finish_reason(
+    monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        chunks = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "12"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]},
+            {"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        ]
+        body = "".join(
+            "data: "
+            + json.dumps({"id": "test", "object": "chat.completion.chunk", "created": 0, "model": "test", **chunk})
+            + "\n\n"
+            for chunk in chunks
+        )
+        return httpx.Response(200, text=body + "data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+
+    original = httpx.AsyncClient
+
+    class MockClient(original):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(transport=httpx.MockTransport(respond), **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(glm_provider.httpx, "AsyncClient", MockClient)
+    source = FixedEndpoint(GlmEndpoint("http://fake/v1", "fake", Pool.BULK))
+    monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://unused"))
+    async with wiring.runtime(load_policy(DEFAULTS), source, "fake") as (_, resources):
+        with pytest.raises(ValueError, match=f"'{reason}' is not a valid FinishReason"):
+            await resources.inference_for("author").complete(request())
+
+
+async def test_an_injected_provider_cannot_report_the_internal_refusal_marker() -> None:
+    marker = ScriptedProvider((segment("12", finish=FinishReason.CONTEXT_EXCEEDED),))
+    with pytest.raises(ValueError, match="'context_exceeded' is not a valid FinishReason"):
+        await client(marker).complete((), LLMPolicy(100, ReasoningEffort.HIGH), {})

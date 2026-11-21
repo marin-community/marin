@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 from typing import Protocol, override
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest
-from taskforge.effects.issues import Hold, Restart, Transient
+from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
 from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelUnavailable
 from taskforge.llm.client import Completion as ProviderCompletion
 from taskforge.llm.policy import LLMPolicy, ModelProfile
-from taskforge.model.llm import TOOL_SCHEMA, Completion, FinishReason, Message, ToolSchema
+from taskforge.model.llm import TOOL_SCHEMA, Completion, Message, ToolSchema
 from taskforge.resources.execution import Notify
 
 
@@ -110,8 +110,8 @@ class GlmInference(InferenceClient):
             result = await self.client.complete(tuple(map(_message, request.conversation)), policy, fields)
         except ModelUnavailable as error:
             raise Restart(str(error), retries=_retries(error.attempts)) from error
-        except ContextExhausted as error:  # a recorded result, so a resumed request replays the same stop
-            return Completion(error.body, finish_reason=FinishReason.CONTEXT_EXCEEDED)
+        except ContextExhausted as error:
+            raise ContextExceeded(error.body, retries=_retries(error.attempts)) from error
         return Completion(
             result.content,
             result.tool_calls,
@@ -135,7 +135,7 @@ async def complete(event: InferenceRequest, client: InferenceClient, *, notify: 
     """Run ``event`` once: the model client owns its retries, which are reported as ``Retrying`` notes."""
     try:
         result = await client.complete(event)
-    except (Transient, Restart, Hold) as error:
+    except (Transient, Restart, Hold, ContextExceeded) as error:
         for index, cause in enumerate(error.retries, 1):
             notify(Retrying(event, index, str(cause)))
         raise
