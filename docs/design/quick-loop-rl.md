@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 1:47 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 1:59 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -106,10 +106,11 @@ Verify each serving rank installed its expected shards for the same version.
 Clear or recreate KV and prefix state, then acknowledge the new cache epoch
 before reopening admission. Fail the step if an install is partial or any
 rank disagrees.
-Treat a repeated publication of the same identity as idempotent. A retry
-with different bytes at the same identity fails. Bind each trajectory to
-the version and cache epoch reported by the serving backend when it sampled
-the tokens. Reject mixed or stale identities at admission.
+Let a live serving process re-acknowledge an exact install receipt using
+the current or immediately preceding policy identity. A conflicting
+receipt for the same step fails. Bind each trajectory to the version and
+cache epoch reported by the backend when it sampled the tokens. Reject
+mixed or stale identities at admission.
 
 Save model, Adam state, RNG, step and model averaging in the native checkpoint.
 Commit a step after the optimizer update and serving acknowledgement. Use
@@ -229,6 +230,15 @@ serving process installed three successive policies across two real CPU
 optimizer updates. A separate CPU test exercised the SkyRL Ray worker
 through two tool continuations with the same transport.
 [CPU serving receipts in Filer][native-serving-wire-archive]
+
+The local retry change at `f36f5761a5` verified a repeated install through
+the actor and protobuf process after moving the snapshot directory.
+Serving re-acknowledged the same receipt and kept producing the same
+replay bytes. It rejected a different digest for the installed step and
+a changed receipt for the same digest. The publisher test withheld the
+first acknowledgement and kept the next lease closed until an exact
+retry succeeded. This covers a live serving process.
+[Retry source and CPU tests][native-install-retry-source]
 
 At the pinned model's 26 layers and four selected experts, a synthetic
 24,576-token frame occupied 13,650,628 bytes. A four-answer group of those
@@ -609,6 +619,18 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   learner and serving processes from a durable checkpoint and verify that
   the next rollout uses the restored policy.
   [Exact chat continuation][chat-continuation]
+
+  The two-update preset currently commits the SkyRL recovery checkpoint at
+  train end. Its earlier worker roundtrip covers learner state alone.
+  In the callback-driven configuration, an interrupted save can leave a
+  higher-numbered folder that blocks resume from the committed marker.
+  The restart qualification needs a step-1 trainer checkpoint, an
+  interrupted step-2 save, and fresh learner and serving processes.
+  Resume the exact committed path and cursor, verify the restored policy
+  on serving, and require one further optimizer update. Give each save a
+  unique path. Once all components finish, advance the commit pointer
+  only if it still names the checkpoint this attempt restored or last
+  committed.
 - During native training, fixed-panel evaluation uses a separate binary
   sampling call bound to the installed weight digest. A local isolated
   CPU test matched an independently configured local sampler's token IDs and
@@ -690,6 +712,7 @@ arms. [Prior timing comparison][timing]
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
 [native-cross-host-serving]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fserving.tar.zst
 [native-cross-host-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fsource-inputs.tar.zst
+[native-install-retry-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.14%2Finstall-retry-source-and-tests.tar.zst
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
