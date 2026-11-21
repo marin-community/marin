@@ -12,13 +12,20 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import click
-from finestore.rl.rl_progress import AttemptSummary, ComparisonRole, GateResult
+from finestore.rl.rl_progress import (
+    GRADER_REPORT_FILENAME,
+    GRADER_REPORTS_DIR,
+    AttemptSummary,
+    ComparisonRole,
+    GateResult,
+)
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
 from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts, recorded_launch
 from pydantic import BaseModel, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
@@ -147,6 +154,11 @@ def build_record(
         )
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
+    report_path = StoragePath(launch.export_root) / GRADER_REPORTS_DIR / attempt_id / GRADER_REPORT_FILENAME
+    try:
+        grader_report = json.loads(report_path.read_text())
+    except FileNotFoundError:
+        grader_report = None
     return AttemptSummary(
         run_id=attempt.run_id,
         attempt_id=attempt_id,
@@ -185,6 +197,7 @@ def build_record(
         wandb_url=tracking.get("wandb_url"),
         grafana_url=attempt_grafana_url(attempt, launch),
         evaluations=evaluations,
+        grader_report=grader_report,
         engine=tracking.get("engine"),
         source_revision=(
             f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"

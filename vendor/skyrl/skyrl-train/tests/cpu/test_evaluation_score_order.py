@@ -203,6 +203,7 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     config = get_default_config()
     config.trainer.export_path = str(tmp_path)
     config.trainer.dump_eval_results = False
+    config.trainer.dump_grader_report = True
     config.generator.eval_n_samples_per_prompt = 1
     OmegaConf.update(config, "runtime", {"attempt_id": "eval-attempt", "model": "test-policy"}, force_add=True)
     task = text_task("validation-task")
@@ -228,6 +229,10 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
 
     async with EvaluationPool(concurrency=1) as pool:
         await evaluate(loader, SimpleNamespace(run=run), config, 0, tokenizer, evaluation_pool=pool)
+        named_loader = StatefulDataLoader([{"input": row}], collate_fn=list)
+        await evaluate(
+            named_loader, SimpleNamespace(run=run), config, 0, tokenizer, val_set_name="named", evaluation_pool=pool
+        )
 
     [saved] = read_evaluations(str(tmp_path), attempt_id="eval-attempt", step=0, evaluation="eval/")
     assert saved.task_id == task.id
@@ -236,6 +241,9 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     assert saved.model == "test-policy"
     [answer] = saved.answers
     assert answer.response_token_count == 1
+    report = json.loads((tmp_path / "grader_report.json").read_text())
+    assert set(report["evaluation"]) == {"0", "named/0"}
+    assert report["evaluation"]["named/0"][0]["success_rate"] == 1.0
 
 
 def test_task_timings_survive_projection_concatenation_and_row_selection():

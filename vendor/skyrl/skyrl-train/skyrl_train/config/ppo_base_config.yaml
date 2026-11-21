@@ -332,6 +332,8 @@ trainer:
   tracker_commit_each_step: true
   dump_data_batch: false
   dump_eval_results: true
+  dump_grader_report: false
+  grader_report_dir: ${trainer.export_path}
   log_level: "INFO"
 
   rope_scaling: null

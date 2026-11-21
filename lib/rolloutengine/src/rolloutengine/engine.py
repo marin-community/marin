@@ -11,7 +11,8 @@ from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE, GradeResult, GradingFailure, Outcome
+from taskcompendium.models import NoGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
@@ -213,6 +214,7 @@ class RolloutEngine:
         messages = recorder.graded_messages()
         assert messages is not None
         started = time.monotonic()
+        failure = None
         try:
             async with asyncio.timeout(spec.limits.verifier_timeout):
                 attempt.outputs = await _captured_outputs(spec, machine)
@@ -231,8 +233,26 @@ class RolloutEngine:
                 Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
             )
             raise _Interrupted(RolloutOperation.GRADE) from error
+        except asyncio.CancelledError:
+            # If the attempt deadline fired during grading, the caller receives this observation.
+            failure = GradingFailure.TIMEOUT
+            raise
         except Exception as error:
+            failure = GradingFailure.EXECUTION
             raise _Interrupted(RolloutOperation.GRADE) from error
-        attempt.grade = grade
-        attempt.grading_seconds = time.monotonic() - started
-        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, attempt.grading_seconds))
+        else:
+            attempt.grade = grade
+        finally:
+            duration = time.monotonic() - started
+            attempt.grading_seconds = duration
+            if not isinstance(spec.task.grader, NoGrader):
+                grade = attempt.grade
+                diagnostics = {**grade.diagnostics, GRADING_DURATION_SECONDS: duration}
+                failure = failure or grade.failure
+                if failure is not None:
+                    diagnostics[GRADING_FAILURE] = failure.value
+                elif grade.status in {Outcome.INFRA_ERROR, Outcome.INVALID_TASK}:
+                    diagnostics[GRADING_FAILURE] = grade.status.value
+                attempt.grade = replace(grade, diagnostics=diagnostics)
+        grade = attempt.grade
+        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, duration))

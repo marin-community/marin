@@ -7,7 +7,10 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, StrictInt, field_validator, model_validator
+
+GRADER_REPORTS_DIR = "grader_reports"
+GRADER_REPORT_FILENAME = "grader_report.json"
 
 
 class Verdict(StrEnum):
@@ -97,6 +100,7 @@ class AttemptSummary(BaseModel):
     wandb_url: str | None = None
     grafana_url: str | None = None
     evaluations: list[Comparison] = Field(default_factory=list)
+    grader_report: dict[str, JsonValue] | None = None
     engine: dict[str, Any] | None = None
     gate_result: GateResult | None = None
     gate: str | None = None

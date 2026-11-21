@@ -177,6 +177,11 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                 attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
             )
         return
+    grader_report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    report_root = source / "exports" / "grader_reports"
+    write_json(report_root / "other-attempt" / "grader_report.json", {"evaluation": {}})
+    if case == "native-composed":
+        write_json(report_root / "native-attempt" / "grader_report.json", grader_report)
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
@@ -197,6 +202,9 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
+        assert row["grader_report"] == grader_report
+    else:
+        assert row["grader_report"] is None
 
 
 @pytest.mark.parametrize("name", ["speed-short", "speed-medium", "speed-long", "data-short"])

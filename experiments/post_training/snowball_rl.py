@@ -210,6 +210,11 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
+_REPORTING_P40 = replace(
+    _ASYNC_P40,
+    config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(dump_grader_report=True))),
+)
+
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 _GAPS = ("aaii-coverage", "no-agentic-tasks", "no-image-sandbox")
@@ -249,7 +254,7 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -275,7 +280,7 @@ _TRAIN_LONG = _snowball(
     checkpoints="best",
     export="best",
     name="train-long",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=100,
     measured=range(1, 101),

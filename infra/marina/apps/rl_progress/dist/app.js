@@ -51,6 +51,7 @@ function showDetails(run) {
   for (const id of run.evaldash_run_ids ?? []) {
     links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
   }
+  if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
