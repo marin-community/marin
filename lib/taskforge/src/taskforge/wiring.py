@@ -210,8 +210,12 @@ def build_resources(
 ) -> Resources:
     """Executors for ``policy``: each role's model through the one model client, over its ``providers`` entry.
 
-    ``profiles`` overrides the model profile per role; a role without one uses ``GLM_5_3``.
+    ``profiles`` overrides the model profile per role; a role without one uses ``GLM_5_3``. Each provider must serve
+    its role's declared ``<role>.model``, the model that replay keys record.
     """
+    for role, provider in providers.items():
+        if provider.model != (declared := policy.setting(f"{role}.model", str)):
+            raise ValueError(f"{role} provider serves {provider.model!r}, policy declares {role}.model={declared!r}")
     clients = {
         role: ModelClient(provider, profiles.get(role, GLM_5_3), retry_policy(policy, role), role=role)
         for role, provider in providers.items()

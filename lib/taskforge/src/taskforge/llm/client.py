@@ -23,7 +23,8 @@ Progress is a payload carrying nonempty generated text (``progressed``); the bou
 renewal all use it. ``generation_timeout`` bounds the seconds a call spends generating: from the first generated token
 of each attempt, adding the call's completed segments, so neither admission nor an earlier fault counts. Crossing the
 bound is not itself evidence: the call ends as ``GenerationTimedOut`` only when the same stream delivers progress again
-``CONFIRMATION_INTERVAL`` after its first progress past the bound, with no finish, abort, cut or stall in between.
+``CONFIRMATION_INTERVAL`` after its first progress past the bound, with no finish, abort, cut or stall in between, and
+the provider does not then report the pool empty (a read bounded by ``unavailable_wait``); an empty pool is an outage.
 """
 
 import asyncio
@@ -56,9 +57,9 @@ TOKEN_LIMIT_FIELDS = ("max_tokens", "max_completion_tokens")
 REASON_LIMIT = 300
 CONFIRMATION_INTERVAL = 1.0
 """Seconds after its first progress past the generation bound that a stream must progress again to end the call there.
-A dead worker produces nothing, and each hop forwards the bytes it holds at once, so a dead stream's buffered tail
-arrives as one burst within a few round trips and then ends, cuts or stalls. A live stream progresses every decode step
-(tens of milliseconds), so confirming costs about a second of the 60-second turn margin."""
+A live stream progresses every decode step (tens of milliseconds), so confirming costs about a second of the 60-second
+turn margin. Output queued on the path when its worker exited can still arrive for longer than this; that tail is
+charged unless the pool reports empty (a known limit: README, Models and providers)."""
 
 
 class AttemptOutcome(StrEnum):
@@ -365,7 +366,10 @@ class ModelClient:
             try:
                 result = await self.provider.stream(body, progress)
             except _BoundReached as reached:
-                raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
+                # A pool reported empty vetoes the cutoff; a healthy or unknown answer certifies nothing.
+                if not await self._pool_empty(self.retry.unavailable_wait):
+                    raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
+                failure = AttemptFailed(AttemptOutcome.ABORTED, "generation bound reached on a pool with no workers")
             except AttemptFailed as error:
                 failure = error
             outcome, status, detail = (
@@ -390,6 +394,13 @@ class ModelClient:
                 raise ModelRequestRejected(status, detail, call.attempts) from failure
             await self._wait(failure, progress, call)
 
+    async def _pool_empty(self, timeout: float) -> bool:
+        """Whether the provider reports no workers within ``timeout``; a longer read is unknown availability."""
+        try:
+            return await asyncio.wait_for(self.provider.no_workers(), timeout)
+        except TimeoutError:
+            return False
+
     async def _wait(self, failure: AttemptFailed, progress: Progress, call: _Call) -> None:
         """Back off after an unavailable attempt, then poll while the provider reports no workers.
 
@@ -404,10 +415,7 @@ class ModelClient:
         waited = False
         while (remaining := call.remaining()) > 0:
             if waited:
-                try:
-                    empty = await asyncio.wait_for(self.provider.no_workers(), remaining)
-                except TimeoutError:
-                    empty = False  # a health read that outlasts the window is unknown availability
+                empty = await self._pool_empty(remaining)
                 if call.remaining() <= 0:
                     break
                 if not empty:

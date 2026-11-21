@@ -10,6 +10,7 @@ import logging
 import shutil
 import sys
 import tarfile
+import time
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from typing import Any, cast, override
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
 from lib.taskforge.tests.effect_fakes import local_records
+from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
@@ -62,7 +64,7 @@ from taskforge.effects.issues import (
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
-from taskforge.llm.glm_provider import EndpointSource
+from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
 from taskforge.llm.policy import GLM_5_3, ModelProfile
 from taskforge.lowering import rollout_engine
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
@@ -332,7 +334,8 @@ async def run_on(
     proposal: TaskProposal, providers: Mapping[str, Provider], profiles: Mapping[str, ModelProfile], log: EventLog
 ) -> Workpiece:
     """A workpiece through the public wiring on ``providers`` and ``profiles``, with fake machines and graders."""
-    policy = load_policy(DEFAULTS_DIR).overlaid(SETTINGS)
+    models = {f"{role}.model": provider.model for role, provider in providers.items()}
+    policy = load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, **models})
     built = build_resources(policy, providers, {}, FakeWeb({}, {}), profiles)
     bundle = replace(
         built,
@@ -912,6 +915,17 @@ class Fleet(Provider):
         self.alive = False
         raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
 
+    async def tails_past_the_bound(self, progress: Progress, pool_empties: bool) -> Segment:
+        """The worker exits at second 4,140 of the bound; its queued output keeps arriving past the bound, two frames
+        1.2 s apart, while ``/health`` reports the pool empty or another replica keeps it positive."""
+        await self.served.wait()
+        await self.generate(progress, 4140)
+        self.alive = not pool_empties
+        for delay in (TOKEN_INTERVAL + 0.5, 1.2):
+            await self.time.sleep(delay)
+            report(progress, chunk(content="x"))
+        raise AssertionError("the second frame past the bound confirms it")
+
     async def generates_past_the_bound(self, progress: Progress) -> Segment:
         await self.served.wait()
         await self.generate(progress, 8400)
@@ -928,13 +942,21 @@ FLEET_FAULTS = {
     "empty-tool-deltas": lambda fleet: (fleet.streams_empty_tool_deltas, fleet.answer),
     "abort-past-the-bound": lambda fleet: (fleet.aborts_past_the_bound, fleet.answer),
     "buffered-token-past-the-bound": lambda fleet: (fleet.delivers_a_buffered_token_past_the_bound, fleet.answer),
+    "tail-past-the-bound-on-an-empty-pool": lambda fleet: (
+        partial(fleet.tails_past_the_bound, pool_empties=True),
+        fleet.answer,
+    ),
 }
 
 
 def fleet_resources(policy: Policy, fleet: Fleet) -> Resources:
     """The production solver path (RolloutEngine, ``solver_turn``, ``ModelClient``) on ``fleet`` and its clock."""
-    author = ScriptedProvider(tuple(segment(c.content, c.tool_calls, FinishReason.TOOL_CALLS) for c in script()))
-    built = build_resources(policy, {"author": author, "solver": fleet, "adversary": author}, {}, FakeWeb({}, {}))
+    author = ScriptedProvider(
+        tuple(segment(c.content, c.tool_calls, FinishReason.TOOL_CALLS) for c in script()),
+        policy.setting("author.model", str),
+    )
+    adversary = ScriptedProvider((), policy.setting("adversary.model", str))
+    built = build_resources(policy, {"author": author, "solver": fleet, "adversary": adversary}, {}, FakeWeb({}, {}))
     model = ModelClient(
         fleet, GLM_5_3, retry_policy(policy, "solver"), role="solver", clock=fleet.time.clock, sleep=fleet.time.sleep
     )
@@ -958,7 +980,8 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
 
 
 # Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. Follow-up 1 added
-# empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
+# empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker; follow-up 2
+# a dead worker's tail confirmed past the bound (1.2 s apart) while /health reported the pool empty.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
@@ -975,11 +998,15 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
     assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
 
 
+# Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged while the pool reports healthy
+# (a known limit of the client-side bound); only a pool reported empty vetoes it (the empty-pool fault above).
+@pytest.mark.parametrize("tail", [False, True], ids=["live", "tail-on-a-healthy-pool"])
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
-    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: bool
 ) -> None:
     fleet = Fleet(LoopTime(), ())
-    fleet.acts = [fleet.generates_past_the_bound, fleet.answer]
+    past = partial(fleet.tails_past_the_bound, pool_empties=False) if tail else fleet.generates_past_the_bound
+    fleet.acts = [past, fleet.answer]
     serve(monkeypatch, fleet_resources(driver.run_policy(driver_args.policy), fleet))
     await driver.one(driver_args)
     destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
@@ -988,6 +1015,35 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     [evidence] = workpiece.evidence
     assert sorted(str(trial.cause) for trial in evidence.solver) == ["None", str(Cause.GENERATION_LIMIT)]
     assert workpiece.terminal == Terminal.ACCEPTED
+
+
+# Review 2026-11-21, follow-up 2: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
+# (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
+async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = {"provider.unavailable_wait": 0.1, "provider.backoff_initial": 0.001, "provider.backoff_maximum": 0.001}
+    policy = driver.run_policy(driver_args.policy).overlaid(window)
+    with serving() as fake:
+        for _ in range(100):
+            fake.status(503, "busy", trickle=400)
+        source = FixedEndpoint(GlmEndpoint(fake.base_url, "token", Pool.HIGH))
+        async with GlmProvider(source, policy.setting("author.model", str), 0.05, 8) as author:
+            roles = ("solver", "adversary")
+            providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in roles}
+            built = build_resources(policy, {**providers, "author": author}, {}, FakeWeb({}, {}))
+            serve(monkeypatch, replace(built, envs=Envs()))
+            started = time.monotonic()
+            await driver.one(driver_args)
+            elapsed = time.monotonic() - started
+    destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert (workpiece.terminal, solver_slots(destination)) == (Terminal.HELD, [])
+    resolved = [record.event for record in history(destination) if isinstance(record.event, Resolved)]
+    assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
+    # Each stage attempt ends within the window plus one bounded attempt, long before one body (2 s) could end.
+    assert elapsed < STAGE_REPLAY_ATTEMPTS * 0.2 and len(fake.requests) >= STAGE_REPLAY_ATTEMPTS
+    assert fake.health_polls >= 1
 
 
 def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: WorkspaceHydration | None = None) -> None:

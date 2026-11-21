@@ -233,7 +233,7 @@ async def test_a_cached_candidate_grade_replays_unless_the_output_cap_changes(
     """Candidate grading runs on the solver's machines, so a tighter ShellSim cap must regrade a control."""
 
     def grading(policy: Policy) -> GradingResource:
-        providers = {role: ScriptedProvider(()) for role in ROLES}
+        providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in ROLES}
         return build_resources(policy, providers, {}, FakeWeb({}, {})).grading
 
     declared = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")

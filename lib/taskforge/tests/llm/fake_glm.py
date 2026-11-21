@@ -29,6 +29,8 @@ class ScriptedStatus:
     code: int
     body: str
     headers: dict[str, str]
+    trickle: int = 0
+    """Bytes of whitespace sent ``TRICKLE_INTERVAL`` apart before ``body``."""
 
 
 @dataclass
@@ -93,8 +95,8 @@ class FakeGlm:
         stall = self.released if stall_after_first else None
         self.responses.append(ScriptedStream(payloads, send_done, stall, interval))
 
-    def status(self, code: int, body: str, headers: dict[str, str] | None = None) -> None:
-        self.responses.append(ScriptedStatus(code, body, headers or {}))
+    def status(self, code: int, body: str, headers: dict[str, str] | None = None, trickle: int = 0) -> None:
+        self.responses.append(ScriptedStatus(code, body, headers or {}, trickle))
 
     def next_health(self) -> dict[str, int]:
         self.health_polls += 1
@@ -111,28 +113,24 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - BaseHTTPRequestHandler signature
             pass
 
-        def _send(self, code: int, body: str, headers: dict[str, str]) -> None:
+        def _send(self, code: int, body: str, headers: dict[str, str], trickle: int = 0) -> None:
             self.send_response(code)
             for key, value in headers.items():
                 self.send_header(key, value)
+            if trickle:
+                self.send_header("Content-Length", str(trickle + len(body)))
             self.end_headers()
+            for _ in range(trickle):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+                time.sleep(TRICKLE_INTERVAL)
             self.wfile.write(body.encode())
 
         def do_GET(self) -> None:
             assert self.path == "/health"
             report = json.dumps({"status": "ok", "workers": fake.next_health()})
             body = report if fake.health_text is None else fake.health_text
-            if not fake.health_trickle:
-                self._send(fake.health_status, body, {})
-                return
-            self.send_response(fake.health_status)
-            self.send_header("Content-Length", str(fake.health_trickle + len(body)))
-            self.end_headers()
-            for _ in range(fake.health_trickle):
-                self.wfile.write(b" ")
-                self.wfile.flush()
-                time.sleep(TRICKLE_INTERVAL)
-            self.wfile.write(body.encode())
+            self._send(fake.health_status, body, {}, fake.health_trickle)
 
         def do_POST(self) -> None:
             assert self.path == "/v1/chat/completions", self.path
@@ -141,7 +139,7 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
             fake.request_headers.append({key.lower(): value for key, value in self.headers.items()})
             response = fake.responses.popleft()
             if isinstance(response, ScriptedStatus):
-                self._send(response.code, response.body, response.headers)
+                self._send(response.code, response.body, response.headers, response.trickle)
                 return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")

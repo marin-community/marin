@@ -153,9 +153,6 @@ async def judged(
     rollout: bool, judge: ModelProfile, history: Sequence[Record]
 ) -> tuple[float | None, int, int, Sequence[Record]]:
     """A solver rollout or a candidate grade through ``build_resources`` and ``install``, replaying ``history``."""
-    policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"})
-    task = arithmetic_task(grader=verifyit_package(JudgeSpec(references=("12",), exact_gate=False)).grader)
-    spec = lower_with_settings(task, lowering_settings(policy), {}).model_copy(update={"trace": TraceMode.MESSAGES})
     solver, host_judge = ScriptedProvider((segment("12"),)), CapSensitiveJudge(())
     providers = {
         "author": ScriptedProvider(()),
@@ -163,6 +160,9 @@ async def judged(
         "solver": solver,
         "judge": host_judge,
     }
+    policy = load_policy(DEFAULTS_DIR).overlaid({f"{role}.model": "test-model" for role in providers})
+    task = arithmetic_task(grader=verifyit_package(JudgeSpec(references=("12",), exact_gate=False)).grader)
+    spec = lower_with_settings(task, lowering_settings(policy), {}).model_copy(update={"trace": TraceMode.MESSAGES})
     log = EventLog(replay_from=history)
     ctx = Context(log=log)
     install(ctx, build_resources(policy, providers, {}, FakeWeb({}, {}), {"judge": judge}))
@@ -189,3 +189,17 @@ async def test_an_outer_result_replays_only_under_the_judge_profile_that_shaped_
     clean = 0.0 if replayed is CAPPED_JUDGE else 1.0
     calls = (0, 0) if recorded is replayed else (int(rollout), 1)
     assert (reward, (solver_calls, judge_calls)) == (clean, calls)
+
+
+# Review 2026-11-21, follow-up 2: a judge provider reporting another model, under the same policy and profile,
+# replayed a grade and a rollout of 1.0 with zero calls where a clean run scored 0.0.
+@pytest.mark.parametrize("role", ["author", "solver", "adversary", "judge"])
+def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role: str) -> None:
+    providers = {name: ScriptedProvider((segment("12"),)) for name in ("author", "solver", "adversary", "judge")}
+    policy = load_policy(DEFAULTS_DIR).overlaid({f"{name}.model": "test-model" for name in providers})
+    providers[role] = ScriptedProvider((segment("12"),), "other-model")
+    with pytest.raises(
+        ValueError, match=f"{role} provider serves 'other-model', policy declares {role}.model='test-model'"
+    ):
+        build_resources(policy, providers, {}, FakeWeb({}, {}))
+    assert not any(provider.bodies for provider in providers.values())
