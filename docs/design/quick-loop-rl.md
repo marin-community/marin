@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 3:23 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 3:42 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,11 +18,11 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 17 more H100 and 17 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 24 more H100 and 24 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
-| Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Two CPU hosts also passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
+| Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Distinct TPUv4 learner and serving hosts passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
-| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify cross-host native serving and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
+| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
@@ -203,8 +203,8 @@ Local CPU tests installed versions 0 through 2 across the worker pipe and
 rejected stale identities. They exercised publication from one and two
 learner processes and a bitwise-identical next update after restoring the
 trainer. A local Ray run installed two mixed-precision snapshots while
-preserving exact binary replay across tool turns. Verification across
-accelerator hosts remains open.
+preserving exact binary replay across tool turns. The tool-turn check
+across accelerator hosts remains open.
 
 The local `snowball_rl` artifact main at `2a8cbaf1c7` renders two-update
 presets named `levanter-inventory-native` and `levanter-inventory-vllm`.
@@ -422,8 +422,8 @@ full-vocabulary profile and fused forward diagnostic on four TPUv4 chips.
 The three installed weight digests were distinct, the second group
 used step 1, and the 128 sampled scores matched within `4.29e-6`. This
 qualifies fresh local KV state across updates. The separate CPU publication
-proof covers the process boundary. Publication across accelerator hosts
-remains open.
+proof covers the process boundary. The later two-host fixture below
+exercises publication across accelerator hosts.
 [TPUv4 queue and cache proof][iris-native-install]
 
 The integrated proof archive is
@@ -506,10 +506,20 @@ rejected stale requests and returned four evaluation tokens under policy 2.
 An independent audit verified 128 scored targets, zero clip-boundary
 crossings and eight byte-identical binary replay frames across the two
 worker archives.
-The accelerator-to-accelerator handoff and the 67B production shapes
-remain open.
 [Two-host TPU attempt][iris-native-cross-host] · [Two-host CPU run][iris-native-cross-host-cpu] ·
 [Learner archive][native-cross-host-learner] · [Serving archive][native-cross-host-serving] · [Harness and verifier][native-cross-host-source]
+
+The follow-up on `63fb947665` used separate four-chip TPUv4 hosts for
+the learner and serving roles. Each role confirmed the peer's first attempt
+before initializing its accelerator. Over regional GCS, the typed learner
+published BF16 policies 0, 1 and 2 across two optimizer updates. Serving
+acknowledged the exact installed identities, rejected stale requests and
+sampled four evaluation tokens under policy 2. The two hosts agreed on all
+eight binary replay frames. The fused scorer checked 128 targets with zero
+clip crossings. This qualifies the handoff for the small 256-token fixture.
+The production run still needs the four learner hosts, pinned 67B model and
+a cross-host tool turn.
+[Verified two-host TPU handoff][iris-native-cross-host-typed-tpu]
 
 The maintained learner and native ports share the SPMD policy scorer and
 learner commit `d52fd47db5`. A local merge at `fe0bb85486` preserves the
@@ -780,6 +790,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-runtime-splash]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-splash-tpu-20261121-09
 [iris-native-runtime-protobuf]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-protobuf-tpu-20261121-11
 [iris-native-cross-host]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-12
+[iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
 [native-cross-host-serving]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fserving.tar.zst
