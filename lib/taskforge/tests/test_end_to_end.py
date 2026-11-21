@@ -3397,14 +3397,16 @@ def asked(candidate: str) -> DecisionModelRead:
     )
 
 
-def probe_bundles(reads: list[str], count: int, reader: DecisionModelReader | None = None) -> list[Resources]:
+def probe_bundles(
+    reads: list[str], count: int, reader: DecisionModelReader | None = None, request_timeout: float = 30.0
+) -> list[Resources]:
     """Launch resources whose decision model reads through ``ProbeReader``: two slots, a 10 s wait, a 30 s request
     deadline, and a backoff that lasts until it is cancelled."""
 
     async def backoff(_seconds: float) -> None:
         await asyncio.Event().wait()
 
-    policy = DecisionModelPolicy("clef@fixture-1", 2, 30.0, 10.0, 1.0, 1.0, 0.0)
+    policy = DecisionModelPolicy("clef@fixture-1", 2, request_timeout, 10.0, 1.0, 1.0, 0.0)
     return [
         replace(resources(Envs(), ()), decision_model=DecisionModel(reader or ProbeReader(reads), policy, sleep=backoff))
         for _ in range(count)
@@ -3442,18 +3444,27 @@ CLEF_BODIES: Mapping[str, httpx.Response] = {
 # Review 2026-11-21 (n10 follow-up 4): through the default reader, one 200 followed only by an off-scale level, an
 # HTTP 403 or a 200 without answers left the earlier answer standing, and the probe released its peers with the root
 # manual. Every dispatched read that fails records the failure, whatever its class; only the caller's own cancellation
-# of a read in flight leaves the earlier answer standing.
+# of a read in flight leaves the earlier answer standing. Follow-up 5: a read whose own request deadline expired, its
+# waiter then cancelled during the HTTP cleanup, ended in CancelledError and was taken for the caller's leaving; a
+# cancellation is the caller's only while neither the request's deadline nor the overall wait has expired.
 @pytest.mark.parametrize(
-    "second, code", [("off-scale", 0), ("forbidden", 0), ("malformed", 0), ("cancelled", driver.ANSWERED)]
+    "second, code",
+    [("off-scale", 0), ("forbidden", 0), ("malformed", 0), ("cancelled", driver.ANSWERED), ("lapsed", 0)],
 )
 async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, second: str, code: int
 ) -> None:
-    sent: list[str] = []
+    sent, clock, cleanup = list[str](), LoopTime(), asyncio.Event()
 
     async def gateway(call: httpx.Request) -> httpx.Response:
         candidate = json.loads(call.content)["state"]["z_candidate_answer"]
         sent.append(candidate)
+        if candidate == "lapsed":  # its request deadline cancels it; the waiter's cancellation arrives during cleanup
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup.set()
+                await asyncio.Event().wait()
         if candidate == "cancelled":
             await asyncio.Event().wait()
         probabilities = {"0": 0.0, "1": 1.0}
@@ -3470,14 +3481,18 @@ async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
         read = asyncio.create_task(ctx.emit(asked(second)))
         while len(sent) < 2:
             await asyncio.sleep(0)
-        if second == "cancelled":  # the caller leaves while its read is in flight
+        if second == "lapsed":  # past the 1 s request deadline, well inside the 10 s wait
+            await clock.sleep(2.0)
+            while not cleanup.is_set():
+                await asyncio.sleep(0)
+        if second in ("cancelled", "lapsed"):  # the caller leaves while its read is in flight
             read.cancel()
         with contextlib.suppress(Exception, asyncio.CancelledError):
             await read
         raise Hold("a sibling's refusal: a human reads this")
 
     monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
-    serve(monkeypatch, *probe_bundles([], 1, reader))
+    serve(monkeypatch, *probe_bundles([], 1, reader, request_timeout=1.0))
     driver_args.probe = True
     assert await driver.one(driver_args) == code
     held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))

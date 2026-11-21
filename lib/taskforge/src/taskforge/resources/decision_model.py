@@ -158,16 +158,21 @@ class DecisionModel:
         try:
             async with asyncio.timeout(policy.unavailable_wait) as deadline, self.gate:
                 while True:
-                    why = "its read went unanswered"
+                    why, request_deadline = "its read went unanswered", asyncio.timeout(policy.request_timeout)
                     try:  # the one physical call; its outcome is recorded here, whatever ends it
-                        async with asyncio.timeout(policy.request_timeout):
+                        async with request_deadline:
                             level: object = await self.reader.read(event.request)
                         top = len(event.request.levels) - 1  # TaskCompendium's level contract, checked before recording
                         if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= top:
                             raise OffScale(level)
                     except BaseException as error:
-                        # Only the caller leaving is no evidence; the read's own deadline expiring in flight is one.
-                        if not isinstance(error, asyncio.CancelledError) or deadline.expired():
+                        # Only the caller leaving is no evidence: a cancellation with neither deadline expired. Once
+                        # either has, a cancellation arriving during the read's cleanup is still that read failing.
+                        if (
+                            not isinstance(error, asyncio.CancelledError)
+                            or request_deadline.expired()
+                            or deadline.expired()
+                        ):
                             self.answered = False
                         if not isinstance(error, DecisionModelDown | TimeoutError):
                             raise  # classified as before: a bug, an off-scale level, the caller's cancellation
