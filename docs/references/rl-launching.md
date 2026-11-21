@@ -491,18 +491,61 @@ backend is Daytona. A typed backend requirement overrides that placement. A
 SHARED integrity contract selects its agent UID; validation rejects a conflicting
 explicit actor identity.
 
+### LOCAL image mirrors
+
 For an authenticated registry that a worker cannot reach, configure a regional
-OCI mirror under `environment.task_sessions.local`. Set `region` to the worker
-region and `image_mirrors` to a list of `{image: <original-reference>@sha256:<digest>,
-uri: s3://<regional-bucket>/<oci-layout>}` records. Prepare each mirror with its
-original manifest and blobs, keeping the task's registry reference. LOCAL
-workers verify every blob before they publish the
-image atomically into Shellbox's content-addressed cache. A mirror from another
-region fails before transfer. Later tasks reuse the verified cache without
-registry credentials in the guest.
-For rootless unpacking, Docker schema-2 manifests use a temporary OCI
-representation with identical config and layer bytes. The pinned mirror and
-cache layout remain unchanged.
+OCI mirror under `environment.task_sessions.local`. Set `region` to the required
+rollout region and `image_mirrors` to a list of
+`{image: <original-reference>@sha256:<digest>, uri: s3://<regional-bucket>/<oci-layout>}`
+records. The launcher pins the GPU allocation to this region. Before image
+preparation, each LOCAL worker requires Iris physical-region metadata matching
+the configured region. An untagged or differently placed worker fails before
+transfer; CPU workers without that metadata cannot use this mirrored consumer
+path. In `config/coreweave.yaml`, set the bucket’s `signing_region` under
+`data.region_buckets` (or its declared store bucket entry) to the same region.
+
+Produce a mirror in an Iris CPU job submitted directly to its target CoreWeave
+cluster. Reserve scratch disk for the image and install Skopeo on that worker.
+Mount a registry auth JSON file there. Run this command inside that regional job,
+passing the original digest-pinned registry reference, target S3 prefix, region,
+and auth-file path:
+
+```bash
+uv run --no-sync python - "$REGISTRY_IMAGE" "$OCI_MIRROR" "$IMAGE_REGION" "$REGISTRY_AUTH_FILE" <<'PY'
+import subprocess
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.fsutil.verified_copy import verified_copy_prefix
+from shellbox.image import ImageCache, RegistryImage, image_cache_path
+
+image, mirror, region, authfile = sys.argv[1:]
+digest = image.rsplit("@", 1)[1]
+require_regional_coreweave_bucket(mirror, region)
+configure_coreweave_s3()
+with TemporaryDirectory(prefix="regional-image-") as temporary:
+    cache = ImageCache(Path(temporary))
+    layout = image_cache_path(cache.directory, digest)
+    subprocess.run([
+        "skopeo", "--insecure-policy", "copy", "--preserve-digests",
+        "--src-authfile", authfile, "docker://" + image, "oci:" + str(layout) + ":image",
+    ], check=True)
+    prepared = cache.prepare(RegistryImage(image))
+    assert prepared.manifest_digest == digest
+    verified_copy_prefix(str(prepared.layout), mirror, workers=4)
+PY
+```
+
+`--preserve-digests` retains the original manifest, including Docker schema-2.
+`ImageCache.prepare` verifies the pinned manifest digest, config and every layer before the
+upload; verified copy checks the uploaded bytes. Keep the task's original registry
+reference. LOCAL workers atomically publish a verified mirror into their cache
+and reuse it without registry credentials in the guest. For rootless unpacking,
+Docker schema-2 manifests use a temporary OCI representation with identical
+config and layer bytes; the pinned mirror and cache layout remain unchanged.
 
 The SkyRL default verifier floor is 1,800 seconds, defined by
 `environment.task_sessions.task_spec.minimum_verifier_timeout`. The common

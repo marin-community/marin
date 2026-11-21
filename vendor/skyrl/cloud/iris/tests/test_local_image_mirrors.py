@@ -4,11 +4,14 @@ import shutil
 
 import pytest
 from rigging.filesystem.cluster_config import BucketSpec, StoreType
+import rigging.filesystem.cluster_config as cluster_config
+from iris.cluster.client.job_info import JobInfo
+from iris.cluster.types import JobName
 from rigging.filesystem import transfer
-from rigging.fsutil import verified_copy
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from shellbox.image import ImageCache, RegistryImage
 
-from marinskyrl.local_images import LocalImageMirror, cached_mirror_image
+from marinskyrl.local_images import LocalImageMirror, LocalMachineSettings, cached_mirror_image, local_machine_factory
 import marinskyrl.local_images as local_images
 import shellbox.image as image_runtime
 
@@ -33,10 +36,11 @@ def mirror(tmp_path, monkeypatch):
         json.dumps({"manifests": [{"digest": manifest, "annotations": {"org.opencontainers.image.ref.name": "image"}}]})
     )
     (layout / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
-    (layout / verified_copy.COMPLETION_MANIFEST).write_text('{"completed":true}')
+    # Real regional producers append this marker; accepting their prefix regresses without it.
+    (layout / COMPLETION_MANIFEST).write_text('{"completed":true}')
     settings = LocalImageMirror(image="registry.fixture/private/image@" + manifest, uri="s3://mirror-bucket/oci")
     monkeypatch.setattr(
-        local_images,
+        cluster_config,
         "data_buckets",
         lambda: {"mirror-bucket": BucketSpec("mirror-bucket", StoreType.COREWEAVE, "US-EAST-02A")},
     )
@@ -47,7 +51,6 @@ def mirror(tmp_path, monkeypatch):
 
     # The external S3 filesystem is local; transfer and cryptographic verification stay real.
     monkeypatch.setattr(transfer, "filesystem_for", mirror_filesystem)
-    monkeypatch.setattr(verified_copy, "filesystem_for", mirror_filesystem)
 
     def registry_unavailable(*args):
         pytest.fail("The registry is unavailable; the pinned OCI mirror must serve the image")
@@ -87,3 +90,12 @@ def test_cross_region_mirror_is_rejected_before_transfer(tmp_path, mirror):
     with pytest.raises(ValueError):
         cached_mirror_image(cache, settings, region="US-EAST-08A")
     assert not cache.directory.exists()
+
+
+@pytest.mark.parametrize("worker_region", ["US-EAST-08A", None])
+def test_mirror_configuration_cannot_override_actual_worker_placement(monkeypatch, mirror, worker_region):
+    settings, _ = mirror
+    info = JobInfo(task_id=JobName.from_wire("/fixture/worker/0"), worker_region=worker_region)
+    monkeypatch.setattr(local_images, "get_job_info", lambda: info)
+    with pytest.raises(ValueError):
+        local_machine_factory(LocalMachineSettings(region="US-EAST-02A", image_mirrors=(settings,)))

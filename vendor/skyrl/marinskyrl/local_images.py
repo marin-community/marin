@@ -4,8 +4,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from filelock import FileLock
+from iris.cluster.client.job_info import get_job_info
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from shellbox.backends.local.machine import LocalMachineFactory
@@ -39,25 +40,27 @@ class LocalMachineSettings(BaseModel):
 
 def local_machine_factory(settings: LocalMachineSettings) -> LocalMachineFactory:
     """Prepare configured regional images before the LOCAL backend accepts tasks."""
-    if settings.image_mirrors and settings.region is None:
-        raise ValueError("LOCAL image mirrors require an explicit worker region")
+    region = settings.region
+    if settings.image_mirrors:
+        if region is None:
+            raise ValueError("LOCAL image mirrors require an explicit worker region")
+        info = get_job_info()
+        if info is None or info.worker_region is None:
+            raise ValueError("LOCAL image mirrors require an attested Iris worker region")
+        if info.worker_region.casefold() != region.casefold():
+            raise ValueError("LOCAL image mirror placement differs from the running worker region")
+        region = info.worker_region
     factory = LocalMachineFactory()
-    if settings.region is not None:
+    if region is not None:
         for mirror in settings.image_mirrors:
-            cached_mirror_image(factory.image_cache, mirror, region=settings.region)
+            cached_mirror_image(factory.image_cache, mirror, region=region)
     return factory
 
 
 def cached_mirror_image(cache: ImageCache, mirror: LocalImageMirror, *, region: str) -> PreparedImage:
     """Verify a same-region OCI mirror and atomically publish it in the digest cache."""
+    require_regional_coreweave_bucket(mirror.uri, region)
     source = StoragePath(mirror.uri)
-    if source.scheme != "s3":
-        raise ValueError("LOCAL image mirrors require regional CoreWeave S3")
-    bucket = data_buckets()[source.bucket]
-    if bucket.store is not StoreType.COREWEAVE or bucket.signing_region is None:
-        raise ValueError("LOCAL image mirrors require a declared CoreWeave bucket region")
-    if bucket.signing_region.lower() != region.lower():
-        raise ValueError("Stage the OCI image in the LOCAL worker region before use")
     image = RegistryImage(mirror.image)
     digest = mirror.image.rsplit("@", 1)[1]
     cache.directory.mkdir(parents=True, exist_ok=True)
