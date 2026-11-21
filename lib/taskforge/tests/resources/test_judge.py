@@ -3,7 +3,10 @@
 
 import asyncio
 import gzip
-from collections.abc import Mapping, Sequence
+import pickle
+import threading
+from collections.abc import Coroutine, Mapping, Sequence
+from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -12,26 +15,29 @@ import pytest
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
-from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
+from pydantic import TypeAdapter
+from rolloutengine import grading
+from rolloutengine.models import GradedRollout, GradedRolloutInterrupted, RolloutOperation, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import ScriptGrader
-from verifyit.spec import JudgeSpec
+from verifyit.modes.grade_judge import JudgeCompletion, JudgeConnection, JudgeRequest, grade_judge_candidate
+from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Resolved
+from taskforge.effects.events import Resolved, ScopeExited
 from taskforge.effects.issues import Restart
 from taskforge.effects.log import EventLog, Record, decode
-from taskforge.llm.client import Progress, Segment
-from taskforge.llm.policy import GLM_5_3, ModelProfile
+from taskforge.llm.client import ModelClient, Progress, Segment
+from taskforge.llm.policy import GLM_5_3, ModelProfile, RetryPolicy
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion, FinishReason, Usage
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.judge import JudgeEngine
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.wiring import build_resources, install
@@ -88,6 +94,66 @@ OUTCOMES = {
 N5_JUDGED = Path(__file__).parents[1] / "fixtures" / "n5-judged-grades.jsonl.gz"
 
 
+def tool(text: str) -> Completion:
+    return Completion(text, finish_reason=FinishReason.TOOL_CALLS, usage=Usage(10, 4))
+
+
+RETRY = {"max_completion_tokens": 16, "incomplete_retry_tokens": 64}
+NO_TEXT = "judge completion is incomplete or has no text"
+# Review 2026-11-21: n6 read every finish but stop as truncation. Each case's judge replies, and the status, reward,
+# judge calls and error n5 (9eb1a96371) produced from them; N5_FINISHES journals those calls, answering with the name.
+FINISHES: dict[str, tuple[JudgeSpec, tuple[Completion, ...], tuple[Outcome, float | None, int, str | None]]] = {
+    "reference-tool-call": (
+        JudgeSpec(references=("12",), exact_gate=False),
+        (tool("SCORE: 1"),),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "reference-tool-call-then-answer": (
+        JudgeSpec(references=("12",), exact_gate=False, **RETRY),
+        (tool("SCORE: 1"), done("SCORE: 1")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "checklist-tool-call-then-answer": (
+        JudgeSpec(rubric="checklist", criteria=("Correct", "Terse"), exact_gate=False, **RETRY),
+        (tool("SCORE: 1"), done("SCORE: 1"), done("SCORE: 0")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "labels-tool-call": (labels(), (tool("PASS"),), (Outcome.INFRA_ERROR, None, 1, NO_TEXT)),
+    "labels-tool-call-then-answer": (
+        labels(**RETRY),
+        (tool("PASS"), done("PASS")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "labels-abort-then-answer": (
+        labels(**RETRY),
+        (Completion("PASS", finish_reason=FinishReason.ABORT), done("PASS")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "labels-length-then-answer": (labels(**RETRY), (CUT, done("PASS")), (Outcome.GRADED, 1.0, 2, None)),
+    "content-tool-call": (
+        labels(completion_policy=JudgeCompletionPolicy.CONTENT, **RETRY),
+        (tool("PASS"), done("FAIL")),
+        (Outcome.GRADED, 1.0, 1, None),
+    ),
+    "content-length-label": (
+        labels(completion_policy=JudgeCompletionPolicy.CONTENT, **RETRY),
+        (Completion("PASS", finish_reason=FinishReason.LENGTH, usage=Usage(10, 16)), done("FAIL")),
+        (Outcome.GRADED, 1.0, 1, None),
+    ),
+    "responses-tool-call-then-answer": (
+        labels(api="responses", **RETRY),
+        (tool("PASS"), done("FAIL")),
+        (Outcome.GRADED, 0.0, 2, None),
+    ),
+    "pairwise-tool-call-then-answer": (
+        replace(JUDGED["pairwise"][0], **RETRY),
+        (tool("[[B>A]]"), done("[[B>A]]"), done("[[A=B]]")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+}
+N5_FINISHES = Path(__file__).parents[1] / "fixtures" / "n5-judge-finishes.jsonl.gz"
+
+
 def judged_spec(judge: JudgeSpec) -> TaskRolloutSpec:
     policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"})
     task = arithmetic_task(grader=verifyit_package(judge).grader)
@@ -95,9 +161,14 @@ def judged_spec(judge: JudgeSpec) -> TaskRolloutSpec:
 
 
 async def grade_judged(
-    judges: Sequence[JudgeSpec], client: InferenceClient, history: Sequence[Record] = (), *, fresh: bool = False
+    judges: Sequence[JudgeSpec],
+    client: InferenceClient,
+    history: Sequence[Record] = (),
+    *,
+    fresh: bool = False,
+    answers: Sequence[str] = (),
 ) -> tuple[list[GradeResult], EventLog]:
-    """Grade "Twelve" under each judge through the installed judge role, replaying ``history``."""
+    """Grade each answer (default "Twelve") under its judge through the installed judge role, replaying ``history``."""
     log = EventLog(replay_from=history)
     ctx = Context(log=log)
     bundle = replace(
@@ -107,8 +178,10 @@ async def grade_judged(
     )
     install(ctx, bundle)
     # A fresh verifier changes the outer grade identity, so only the judge's inference effects can replay.
+    answers = answers or ["Twelve"] * len(judges)
     results = [
-        await ctx.emit(GradeCandidate(judged_spec(judge), Candidate("Twelve"), fresh_verifier=fresh)) for judge in judges
+        await ctx.emit(GradeCandidate(judged_spec(judge), Candidate(answer), fresh_verifier=fresh))
+        for judge, answer in zip(judges, answers, strict=True)
     ]
     await ctx.drain()
     return results, log
@@ -122,38 +195,192 @@ def judge_inference(log: EventLog) -> list[Resolved[Any]]:
     ]
 
 
-async def test_a_cancelled_grade_leaves_no_judge_call_running_or_recorded() -> None:
-    entered, cancelled = asyncio.Event(), asyncio.Event()
+class HeldJudge(FakeInference):
+    """Answers sample 0 from its script and holds every later sample until cancelled, then for any ``cleanup``."""
 
-    class BlockingInference(FakeInference):
-        async def complete(self, request: InferenceRequest) -> Completion:
-            self.requests.append(request)
-            entered.set()
-            try:
-                await asyncio.Future()
-            finally:
-                cancelled.set()
-            raise AssertionError("unreachable")
+    def __init__(self, script: Sequence[Completion], cleanup: asyncio.Event | None = None) -> None:
+        super().__init__(script)
+        self.held, self.cleanup, self.cleaned = asyncio.Event(), cleanup, asyncio.Event()
 
+    async def complete(self, request: InferenceRequest) -> Completion:
+        if request.sample == 0:
+            return await super().complete(request)
+        self.requests.append(request)
+        self.held.set()
+        try:
+            await asyncio.Future()
+        finally:
+            if self.cleanup is not None:
+                await self.cleanup.wait()
+            self.cleaned.set()
+        raise AssertionError("unreachable")
+
+
+def grading_thread_exits(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, list[BaseException]]:
+    """Signal when each grading invocation's thread returns, and collect what it raised."""
+    exited, raised = threading.Event(), []
+    invocation = grading.grade_remote_judge_answer
+
+    def graded(*args: Any) -> GradeResult:
+        try:
+            return invocation(*args)
+        except BaseException as error:
+            raised.append(error)
+            raise
+        finally:
+            exited.set()
+
+    monkeypatch.setattr(grading, "grade_remote_judge_answer", graded)
+    return exited, raised
+
+
+# Review 2026-11-21: holding the grading thread before or during submission let a cancelled, drained grade issue or
+# record a judge sample afterwards. The thread may still be unwinding when the grade returns; it adds nothing then.
+@pytest.mark.parametrize("hold", ["submission", "publication", "registration", "provider-cleanup"])
+async def test_a_cancelled_grade_returns_with_its_journal_final_and_starts_no_later_sample(
+    hold: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = asyncio.Event()
+    client = HeldJudge((done("SCORE: 1"),), release if hold == "provider-cleanup" else None)
+    submit, submissions = asyncio.run_coroutine_threadsafe, 0
+
+    def submitted(coro: Coroutine[Any, Any, Completion], loop: asyncio.AbstractEventLoop) -> Future[Completion]:
+        # Runs on the grading thread; the second judge sample is the one held.
+        nonlocal submissions
+        submissions += 1
+        if submissions != 2 or hold == "provider-cleanup":
+            return submit(coro, loop)
+        if hold == "registration":
+
+            async def gated() -> Completion:
+                client.held.set()
+                await release.wait()
+                return await coro
+
+            return submit(gated(), loop)
+        if hold == "submission":
+            loop.call_soon_threadsafe(client.held.set)
+            submit(release.wait(), loop).result()
+            return submit(coro, loop)
+        future = submit(coro, loop)
+        submit(release.wait(), loop).result()
+        return future
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", submitted)
+    exited, raised = grading_thread_exits(monkeypatch)
     log = EventLog()
     ctx = Context(log=log)
-    client = BlockingInference(())
     engine = JudgeEngine(rollout_engine({}, command_timeout=None), ctx, client)
-    # A second criterion would be a second judge sample if the grading thread outlived the cancellation.
     spec = judged_spec(JUDGED["checklist"][0])
     operation = asyncio.create_task(GradingResource(engine, "judge").grade(GradeCandidate(spec, Candidate("Twelve"))))
-    try:
-        await asyncio.wait_for(entered.wait(), 5)
-    finally:
-        operation.cancel()
+    await client.held.wait()
+    operation.cancel()
+    if hold == "provider-cleanup":
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert not operation.done()
+        release.set()
     with pytest.raises(asyncio.CancelledError):
         await operation
-    await asyncio.wait_for(cancelled.wait(), 5)
-    # Joins VerifyIt's grading thread: it ended rather than waiting on, or issuing, another judge sample.
-    await asyncio.wait_for(asyncio.get_running_loop().shutdown_default_executor(), 5)
+    returned = (len(log.records), len(client.requests))
+    assert client.cleaned.is_set() is (hold in {"publication", "provider-cleanup"})
+    # Released only now, the thread meets the closed grade: it starts no sample, journals nothing and exits.
+    release.set()
+    assert await asyncio.to_thread(exited.wait, 5)
     await ctx.drain()
-    assert len(client.requests) == 1
+    assert [type(error) for error in raised] == [asyncio.CancelledError]
+    calls = 2 if hold in {"publication", "provider-cleanup"} else 1
+    assert returned == (len(log.records), calls)
+    assert [cast(InferenceRequest, event.request).sample for event in judge_inference(log)] == [0]
+    # The sample that completed before the cancellation stays a valid journal entry: a regrade asks only for the next.
+    resumed = FakeInference((done("SCORE: 0"),))
+    [result], _ = await grade_judged((JUDGED["checklist"][0],), resumed, log.records)
+    assert (result.reward, [request.sample for request in resumed.requests]) == (0.5, [1])
+
+
+def judge_provider(provider: ScriptedProvider) -> InferenceClient:
+    return GlmInference(ModelClient(provider, GLM_5_3, RetryPolicy(0.1, 0.001, 0.001, 1.0), role="judge"), "judge")
+
+
+# Review 2026-11-21, follow-up 2: a provider that had parsed its segment, swallowed the grade's cancellation in cleanup
+# and returned it after a second cancellation released the caller journalled a late Resolved; a regrade then scored 0.5.
+async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_never_journalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    held, cleanup = asyncio.Event(), asyncio.Event()
+
+    async def swallows_cancellation(progress: Progress) -> Segment:
+        parsed = segment("SCORE: 1")
+        held.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await cleanup.wait()
+        return parsed
+
+    exited, raised = grading_thread_exits(monkeypatch)
+    log = EventLog()
+    ctx = Context(log=log)
+    client = judge_provider(ScriptedProvider((swallows_cancellation,)))
+    engine = JudgeEngine(rollout_engine({}, command_timeout=None), ctx, client)
+    judge = JUDGED["checklist"][0]
+    operation = asyncio.create_task(
+        GradingResource(engine, "judge").grade(GradeCandidate(judged_spec(judge), Candidate("Twelve")))
+    )
+    await held.wait()
+    operation.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not operation.done()
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    returned = len(log.records)
+    cleanup.set()
+    assert await asyncio.to_thread(exited.wait, 5)
+    await ctx.drain()
+    assert [type(error) for error in raised] == [asyncio.CancelledError]
+    # The disclosed late row is the sample's failed scope exit; its returned segment is never resolved.
+    assert [record.event for record in log.records[returned:]] == [ScopeExited("judge", failed=True)]
     assert not judge_inference(log)
+    graded = []
+    for history in (log.records, ()):
+        zeros = ScriptedProvider((segment("SCORE: 0"), segment("SCORE: 0")))
+        [result], _ = await grade_judged((judge,), judge_provider(zeros), history)
+        graded.append((result.reward, len(zeros.bodies)))
+    assert graded == [(0.0, 2), (0.0, 2)]
+
+
+# Review 2026-11-21, follow-up 1: waiting for the grading thread at the verifier deadline turned a grade timeout
+# into an attempt failure and left the sample running. n5 (9eb1a96371) raised this Restart from this grade.
+async def test_a_verifier_deadline_during_a_judge_sample_is_the_n5_grade_timeout_and_cancels_the_sample(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exited, raised = grading_thread_exits(monkeypatch)
+    client = HeldJudge((done("SCORE: 1"),))
+    log = EventLog()
+    ctx = Context(log=log)
+    engine = JudgeEngine(rollout_engine({}, command_timeout=None), ctx, client)
+    spec = judged_spec(JUDGED["checklist"][0])
+    spec = spec.model_copy(update={"limits": spec.limits.model_copy(update={"verifier_timeout": 0.2})})
+    with pytest.raises(Restart, match=r"^Rollout interrupted during grade: TimeoutError <- CancelledError$") as caught:
+        await GradingResource(engine, "judge").grade(GradeCandidate(spec, Candidate("Twelve")))
+    returned = (len(log.records), len(client.requests))
+    interrupted = cast(GradedRolloutInterrupted, caught.value.__cause__)
+    grade = interrupted.grade
+    assert (interrupted.operation, grade.status, grade.reward, grade.error, grade.failure) == (
+        RolloutOperation.GRADE,
+        Outcome.INFRA_ERROR,
+        None,
+        "Verifier deadline expired",
+        GradingFailure.TIMEOUT,
+    )
+    assert client.cleaned.is_set()
+    assert await asyncio.to_thread(exited.wait, 5)
+    await ctx.drain()
+    assert [type(error) for error in raised] == [asyncio.CancelledError]
+    assert returned == (len(log.records), 2)
+    assert [cast(InferenceRequest, event.request).sample for event in judge_inference(log)] == [0]
 
 
 async def test_a_judge_effect_failure_reaches_the_grade_caller_unchanged() -> None:
@@ -219,6 +446,45 @@ async def test_judge_samples_recorded_through_the_n5_transport_shim_replay_with_
     assert not client.requests
     replayed = [event for event in judge_inference(log) if event.replayed]
     assert len(replayed) == sum(len(script) for _, script in JUDGED.values())
+
+
+@pytest.mark.parametrize("case", FINISHES)
+async def test_a_judge_finish_grades_and_spends_calls_as_it_did_at_n5(case: str) -> None:
+    judge, script, expected = FINISHES[case]
+    client = FakeInference(script)
+    [result], _ = await grade_judged((judge,), client, answers=(f"Twelve ({case})",))
+    assert (result.status, result.reward, len(client.requests), result.error) == expected
+
+
+async def test_judge_finishes_recorded_at_n5_replay_their_n5_grades_with_zero_calls() -> None:
+    recorded = decode(gzip.decompress(N5_FINISHES.read_bytes()))
+    client = FakeInference((), identity="judge")
+    judges, _, expected = zip(*FINISHES.values(), strict=True)
+    answers = [f"Twelve ({case})" for case in FINISHES]
+    results, log = await grade_judged(judges, client, recorded, fresh=True, answers=answers)
+    assert [(result.status, result.reward, result.error) for result in results] == [
+        (status, reward, error) for status, reward, _, error in expected
+    ]
+    assert not client.requests
+    assert sum(event.replayed for event in judge_inference(log)) == sum(calls for _, _, calls, _ in expected)
+
+
+# Review 2026-11-21: the callback field made TaskRolloutSpec.model_json_schema() raise PydanticInvalidForJsonSchema.
+def test_a_judged_rollout_spec_has_a_json_schema_and_never_serializes_its_callback() -> None:
+    def judge(request: JudgeRequest) -> JudgeCompletion:
+        return JudgeCompletion("PASS", "stop")
+
+    # Typed ``Any`` like n5's transport, so VerifyIt needs no Pydantic 2 import for the schema to generate.
+    schema = TaskRolloutSpec.model_json_schema()["$defs"]["JudgeConnection"]["properties"]["callback"]
+    assert schema == {"default": None, "title": "Callback"}
+    with pytest.raises(TypeError, match="Judge callback must be callable, got str"):
+        connection = JudgeConnection("", "", default_model="judge", callback="judge")
+        grade_judge_candidate(JudgeSpec(references=("12",), exact_gate=False), "12", connection=connection, runtime=None)
+    connection = TypeAdapter(JudgeConnection).validate_python({"base_url": "", "api_key": "", "callback": judge})
+    spec = judged_spec(labels()).model_copy(update={"judge_connection": connection})
+    assert "judge_connection" not in spec.model_dump()
+    assert TaskRolloutSpec.model_validate_json(spec.model_dump_json()).judge_connection is None
+    assert pickle.loads(pickle.dumps(spec)).judge_connection is None
 
 
 @pytest.mark.parametrize("script", [False, True])

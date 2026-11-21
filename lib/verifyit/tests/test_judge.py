@@ -1251,7 +1251,7 @@ def test_a_judge_callback_answers_every_sample_without_an_endpoint(rubric):
 
     def judge(request):
         requests.append(request)
-        return grade_judge.JudgeCompletion(next(script), truncated=False)
+        return grade_judge.JudgeCompletion(next(script), "stop")
 
     connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=judge)
     result = grade_judge.grade_judge_candidate(specs[rubric], "candidate", connection=connection, runtime=None)
@@ -1275,7 +1275,9 @@ def test_a_truncated_callback_reply_retries_at_the_larger_budget_or_is_incomplet
     def judge(request):
         budgets.append(request.max_output_tokens)
         reply = "SCORE: 1" if rubric == "reference" else "[[A=B]]"
-        return grade_judge.JudgeCompletion("partial" if len(budgets) == 1 else reply, truncated=len(budgets) == 1)
+        return grade_judge.JudgeCompletion(
+            "partial" if len(budgets) == 1 else reply, "length" if len(budgets) == 1 else "stop"
+        )
 
     connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=judge)
     if not retry:
@@ -1285,3 +1287,32 @@ def test_a_truncated_callback_reply_retries_at_the_larger_budget_or_is_incomplet
         return
     assert grade_judge.grade_judge_candidate(spec, "candidate", connection=connection).reward == 1.0
     assert budgets == [16, 64]
+
+
+# Review 2026-11-21: a below-cap tool-call finish was read as truncation, so a retry budget bought a passing grade.
+@pytest.mark.parametrize(
+    ("api", "policy", "finish", "expected"),
+    [
+        ("chat_completions", JudgeCompletionPolicy.COMPLETED_TEXT, "tool_calls", ([16], None)),
+        ("chat_completions", JudgeCompletionPolicy.COMPLETED_TEXT, "length", ([16, 64], 0.0)),
+        ("chat_completions", JudgeCompletionPolicy.CONTENT, "tool_calls", ([16], 1.0)),
+        ("chat_completions", JudgeCompletionPolicy.CONTENT, "length", ([16], 1.0)),
+        ("responses", JudgeCompletionPolicy.COMPLETED_TEXT, "tool_calls", ([16, 64], 0.0)),
+    ],
+)
+def test_a_callback_finish_is_read_as_the_same_finish_from_an_endpoint(api, policy, finish, expected):
+    spec = _label_spec(api=api, completion_policy=policy, max_completion_tokens=16, incomplete_retry_tokens=64)
+    replies = iter([grade_judge.JudgeCompletion("[[A=B]]", finish), grade_judge.JudgeCompletion("[[A!=B]]", "stop")])
+    budgets = []
+
+    def judge(request):
+        budgets.append(request.max_output_tokens)
+        return next(replies)
+
+    connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=judge)
+    if expected[1] is None:
+        with pytest.raises(RuntimeError, match="judge completion is incomplete or has no text"):
+            grade_judge.grade_judge_candidate(spec, "candidate", connection=connection)
+    else:
+        assert grade_judge.grade_judge_candidate(spec, "candidate", connection=connection).reward == expected[1]
+    assert budgets == expected[0]

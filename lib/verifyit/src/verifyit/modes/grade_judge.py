@@ -140,10 +140,14 @@ class JudgeRequest:
 
 @dataclass(frozen=True)
 class JudgeCompletion:
-    """The reply; ``truncated`` when it stopped at ``max_output_tokens``, which retries or fails as incomplete."""
+    """The reply and its chat ``finish_reason``, read as an endpoint reply with that finish would be.
+
+    Strict chat retries ``length`` at the larger budget and fails any other finish but ``stop``; content-policy
+    chat keeps the text under any finish; Responses treats every finish but ``stop`` as an incomplete response.
+    """
 
     text: str
-    truncated: bool
+    finish_reason: str
     completion_tokens: int | None = None
 
 
@@ -162,7 +166,8 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
-    callback: JudgeCallback | None = field(default=None, kw_only=True, repr=False, compare=False)
+    callback: Any = field(default=None, kw_only=True, repr=False, compare=False)
+    """A ``JudgeCallback``; runtime-only, like the credentials."""
 
 
 _Client = openai.OpenAI | JudgeCallback
@@ -607,11 +612,17 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
 def _label_completion(spec: JudgeSpec, client: _Client, model: str, messages: list, budget: int) -> _LabelCompletion:
     if not isinstance(client, openai.OpenAI):
         reply = client(_request(spec, model, messages, budget))
-        finish = "length" if reply.truncated else "stop"
-        if spec.api == "chat_completions" and spec.completion_policy is JudgeCompletionPolicy.CONTENT:
+        finish = reply.finish_reason
+        if spec.api == "responses":
+            # An endpoint reports any unfinished response as incomplete, without its partial text.
+            if finish != "stop":
+                return _LabelCompletion("", True, None, None, "incomplete")
+            return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, "completed")
+        if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
             return _LabelCompletion(reply.text, False, None, None, finish)
-        text = reply.text if reply.truncated else _completed_text(finish, reply.text)
-        return _LabelCompletion(text, reply.truncated, None, None, finish)
+        if finish == "length":
+            return _LabelCompletion(reply.text, True, None, None, finish)
+        return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, finish)
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
         request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
@@ -813,7 +824,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[_Clien
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     if callback is not None:
-        return callback, model
+        if not callable(callback):
+            raise TypeError(f"Judge callback must be callable, got {type(callback).__name__}")
+        return cast(JudgeCallback, callback), model
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) else {}
     return (
@@ -913,7 +926,7 @@ def _complete(
     messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt}]
     if not isinstance(client, openai.OpenAI):
         reply = client(_request(spec, model, messages, budget))
-        return _CompletionAttempt("length" if reply.truncated else "stop", reply.completion_tokens), reply.text
+        return _CompletionAttempt(reply.finish_reason, reply.completion_tokens), reply.text
     options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
     response = _chat_completion(
         client,
