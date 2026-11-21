@@ -253,9 +253,27 @@ def _newtonschulz_4d_distributed(
 
     # Gate on the bank's own split, not on "expert" alone: an expert=1, context>1 mesh still
     # splits the bank over context, and the merged 3-D path below would gather it whole.
+    # Split any spare intra-rack axes (such as `data`) across axis 0 (`layers`), zero-padding
+    # when needed, so each device runs Newton-Schulz on its own slice without gathering `data`.
     if math.prod(int(mesh.shape.get(axis, 1)) for axis in bank_axes) > 1:
-        distributed_4d_spec = PartitionSpec(None, bank_axes if len(bank_axes) > 1 else bank_axes[0], None, None)
-        x_distributed = reshard(x.astype(jnp.bfloat16), distributed_4d_spec)
+        bank_spec = bank_axes if len(bank_axes) > 1 else bank_axes[0]
+        orig_layer_spec = orig_4d_spec[0] if len(orig_4d_spec) > 0 else None
+        if orig_layer_spec is None:
+            bank_axis_set = set(bank_axes)
+            spare_axes = [(name, size) for name, size in mesh_shape_items if name not in bank_axis_set]
+            layer_axes = tuple(name for name, _ in spare_axes)
+            layer_shards = math.prod(size for _, size in spare_axes) if spare_axes else 1
+            layer_spec = layer_axes if len(layer_axes) > 1 else (layer_axes[0] if layer_axes else None)
+            pad = (-layers) % layer_shards if layer_shards > 1 else 0
+        else:
+            layer_spec = orig_layer_spec
+            pad = 0
+
+        distributed_4d_spec = PartitionSpec(layer_spec, bank_spec, None, None)
+        x_bf16 = x.astype(jnp.bfloat16)
+        if pad:
+            x_bf16 = jnp.pad(x_bf16, ((0, pad), (0, 0), (0, 0), (0, 0)))
+        x_distributed = reshard(x_bf16, distributed_4d_spec)
         if use_syrk:
 
             def local_syrk(stack):
@@ -272,8 +290,17 @@ def _newtonschulz_4d_distributed(
                 check_vma=False,
             )(x_distributed)
         else:
-            updated_distributed = jax.vmap(jax.vmap(local_ns))(x_distributed)
-        return reshard(updated_distributed, orig_4d_spec).astype(x.dtype)
+            updated_distributed = shard_map(
+                lambda stack: jax.vmap(jax.vmap(local_ns))(stack),
+                mesh=mesh,
+                in_specs=distributed_4d_spec,
+                out_specs=distributed_4d_spec,
+                check_vma=False,
+            )(x_distributed)
+        updated = reshard(updated_distributed, orig_4d_spec)
+        if pad:
+            updated = updated[:layers]
+        return updated.astype(x.dtype)
 
     merged = layers * expert_count
 

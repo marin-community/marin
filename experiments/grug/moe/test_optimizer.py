@@ -6,7 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
+from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, scale_with_grug_muonh
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig as HeroMuonHConfig
@@ -300,29 +301,105 @@ def test_muonh_state_matches_hero_layout(stacked):
 @pytest.mark.multidevice
 @pytest.mark.parametrize("clip", [None, 0.5])
 def test_muonh_sharded_expert_update_matches_hero(clip):
-    mesh = jax.sharding.Mesh(np.asarray(jax.devices()), ("data",), axis_types=(jax.sharding.AxisType.Explicit,))
-    with jax.set_mesh(mesh):
-        expert_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None, "data", None, None))
-        matrix_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data", None))
-        params = {
-            "matrix": jax.device_put(jnp.arange(1, 17, dtype=jnp.float32).reshape(4, 4), matrix_sharding),
-            "mlp": {
-                "expert_mlp": {
-                    "w_gate": jax.device_put(jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4), expert_sharding)
+    with use_test_devices(2) as devices:
+        mesh = Mesh(np.asarray(devices), ("data",), axis_types=(AxisType.Explicit,))
+        with jax.set_mesh(mesh):
+            expert_sharding = NamedSharding(mesh, PartitionSpec(None, "data", None, None))
+            matrix_sharding = NamedSharding(mesh, PartitionSpec("data", None))
+            params = {
+                "matrix": jax.device_put(jnp.arange(1, 17, dtype=jnp.float32).reshape(4, 4), matrix_sharding),
+                "mlp": {
+                    "expert_mlp": {
+                        "w_gate": jax.device_put(
+                            jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4), expert_sharding
+                        )
+                    }
+                },
+            }
+            grads = jax.tree.map(lambda x: jax.sharding.reshard(jnp.sin(x), x.sharding), params)
+            settings = dict(learning_rate=0.02, warmup=0, use_syrk=False, expert_normalization="all_experts")
+            actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
+            reference = HeroMuonHConfig(**settings).build(100)
+            reference_grads = clip_by_total_norm(grads, clip).grads if clip is not None else grads
+            actual_updates, _ = jax.jit(actual.update)(grads, actual.init(params), params)
+            expected_updates, _ = jax.jit(reference.update)(reference_grads, reference.init(params), params)
+            for actual_leaf, expected_leaf in zip(
+                jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
+            ):
+                np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize(
+    ("mesh_shape", "layers"),
+    [
+        ((1, 2, 2, 1, 1), 4),  # expert=1, context=2, data=2 (divisible layers)
+        ((1, 2, 2, 1, 1), 3),  # expert=1, context=2, data=2 (padded layers)
+        ((1, 2, 1, 2, 1), 3),  # expert=2, context=1, data=2 (hero layout, padded layers)
+    ],
+)
+def test_muonh_4d_expert_layer_split_matches_unsharded_reference(mesh_shape, layers):
+    rng = np.random.default_rng(0)
+    w_gate_np = rng.normal(0.0, 0.05, size=(layers, 4, 8, 6)).astype(np.float32)
+    w_down_np = rng.normal(0.0, 0.05, size=(layers, 4, 6, 8)).astype(np.float32)
+    g_gate_np = rng.normal(0.0, 0.05, size=(layers, 4, 8, 6)).astype(np.float32)
+    g_down_np = rng.normal(0.0, 0.05, size=(layers, 4, 6, 8)).astype(np.float32)
+
+    cfg = GrugMoeMuonHConfig(
+        learning_rate=0.02,
+        adam_lr=0.02,
+        warmup=0,
+        use_syrk=False,
+        expert_normalization="all_experts",
+        global_grad_norm=1.0,
+    )
+    opt = cfg.build(100)
+
+    ref_params = {
+        "blocks": {"mlp": {"expert_mlp": {"w_gate": jnp.asarray(w_gate_np), "w_down": jnp.asarray(w_down_np)}}}
+    }
+    ref_grads = {"blocks": {"mlp": {"expert_mlp": {"w_gate": jnp.asarray(g_gate_np), "w_down": jnp.asarray(g_down_np)}}}}
+    ref_updates, _ = opt.update(ref_grads, opt.init(ref_params), ref_params)
+    ref_updates_np = jax.tree.map(np.asarray, ref_updates)
+
+    with use_test_devices(4) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(mesh_shape),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        gate_sharding = NamedSharding(mesh, PartitionSpec(None, ("expert", "context"), "data", "model"))
+        down_sharding = NamedSharding(mesh, PartitionSpec(None, ("expert", "context"), "model", "data"))
+        with jax.set_mesh(mesh):
+            params = {
+                "blocks": {
+                    "mlp": {
+                        "expert_mlp": {
+                            "w_gate": jax.device_put(jnp.asarray(w_gate_np), gate_sharding),
+                            "w_down": jax.device_put(jnp.asarray(w_down_np), down_sharding),
+                        }
+                    }
                 }
-            },
-        }
-        grads = jax.tree.map(lambda x: jax.sharding.reshard(jnp.sin(x), x.sharding), params)
-        settings = dict(learning_rate=0.02, warmup=0, use_syrk=False, expert_normalization="all_experts")
-        actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
-        reference = HeroMuonHConfig(**settings).build(100)
-        reference_grads = clip_by_total_norm(grads, clip).grads if clip is not None else grads
-        actual_updates, _ = jax.jit(actual.update)(grads, actual.init(params), params)
-        expected_updates, _ = jax.jit(reference.update)(reference_grads, reference.init(params), params)
-        for actual_leaf, expected_leaf in zip(
-            jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
-        ):
-            np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
+            }
+            grads = {
+                "blocks": {
+                    "mlp": {
+                        "expert_mlp": {
+                            "w_gate": jax.device_put(jnp.asarray(g_gate_np), gate_sharding),
+                            "w_down": jax.device_put(jnp.asarray(g_down_np), down_sharding),
+                        }
+                    }
+                }
+            }
+            actual_updates, _ = jax.jit(opt.update)(grads, opt.init(params), params)
+            for actual_leaf, param_leaf, expected_leaf in zip(
+                jax.tree.leaves(actual_updates),
+                jax.tree.leaves(params),
+                jax.tree.leaves(ref_updates_np),
+                strict=True,
+            ):
+                assert actual_leaf.sharding == param_leaf.sharding
+                np.testing.assert_allclose(np.asarray(actual_leaf), expected_leaf, rtol=1e-2, atol=1e-4)
 
 
 def test_scale_with_grug_muonh_rejects_4d_updates():
