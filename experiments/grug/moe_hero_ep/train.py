@@ -4,8 +4,10 @@
 import dataclasses
 import functools
 import gc
+import hashlib
 import importlib.metadata
 import itertools
+import json
 import logging
 import math
 import os
@@ -63,9 +65,11 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
+    init_weights_only_from_checkpoint,
     restore_grug_state_and_source,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -87,6 +91,9 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+# Each complete checkpoint directory holds its step and run metadata in this file.
+CHECKPOINT_METADATA_FILE = "metadata.json"
 
 HERO_EP_RUNTIME_ENV = {
     "LD_PRELOAD": "libjemalloc.so.2",
@@ -186,12 +193,16 @@ class SpecialTokenInit:
     ``anchor_ids`` column, and the optimizer moments of those columns are zeroed; input embeddings
     and their moments are kept. Every step scales the optimizer updates of the same
     ``token_embed`` rows and ``output_proj`` columns by ``lr_multiplier``.
+
+    ``reseed=False`` keeps the faster learning rate but skips the reseed, for a run that continues
+    an SFT checkpoint whose columns were already trained.
     """
 
     token_ids: tuple[int, ...]
     anchor_ids: tuple[int, ...]
     start_step: int
     lr_multiplier: float
+    reseed: bool = True
 
     def __post_init__(self):
         if not self.token_ids or len(set(self.token_ids)) != len(self.token_ids):
@@ -436,6 +447,19 @@ class GrugEvalConfig:
 
 
 @dataclass(frozen=True)
+class HeldOutEvalOnly:
+    """Score a checkpoint's parameters once on the configured evaluation sets, then exit without a train step.
+
+    Only ``params`` and ``pending_qb_betas`` are read from ``weights_checkpoint``; the optimizer state is not.
+    The scores go to ``output`` as JSON, with the same metric names the training-time evals log, the step and
+    ``metadata.json`` SHA-256 of the checkpoint, and the number of sequences scored in each set.
+    """
+
+    output: str
+    weights_checkpoint: str
+
+
+@dataclass(frozen=True)
 class FlopsBaseline:
     """Cumulative training FLOPs through a completed handoff step."""
 
@@ -470,6 +494,7 @@ class GrugRunConfig:
     # the schedule's end. None runs the whole schedule and its extension.
     stop_after_steps: int | None = None
     flops_baseline: FlopsBaseline | None = None
+    eval_only: HeldOutEvalOnly | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -733,6 +758,87 @@ def build_tagged_evaluator(
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
     )
+
+
+def dropless_eval(
+    evaluator: TaggedEvaluator, params: Transformer, *, train_mesh: Mesh, eval_mesh: Mesh, prefix: str
+) -> dict[str, float]:
+    """Score ``params`` from ``train_mesh`` with the dropless ``evaluator`` on ``eval_mesh``, with PGLE off.
+
+    JAX does not reshard across explicit meshes, so the params move to the expert-collapsed eval mesh first.
+    """
+    with set_mesh(eval_mesh):
+        # `model` must stay a local. In a multi-process run the move copies each leaf, also when the leaf
+        # stays on its devices. The copy adds to the train-mesh params, and the train step needs almost the
+        # whole device budget for its temporary buffer, thus this copy must die before the next step.
+        model = _move_tree_to_eval_mesh(params, train_mesh)
+        with jax_config.enable_pgle(False):
+            return eval_model(evaluator, model, prefix=prefix)
+
+
+def validate_eval_only(config: GrugRunConfig) -> None:
+    """An eval-only run scores and exits: it needs evaluation sets and must neither restore nor save a train state."""
+    if config.eval is None:
+        raise ValueError("eval_only needs an eval config")
+    if config.trainer.trainer.load_checkpoint is not False:
+        raise ValueError("eval_only reads only parameters; set load_checkpoint=False")
+    if config.trainer.save_checkpoints:
+        raise ValueError("eval_only must not save checkpoints")
+
+
+def _write_held_out_scores(
+    state: "GrugTrainState",
+    config: GrugRunConfig,
+    mesh: Mesh,
+    *,
+    evaluator: TaggedEvaluator | None,
+    dropless_evaluator: TaggedEvaluator | None,
+    dropless_eval_mesh: Mesh | None,
+) -> None:
+    """Run each configured evaluator once on the loaded parameters and write the metrics as JSON from process 0.
+
+    Dropless metrics are logged under ``<prefix>_dropless``, the names a training run's dropless evals use.
+    """
+    assert config.eval is not None and config.eval_only is not None
+    # Read before scoring, so a failed read cannot discard a finished evaluation.
+    metadata = (StoragePath(config.eval_only.weights_checkpoint) / CHECKPOINT_METADATA_FILE).read_bytes()
+    scored = dropless_evaluator if dropless_evaluator is not None else evaluator
+    assert scored is not None
+    # `tagged_eval_sets` names each set by its last tag. Token counts stay inside the evaluator.
+    set_names = [tags[-1] for _, tags in scored.dataset.datasets]
+    if len(set(set_names)) != len(set_names):
+        raise ValueError(f"eval sets share a last tag: {sorted(set_names)}")
+    sequences_per_set = {tags[-1]: len(dataset.as_sync_dataset()) for dataset, tags in scored.dataset.datasets}
+    metrics: dict[str, float] = {}
+    if evaluator is not None:
+        with jax_config.enable_pgle(False):
+            metrics.update(eval_model(evaluator, state.params, prefix=config.eval.prefix))
+    if dropless_evaluator is not None and dropless_eval_mesh is not None:
+        metrics.update(
+            dropless_eval(
+                dropless_evaluator,
+                state.params,
+                train_mesh=mesh,
+                eval_mesh=dropless_eval_mesh,
+                prefix=f"{config.eval.prefix}_dropless",
+            )
+        )
+    if not metrics:
+        raise ValueError("eval_only found no evaluation sets")
+    levanter.tracker.log(metrics, step=0)
+    if jax.process_index() != 0:
+        return
+    record = {
+        "weights_checkpoint": config.eval_only.weights_checkpoint,
+        "checkpoint_step": int(json.loads(metadata)["step"]),
+        "checkpoint_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
+        "sequences_per_set": sequences_per_set,
+        "mesh": dict(mesh.shape),
+        "eval": dataclasses.asdict(config.eval),
+        "metrics": {key: float(value) for key, value in metrics.items()},
+    }
+    StoragePath(config.eval_only.output).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    logger.info("Held-out scores written to %s", config.eval_only.output)
 
 
 def _compute_flops(
@@ -1238,6 +1344,24 @@ _EXPERT_AXES: dict[tuple[str, ...], int] = {
 }
 
 
+def reseed_at_start_step(
+    state: GrugTrainState, special_tokens: SpecialTokenInit, *, offload_opt_state: bool
+) -> GrugTrainState:
+    """Reseed the special-token columns if ``state`` is at the start step and reseeding is on.
+
+    Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
+    """
+    if not special_tokens.reseed or int(state.step) != special_tokens.start_step:
+        return state
+    state = reseed_special_token_columns(state, special_tokens, offload_opt_state=offload_opt_state)
+    logger.info(
+        "Reseeded %d LM-head special-token columns from anchors %s",
+        len(special_tokens.token_ids),
+        dict(zip(special_tokens.token_ids, special_tokens.anchor_ids, strict=True)),
+    )
+    return state
+
+
 def _attribute_names(path) -> tuple[str, ...]:
     return tuple(entry.name for entry in path if isinstance(entry, jax.tree_util.GetAttrKey))
 
@@ -1389,7 +1513,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
 
-    optimizer = config.optimizer.build(trainer.num_train_steps)
+    if config.eval_only is not None:
+        validate_eval_only(config)
+    # Scoring needs no optimizer state; a stateless optimizer keeps it out of device and host memory.
+    optimizer = optax.identity() if config.eval_only is not None else config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
     diagnostic_watch_step = None
     inline_watch_config = watch_config if watch_config.is_enabled else None
@@ -1483,16 +1610,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = _init_state(model_key)
         if loaded_checkpoint is not None and not restored_nothing:
             state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
-        special_tokens = config.trainer.special_tokens
-        # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
-        if special_tokens is not None and int(state.step) == special_tokens.start_step:
-            state = reseed_special_token_columns(
-                state, special_tokens, offload_opt_state=config.trainer.offload_opt_state
+        if config.trainer.special_tokens is not None:
+            state = reseed_at_start_step(
+                state, config.trainer.special_tokens, offload_opt_state=config.trainer.offload_opt_state
             )
-            logger.info(
-                "Reseeded %d LM-head special-token columns from anchors %s",
-                len(special_tokens.token_ids),
-                dict(zip(special_tokens.token_ids, special_tokens.anchor_ids, strict=True)),
+        if config.eval_only is not None:
+            # Free the random parameters before reading the real ones.
+            state = dataclasses.replace(state, params=restore_template_from(state.params))
+            state = init_weights_only_from_checkpoint(
+                state,
+                config.eval_only.weights_checkpoint,
+                mesh=mesh,
+                allow_partial=False,
+                additional_weight_fields=("pending_qb_betas",),
             )
         dump_grug_state_sharding_run_artifact(
             state,
@@ -1505,7 +1635,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         train_dataset = None
         train_loader = None
-        if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
+        if config.trainer.training_data_mode == TrainingDataMode.MIXTURE and config.eval_only is None:
             train_dataset = build_train_dataset(
                 config.data,
                 max_seq_len=config.model.max_seq_len,
@@ -1564,6 +1694,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             implementation=eval_cfg.dropless_eval_moe_implementation,
                         ),
                     )
+
+        if config.eval_only is not None:
+            _write_held_out_scores(
+                state,
+                config,
+                mesh,
+                evaluator=evaluator,
+                dropless_evaluator=dropless_evaluator,
+                dropless_eval_mesh=dropless_eval_mesh,
+            )
+            levanter.tracker.current_tracker().finish()
+            return
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
         # both use it so a run reports against the steps it will actually take.
@@ -1650,21 +1792,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. In a multi-process run the move copies each leaf,
-                    # also when the leaf stays on its devices. The copy adds to the train-mesh
-                    # params, and the train step needs almost the whole device budget for its
-                    # temporary buffer, thus this copy must die before the next step.
-                    with (
-                        callbacks.progress_event_scope(
-                            step.emit_event,
-                            callbacks.ProgressEvent.EVALUATION_STARTED,
-                            callbacks.ProgressEvent.EVALUATION_FINISHED,
-                        ),
-                        set_mesh(_mesh),
+                    with callbacks.progress_event_scope(
+                        step.emit_event,
+                        callbacks.ProgressEvent.EVALUATION_STARTED,
+                        callbacks.ProgressEvent.EVALUATION_FINISHED,
                     ):
-                        model = _move_tree_to_eval_mesh(step.model, mesh)
-                        with jax_config.enable_pgle(False):
-                            log_dict = eval_model(_ev, model, prefix=_prefix)
+                        log_dict = dropless_eval(_ev, step.model, train_mesh=mesh, eval_mesh=_mesh, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
                     last_dropless_eval_step = step_count
 

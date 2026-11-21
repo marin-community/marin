@@ -7,12 +7,13 @@ import dataclasses
 import json
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import click
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
@@ -75,8 +76,10 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
+    CHECKPOINT_METADATA_FILE,
     GrugEvalConfig,
     GrugRunConfig,
+    HeldOutEvalOnly,
     RouterBiasMode,
     SpecialTokenInit,
     TrainingDataMode,
@@ -113,6 +116,8 @@ SPECIAL_TOKEN_ANCHORS = (
     (128009, "<|end_of_text|>"),
 )
 EXPECTED_ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
+# The pretraining checkpoint step the hero SFT starts from. A later checkpoint has trained chat-token columns.
+HERO_SFT_BASE_STEP = 393_491
 
 
 @dataclass(frozen=True)
@@ -287,8 +292,8 @@ def sft_data_config(
     )
 
 
-def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER) -> SpecialTokenInit:
-    """The seven chat-token reseeds, checked against the SFT tokenizer."""
+def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER, *, reseed: bool = True) -> SpecialTokenInit:
+    """The seven chat-token reseeds, checked against the SFT tokenizer; ``reseed=False`` only raises their rate."""
     tokenizer = load_tokenizer(tokenizer_path)
     anchors = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for _, text in SPECIAL_TOKEN_ANCHORS)
     if anchors != tuple((anchor,) for anchor in EXPECTED_ANCHOR_IDS):
@@ -298,18 +303,88 @@ def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER) -> 
         anchor_ids=EXPECTED_ANCHOR_IDS,
         start_step=start_step,
         lr_multiplier=SPECIAL_TOKEN_LR_MULTIPLIER,
+        reseed=reseed,
     )
+
+
+def checkpoint_metadata(checkpoint: str) -> dict:
+    return json.loads((StoragePath(checkpoint) / CHECKPOINT_METADATA_FILE).read_text())
 
 
 def checkpoint_step(checkpoint: str) -> int:
     """The step recorded in a complete checkpoint's ``metadata.json``."""
-    metadata = json.loads((StoragePath(checkpoint) / "metadata.json").read_text())
+    return _recorded_step(checkpoint, checkpoint_metadata(checkpoint))
+
+
+def start_step_for(initialize_from: str, *, reseed_special_tokens: bool) -> int:
+    """The start step ``initialize_from`` records; refuses a reseed of a checkpoint that already trained SFT.
+
+    A checkpoint past the hero base step, or one that records an expert placement, comes from an SFT run, so
+    reseeding would overwrite its trained chat-token columns. Continue such a checkpoint without the reseed.
+    """
+    metadata = checkpoint_metadata(initialize_from)
+    step = _recorded_step(initialize_from, metadata)
+    if reseed_special_tokens:
+        if step > HERO_SFT_BASE_STEP:
+            raise ValueError(
+                f"{initialize_from} is past the hero base step {HERO_SFT_BASE_STEP}; "
+                "continue it with --no-special-token-reseed"
+            )
+        if ExpertPlacement.recorded_in(metadata) is not None:
+            raise ValueError(
+                f"{initialize_from} records an expert placement, so it is an SFT save; "
+                "continue it with --no-special-token-reseed"
+            )
+    return step
+
+
+def _recorded_step(checkpoint: str, metadata: dict) -> int:
     if metadata.get("is_temporary"):
         raise ValueError(f"{checkpoint} is a temporary checkpoint")
     step = int(metadata["step"])
     if StoragePath(checkpoint).name != f"step-{step}":
         raise ValueError(f"{checkpoint} records step {step}")
     return step
+
+
+@dataclass(frozen=True)
+class CatalogMixture:
+    """A serialized ``LmDataConfig`` (for example a long-loop run's ``data`` block, with its ``cache_catalog``)
+    trained under a replacement ``train_weights`` for a fixed number of updates.
+
+    Its own validation sets are the evaluation sets; the stores manifest and Harrier replay are not used.
+    """
+
+    data: LmDataConfig
+    num_updates: int
+
+    @staticmethod
+    def load(data_config: Path, train_weights: Path, num_updates: int) -> "CatalogMixture":
+        raw = json.loads(data_config.read_text())
+        raw["train_weights"] = json.loads(train_weights.read_text())
+        data = draccus.decode(LmDataConfig, raw)
+        if data.cache_catalog is None:
+            raise ValueError(f"{data_config} names no cache_catalog")
+        if data.tokenizer != SFT_TOKENIZER:
+            raise ValueError(f"{data_config} uses tokenizer {data.tokenizer}, expected {SFT_TOKENIZER}")
+        if num_updates <= 0:
+            raise ValueError(f"num_updates must be positive, got {num_updates}")
+        return CatalogMixture(data=data, num_updates=num_updates)
+
+    def data_config(self, start_step: int) -> LmDataConfig:
+        """The mixture from ``start_step``, so a continued run reads it from its first block."""
+        return dataclasses.replace(self.data, mixture_start_step=start_step)
+
+
+def check_start_placement(placement: ExpertPlacement, initialize_from: str) -> None:
+    """Fail unless ``initialize_from`` is the placement's source or a save that already records the placement."""
+    if placement.permutes(initialize_from):
+        return
+    recorded = ExpertPlacement.recorded_in(checkpoint_metadata(initialize_from))
+    if recorded is None or recorded.fingerprint != placement.fingerprint:
+        raise ValueError(
+            f"the expert placement permutes {placement.source_checkpoint}, and {initialize_from} does not record it"
+        )
 
 
 def sft_resources(dp_racks: int) -> ResourceConfig:
@@ -337,7 +412,7 @@ def build_sft_run(
     muon_lr: float,
     adam_lr: float,
     max_grad_norm: float | None,
-    replay_fraction: float,
+    replay_fraction: float | None,
     dp_racks: int,
     router_bias_mode: RouterBiasMode,
     capacity_factor: float,
@@ -348,22 +423,35 @@ def build_sft_run(
     version: str | None = None,
     resources: ResourceConfig | None = None,
     checkpoints: Literal["periodic", "final", "none"] = "periodic",
+    catalog_mixture: CatalogMixture | None = None,
+    reseed_special_tokens: bool = True,
+    eval_only_output: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
-    ``stop_after_steps`` bounds a smoke test to that many updates of the full one-epoch schedule.
+    ``stop_after_steps`` bounds a smoke test to that many updates of the full schedule: one epoch of the stores,
+    or ``catalog_mixture.num_updates``.
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
     ``checkpoints`` selects periodic saves, a single final save, or training without checkpoint writes.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
     expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
-    routed experts of ``initialize_from`` so each capacity block carries a similar load.
+    routed experts of ``initialize_from`` so each capacity block carries a similar load; a checkpoint that already
+    records the same placement, such as a placed SFT run's own save, is continued as is.
+    ``catalog_mixture`` replaces the stores manifest and Harrier replay with a catalog mixture.
+    ``reseed_special_tokens=False`` continues an SFT checkpoint without resetting its chat-token columns.
+    ``eval_only_output`` scores ``initialize_from``'s parameters once on the evaluation sets, dropless, and
+    writes the metrics there instead of training.
     """
     allocation = sft_resources(dp_racks)
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
-    if expert_placement is not None and not expert_placement.permutes(initialize_from):
-        raise ValueError(f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}")
+    if expert_placement is not None:
+        check_start_placement(expert_placement, initialize_from)
+    eval_only = eval_only_output is not None
+    if eval_only:
+        checkpoints = "none"
+    evaluates = eval_every > 0 or eval_only
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
     model = sft_model_config(capacity_factor)
@@ -375,12 +463,58 @@ def build_sft_run(
             num_layers=model.num_layers, num_experts=model.num_experts, expert_axis_size=expert_axis_size
         )
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
-    stores = load_sft_stores()
-    plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
-    num_train_steps = start_step + plan.steps
+    # The data source: one epoch of the stores with Harrier replay and Paloma validation, or a catalog mixture
+    # that carries its own replay share and validation sets.
+    data_for: Callable[[StepContext], LmDataConfig]
+    if catalog_mixture is None:
+        if replay_fraction is None:
+            raise ValueError("the stores mixture needs a replay fraction")
+        stores = load_sft_stores()
+        plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
+        steps, decay_steps = plan.steps, plan.decay_steps
+        validation = validation_datasets() if evaluates else []
+        length_statistics = harrier_length_statistics()
+        deps: tuple = (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation)
+        logger.info(
+            "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
+            "router bias %s, capacity factor %g",
+            run_id,
+            plan.steps,
+            plan.batch_size,
+            plan.num_blocks,
+            plan.block_size,
+            plan.replay_fraction,
+            plan.decay_steps,
+            router_bias_mode.value,
+            capacity_factor,
+        )
+
+        def data_for(ctx: StepContext) -> LmDataConfig:
+            replay = harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=0,
+                max_seq_len=model.max_seq_len,
+                validation=[],
+                stats_path=ctx.artifact_path(length_statistics),
+            )
+            return sft_data_config(
+                stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+            )
+
+    else:
+        if replay_fraction is not None:
+            raise ValueError("a catalog mixture sets its replay share through its train_weights")
+        steps = catalog_mixture.num_updates
+        decay_steps = max(2, round(steps * SFT_DECAY_FRACTION))
+        deps = ()
+
+        def data_for(ctx: StepContext) -> LmDataConfig:
+            return catalog_mixture.data_config(start_step)
+
+    num_train_steps = start_step + steps
     stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
     if stop_step > num_train_steps:
-        raise ValueError(f"stop_after_steps={stop_after_steps} is past the {plan.steps}-step epoch")
+        raise ValueError(f"stop_after_steps={stop_after_steps} is past the {steps}-step schedule")
 
     # The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon.
     _, pretrain_optimizer = build_hero_configs(
@@ -392,7 +526,7 @@ def build_sft_run(
         learning_rate=muon_lr,
         adam_lr=adam_lr,
         warmup=0,
-        decay=plan.decay_steps,
+        decay=decay_steps,
         min_lr_ratio=SFT_MIN_LR_RATIO,
         weight_decay=0.0,
         gate_router_weight_decay=0.0,
@@ -419,27 +553,12 @@ def build_sft_run(
             gc_interval=100,
         ),
         router_bias_mode=router_bias_mode,
-        special_tokens=special_token_init(start_step),
+        special_tokens=special_token_init(start_step, reseed=reseed_special_tokens),
         expert_placement=expert_placement,
     )
     train_resources = allocation if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = validation_datasets() if eval_every > 0 else []
-    length_statistics = harrier_length_statistics()
-    logger.info(
-        "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
-        "router bias %s, capacity factor %g",
-        run_id,
-        plan.steps,
-        plan.batch_size,
-        plan.num_blocks,
-        plan.block_size,
-        plan.replay_fraction,
-        plan.decay_steps,
-        router_bias_mode.value,
-        capacity_factor,
-    )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
@@ -492,8 +611,8 @@ def build_sft_run(
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
             # The run's own checkpoints come first, so a retry resumes the SFT; the base starts it.
-            load_checkpoint_path=[*resume_paths, initialize_from],
-            load_checkpoint=True,
+            load_checkpoint_path=[] if eval_only else [*resume_paths, initialize_from],
+            load_checkpoint=not eval_only,
             checkpointer=CheckpointerConfig(
                 base_path=permanent_path,
                 temporary_base_path=temporary_path,
@@ -505,33 +624,28 @@ def build_sft_run(
             ),
             context_axis_size=context_axis_size,
         )
-        replay = harrier_long_context_data_config(
-            ctx=ctx,
-            start_step=0,
-            max_seq_len=model.max_seq_len,
-            validation=[],
-            stats_path=ctx.artifact_path(length_statistics),
-        )
-        data = sft_data_config(
-            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
-        )
         return GrugRunConfig(
             model=model,
-            data=data,
+            data=data_for(ctx),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=(
                 GrugEvalConfig(
-                    steps_per_eval=eval_every,
+                    steps_per_eval=None if eval_only else eval_every,
                     eval_batch_size=batch_axes,
                     eval_current=False,
                     eval_ema=False,
                     compute_bpb=True,
                     dropless_eval=True,
                 )
-                if validation
+                if evaluates
+                else None
+            ),
+            eval_only=(
+                HeldOutEvalOnly(output=eval_only_output, weights_checkpoint=initialize_from)
+                if eval_only_output
                 else None
             ),
             stop_after_steps=stop_step,
@@ -544,7 +658,7 @@ def build_sft_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation),
+        deps=deps,
         runtime_args={"train_resources": train_resources},
     )
 
@@ -586,8 +700,37 @@ def _grad_norm(value: str) -> float | None:
 @click.option(
     "--replay-fraction",
     type=click.FloatRange(min=0, max=1, min_open=True, max_open=True),
-    required=True,
-    help="Target share of each block drawn from replay; the block count rounds it.",
+    default=None,
+    help="Target share of each block drawn from replay; the block count rounds it. Required without --data-config.",
+)
+@click.option(
+    "--data-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Serialized LmDataConfig JSON with a cache_catalog; replaces the stores manifest and Harrier replay.",
+)
+@click.option(
+    "--train-weights",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="train_weights JSON for --data-config, e.g. [[0, {component: weight}]].",
+)
+@click.option(
+    "--num-updates",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Updates of the --data-config schedule; the last tenth decays.",
+)
+@click.option(
+    "--special-token-reseed/--no-special-token-reseed",
+    default=True,
+    show_default=True,
+    help="Reset the chat-token LM-head columns at the start step. Turn off to continue an SFT checkpoint.",
+)
+@click.option(
+    "--eval-only-output",
+    default=None,
+    help="Score the start checkpoint's parameters once, dropless, and write the metrics JSON here; no training.",
 )
 @click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 racks.")
 @click.option(
@@ -637,7 +780,12 @@ def main(
     muon_lr: float,
     adam_lr: float,
     max_grad_norm: str,
-    replay_fraction: float,
+    replay_fraction: float | None,
+    data_config: Path | None,
+    train_weights: Path | None,
+    num_updates: int | None,
+    special_token_reseed: bool,
+    eval_only_output: str | None,
     dp_racks: int,
     stop_after_steps: int | None,
     router_bias: str,
@@ -646,10 +794,15 @@ def main(
     checkpoint_root: str | None,
     expert_placement_path: Path | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    catalog_inputs = (data_config, train_weights, num_updates)
+    if any(value is not None for value in catalog_inputs) and None in catalog_inputs:
+        raise click.UsageError("--data-config, --train-weights and --num-updates go together")
+    if (replay_fraction is None) == (data_config is None):
+        raise click.UsageError("pass exactly one of --replay-fraction and --data-config")
     return build_sft_run(
         run_id=run_id,
         initialize_from=initialize_from,
-        start_step=checkpoint_step(initialize_from),
+        start_step=start_step_for(initialize_from, reseed_special_tokens=special_token_reseed),
         muon_lr=muon_lr,
         adam_lr=adam_lr,
         max_grad_norm=_grad_norm(max_grad_norm),
@@ -663,6 +816,13 @@ def main(
         expert_placement=(
             None if expert_placement_path is None else ExpertPlacement.from_json(expert_placement_path.read_text())
         ),
+        catalog_mixture=(
+            None
+            if data_config is None or train_weights is None or num_updates is None
+            else CatalogMixture.load(data_config, train_weights, num_updates)
+        ),
+        reseed_special_tokens=special_token_reseed,
+        eval_only_output=eval_only_output,
     )
 
 
