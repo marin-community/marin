@@ -455,8 +455,12 @@ def after_revise(proposal: TaskProposal, result: ValidationResult) -> Workpiece:
     confirmed_wp = confirmed(proposal, True, False, False, True)
     revise = Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND)
     session = Conversation((Message(Role.SYSTEM, "author"),), ())
-    return confirmed_wp.with_(
-        round=1, session=session, evidence=(*confirmed_wp.evidence, result), decisions=(*confirmed_wp.decisions, revise)
+    return replace(
+        confirmed_wp,
+        round=1,
+        session=session,
+        evidence=(*confirmed_wp.evidence, result),
+        decisions=(*confirmed_wp.decisions, revise),
     )
 
 
@@ -634,7 +638,7 @@ def test_a_fault_in_the_revision_s_confirmation_abandons(proposal: TaskProposal)
     config = setup()
     revise = Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND)
     wp = confirming(proposal, [graded(3, INVALID)])
-    wp = wp.with_(decisions=(revise, *wp.decisions))
+    wp = replace(wp, decisions=(revise, *wp.decisions))
     decision = default_review(wp, config.band, config.budget)
     assert isinstance(decision, Abandon)
     assert decision.reasons[0] == f"{CONFIRMATION_REVISION_FAILED}: its confirmation has a fault"
@@ -813,7 +817,7 @@ def test_responses_are_kept_by_originating_review_across_a_stop_and_several_roun
             SUBMISSION.digest, BASE, CONTROLS, (), review=SolveReview(f"v{n}", ReviewEnd.REPORTED, (f,))
         )
         wp = apply_decision(
-            wp.with_(evidence=(*wp.evidence, result)), Modify(("x",), review=(f,)), config.budget, config.policy
+            replace(wp, evidence=(*wp.evidence, result)), Modify(("x",), review=(f,)), config.budget, config.policy
         )
         assert wp.session is not None
         if n < 2:
@@ -855,7 +859,7 @@ async def test_a_mixed_final_report_sends_its_note_to_the_author_as_optional_and
 def test_a_pending_acceptance_publishes_no_placement(proposal: TaskProposal) -> None:
     """A provisional too-easy acceptance sent back by the final review and abandoned carried ``accepted_with``."""
     config = setup()
-    wp = confirming(proposal, ()).with_(decisions=(), evidence=confirming(proposal, ()).evidence[:1])
+    wp = replace(confirming(proposal, ()), decisions=(), evidence=confirming(proposal, ()).evidence[:1])
     pending = apply_decision(wp, Accept(BandOutcome.TOO_EASY), config.budget, config.policy)
     assert pending.terminal is None and pending.accepted_with is None
     abandoned = apply_decision(pending, Abandon(("author stopped",)), config.budget, config.policy)
@@ -868,7 +872,7 @@ def test_an_omission_both_reviews_name_is_listed_once(proposal: TaskProposal) ->
     config = setup()
     gone = MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [0] have no complete transcript")
     wp = confirming(proposal, (), review=SolveReview("v1", ReviewEnd.REPORTED, missing=(gone,)))
-    wp = wp.with_(decisions=(Accept(BandOutcome.IN_BAND, missing=(gone,)),))
+    wp = replace(wp, decisions=(Accept(BandOutcome.IN_BAND, missing=(gone,)),))
     decision = default_review(wp, config.band, config.budget)
     assert isinstance(decision, Accept) and decision.missing == (gone,)
 

@@ -78,7 +78,7 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
     """
     if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
         decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
-    wp = wp.with_(decisions=(*wp.decisions, decision))
+    wp = replace(wp, decisions=(*wp.decisions, decision))
     match decision:
         case Accept(band, _, restore):
             if restore is not None and (
@@ -87,20 +87,21 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                 raise ValueError(f"Cannot restore {restore} at {band}: the fallback is {wp.fallback}")
             if restore is not None and wp.fallback is not None:  # the revisions after the restored round are discarded
                 after = wp.fallback.evidence
-                wp = wp.with_(
-                    responses=tuple(replace(r, discarded=r.discarded or r.review >= after) for r in wp.responses)
+                wp = replace(
+                    wp, responses=tuple(replace(r, discarded=r.discarded or r.review >= after) for r in wp.responses)
                 )
             confirmed = bool(wp.evidence) and wp.evidence[-1].confirms is not None
             final = confirmed or not policy.setting("solver.confirmation_k", int)
-            return wp.with_(  # a pending acceptance's placement is its decision's band, published only once final
+            return replace(
+                wp,  # a pending acceptance's placement is its decision's band, published only once final
                 terminal=Terminal.ACCEPTED if final else None,
                 submission=wp.fallback.submission if wp.fallback and restore else wp.submission,
                 accepted_with=band if final and band is not BandOutcome.IN_BAND else None,
             )
         case Reject():
-            return wp.with_(terminal=Terminal.REJECTED)
+            return replace(wp, terminal=Terminal.REJECTED)
         case Abandon():
-            return wp.with_(terminal=Terminal.ABANDONED)
+            return replace(wp, terminal=Terminal.ABANDONED)
         case Modify(findings, placement, _, _, review) | Revise(findings, review, placement=placement):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
@@ -122,7 +123,8 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
             kind = "review" if isinstance(decision, Modify) else "the final review"
             prompt = policy.prompt("author.revision").render(kind=kind, detail=detail)
             sent = (FindingResponse(len(wp.evidence) - 1, f, Response.REQUESTED) for f in (*review, *notes))
-            return wp.with_(
+            return replace(
+                wp,
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), wp.session.tool_schemas),
                 fallback=kept,
@@ -131,13 +133,14 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
         case Retry():
             return wp
         case Incomplete():
-            return wp.with_(terminal=Terminal.HELD)
+            return replace(wp, terminal=Terminal.HELD)
 
 
 def answered(wp: Workpiece, declined: tuple[Decline, ...], response: Response) -> Workpiece:
     """``wp`` with each finding still requested of the author answered: declined with its reason, else ``response``."""
     reasons = {decline.finding: decline.reason for decline in declined}
-    return wp.with_(
+    return replace(
+        wp,
         responses=tuple(
             (
                 r
@@ -149,7 +152,7 @@ def answered(wp: Workpiece, declined: tuple[Decline, ...], response: Response) -
                 )
             )
             for r in wp.responses
-        )
+        ),
     )
 
 
@@ -162,15 +165,15 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
     match stage, result:
         case Stage.AUTHOR, Submitted(submission, session):
             wp = answered(wp, submission.declined, Response.REVISED)
-            return wp.with_(submission=submission, session=session), Stage.VALIDATE
+            return replace(wp, submission=submission, session=session), Stage.VALIDATE
         case Stage.AUTHOR, Stopped():
             wp = answered(wp, (), Response.STOPPED)
             stopped = apply_decision(
-                wp.with_(session=result.session), author_stopped(wp, result.summary), config.budget, config.policy
+                replace(wp, session=result.session), author_stopped(wp, result.summary), config.budget, config.policy
             )
             return stopped, None if stopped.terminal is not None else Stage.CONFIRM
         case Stage.VALIDATE | Stage.CONFIRM, Validated(evidence):
-            return wp.with_(evidence=(*wp.evidence, evidence)), Stage.REVIEW
+            return replace(wp, evidence=(*wp.evidence, evidence)), Stage.REVIEW
         case Stage.REVIEW, Decided(decision):
             wp = apply_decision(wp, decision, config.budget, config.policy)
             if wp.terminal is not None:
@@ -199,7 +202,7 @@ async def run_workpiece(
     try:
         async with ctx.scope("workpiece"):
             install(ctx, resources)
-            wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
+            wp = replace(wp, id=await ctx.emit(NewId("workpiece")))
             while True:
                 reached(wp)
                 try:
@@ -231,7 +234,7 @@ async def run_workpiece(
         interrupted = True
         # Only a hold every leaf of which is a decision-model outage resumes without a person.
         awaits = DecisionModelUnavailable.awaits if error.split(DecisionModelUnavailable)[1] is None else None
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error), awaits=awaits)))
+        wp = replace(wp, terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error), awaits=awaits)))
     finally:
         try:
             await ctx.drain()

@@ -143,7 +143,7 @@ async def test_both_default_briefs_report_observed_and_deserved_and_a_false_reje
     assert not any(g.fresh_verifier for g in grades if g.candidate.reply == "9")  # an unshown claim stops at one grade
     schema = next(tool for tool in client.requests[0].tools if tool.name == "report").parameters
     assert {"grader_observed_reward", "deserved_reward"} <= set(json.dumps(schema).replace('"', " ").split())
-    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Modify) and decision.findings == ("false_reject: 12.0 is graded 0.0, deserves 1.0",)
 
 
@@ -218,7 +218,7 @@ async def test_a_report_must_copy_the_adversarys_own_grade_of_that_candidate(
     ctx = Context(log=log)
     bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = (await validate(ctx, workpiece, setup, bundle)).result
-    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     fresh = [r.event for r in log.records if isinstance(r.event, GradeCandidate) and r.event.fresh_verifier]
     answers = [request.conversation[-1].content for request in client.requests[2:]]
     if refused:
@@ -257,7 +257,7 @@ async def test_a_claim_that_fails_reproduction_gets_one_revision_in_the_same_ses
     _, reject = result.adversary
     assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False), ("12.0", True)]
     assert not any("ran out of search budget" in reason for reason in reject.reasons)
-    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Modify) and decision.findings == ("false_reject: 12.0 is graded 0.0, deserves 1.0",)
 
 
@@ -320,7 +320,7 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     final = Conversation((*client.requests[1].conversation, ended), client.requests[1].tools)
     owner = "validate/0/0/adversary:false_reject/0/0"
     assert reject.continuation == Continuation(owner, SearchEnd.BUDGET_EXHAUSTED, digest(final), 2)
-    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Accept)
 
 
@@ -370,7 +370,7 @@ async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_w
     if isinstance(revision, ContextExceeded):  # the conversation the rejected request carried
         held = Conversation(client.requests[1].conversation, client.requests[1].tools)
         assert reject.continuation.conversation == digest(held)
-    assert isinstance(default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget), Accept)
+    assert isinstance(default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget), Accept)
 
 
 # Review 2026-11-21: a report alleging a wrong score whose fresh verifier crashed correctly led to Modify, but the review
@@ -396,7 +396,7 @@ async def test_a_claim_whose_fresh_verifier_crashes_is_reported_by_its_graded_ca
     ((crashed,),) = (result.adversary[0].findings,)
     assert (crashed.met, crashed.cause) == (False, Cause.GRADER_EXECUTION)
     assert result.adversary[0].reasons == ()
-    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Modify) and decision.findings == (
         "1 ungraded trial(s): grader_execution",
         "grader exited 1\nZeroDivisionError",
@@ -421,7 +421,7 @@ async def test_a_zero_revision_budget_still_reproduces_the_report_and_a_negative
     fresh = [r.event for r in log.records if isinstance(r.event, GradeCandidate) and r.event.fresh_verifier]
     assert len(client.requests) == 1 and [grade.candidate.reply for grade in fresh] == ["12.0"]
     assert [(f.candidate.reply, f.met) for f in result.adversary[0].findings] == [("12.0", True)]
-    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Modify) and decision.findings == ("false_reject: 12.0 is graded 0.0, deserves 1.0",)
 
 

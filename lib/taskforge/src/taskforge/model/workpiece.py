@@ -7,9 +7,9 @@ Pydantic frozen models would not freeze those nested payloads either. Callers ow
 nested payloads and must replace them; persistence boundaries serialize snapshots.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, TypedDict, Unpack
+from typing import Annotated
 
 from pydantic import TypeAdapter
 from taskcompendium.models import TaskSpec
@@ -64,20 +64,6 @@ class Terminal(StrEnum):
     HELD = "held"
 
 
-class WorkpieceChanges(TypedDict, total=False):
-    id: str
-    proposal: TaskProposal
-    round: int
-    session: Conversation | None
-    submission: Submission | None
-    evidence: tuple[ValidationResult, ...]
-    decisions: tuple[Decision, ...]
-    terminal: Terminal | None
-    fallback: Fallback | None
-    accepted_with: BandOutcome | None
-    responses: tuple[FindingResponse, ...]
-
-
 @dataclass(frozen=True, slots=True)
 class Workpiece:
     id: str
@@ -92,9 +78,6 @@ class Workpiece:
     accepted_with: BandOutcome | None = None
     responses: Annotated[tuple[FindingResponse, ...], OMIT_NOTHING] = ()
     """The author's response to every review finding sent back, by originating review (``FindingResponse``)."""
-
-    def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
-        return replace(self, **changes)
 
 
 WORKPIECE = TypeAdapter(Workpiece)

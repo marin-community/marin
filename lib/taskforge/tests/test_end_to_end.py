@@ -644,7 +644,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
 @pytest.mark.parametrize("reason", tuple(StopReason))
 def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason: StopReason) -> None:
     previous = Modify(("prior review",))
-    wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
+    wp = replace(Workpiece(proposal.header.id, proposal), decisions=(previous,))
     session = Conversation((), ())
     stopped, following = advance(wp, Stage.AUTHOR, Stopped(reason, session), config())
     assert following is None
@@ -3367,7 +3367,7 @@ async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators
     assert held_wp.terminal is Terminal.HELD and driver.deferred(held_wp) is enters
     positional = Incomplete(("held",), "incomplete")  # the earlier constructor: the second argument is still the kind
     assert (positional.kind, positional.awaits) == ("incomplete", None)
-    assert not driver.deferred(held_wp.with_(decisions=(*held_wp.decisions, positional)))
+    assert not driver.deferred(replace(held_wp, decisions=(*held_wp.decisions, positional)))
 
 
 def answering(*answers: DecisionModelHealth) -> tuple[list[DecisionModelHealth], Any]:
