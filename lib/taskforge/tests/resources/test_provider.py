@@ -7,6 +7,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from lib.taskforge.tests.resources.inference_fakes import (
     request,
     segment,
 )
+from pydantic import TypeAdapter
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import GradedRollout, ModelRequest, TaskRolloutSpec, TraceMode
@@ -41,6 +43,7 @@ from taskforge.llm.client import (
 )
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ReasoningEffort, RetryPolicy
+from taskforge.model.content_hash import json_value
 from taskforge.model.llm import FinishReason
 from taskforge.model.review import Cause
 from taskforge.policy import load_policy
@@ -415,3 +418,30 @@ async def test_an_injected_provider_cannot_report_the_internal_refusal_marker() 
     marker = ScriptedProvider((segment("12", finish=FinishReason.CONTEXT_EXCEEDED),))
     with pytest.raises(ValueError, match="'context_exceeded' is not a valid FinishReason"):
         await client(marker).complete((), LLMPolicy(100, ReasoningEffort.HIGH), {})
+
+
+def raw(reason: str) -> Segment:
+    """A segment from a provider that reports its finish reason as the wire string, not the annotated member."""
+    return replace(segment("12"), finish_reason=cast(FinishReason, reason))
+
+
+# Review 2026-11-21 (n12 follow-up 4): the guard compared by identity, so a raw "context_exceeded" string passed live
+# while its journal row decodes to the marker member and a cold replay stopped on a context limit.
+async def test_an_injected_provider_cannot_report_the_raw_marker_string() -> None:
+    with pytest.raises(ValueError, match="'context_exceeded' is not a valid FinishReason"):
+        await client(ScriptedProvider((raw("context_exceeded"),))).complete((), LLMPolicy(100, ReasoningEffort.HIGH), {})
+    with pytest.raises(ValueError, match="'no_such_reason' is not a valid FinishReason"):
+        await client(ScriptedProvider((raw("no_such_reason"),))).complete((), LLMPolicy(100, ReasoningEffort.HIGH), {})
+
+
+@pytest.mark.parametrize("reason", [FinishReason.STOP, FinishReason.TOOL_CALLS])
+async def test_a_raw_finish_reason_string_completes_as_its_member_live_and_after_a_round_trip(
+    reason: FinishReason,
+) -> None:
+    policy = LLMPolicy(100, ReasoningEffort.HIGH)
+    live = await client(ScriptedProvider((raw(reason.value),))).complete((), policy, {})
+    typed = await client(ScriptedProvider((segment("12", finish=reason),))).complete((), policy, {})
+    adapter = TypeAdapter(type(live))
+    replayed = adapter.validate_python(json.loads(json.dumps(json_value(live))))  # as a journal row decodes it
+    assert live.finish_reason is reason and replayed.finish_reason is reason
+    assert replace(live, wall_time=0.0, attempts=()) == replace(typed, wall_time=0.0, attempts=())
