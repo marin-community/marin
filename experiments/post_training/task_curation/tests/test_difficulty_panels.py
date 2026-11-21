@@ -82,7 +82,7 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
             ),
         }
     )
-    served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
+    served = {"id": declaration.id, "load_id": "frozen-load", "declaration": declaration.model_dump(mode="json")}
 
     def query(_sql, _params):
         return {"rows": [served]}
@@ -126,3 +126,36 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
     ).model_dump(mode="json")
     (changed,) = catalog.served_catalog("fixture", queues=(), ledger=ledger)
     assert changed.registry_revision != before.registry_revision and not changed.tasks
+
+
+def test_catalog_batches_large_declarations_at_the_original_load(tmp_path, monkeypatch):
+    identities = [
+        {
+            "id": f"fixture:{i}",
+            "load_id": "original",
+            "declaration": {"current_release": None, "pipeline": {}, "actor_census_input": None},
+        }
+        for i in range(9)
+    ]
+    calls = []
+
+    def query(sql, params):
+        if not params:
+            return {"rows": identities}
+        assert params["load_id"] == "original"
+        selected = [value for name, value in params.items() if name.startswith("source_")]
+        if len(selected) > 4:
+            raise AssertionError("Response would exceed the catalog byte limit")
+        calls.append(selected)
+        return {
+            "rows": [
+                {"id": source_id, "declaration": {**identities[0]["declaration"], "payload": "large"}}
+                for source_id in selected
+            ]
+        }
+
+    monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)
+    result = catalog.served_catalog("fixture", queues=(), ledger=str(tmp_path))
+    assert [source.source_id for source in result] == [row["id"] for row in identities]
+    assert len(calls) == 3
+    assert all(json.loads(source.declaration_json)["payload"] == "large" for source in result)

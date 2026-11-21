@@ -15,6 +15,7 @@ from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LE
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, CellState, GapReason, PanelReference
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
+DECLARATION_BATCH_SIZE = 4
 DEFAULT_APPLET = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
 DEFAULT_QUEUES = (
     (
@@ -58,7 +59,9 @@ def served_catalog(
     """Keep every served source; unmatched pins need a fresh frozen task panel."""
     query = applet_query(DEFAULT_MARINA_URL, applet_id, token_provider=token_provider)
     declarations = query(
-        "SELECT id, declaration FROM atlas_sources WHERE load_id = "
+        "SELECT id, load_id, jsonb_build_object('current_release', declaration->'current_release', "
+        "'pipeline', declaration->'pipeline', 'actor_census_input', declaration->'actor_census_input') "
+        "AS declaration FROM atlas_sources WHERE load_id = "
         "(SELECT load_id FROM atlas_current WHERE name = 'latest') ORDER BY id",
         {},
     )["rows"]
@@ -68,6 +71,25 @@ def served_catalog(
             panels[(canonical_source_id(source.source_id), source.registry_revision)] = source
     for source in published_panel_sources(ledger):
         panels.setdefault((canonical_source_id(source.source_id), source.registry_revision), source)
+    missing = [
+        row
+        for row in declarations
+        if (canonical_source_id(row["id"]), declaration_population_revision(row["declaration"])) not in panels
+    ]
+    full_declarations = {}
+    for start in range(0, len(missing), DECLARATION_BATCH_SIZE):
+        batch = missing[start : start + DECLARATION_BATCH_SIZE]
+        parameters = {"load_id": batch[0]["load_id"], **{f"source_{i}": row["id"] for i, row in enumerate(batch)}}
+        placeholders = ",".join(f":source_{i}" for i in range(len(batch)))
+        full = query(
+            "SELECT id, declaration FROM atlas_sources WHERE load_id=:load_id AND id IN ("
+            + placeholders
+            + ") ORDER BY id",
+            parameters,
+        )["rows"]
+        if {row["id"] for row in full} != {row["id"] for row in batch}:
+            raise ValueError("Frozen catalog snapshot lacks a requested source declaration")
+        full_declarations.update({row["id"]: row["declaration"] for row in full})
     sources = []
     for row in declarations:
         declaration = row["declaration"]
@@ -76,7 +98,10 @@ def served_catalog(
         if match is not None:
             sources.append(match)
             continue
-        sources.append(CatalogSource(row["id"], revision, (), "", "", json.dumps(declaration, sort_keys=True)))
+        full = full_declarations[row["id"]]
+        if any(full[key] != declaration[key] for key in declaration):
+            raise ValueError("Source declaration differs from its frozen population identity")
+        sources.append(CatalogSource(row["id"], revision, (), "", "", json.dumps(full, sort_keys=True)))
     if len({canonical_source_id(source.source_id) for source in sources}) != len(sources):
         raise ValueError("Served catalog contains duplicate source identities")
     return sources
