@@ -548,7 +548,8 @@ def run_gate(args: argparse.Namespace) -> None:
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
+    # Iris endpoint namespaces are shared with sibling jobs under the same coordinator.
+    endpoint_name = job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}").to_wire()
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)

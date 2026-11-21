@@ -3,14 +3,21 @@
 
 """Tests for the NCCL transport probe's log parsing and gate verdict."""
 
+import argparse
 import hashlib
 import os
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.types import JobName
 
+from experiments.post_training import nccl_transport_probe as probe
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
     all_to_all_element_count,
@@ -77,6 +84,55 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(True, [["NET/Socket/0"]]) == "socket_transport"
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
+
+
+def test_gate_worker_uses_its_sibling_jobs_own_rendezvous(tmp_path, monkeypatch):
+    coordinator = JobName.root("test-user", "coordinator")
+    first_job, second_job = coordinator.child("first"), coordinator.child("second")
+    addresses = {first_job: "127.0.0.1", second_job: "127.0.0.2"}
+    endpoints = {}
+
+    def register_endpoint(*, name, address, task_attempt, **_kwargs):
+        endpoint_id = task_attempt.task_id.to_wire()
+        endpoints[endpoint_id] = SimpleNamespace(name=name, address=address, endpoint_id=endpoint_id, metadata={})
+        return endpoint_id
+
+    cluster = Mock()
+    cluster.register_endpoint.side_effect = register_endpoint
+    cluster.unregister_endpoint.side_effect = endpoints.pop
+    cluster.list_endpoint_instances.side_effect = lambda name: [item for item in endpoints.values() if item.name == name]
+    client = IrisClient(cluster)
+    args = argparse.Namespace(gate_coverage="first-pair", env_pairs=(), gate_report_prefix=None)
+    groups = {}
+
+    def run_task(job, rank):
+        previous = get_job_info()
+        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host=addresses[job])
+        set_job_info(info)
+        try:
+            with iris_ctx_scope(IrisContext.from_job_info(info, client)):
+                probe.run_gate(args)
+        finally:
+            set_job_info(previous)
+
+    def run_variant(_variant, rank_offset, _local_gpus, _world_size, master_host, port, _log_dir):
+        info = get_job_info()
+        assert info is not None
+        job = info.job_id
+        groups[job, rank_offset] = (master_host, port)
+        if job == first_job:
+            run_task(second_job, 0)
+        elif rank_offset == 0:
+            run_task(second_job, 1)
+        return {"pass": True, "ranks": [{"transports": ["NET/IB/0/GDRDMA"]}]}
+
+    monkeypatch.setenv("GLOO_SOCKET_IFNAME", "lo")
+    monkeypatch.setattr(probe, "RESULT_DIR", tmp_path)
+    monkeypatch.setattr(probe, "run_variant", run_variant)
+    run_task(first_job, 0)
+
+    assert groups[second_job, 1] == groups[second_job, 0]
+    assert groups[second_job, 1] != groups[first_job, 0]
 
 
 def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):
