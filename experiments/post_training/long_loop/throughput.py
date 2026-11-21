@@ -9,7 +9,7 @@ import json
 import logging
 import socket
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import httpx
 from iris.cluster.client.job_info import get_job_info
@@ -39,12 +39,13 @@ def write_json(root: str, name: str, value: dict) -> None:
 
 def workload_requests(workload: dict, seed: int) -> list[LoadRequest]:
     if workload["kind"] == "synthetic":
-        return synthetic_requests(
+        requests = synthetic_requests(
             seed=seed,
             context_repetitions=workload["context_repetitions"],
             output_tokens=workload["output_tokens"],
             count=256,
         )
+        return [replace(request, body={**request.body, **workload["sampling_params"]}) for request in requests]
     if workload["kind"] != "replay":
         raise ValueError(f"Unknown workload kind: {workload['kind']}")
     payload = (StoragePath(workload["uri"])).read_text()
@@ -166,8 +167,10 @@ def run(spec: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True)
+    parser.add_argument("--source-revision", required=True)
     args = parser.parse_args()
     spec = json.loads(StoragePath(args.spec).read_text())
+    spec["source_revision"] = args.source_revision
     run(spec)
 
 

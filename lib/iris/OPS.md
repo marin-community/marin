@@ -185,6 +185,7 @@ exit 137 and the word `ephemeral-storage` alone do not establish a task limit.
 - `--gpu` requests hardware; `--extra gpu` selects Python dependencies.
 - Select accelerators with `--gpu`/`--tpu`; use region/zone only for placement.
   `--reserve` constrains placement to obtained capacity; it does not attach devices.
+- Use repeatable `--exclude-nvlink-domain <domain>` on `job run` to exclude faulty GPU racks. It emits the same hard `nvlink.domain NE` placement constraint as SkyRL's `excluded_nvlink_domains`.
 - A `uv sync` failure in BUILDING is setup failure. Use `--sync-package` to scope
   setup or `--no-sync` for a prepared image; see [Task Setup](AGENTS.md#task-setup).
 - Supply credentials through [secret delivery](docs/secrets.md). CoreWeave tasks

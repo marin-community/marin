@@ -986,3 +986,34 @@ Submit through Iris at production priority, with explicit GPU count, rack
 locality and job deadline. Prepare large model snapshots with a CPU job in the
 same region before reserving accelerators. Record every submission ID and hand
 long jobs to the task's watchdog.
+
+## Bounded Mochi decode arms
+
+The `throughput` worker measures serving without trainer or task-environment work.
+The checked-in `specs/mochi-decode-seqs16.json` control uses the Mochi rollout
+engine's model, TP1/DP12/EP12, BF16, cache, logprob, compiler and CUDA graph settings.
+The `seqs32` spec changes only sequence capacity. Both use a 25-minute server-counter
+window after warm-up, plus retained streaming request timings. The loader streams
+regional weights for startup; throughput excludes loading and request drain.
+
+Submit from the clean, landed long-loop commit:
+
+```bash
+uv run iris --cluster=marin job run \
+  --job-name mochi-throughput-decode-control-20261121a \
+  --target-cluster cw-us-east-08a --priority production \
+  --gpu GB200x4 --replicas 3 --cpu 120 --memory 900GB --disk 2TB \
+  --enable-extra-resources --extra cpu --timeout 10800 --max-retries 0 --no-wait \
+  --exclude-nvlink-domain dh1-r136-us-east-08a \
+  -e NCCL_NET IB -e NCCL_IB_DISABLE 0 -e NCCL_IB_HCA ibp -e NCCL_BUFFSIZE 4194304 \
+  -e PYTORCH_CUDA_ALLOC_CONF expandable_segments:True \
+  -- uv run --no-sync python -m experiments.post_training.long_loop.throughput \
+  --spec experiments/post_training/long_loop/specs/mochi-decode-seqs16.json \
+  --source-revision "$(git rev-parse HEAD)"
+```
+
+Source revision is a separate required argument so a committed spec does not embed
+its own commit hash. Use a fresh job name and output URI for every arm. Stop a
+measured arm with `iris-cancel-own` if it is still running after publishing its
+window. Compare generated tokens/s per engine and GPU, and request decode rate
+at actual concurrency. Do not infer serving capacity from consumed training tokens.
