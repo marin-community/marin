@@ -1,0 +1,7 @@
+{
+  "repo": "open-athena/atlas-image-registry",
+  "revision": "5297e45a094bc983500c1599d2fb7a998b120fb1",
+  "rows": 137800,
+  "summary": "137800 image rows over 215 served sources (0 without a payload pin, 63 whose pin carries no payload, 3488054 tasks without a registry image)",
+  "generated_at": "2026-11-21T12:14:12.310203+00:00"
+}
