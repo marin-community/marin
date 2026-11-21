@@ -55,7 +55,7 @@ from rolloutengine.models import (
 from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol, text_prompt
 from taskcompendium.evaluation.metrics import likelihood_metrics
-from taskcompendium.evaluation.response import completion_text
+from taskcompendium.evaluation.response import completion_text, inline_reasoning_message, split_inline_reasoning
 from taskcompendium.evaluation.selection import (
     SELECTIONS_TABLE,
     EvaluationTokenizer,
@@ -77,8 +77,13 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
+from marin.rollouts.reasoning_format import InlineReasoningFormat
+
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
+EVALUATION_EXECUTION_REVISION = "2026.11.18.1"
+
+
+SKIP_SPECIAL_TOKENS = "skip_special_tokens"
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -250,15 +255,36 @@ async def _saved_model_turn(_request: ModelRequest, turn: ModelTurn) -> ModelTur
 
 
 async def generation_turn(
-    request: ModelRequest, *, model: Model, operation: ChatGeneration | TextGeneration
+    request: ModelRequest,
+    *,
+    model: Model,
+    operation: ChatGeneration | TextGeneration,
+    reasoning_format: InlineReasoningFormat | None,
 ) -> ModelTurn:
-    """Keep raw channels and wire messages while selecting the source's grading text."""
+    """Keep raw channels and wire messages while selecting the source's grading text.
+
+    A chat reply that carries its reasoning inline, because no server reasoning parser split it, has
+    that reasoning moved to the reasoning channel before selection.
+    """
     if isinstance(operation, ChatGeneration):
         request = dataclasses.replace(request, messages=tuple(wire_messages(request.messages, operation)))
     turn = await model(request)
     raw_message = dict(turn.message)
     if reasoning := turn.metadata.get("reasoning"):
         raw_message["reasoning"] = reasoning
+    elif (
+        isinstance(operation, ChatGeneration)
+        and reasoning_format is not None
+        and not raw_message.get("reasoning_content")
+    ):
+        template_kwargs = request.options.get("extra_body", {}).get("chat_template_kwargs", {})
+        split = split_inline_reasoning(
+            raw_message["content"],
+            reasoning_format.delimiters,
+            prompt_opens_span=reasoning_format.prompt_opens_span(request.messages, template_kwargs),
+        )
+        if split is not None:
+            raw_message = inline_reasoning_message(raw_message, split, reasoning_format.delimiters)
     selection = operation.response_selection if isinstance(operation, ChatGeneration) else "combine"
     content = completion_text(raw_message, turn.stop_reason, selection)
     return dataclasses.replace(
@@ -419,10 +445,16 @@ async def _score_generation(
     machine_factories: Mapping[str, MachineFactory],
     judge_connection: JudgeConnection | None,
     retry_turn: ModelTurn | None,
+    reasoning_format: InlineReasoningFormat | None,
 ) -> Outcome:
     task = case.task
     options = generation_options(protocol, config, attempt.trial)
     options["max_tokens"] = max_tokens
+    operation = case.item.operation
+    assert isinstance(operation, ChatGeneration | TextGeneration)
+    if isinstance(operation, ChatGeneration) and reasoning_format is not None and reasoning_format.special:
+        # Special-token delimiters reach the reply text only when the server keeps special tokens.
+        options["extra_body"] = {SKIP_SPECIAL_TOKENS: False, **options["extra_body"]}
     engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
     verifier = config.verifier_machine
     if (
@@ -447,13 +479,10 @@ async def _score_generation(
         limits=config.limits,
         trace=TraceMode.MESSAGES,
     )
-    operation = case.item.operation
-    assert isinstance(operation, ChatGeneration | TextGeneration)
-
     policy_model = (
         partial(_saved_model_turn, turn=retry_turn)
         if retry_turn is not None
-        else partial(generation_turn, model=model, operation=operation)
+        else partial(generation_turn, model=model, operation=operation, reasoning_format=reasoning_format)
     )
 
     failure_evidence = None
@@ -549,6 +578,7 @@ async def run_evaluation(
     *,
     machine_factories: Mapping[str, MachineFactory],
     tokenizer: EvaluationTokenizer | None = None,
+    reasoning_format: InlineReasoningFormat | None = None,
     judge_connection: JudgeConnection | None = None,
     completion_model: Model | None = None,
     likelihood: LikelihoodScorer | None = None,
@@ -558,7 +588,17 @@ async def run_evaluation(
     Every physical attempt has an append-only start and finish. Its sample, terminal state and raw
     evidence commit together. Infrastructure failures remain retryable on a later invocation with the
     same run identity and seed. Summaries belong to the consumer of these raw results.
+    ``reasoning_format`` describes the served model's inline reasoning delimiters, if it has any.
     """
+    if (
+        reasoning_format is not None
+        and reasoning_format.special
+        and config.generation_extra_body.get(SKIP_SPECIAL_TOKENS, False)
+    ):
+        raise ValueError(
+            f"{config.model.name} marks reasoning with special tokens {reasoning_format.delimiters}; "
+            f"{SKIP_SPECIAL_TOKENS}=true would glue its reasoning to the answer"
+        )
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
     if config.judge is not None:
@@ -724,6 +764,7 @@ async def run_evaluation(
                     machine_factories=machine_factories,
                     judge_connection=judge_connection,
                     retry_turn=retry_turn,
+                    reasoning_format=reasoning_format,
                 )
                 failures += outcome is Outcome.INFRA_ERROR
 

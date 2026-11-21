@@ -145,11 +145,22 @@ served generation configuration apply. Record those serving defaults with the
 model identity.
 
 Set `generation_extra_body` in the run config for endpoint-specific request
-options. For Grug or Snowball served without a reasoning parser, use
-`"generation_extra_body": {"skip_special_tokens": false}` to keep
-`<|end_think|>` in the response. The NUPA scorer needs that boundary to exclude
-reasoning. The option is recorded in the run descriptor; changing it requires a
+options. The option is recorded in the run descriptor; changing it requires a
 new result root.
+
+When the model tokenizer's chat template marks reasoning with delimiters such
+as `<|start_think|>`/`<|end_think|>` or `<think>`/`</think>`, the worker splits
+reasoning that a chat reply carries inline, because no server reasoning parser
+ran, from its final answer. Everything through the last closing delimiter is
+reasoning, even without an opener. A reply that leaves a span open, or that has
+no delimiter when the rendered prompt ends inside a span, is unfinished
+reasoning with an empty answer. For special-token delimiters, chat requests set
+`skip_special_tokens: false` so the delimiters reach the reply; a run that sets
+it to `true` fails before inference. The raw attempt message keeps the
+reasoning in `reasoning_content`. `final_only` and `final_or_complete_*`
+selections grade the split answer; `combine` renders the reasoning back as one
+well-formed span before the answer, so scorers such as NUPA's can still exclude
+it.
 
 Omit `--local` to submit a disposable privileged Iris CPU worker. Shellbox's
 bubblewrap backend needs permission to create namespaces; local execution needs
