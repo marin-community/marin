@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from loguru import logger
 from rigging.task_errors import ErrorCategory, error_category, errors_by_category, known_error_types
+from skyrl_train.task_errors import ERROR_CATEGORIES
 
 from skyrl_train.error_treatment import ErrorTreatment
 
@@ -64,9 +65,9 @@ def retry_excluded_exception_types(
     error_handling: ErrorHandlingConfig,
 ) -> frozenset[str]:
     """Return retry exclusions with every pass-through classification made terminal."""
-    classification_candidates = set(known_error_types())
+    classification_candidates = set(known_error_types(categories=ERROR_CATEGORIES))
     if error_handling.default_error_treatment is not ErrorTreatment.PASSTHROUGH:
-        classification_candidates.difference_update(errors_by_category(ErrorCategory.UNKNOWN))
+        classification_candidates.difference_update(errors_by_category(ErrorCategory.UNKNOWN, categories=ERROR_CATEGORIES))
     classification_candidates.update(error_handling.passthrough_exceptions)
     classification_candidates.update(error_handling.mask_exceptions)
     classification_candidates.update(error_handling.zero_exceptions)
@@ -97,7 +98,7 @@ def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) ->
         if exception_type in exception_types:
             return treatment
 
-    category = error_category(exception_type)
+    category = error_category(exception_type, categories=ERROR_CATEGORIES)
     if category is not ErrorCategory.UNKNOWN:
         return _CATEGORY_TREATMENTS[category]
 
