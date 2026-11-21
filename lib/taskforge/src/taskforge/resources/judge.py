@@ -14,7 +14,7 @@ from verifyit.modes.grade_judge import JudgeCompletion, JudgeRequest
 
 from taskforge.effects.context import Context
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
-from taskforge.model.llm import Completion, FinishReason, Message, Role
+from taskforge.model.llm import Completion, Message, Role
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 from taskforge.resources.rollouts import Engine
 
@@ -66,8 +66,7 @@ class JudgeEngine:
                 raise asyncio.CancelledError from error
             except Exception as error:
                 raise _EffectFailure(error) from error
-            truncated = result.finish_reason is not FinishReason.STOP
-            return JudgeCompletion(result.content, truncated, result.usage.completion_tokens)
+            return JudgeCompletion(result.content, result.finish_reason.value, result.usage.completion_tokens)
 
         spec = spec.model_copy(update={"judge_connection": replace(connection, callback=judge)})
         try:

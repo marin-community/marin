@@ -17,7 +17,7 @@ from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ScriptGrader
-from verifyit.spec import JudgeSpec
+from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
@@ -88,6 +88,66 @@ OUTCOMES = {
 N5_JUDGED = Path(__file__).parents[1] / "fixtures" / "n5-judged-grades.jsonl.gz"
 
 
+def tool(text: str) -> Completion:
+    return Completion(text, finish_reason=FinishReason.TOOL_CALLS, usage=Usage(10, 4))
+
+
+RETRY = {"max_completion_tokens": 16, "incomplete_retry_tokens": 64}
+NO_TEXT = "judge completion is incomplete or has no text"
+# Review 2026-11-21: n6 read every finish but stop as truncation. Each case's judge replies, and the status, reward,
+# judge calls and error n5 (9eb1a96371) produced from them; N5_FINISHES journals those calls, answering with the name.
+FINISHES: dict[str, tuple[JudgeSpec, tuple[Completion, ...], tuple[Outcome, float | None, int, str | None]]] = {
+    "reference-tool-call": (
+        JudgeSpec(references=("12",), exact_gate=False),
+        (tool("SCORE: 1"),),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "reference-tool-call-then-answer": (
+        JudgeSpec(references=("12",), exact_gate=False, **RETRY),
+        (tool("SCORE: 1"), done("SCORE: 1")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "checklist-tool-call-then-answer": (
+        JudgeSpec(rubric="checklist", criteria=("Correct", "Terse"), exact_gate=False, **RETRY),
+        (tool("SCORE: 1"), done("SCORE: 1"), done("SCORE: 0")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "labels-tool-call": (labels(), (tool("PASS"),), (Outcome.INFRA_ERROR, None, 1, NO_TEXT)),
+    "labels-tool-call-then-answer": (
+        labels(**RETRY),
+        (tool("PASS"), done("PASS")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "labels-abort-then-answer": (
+        labels(**RETRY),
+        (Completion("PASS", finish_reason=FinishReason.ABORT), done("PASS")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+    "labels-length-then-answer": (labels(**RETRY), (CUT, done("PASS")), (Outcome.GRADED, 1.0, 2, None)),
+    "content-tool-call": (
+        labels(completion_policy=JudgeCompletionPolicy.CONTENT, **RETRY),
+        (tool("PASS"), done("FAIL")),
+        (Outcome.GRADED, 1.0, 1, None),
+    ),
+    "content-length-label": (
+        labels(completion_policy=JudgeCompletionPolicy.CONTENT, **RETRY),
+        (Completion("PASS", finish_reason=FinishReason.LENGTH, usage=Usage(10, 16)), done("FAIL")),
+        (Outcome.GRADED, 1.0, 1, None),
+    ),
+    "responses-tool-call-then-answer": (
+        labels(api="responses", **RETRY),
+        (tool("PASS"), done("FAIL")),
+        (Outcome.GRADED, 0.0, 2, None),
+    ),
+    "pairwise-tool-call-then-answer": (
+        replace(JUDGED["pairwise"][0], **RETRY),
+        (tool("[[B>A]]"), done("[[B>A]]"), done("[[A=B]]")),
+        (Outcome.INFRA_ERROR, None, 1, NO_TEXT),
+    ),
+}
+N5_FINISHES = Path(__file__).parents[1] / "fixtures" / "n5-judge-finishes.jsonl.gz"
+
+
 def judged_spec(judge: JudgeSpec) -> TaskRolloutSpec:
     policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"})
     task = arithmetic_task(grader=verifyit_package(judge).grader)
@@ -95,9 +155,14 @@ def judged_spec(judge: JudgeSpec) -> TaskRolloutSpec:
 
 
 async def grade_judged(
-    judges: Sequence[JudgeSpec], client: InferenceClient, history: Sequence[Record] = (), *, fresh: bool = False
+    judges: Sequence[JudgeSpec],
+    client: InferenceClient,
+    history: Sequence[Record] = (),
+    *,
+    fresh: bool = False,
+    answers: Sequence[str] = (),
 ) -> tuple[list[GradeResult], EventLog]:
-    """Grade "Twelve" under each judge through the installed judge role, replaying ``history``."""
+    """Grade each answer (default "Twelve") under its judge through the installed judge role, replaying ``history``."""
     log = EventLog(replay_from=history)
     ctx = Context(log=log)
     bundle = replace(
@@ -107,8 +172,10 @@ async def grade_judged(
     )
     install(ctx, bundle)
     # A fresh verifier changes the outer grade identity, so only the judge's inference effects can replay.
+    answers = answers or ["Twelve"] * len(judges)
     results = [
-        await ctx.emit(GradeCandidate(judged_spec(judge), Candidate("Twelve"), fresh_verifier=fresh)) for judge in judges
+        await ctx.emit(GradeCandidate(judged_spec(judge), Candidate(answer), fresh_verifier=fresh))
+        for judge, answer in zip(judges, answers, strict=True)
     ]
     await ctx.drain()
     return results, log
@@ -219,6 +286,27 @@ async def test_judge_samples_recorded_through_the_n5_transport_shim_replay_with_
     assert not client.requests
     replayed = [event for event in judge_inference(log) if event.replayed]
     assert len(replayed) == sum(len(script) for _, script in JUDGED.values())
+
+
+@pytest.mark.parametrize("case", FINISHES)
+async def test_a_judge_finish_grades_and_spends_calls_as_it_did_at_n5(case: str) -> None:
+    judge, script, expected = FINISHES[case]
+    client = FakeInference(script)
+    [result], _ = await grade_judged((judge,), client, answers=(f"Twelve ({case})",))
+    assert (result.status, result.reward, len(client.requests), result.error) == expected
+
+
+async def test_judge_finishes_recorded_at_n5_replay_their_n5_grades_with_zero_calls() -> None:
+    recorded = decode(gzip.decompress(N5_FINISHES.read_bytes()))
+    client = FakeInference((), identity="judge")
+    judges, _, expected = zip(*FINISHES.values(), strict=True)
+    answers = [f"Twelve ({case})" for case in FINISHES]
+    results, log = await grade_judged(judges, client, recorded, fresh=True, answers=answers)
+    assert [(result.status, result.reward, result.error) for result in results] == [
+        (status, reward, error) for status, reward, _, error in expected
+    ]
+    assert not client.requests
+    assert sum(event.replayed for event in judge_inference(log)) == sum(calls for _, _, calls, _ in expected)
 
 
 @pytest.mark.parametrize("script", [False, True])
