@@ -30,6 +30,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import json_value
 from taskforge.model.llm import Message, Role
 from taskforge.model.stage import Stage
+from taskforge.resources.decision_model import DecisionModelRead
 from taskforge.resources.env import ReadFile, RunCommand, WriteFile, WriteFiles
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import NewId
@@ -38,6 +39,7 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.resources.web import WebFetch, WebSearch
 
 KINDS: dict[str, type[Event[object]]] = {
+    "decision_model.read": DecisionModelRead,
     "effect.failed": Failed,
     "effect.note": Note,
     "effect.resolved": Resolved,

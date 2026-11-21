@@ -91,4 +91,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
                 "Grader checks must be a list of {name: string, passed: boolean, weight: number}; "
                 f"fix the grader output: {error}"
             )
-        return ToolResult(pretty_json({"reward": result.reward, "status": result.status, "grader_checks": checks}))
+        shown = {"reward": result.reward, "status": result.status, "grader_checks": checks}
+        if read := (result.detail or {}).get("decision_model"):  # the level an author sets the cut from
+            shown["decision_model"] = read
+        return ToolResult(pretty_json(shown))

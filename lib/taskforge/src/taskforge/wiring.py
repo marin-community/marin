@@ -8,7 +8,7 @@ import math
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from functools import partial
 from pathlib import PurePosixPath
 from string import Formatter
@@ -63,6 +63,15 @@ from taskforge.policy import Policy, load_policy, resolution_lines
 from taskforge.policy import sampling as policy_sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
+from taskforge.resources.decision_model import (
+    ClefReader,
+    DecisionModel,
+    DecisionModelEngine,
+    DecisionModelPolicy,
+    DecisionModelRead,
+    DecisionModelReader,
+    read_level,
+)
 from taskforge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.ids import Ids, NewId, new_id
@@ -146,6 +155,14 @@ def install(ctx: Context, resources: Resources) -> None:
             engine=JudgeEngine(grading.engine, ctx, judge),
             fresh_engine=JudgeEngine(grading.fresh_engine, ctx, judge) if grading.fresh_engine else None,
         )
+    if (decision_model := resources.decision_model) is not None:
+        rollouts = replace(rollouts, engine=DecisionModelEngine(rollouts.engine, ctx))
+        grading = replace(
+            grading,
+            engine=DecisionModelEngine(grading.engine, ctx),
+            fresh_engine=DecisionModelEngine(grading.fresh_engine, ctx) if grading.fresh_engine else None,
+        )
+        ctx.handle(DecisionModelRead, partial(read_level, notify=ctx.notify), decision_model)
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.notify
@@ -204,18 +221,40 @@ def retry_policy(policy: Policy, role: str) -> RetryPolicy:
     )
 
 
+def decision_model_policy(policy: Policy) -> DecisionModelPolicy | None:
+    """The ``decision_model.*`` settings, or None while ``decision_model.model`` is empty."""
+    if not (model := policy.setting("decision_model.model", str)):
+        return None
+    names = [item.name for item in fields(DecisionModelPolicy)[2:]]
+    concurrency = policy.setting("decision_model.concurrency", int)
+    timings = [policy.setting(f"decision_model.{name}", float) for name in names]
+    named = zip(("concurrency", *names), (concurrency, *timings), strict=True)
+    if bad := [f"decision_model.{name}" for name, value in named if not 0 < value < math.inf]:
+        raise ValueError(f"{', '.join(bad)} must be positive and finite")
+    settings = DecisionModelPolicy(model, concurrency, *timings)
+    if settings.unavailable_wait + settings.request_timeout >= policy.setting("solver.turn_timeout", float):
+        # A decision-model grade has the solver turn as its verifier deadline: the typed outage must come first.
+        raise ValueError("decision_model.unavailable_wait plus request_timeout must end before solver.turn_timeout")
+    return settings
+
+
 def build_resources(
     policy: Policy,
     providers: Mapping[str, Provider],
     factories: Mapping[str, MachineFactory],
     web: WebClient,
     profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES,
+    decision_model: DecisionModelReader | None = None,
 ) -> Resources:
     """Executors for ``policy``: each role's model through the one model client, over its ``providers`` entry.
 
     ``profiles`` overrides the model profile per role; a role without one uses ``GLM_5_3``. Each provider must serve
-    its role's declared ``<role>.model``, the model that replay keys record.
+    its role's declared ``<role>.model``, the model that replay keys record. ``decision_model`` reads for a configured
+    ``decision_model.model`` and only then.
     """
+    decided = decision_model_policy(policy)
+    if (decided is None) != (decision_model is None):
+        raise ValueError("A decision-model reader is supplied exactly when policy decision_model.model is set")
     for role, provider in providers.items():
         if provider.model != (declared := policy.setting(f"{role}.model", str)):
             raise ValueError(f"{role} provider serves {provider.model!r}, policy declares {role}.model={declared!r}")
@@ -237,21 +276,23 @@ def build_resources(
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
     profile = solver.profile.replay_identity()
     judge = clients["judge"].profile.replay_identity() if "judge" in clients else None
-    judged = () if judge is None else (("judge", judge),)
+    graders = () if judge is None else (("judge", judge),)
+    graders += () if decided is None else (("decision_model", decided.model),)
     return Resources(
         Environments(factories, settings),
         inference["author"],
         RolloutResource(
             verifiers.rollouts,
             partial(solver_turn, solver, sampling),
-            digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + judged),
+            digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + graders),
         ),
-        GradingResource(verifiers.grades, digest((execution, *judged)) if judged else execution, base_engine),
+        GradingResource(verifiers.grades, digest((execution, *graders)) if graders else execution, base_engine),
         Ids(),
         factories,
         web,
         inference,
         verifiers,
+        None if decision_model is None or decided is None else DecisionModel(decision_model, decided),
     )
 
 
@@ -362,11 +403,13 @@ async def runtime(
     *,
     providers: Mapping[str, Provider] = NO_PROVIDERS,
     profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES,
+    decision_model: DecisionModelReader | None = None,
 ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
     """The process-boundary bindings for ``policy``.
 
     Each role reaches ``<role>.model`` through a ``GlmProvider`` on ``source`` unless ``providers`` names one for it,
-    and uses ``GLM_5_3`` unless ``profiles`` does. The caller owns the providers it passes.
+    and uses ``GLM_5_3`` unless ``profiles`` does. A configured ``decision_model.model`` reads through
+    ``decision_model``, by default Clef on ``source`` at ``decision_model.route``. The caller owns what it passes.
     """
     policy = provider_policy(policy)
     declared = load_policy(DEFAULTS_DIR)
@@ -404,4 +447,10 @@ async def runtime(
             httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60)
         )
         web = ParallelWeb(http)
-        yield build_config(policy, factories, profiles), build_resources(policy, resolved, factories, web, profiles)
+        if decision_model is None and decision_model_policy(policy) is not None:
+            route = policy.setting("decision_model.route", str)
+            route_source = replace(source, model=route) if isinstance(source, RelayEndpoint) else source
+            logging.info("MODEL role=decision_model route=%s endpoint=%r", route, route_source)
+            decision_model = ClefReader(route_source, await owned.enter_async_context(httpx.AsyncClient()))
+        resources = build_resources(policy, resolved, factories, web, profiles, decision_model)
+        yield build_config(policy, factories, profiles), resources

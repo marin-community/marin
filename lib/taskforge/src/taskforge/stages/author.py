@@ -5,6 +5,7 @@
 
 import json
 from pathlib import PurePosixPath
+from typing import Any
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
@@ -22,10 +23,26 @@ from taskforge.policy import GRADER_BASE_IMAGE, Policy
 from taskforge.resources.bundle import Resources
 
 
+def task_schema(decision_model: bool) -> dict[str, Any]:
+    """TaskSpec's schema; without a configured decision model, without the grader kind that needs one.
+
+    The schema is part of every author request, so a run without a decision model keeps the bytes it had before the
+    kind existed, and its recorded author calls replay.
+    """
+    schema = TaskSpec.model_json_schema()
+    if not decision_model:
+        del schema["$defs"]["DecisionModelGrader"]
+        grader = schema["properties"]["grader"]
+        del grader["discriminator"]["mapping"]["decision_model"]
+        grader["oneOf"].remove({"$ref": "#/$defs/DecisionModelGrader"})
+    return schema
+
+
 def system_prompt(policy: Policy) -> str:
     """Render the author reference from the current task and control schemas."""
+    decision_model = bool(policy.setting("decision_model.model", str))
     reference = json.dumps(
-        {"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()},
+        {"TaskSpec": task_schema(decision_model), "Control": CONTROL.json_schema()},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -42,6 +59,7 @@ def system_prompt(policy: Policy) -> str:
     )
     return policy.prompt("author.system").render(
         reference=reference,
+        decision_model=f"\n\n{policy.prompt('author.decision_model').template}" if decision_model else "",
         environment=environment,
         author_image=image or "none (ShellSim)",
         workdir=policy.setting("author.workdir", str),

@@ -526,17 +526,26 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
     assert adversary.requests[0].conversation[1].content.startswith("Review strategy: adversary\n\n")
     assert [result.name for result in workpiece.evidence[-1].adversary] == ["adversary"]
     was = next(r.event.config_digest for r in recorded if isinstance(r.event, StageCompleted))
-    assert was == digest(Policy({key: value for key, value in policy.entries.items() if key not in N9_SETTINGS}))
+    entries = {key: value for key, value in policy.entries.items() if key not in LATER_SETTINGS}
+    template = policy.prompt("author.system").template
+    assert template.count("{decision_model}") == 1  # renders nothing without a configured decision model
+    entries["author.system"] = Prompt(template.replace("{decision_model}", ""))
+    assert was == digest(Policy(entries))
 
 
-N9_SETTINGS = frozenset(
+LATER_SETTINGS = frozenset(
     {
         "budget.max_missing_trials",
         "solver.concurrency",
         "solver.heartbeat_interval",
+        "author.decision_model",
+        *(f"decision_model.{name}" for name in ("model", "route", "concurrency", "request_timeout")),
+        *(f"decision_model.{name}" for name in ("unavailable_wait", "backoff_initial", "backoff_maximum")),
+        "decision_model.retry_interval",
     }
 )
-"""The settings the default policy gained after this fixture was recorded; none enters a replay key."""
+"""The entries the default policy gained after this fixture was recorded (n9, then n10); none enters a replay key
+while ``decision_model.model`` is empty."""
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record

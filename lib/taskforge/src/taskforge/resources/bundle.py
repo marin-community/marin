@@ -9,6 +9,7 @@ from types import MappingProxyType
 
 from shellbox.machine import MachineFactory
 
+from taskforge.resources.decision_model import DecisionModel
 from taskforge.resources.env import EnvFactory
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
@@ -30,6 +31,7 @@ class Resources:
     role_inference: Mapping[str, InferenceClient] = field(default_factory=dict)
 
     verifiers: RoundVerifier | None = None
+    decision_model: DecisionModel | None = None
 
     async def close_round(self) -> None:
         if self.verifiers is not None:

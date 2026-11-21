@@ -22,6 +22,7 @@ from taskforge.effects.issues import Hold
 from taskforge.effects.log import Record
 from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
+from taskforge.resources.decision_model import DecisionModelRead
 from taskforge.resources.rollouts import HELD
 
 # One review disposition per cause; solver generation limits are handled as failed trials. GRADER_INFRA
@@ -104,6 +105,8 @@ def replayable_grade(event: Resolved[object]) -> bool:
     """Resume successful evidence and slot holds, but reevaluate unavailable infrastructure."""
     value = event.value
     grade = value.grade if isinstance(value, GradedRollout) else value
+    if isinstance(event.request, DecisionModelRead):  # an off-scale level is read again, never replayed
+        return isinstance(value, int | float) and 0 <= value <= len(event.request.request.levels) - 1
     unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
     return held(event) or not unavailable
 

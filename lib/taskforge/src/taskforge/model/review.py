@@ -92,6 +92,8 @@ class Retry:
 @dataclass(frozen=True, slots=True)
 class Incomplete:
     reasons: tuple[str, ...]
+    awaits: Annotated[str | None, OMIT_DEFAULT] = None
+    """The service whose recovery resumes this hold without a person; None holds for review."""
     kind: Literal["incomplete"] = "incomplete"
 
 

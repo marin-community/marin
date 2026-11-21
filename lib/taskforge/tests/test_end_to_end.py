@@ -58,6 +58,7 @@ from taskforge.effects.events import (
 )
 from taskforge.effects.issues import (
     CorruptJournal,
+    DecisionModelUnavailable,
     Hold,
     LogFailure,
     OutputBudgetExhausted,
@@ -2073,7 +2074,8 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert VALIDATION_RESULT.dump_json(VALIDATION_RESULT.validate_json(written)) == written
     decisions = (Accept(BandOutcome.IN_BAND), Modify(("harder",), BandOutcome.TOO_EASY), Incomplete(("held",)))
     snapshot = json.loads(WORKPIECE.dump_json(Workpiece("w", proposal, decisions=decisions)))
-    assert "fallback" not in snapshot and not {"restore", "fallback"} & {key for d in snapshot["decisions"] for key in d}
+    keys = {key for decision in snapshot["decisions"] for key in decision}
+    assert "fallback" not in snapshot and not {"restore", "fallback", "awaits"} & keys
 
 
 # Review 2026-11-21: a refused foreign restore digest published a bug-class hold whose snapshot had neither the
@@ -3003,3 +3005,30 @@ async def test_hydration_failure_on_a_caller_path_stays_the_callers_and_repeats(
         assert "Unreproducible" not in str(workpiece.decisions[-1]) and executions(attempt_resources) == (0, 0)
         assert not [r for r in history(destination) if isinstance(r.event, Failed)]
         driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+
+
+OUTAGE = DecisionModelUnavailable("clef@fixture-1 answered no read for 900s; last HTTP 503: clef_unavailable")
+
+
+# A decision-model outage is no case for a person: the published hold names what it awaits, and the next launch
+# resumes it without --resume-held, paying only what the held launch had not bought. Any other hold stays put.
+@pytest.mark.parametrize("hold, resumes", [(OUTAGE, True), (Hold("relay unavailable"), False)], ids=["outage", "hold"])
+async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_unasked(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, hold: Hold, resumes: bool
+) -> None:
+    first = replace(resources(Envs(), ()), inference=FakeInference((*script()[:2], hold)))
+    resumed = replace(resources(Envs(), ()), inference=ServedOnce(script()[2:], ()))
+    serve(monkeypatch, first, resumed)
+    assert await driver.one(driver_args) == (driver.DEFERRED if resumes else 0)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    held = published_workpiece(destination)
+    assert held.terminal is Terminal.HELD and isinstance(last := held.decisions[-1], Incomplete)
+    assert last.awaits == ("decision_model" if resumes else None)
+    assert isinstance(first.inference, FakeInference) and isinstance(resumed.inference, ServedOnce)
+    resumed.inference.served = {event_digest(request) for request in first.inference.requests[:-1]}
+    assert await driver.one(driver_args) == 0  # driver_args.resume_held stays False
+    if not resumes:
+        assert published_workpiece(destination) == held and not resumed.inference.requests
+        return
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2

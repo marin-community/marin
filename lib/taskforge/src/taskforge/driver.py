@@ -54,6 +54,14 @@ OUTCOMES = {
     CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
 }
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
+DEFERRED = 75
+"""``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL)."""
+
+
+def deferred(wp: Workpiece | None) -> bool:
+    """Whether ``wp`` is held only until a service recovers, so that a launch resumes it without ``--resume-held``."""
+    last = wp.decisions[-1] if wp is not None and wp.decisions else None
+    return wp is not None and wp.terminal is Terminal.HELD and isinstance(last, Incomplete) and last.awaits is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,21 +109,22 @@ def run_policy(path: str) -> Policy:
 
 
 def eligible(proposal: TaskProposal, policy: Policy) -> bool:
-    for field, key in (("environment", "proposals.environments"), ("verification", "proposals.verifications")):
-        value = getattr(proposal.header, field).value
+    for name, key in (("environment", "proposals.environments"), ("verification", "proposals.verifications")):
+        value = getattr(proposal.header, name).value
         if value not in policy.setting(key, tuple):
-            logging.info("SKIP %s: %s=%s", proposal.header.id, field, value)
+            logging.info("SKIP %s: %s=%s", proposal.header.id, name, value)
             return False
     return True
 
 
-async def one(args: argparse.Namespace) -> None:
+async def one(args: argparse.Namespace) -> int:
+    """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, else 0."""
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
     policy = run_policy(args.policy)
     if not eligible(proposal, policy):
-        return
+        return 0
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -123,12 +132,14 @@ async def one(args: argparse.Namespace) -> None:
     # Another journal format or undecodable history raises before anything is claimed or published.
     journal = await asyncio.to_thread(read_journal, destination)
     status = journal.head.status if journal else Status()
-    if status.finished or (status.terminal is Terminal.HELD and not args.resume_held):
+    held = status.terminal is Terminal.HELD
+    resume = args.resume_held or (held and journal is not None and deferred(await asyncio.to_thread(journal.workpiece)))
+    if status.finished or (held and not resume):
         logging.info("SKIP %s: published terminal=%s", identity, status.terminal)
-        return
+        return 0
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, resume))
     latest = [Workpiece(proposal.header.id, proposal)]
     wp = latest[0]
     try:
@@ -168,6 +179,7 @@ async def one(args: argparse.Namespace) -> None:
             status = fold(tuple(record.event for record in log.records))
             matched = wp.terminal is not None and (status.round, status.terminal) == (wp.round, wp.terminal)
             await checkpoints.finish(status if matched else Status(), wp)
+    return DEFERRED if deferred(wp) else 0
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -269,12 +281,12 @@ def main() -> None:
         asyncio.run(run(args))
     else:
         try:
-            asyncio.run(one(args))
+            code = asyncio.run(one(args))
         except Exception as error:
             if (code := exit_code(error)) is None:
                 raise
             logging.exception("Taskforge workpiece published nothing: %s", OUTCOMES[code][0])
-            sys.exit(code)
+        sys.exit(code)
 
 
 if __name__ == "__main__":

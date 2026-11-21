@@ -24,7 +24,14 @@ from shellbox.machine import (
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.effects.issues import (
+    DecisionModelUnavailable,
+    Hold,
+    OutputBudgetExhausted,
+    Restart,
+    Transient,
+    describe_exception,
+)
 from taskforge.llm.client import ModelRequestRejected
 from taskforge.resources.execution import Notify, retry_effect
 
@@ -42,9 +49,9 @@ class RequestRejected(Hold):
 
 
 SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)
-"""The holds that mean only "this slot produced no evidence": the batch records them as the slot's result. This is
-the one place to add a typed model-outage hold. Every other hold (``Unreproducible``, host refusals, anything
-unknown) holds the workpiece."""
+"""The holds that mean only "this slot produced no evidence": the batch records them as the slot's result. Every
+other hold (``Unreproducible``, host refusals, anything unknown) holds the workpiece. ``DecisionModelUnavailable`` is
+deliberately absent: a recorded result would be missing evidence, while an outage defers the slot unrecorded."""
 HELD = "held"
 """The stop reason of a slot whose rollout ended in a slot-local hold; its grade carries the reason."""
 
@@ -53,8 +60,9 @@ class Engine(Protocol):
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout: ...
 
 
-def interruption(error: RolloutInterrupted) -> Transient | Restart | RequestRejected:
-    """Retry startup and confirmed pre-command websocket setup failures; hold on a request the model server rejects."""
+def interruption(error: RolloutInterrupted) -> Transient | Restart | Hold:
+    """Retry startup and confirmed pre-command websocket setup failures; hold on a request the model server rejects
+    and on a decision-model outage."""
     chain: list[BaseException] = [error]
     while (cause := chain[-1].__cause__) is not None and all(cause is not seen for seen in chain):
         chain.append(cause)
@@ -64,6 +72,8 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart | RequestReje
     def caused(*kinds: type[BaseException]) -> bool:
         return any(isinstance(cause, kinds) for cause in chain)
 
+    if outage := next((cause for cause in chain if isinstance(cause, DecisionModelUnavailable)), None):
+        return DecisionModelUnavailable(str(outage))  # a fresh hold: chaining the original would make a cycle
     if rejected := next((cause for cause in chain if isinstance(cause, ModelRequestRejected)), None):
         return RequestRejected(str(rejected))  # no evidence about the model
     if error.operation is RolloutOperation.ADVANCE and caused(MachineOutputLimitExceeded):

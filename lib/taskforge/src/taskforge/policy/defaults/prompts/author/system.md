@@ -40,4 +40,4 @@ The `TaskSpec` and `Control` entries below are generated from the installed mode
 
 ```json
 {reference}
-```
+```{decision_model}
