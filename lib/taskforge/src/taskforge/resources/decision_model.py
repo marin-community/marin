@@ -23,7 +23,7 @@ from taskcompendium.decision_model import DecisionModelRequest
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
-from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, GlmEndpoint, retry_after
+from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
 from taskforge.resources.rollouts import Engine
 
@@ -69,24 +69,24 @@ class ClefReader(DecisionModelReader):
     source: EndpointSource
     http: httpx.AsyncClient
 
-    async def _endpoint(self) -> GlmEndpoint:
+    async def _send(self, method: str, route: str, body: object = None) -> httpx.Response:
+        """The authorized request to ``route``; an unresolvable or unreachable host is down. The caller bounds it."""
         try:
-            return await asyncio.to_thread(self.source.current)
+            endpoint = await asyncio.to_thread(self.source.current)
+            url, headers = f"{endpoint.base_url}{route}", {"Authorization": f"Bearer {endpoint.token}"}
+            return await self.http.request(method, url, headers=headers, json=body, timeout=None)
         except EndpointUnavailable as error:
             raise DecisionModelDown(str(error)) from error
+        except httpx.TransportError as error:
+            raise DecisionModelDown(f"unreachable: {type(error).__name__}") from error
 
     @override
     async def read(self, request: DecisionModelRequest) -> float:
-        endpoint = await self._endpoint()
         state = {"task_deliverable": request.deliverable, "rubric": request.rubric}
         state |= {"y_reference_answer": request.reference, "z_candidate_answer": request.candidate}
         question = {"type": "score", "instructions": request.question, "criteria": list(request.levels)}
         body = {"model": CLEF_MODEL, "state": state, "questions": {CLEF_QUESTION: question}}
-        headers = {"Authorization": f"Bearer {endpoint.token}"}
-        try:  # the resource's request deadline bounds the call
-            response = await self.http.post(f"{endpoint.base_url}/systemone", json=body, headers=headers, timeout=None)
-        except httpx.TransportError as error:
-            raise DecisionModelDown(f"unreachable: {type(error).__name__}") from error
+        response = await self._send("POST", "/systemone", body)  # the resource's request deadline bounds it
         if (status := response.status_code) in DOWN_STATUSES or status >= 500:
             raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", retry_after(response))
         if status != 200:
@@ -101,11 +101,8 @@ class ClefReader(DecisionModelReader):
     async def health(self) -> DecisionModelHealth:
         try:
             async with asyncio.timeout(HEALTH_TIMEOUT):  # relay resolution included
-                endpoint = await self._endpoint()
-                response = await self.http.get(
-                    f"{endpoint.base_url}/systemone/health", headers={"Authorization": f"Bearer {endpoint.token}"}
-                )
-        except (DecisionModelDown, httpx.TransportError, TimeoutError):
+                response = await self._send("GET", "/systemone/health")
+        except (DecisionModelDown, TimeoutError):
             return DecisionModelHealth.DOWN
         if response.status_code == 200:
             return DecisionModelHealth.HEALTHY

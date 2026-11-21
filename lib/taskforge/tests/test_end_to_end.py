@@ -3270,7 +3270,7 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     codes = {"first": [driver.DEFERRED], "second": [], "code": []}
     launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
     given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     await driver.run(driver_args)
     assert launches == ["first", "code", "first", "second"]
     assert given == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
@@ -3291,7 +3291,7 @@ async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
             await asyncio.sleep(0)
         return DecisionModelHealth.HEALTHY
 
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     async with asyncio.timeout(30.0):  # a health read that blocks dispatch never answers
         await driver.run(driver_args)
     assert launches == ["first", "code", "first"]
@@ -3312,7 +3312,7 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": [driver.ANSWERED]}
     launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
     given, health = answering(DecisionModelHealth.UNSUPPORTED)
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     with contextlib.suppress(RuntimeError):  # a failed probe fails the run, once every proposal has run
         await driver.run(driver_args)
     # a defers, and b and c wait behind it; a probes and fails, so b probes and defers again, then c probes and is
@@ -3330,7 +3330,7 @@ async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
 ) -> None:
     launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"a": [driver.DEFERRED, 0], "b": [], "c": []})
     given, health = answering(DecisionModelHealth.UNSUPPORTED)
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     await driver.run(driver_args)
     assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
 
@@ -3350,7 +3350,7 @@ async def test_a_fresh_outage_parks_released_work_that_has_not_started(
         seen.append(len(started))  # admission is synchronous: a launch beside this read happened before it
         return DecisionModelHealth.HEALTHY
 
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     await driver.run(driver_args)
     assert (seen, sorted(launches)) == ([1, 2], ["a", "a", "a", "b", "c", "d"])
 

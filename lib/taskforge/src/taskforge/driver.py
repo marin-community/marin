@@ -195,19 +195,15 @@ async def one(args: argparse.Namespace) -> int:
     return DEFERRED if deferred(wp[0]) else ANSWERED if answered else 0
 
 
-async def decision_model_health(policy: Policy) -> DecisionModelHealth:
-    """The default decision model's health on the gateway that ``one`` reads through."""
-    async with httpx.AsyncClient() as http:
-        return await clef(policy, glm_source(policy), http).health()
-
-
 async def recovery(policy: Policy) -> DecisionModelHealth:
-    """HEALTHY once the decision model's host says so; UNSUPPORTED ``decision_model.retry_interval`` after a host
-    without the health route says so, when one deferred proposal probes it."""
-    while (health := await decision_model_health(policy)) is not DecisionModelHealth.HEALTHY:
-        await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
-        if health is DecisionModelHealth.UNSUPPORTED:
-            break
+    """HEALTHY once the default decision model's host (``one``'s gateway) says so; UNSUPPORTED after a host without
+    the health route says so and ``decision_model.retry_interval`` passes, when one deferred proposal probes it."""
+    async with httpx.AsyncClient() as http:
+        reader = clef(policy, glm_source(policy), http)
+        while (health := await reader.health()) is not DecisionModelHealth.HEALTHY:
+            await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
+            if health is DecisionModelHealth.UNSUPPORTED:
+                break
     return health
 
 

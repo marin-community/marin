@@ -428,35 +428,28 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
         roster = config.policy.setting("adversary.roster", tuple)
         holds: list[BaseException] = []  # every sibling settles before a hold or an outage stops the workpiece
         async with asyncio.TaskGroup() as group:
-            controls = [
-                group.create_task(settled(control_result(ctx, spec, index, control), holds))
-                for index, control in enumerate(submission.controls)
-            ]
-            solver = group.create_task(
-                settled(
-                    solver_batch(
-                        ctx,
-                        spec,
-                        "validation",
-                        len(workpiece.evidence),
-                        (),
-                        0,
-                        k,
-                        concurrency=config.policy.setting("solver.concurrency", int),
-                        heartbeat=config.policy.setting("solver.heartbeat_interval", float),
-                        max_missing=config.budget.max_missing_trials,
-                        stopped=lambda: bool(holds),
-                    ),
-                    holds,
+
+            def start[T](work: Awaitable[T]) -> asyncio.Task[T | None]:
+                return group.create_task(settled(work, holds))
+
+            controls = [start(control_result(ctx, spec, i, control)) for i, control in enumerate(submission.controls)]
+            solver = start(
+                solver_batch(
+                    ctx,
+                    spec,
+                    "validation",
+                    len(workpiece.evidence),
+                    (),
+                    0,
+                    k,
+                    concurrency=config.policy.setting("solver.concurrency", int),
+                    heartbeat=config.policy.setting("solver.heartbeat_interval", float),
+                    max_missing=config.budget.max_missing_trials,
+                    stopped=lambda: bool(holds),
                 )
             )
             adversary = [
-                group.create_task(
-                    settled(
-                        adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name)),
-                        holds,
-                    )
-                )
+                start(adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name)))
                 for i, name in enumerate(roster)
             ]
         await settled(ctx.check(), holds)  # the grade observers settle with the wave
