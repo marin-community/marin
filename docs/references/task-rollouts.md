@@ -663,6 +663,10 @@ This includes a response that the server's tool parser reports as tool calls; vL
 `ChatModel` with a `context_window` also reports `length` for a `tool_calls` response whose prompt and completion tokens fill that window.
 The shell harness does not execute tool calls from a `length` response.
 
+SkyRL's model client replaces each lone surrogate in tool-call arguments with U+FFFD, so the tool runs with
+that character. A lone surrogate comes from a JSON escape for half of a surrogate pair, and the tokenizer cannot
+encode it when vLLM renders the next turn. Response token IDs keep the escape that the model wrote.
+
 ## Trace modes
 
 `TaskRolloutSpec.trace` selects the evidence that the engine records.
