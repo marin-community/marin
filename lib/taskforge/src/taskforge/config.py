@@ -42,6 +42,8 @@ class TaskforgeConfig:
     author: Role
     adversary: Role
     """Every name on ``adversary.roster`` runs this role."""
+    solve_review: Role
+    """The machine-less reviewer of every reviewable validation round; its tools are bound per visit."""
     review: ReviewRules
     band: BandRules
     budget: Budget

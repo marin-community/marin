@@ -16,10 +16,11 @@ from taskcompendium.grading_result import GradeResult
 from taskforge.model.controls import Candidate
 
 OMIT_NONE, OMIT_EMPTY = Field(exclude_if=lambda value: value is None), Field(exclude_if=lambda value: value == "")
+OMIT_NOTHING = Field(exclude_if=lambda value: value == ())
 """Persistence rule: a new optional persisted field is omitted from its serialised form when it holds its ONE declared
-default (``None`` or ``""``, marked ``Annotated[T, OMIT_NONE]`` or ``OMIT_EMPTY``), so adding it changes no existing
-serialised bytes, and no other valid value encodes like it. Canonical content digests still visit every field; a
-change of meaning bumps the journal format."""
+default (``None``, ``""`` or ``()``, marked ``Annotated[T, OMIT_NONE]``, ``OMIT_EMPTY`` or ``OMIT_NOTHING``), so
+adding it changes no existing serialised bytes, and no other valid value encodes like it. Canonical content digests
+still visit every field; a change of meaning bumps the journal format."""
 
 
 def nonempty(digest: str | None) -> None:
@@ -54,6 +55,105 @@ class BandOutcome(StrEnum):
     TOO_HARD = "too_hard"
 
 
+class FindingKind(StrEnum):
+    """What a solve-review finding says is wrong with the task. Difficulty is never one."""
+
+    AMBIGUOUS_PROMPT = "ambiguous_prompt"
+    GRADER_DEFECT = "grader_defect"
+    ANSWER_LEAK = "answer_leak"
+    ENVIRONMENT_PROBLEM = "environment_problem"
+
+
+type Text = Annotated[str, Field(min_length=1)]
+
+
+@dataclass(frozen=True, slots=True)
+class Citation:
+    """``quote``, verbatim from parts ``start`` to ``end`` (inclusive) of one evidence source: a trial's messages, its
+    grade as the last part, or a task file's lines."""
+
+    source: str
+    start: int
+    end: int
+    quote: Text
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewFinding:
+    """A task defect the solver trials show, the concrete ``edit`` that would remove it, and its quoted evidence."""
+
+    kind: FindingKind
+    description: Text
+    edit: Text
+    citations: Annotated[tuple[Citation, ...], Field(min_length=1)]
+
+
+@dataclass(frozen=True, slots=True)
+class Dropped:
+    """A reported finding that failed its citation check against the evidence the reviewer was shown, and why."""
+
+    finding: ReviewFinding
+    reason: str
+
+
+class Attribution(StrEnum):
+    """What a trial that did not pass reflects."""
+
+    SOLVER = "solver"
+    DEFECT = "defect"
+    UNINFORMATIVE = "uninformative"
+
+
+@dataclass(frozen=True, slots=True)
+class TrialAccount:
+    trial: int
+    attribution: Attribution
+    reason: str
+
+
+class EvidenceKind(StrEnum):
+    """Validation evidence an acceptance went without."""
+
+    SOLVE_REVIEW = "solve_review"
+    TRANSCRIPTS = "transcripts"
+
+
+@dataclass(frozen=True, slots=True)
+class MissingEvidence:
+    kind: EvidenceKind
+    detail: str
+
+
+class ReviewEnd(StrEnum):
+    REPORTED = "reported"
+    NO_REPORT = "no_report"
+    """The session ended without a report (window or output exhausted): missing evidence, named on acceptance."""
+
+
+@dataclass(frozen=True, slots=True)
+class SolveReview:
+    """One solve-review of the evidence index whose digest is ``evidence``. ``findings`` passed their citation checks
+    and ``dropped`` did not; a final review's ``notes`` are the findings the task may be accepted with, and
+    ``missing`` the evidence it went without (its own report, or complete transcripts)."""
+
+    evidence: str
+    end: ReviewEnd
+    findings: tuple[ReviewFinding, ...] = ()
+    notes: tuple[ReviewFinding, ...] = ()
+    dropped: tuple[Dropped, ...] = ()
+    accounts: tuple[TrialAccount, ...] = ()
+    reasons: tuple[str, ...] = ()
+    missing: tuple[MissingEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Decline:
+    """A review finding the author declined to act on, with its reason."""
+
+    finding: ReviewFinding
+    reason: Text
+
+
 class RejectKind(StrEnum):
     TASK = "task"
     BUDGET = "budget"
@@ -62,12 +162,15 @@ class RejectKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Accept:
-    """``restore`` names, by digest, the earlier submission accepted in place of the current one."""
+    """``restore`` names, by digest, the earlier submission accepted in place of the current one; ``missing`` the
+    validation evidence the acceptance went without, and ``notes`` the review findings it is accepted with."""
 
     band: BandOutcome
     reasons: tuple[str, ...] = ()
     restore: Annotated[str | None, OMIT_NONE] = None
     kind: Literal["accept"] = "accept"
+    missing: Annotated[tuple[MissingEvidence, ...], OMIT_NOTHING] = ()
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
 
     def __post_init__(self) -> None:
         nonempty(self.restore)
@@ -82,12 +185,14 @@ class Reject:
 
 @dataclass(frozen=True, slots=True)
 class Modify:
-    """``fallback`` names, by digest, the submission the next round falls back to."""
+    """``fallback`` names, by digest, the submission the next round falls back to; ``review`` the solve-review findings
+    the author revises on and may decline."""
 
     findings: tuple[str, ...]
     placement: BandOutcome | None = None
     fallback: Annotated[str | None, OMIT_NONE] = None
     kind: Literal["modify"] = "modify"
+    review: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
 
     def __post_init__(self) -> None:
         nonempty(self.fallback)
@@ -295,6 +400,7 @@ class ValidationResult:
     adversary: tuple[AdversaryResult, ...]
     lowering_error: str | None = None
     lowering_cause: Cause | None = None
+    review: Annotated[SolveReview | None, OMIT_NONE] = None
 
 
 @dataclass(frozen=True, slots=True)

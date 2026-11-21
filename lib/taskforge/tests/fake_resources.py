@@ -3,7 +3,7 @@
 
 """A resource bundle of fakes, installed into a context, for the stage and judge tests."""
 
-from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, SolverEngine, solver_model
 
 from taskforge.effects.context import Context
@@ -23,6 +23,7 @@ def resources(ctx: Context, restart: int | None = None) -> Resources:
         Ids(),
         {},
         FakeWeb({}, {}),
+        {"solve_review": CleanReviewer()},
     )
     install(ctx, bundle)
     return bundle

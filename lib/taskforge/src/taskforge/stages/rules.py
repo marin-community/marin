@@ -19,7 +19,9 @@ from taskforge.model.review import (
     Budget,
     Cause,
     Decision,
+    EvidenceKind,
     Incomplete,
+    MissingEvidence,
     Modify,
     Reject,
     RejectKind,
@@ -82,10 +84,27 @@ def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: Band
     return current if kept is None else better(current, kept)
 
 
+def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
+    """An acceptance with what its accepted submission's latest round went without, and that round's review findings
+    as notes: an acceptance never reaches them with a revision round left."""
+    if not isinstance(decision, Accept):
+        return decision
+    digest = decision.restore or workpiece.evidence[-1].task_digest
+    review = next((result.review for result in reversed(workpiece.evidence) if result.task_digest == digest), None)
+    missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no solve-review ran"),) if review is None else review.missing
+    notes = () if review is None else review.findings
+    why = ("Solve-review findings recorded as notes: no revision round left",) * bool(notes)
+    return replace(decision, reasons=(*decision.reasons, *why), missing=missing, notes=notes)
+
+
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
     """Owner's ruling (2026-11-12): placement tags a task and never filters it. An out-of-band task gets one band-only
     round within the shared budget and is then accepted tagged; a clean revision is placed on its own evidence and a
-    faulted one restores the fallback, named by digest and band."""
+    faulted one restores the fallback, named by digest and band.
+
+    A round's solve-review findings join its modification, or turn its acceptance into one at its placement, while a
+    round is left (as for the band round, the next round is final); after that the acceptance carries them as notes.
+    """
     result = workpiece.evidence[-1]
     decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
@@ -97,22 +116,26 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
         if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
-    if not isinstance(decision, Modify):
-        return decision
-    placement = decision.placement if decision.placement in band.accepted else None  # None: a fault or ineligible
     final = workpiece.fallback is not None or workpiece.round >= budget.max_modify_rounds
+    review = () if result.review is None or final else result.review.findings
+    if isinstance(decision, Accept) and review:
+        decision = Modify((f"The solve-review proposed {len(review)} edit(s)",), decision.band)
+    if not isinstance(decision, Modify):
+        return accepted(decision, workpiece)
+    placement = decision.placement if decision.placement in band.accepted else None  # None: a fault or ineligible
     chosen = fallback_for(workpiece, placement, band)
     if (placement is not None and not final) or chosen is None:
-        return replace(decision, fallback=None if chosen is None else chosen.submission.digest)
+        return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
     notes = exhausted_notes(result)
     if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
         why = (
             "Clean revision placed on its own evidence" if workpiece.fallback else "Shared modification budget exhausted"
         )
-        return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes))
+        return accepted(Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes)), workpiece)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
-    return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)
+    restored = Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)
+    return accepted(restored, workpiece)
 
 
 def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decision:
@@ -135,7 +158,7 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
-        if CAUSE_DECISIONS[cause] not in (Modify, Reject)
+        if CAUSE_DECISIONS.get(cause) not in (Modify, Reject)
     )
     unavailable += tuple(
         f"{trial.name}: {reason}"

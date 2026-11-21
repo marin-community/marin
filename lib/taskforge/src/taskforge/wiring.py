@@ -365,6 +365,11 @@ def build_config(
         agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3)),
         adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
     )
+    for prompt in ("system", "user", "final.system", "final.user"):
+        policy.prompt(f"solve_review.{prompt}")  # a missing prompt fails here, not at a round's first review
+    solve_review = Role(
+        "solve_review", agentic_harness(policy, "solve_review", profiles.get("solve_review", GLM_5_3)), {}
+    )
     budget = Budget(
         policy.setting("budget.max_modify_rounds", int),
         policy.setting("budget.max_validation_retries", int),
@@ -379,7 +384,7 @@ def build_config(
         frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_HARD, BandOutcome.TOO_EASY})
         - (set() if policy.setting("band.accept_too_easy", bool) else {BandOutcome.TOO_EASY}),
     )
-    return TaskforgeConfig(policy, author, adversary, default_review, band, budget)
+    return TaskforgeConfig(policy, author, adversary, solve_review, default_review, band, budget)
 
 
 def provider_policy(policy: Policy) -> Policy:
@@ -434,7 +439,9 @@ async def runtime(
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         resolved = dict(providers)
-        roles = ("author", "solver", "adversary") + (("judge",) if policy.setting("judge.model", str) else ())
+        roles = ("author", "solver", "adversary", "solve_review") + (
+            ("judge",) if policy.setting("judge.model", str) else ()
+        )
         stall = policy.setting("provider.stall_timeout", float)
         connections = policy.setting("provider.max_connections", int)
         for role in (role for role in roles if role not in providers):

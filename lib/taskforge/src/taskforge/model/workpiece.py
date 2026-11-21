@@ -18,7 +18,7 @@ from taskforge.model.content_hash import digest
 from taskforge.model.controls import Control
 from taskforge.model.llm import Message, ToolSchema
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import OMIT_NONE, BandOutcome, Decision, ValidationResult
+from taskforge.model.review import OMIT_NONE, OMIT_NOTHING, BandOutcome, Decision, Decline, ValidationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +26,7 @@ class Submission:
     task: TaskSpec
     controls: tuple[Control, ...]
     notes: str
+    declined: Annotated[tuple[Decline, ...], OMIT_NOTHING] = ()
 
     @property
     def digest(self) -> str:

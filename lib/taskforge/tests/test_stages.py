@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
-from lib.taskforge.tests.resource_doubles import FakeInference
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
 from lib.taskforge.tests.stage_fakes import (
     OVER_CREDITED,
     CandidateEngine,
@@ -213,7 +213,7 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     harness = RecordingHarness(Restart("machine gone"))
     ctx = Context(log=EventLog())
     author_client = FakeInference(())
-    bundle = replace(resources(ctx), role_inference={"author": author_client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "author": author_client})
     with pytest.raises(Restart):
         await author(ctx, workpiece.with_(submission=None), config(harness), bundle)
     await ctx.drain()
@@ -303,7 +303,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
     adversary_client = FakeInference(())
-    bundle = replace(resources(ctx), role_inference={"adversary": adversary_client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": adversary_client})
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     finding = evidence.adversary[0].findings[0]
@@ -359,7 +359,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
         )
     )
     ctx = Context(log=EventLog())
-    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     tools = adversary_tools(
         task_path="/workspace/task.json",
         policy=setup.policy,
@@ -995,7 +995,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
         )
     )
     ctx = Context(log=EventLog())
-    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0)
     assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
     (note,) = result.reasons

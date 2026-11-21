@@ -12,11 +12,13 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.harness.protocol import Tool
 from taskforge.harness.role import Files, Fresh, Visit, sitting
+from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lowering_settings, requirements
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.proposal import render
-from taskforge.model.review import VALIDATION_RESULT
+from taskforge.model.review import VALIDATION_RESULT, Modify
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
@@ -121,7 +123,12 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
 
     # A round has one author visit, which a stage restart reconstructs on its fresh machine. The caller's files are
     # prepared inside it and the opening after hydration, so either failing is journalled and its machine closed.
-    visit = Visit("author", f"author/{workpiece.round}", machine, workspace)
+    tools: dict[str, Tool[object]] = {}
+    if workpiece.decisions and isinstance(revise := workpiece.decisions[-1], Modify) and revise.review:
+        submit = config.author.tools["submit"]
+        assert isinstance(submit, SubmitTool)
+        tools = {"submit": RevisedSubmitTool(submit, revise.review)}
+    visit = Visit("author", f"author/{workpiece.round}", machine, workspace, tools)
     async with sitting(ctx, config.author, visit, resources) as session:
         if workpiece.session is not None:
             return await session(workpiece.session)

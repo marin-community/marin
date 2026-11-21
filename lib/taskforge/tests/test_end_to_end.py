@@ -27,10 +27,10 @@ import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.llm.fake_glm import serving
-from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
-from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
+from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model, transcript
 from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
@@ -199,6 +199,7 @@ def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
         Ids(lambda: "workpiece"),
         {},
         FakeWeb({}, {}),
+        {"solve_review": CleanReviewer()},
     )
 
 
@@ -248,7 +249,7 @@ class FirstRoundSolves(Engine):
         assert run_id is not None
         first = run_id.endswith(":0")
         grade = GradeResult(Outcome.GRADED, 1.0) if first else GradeResult(Outcome.INVALID_TASK, None, "bad task")
-        return GradedRollout(Rollout(run_id, (), "stop"), grade)
+        return GradedRollout(Rollout(run_id, (transcript("12"),), "stop"), grade)
 
 
 # Review 2026-11-21 (follow-up 1): a faulted revision resubmitted the same task and controls with new notes; review
@@ -309,7 +310,7 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
         @override
         async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
             assert run_id is not None
-            return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+            return GradedRollout(Rollout(run_id, (transcript("12"),), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
 
     bundle = resources(Envs(), script())
     bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=UngradedEngine()))
@@ -353,7 +354,9 @@ class FlakySolver(Engine):
         if trial == 0 and self.failures.get(attempt, 0):
             self.failures[attempt] -= 1
             raise Restart("solver sandbox preempted")
-        return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.GRADED, float(trial % 2 == 0)))
+        return GradedRollout(
+            Rollout(run_id, (transcript("12"),), "stop"), GradeResult(Outcome.GRADED, float(trial % 2 == 0))
+        )
 
 
 # Review 2026-11-20: a same-round validation retry inherited the earlier visit's replay attempts and held.
@@ -392,6 +395,7 @@ async def run_on(
         envs=Envs(),
         rollouts=replace(built.rollouts, engine=CandidateEngine()),
         grading=GradingResource(CandidateEngine(), "grader"),
+        role_inference={**built.role_inference, "solve_review": CleanReviewer()},
     )
     return await run_workpiece(proposal, build_config(policy, {}, profiles), bundle, log, install=install)
 
@@ -1018,7 +1022,14 @@ def fleet_resources(policy: Policy, fleet: Fleet) -> Resources:
         engine=engine,
         model=partial(solver_turn, model, sampling(policy, GLM_5_3.sampling)),
     )
-    return replace(built, envs=Envs(), rollouts=rollouts, grading=GradingResource(CandidateEngine(), "grader"))
+    grading = GradingResource(CandidateEngine(), "grader")
+    return replace(
+        built,
+        envs=Envs(),
+        rollouts=rollouts,
+        grading=grading,
+        role_inference={**built.role_inference, "solve_review": CleanReviewer()},
+    )
 
 
 def solver_slots(destination: Path) -> list[Resolved[object]]:
@@ -1084,7 +1095,10 @@ async def test_a_trickling_error_body_holds_the_workpiece_within_the_availabilit
             roles = ("solver", "adversary")
             providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in roles}
             built = build_resources(policy, {**providers, "author": author}, {}, FakeWeb({}, {}))
-            serve(monkeypatch, replace(built, envs=Envs()))
+            serve(
+                monkeypatch,
+                replace(built, envs=Envs(), role_inference={**built.role_inference, "solve_review": CleanReviewer()}),
+            )
             started = time.monotonic()
             await driver.one(driver_args)
             elapsed = time.monotonic() - started
@@ -2589,7 +2603,10 @@ async def test_each_adversary_replays_its_own_machine_history_whatever_its_sibli
     overlay = json.loads(Path(driver_args.policy).read_text())
     Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": list(roster)}))
     held = Adversaries(hold=True)
-    first = replace(resources(RoleEnvs(recorded, (0, 1), overlap), script()), role_inference={"adversary": held})
+    first = replace(
+        resources(RoleEnvs(recorded, (0, 1), overlap), script()),
+        role_inference={"solve_review": CleanReviewer(), "adversary": held},
+    )
     serve(monkeypatch, first)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
@@ -2601,7 +2618,11 @@ async def test_each_adversary_replays_its_own_machine_history_whatever_its_sibli
         hold=False, served=[r for r in resolved if isinstance(r, InferenceRequest) and r in held.requests]
     )
     envs = RoleEnvs(fresh, (1, 0), overlap)
-    resumed = replace(resources(envs, ()), inference=ServedOnce((), ()), role_inference={"adversary": adversary})
+    resumed = replace(
+        resources(envs, ()),
+        inference=ServedOnce((), ()),
+        role_inference={"solve_review": CleanReviewer(), "adversary": adversary},
+    )
     serve(monkeypatch, resumed)
     driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
     await driver.one(driver_args)
@@ -2683,13 +2704,22 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
     overlay = json.loads(Path(driver_args.policy).read_text())
     Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["false_accept"]}))
     held = Adversaries(hold=True)
-    serve(monkeypatch, replace(resources(ExhaustedRole(0), script()), role_inference={"adversary": held}))
+    serve(
+        monkeypatch,
+        replace(
+            resources(ExhaustedRole(0), script()), role_inference={"solve_review": CleanReviewer(), "adversary": held}
+        ),
+    )
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published_workpiece(destination).terminal is Terminal.HELD and len(held.requests) == 2
     adversary = Adversaries(hold=False, served=held.requests[:1])
     envs = ExhaustedRole(exhausted)
-    resumed = replace(resources(envs, ()), inference=ServedOnce((), ()), role_inference={"adversary": adversary})
+    resumed = replace(
+        resources(envs, ()),
+        inference=ServedOnce((), ()),
+        role_inference={"solve_review": CleanReviewer(), "adversary": adversary},
+    )
     serve(monkeypatch, resumed)
     driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
     await driver.one(driver_args)

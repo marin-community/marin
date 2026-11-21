@@ -30,6 +30,7 @@ from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.rules import better
+from taskforge.stages.solve_review import finding_lines
 
 
 def reasons(error: BaseException) -> tuple[str, ...]:
@@ -77,7 +78,7 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
             return wp.with_(terminal=Terminal.REJECTED)
         case Abandon():
             return wp.with_(terminal=Terminal.ABANDONED)
-        case Modify(findings, placement, fallback):
+        case Modify(findings, placement, fallback, _, review):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
             current = Fallback(wp.submission, placement) if wp.submission and placement else None
@@ -88,7 +89,10 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                     f"Cannot keep {fallback} as the fallback: it is neither the submission nor the fallback"
                 )
             system = tuple(message for message in wp.session.messages if message.role == "system")
-            prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
+            detail = "\n".join(findings)
+            if review:
+                detail += "\n\n" + policy.prompt("author.review").render(findings=finding_lines(review))
+            prompt = policy.prompt("author.revision").render(kind="review", detail=detail)
             return wp.with_(
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), wp.session.tool_schemas),

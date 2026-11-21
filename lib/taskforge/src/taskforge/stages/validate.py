@@ -9,10 +9,11 @@ import itertools
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import cast
 
-from rolloutengine.models import TaskRolloutSpec, TraceMode
+from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
@@ -41,11 +42,14 @@ from taskforge.model.review import (
     Cause,
     Continuation,
     ControlResult,
+    Incomplete,
     Modify,
     Observation,
     ObservedStatus,
+    Reject,
     SearchEnd,
     SearchLimit,
+    SolveReview,
     TrialResult,
     ValidationResult,
 )
@@ -57,7 +61,8 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
-from taskforge.stages.rules import actionable
+from taskforge.stages.rules import actionable, assess
+from taskforge.stages.solve_review import solve_review
 from taskforge.stages.summary import task_manifest
 
 
@@ -67,15 +72,19 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
     return ControlResult(index, grade, cause is None and control.expected.met_by(grade), cause)
 
 
-async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
-    """One slot's ``SolverRollout``: a slot-local hold is recorded missing evidence; any other hold or restart
-    propagates."""
+async def solver_result(
+    ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int, rollouts: dict[int, GradedRollout] | None = None
+) -> TrialResult:
+    """One slot's ``SolverRollout``, kept in ``rollouts`` for the solve-review: a slot-local hold is recorded missing
+    evidence; any other hold or restart propagates."""
     for retry in range(2):
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
         except OutputBudgetExhausted:
             ctx.notify(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
             continue
+        if rollouts is not None:
+            rollouts[trial] = result
         if (cause := trial_cause(result, spec.task)) is Cause.HELD:
             return TrialResult(trial, None, cause, result.grade.error or "")
         return TrialResult(trial, result.grade, cause)
@@ -95,6 +104,7 @@ async def solver_batch(
     heartbeat: float,
     max_missing: int = 0,
     stopped: Callable[[], bool] = lambda: False,
+    rollouts: dict[int, GradedRollout] | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[TrialResult, ...]:
@@ -118,7 +128,7 @@ async def solver_batch(
                 return None
             running[trial] = clock()
             try:
-                return await solver_result(ctx, spec, trial, attempt)
+                return await solver_result(ctx, spec, trial, attempt, rollouts)
             except Restart as error:
                 return error
             except DecisionModelUnavailable as error:
@@ -398,6 +408,28 @@ async def run_adversary(
         return AdversaryResult(name, status, findings, reasons, continuation=stopped_at(owner, end, ended))
 
 
+async def reviewed(
+    ctx: Context,
+    workpiece: Workpiece,
+    config: TaskforgeConfig,
+    resources: Resources,
+    solver: Awaitable[tuple[TrialResult, ...] | None],
+    controls: Sequence[Awaitable[ControlResult | None]],
+    rollouts: dict[int, GradedRollout],
+    holds: list[BaseException],
+) -> SolveReview | None:
+    """The round's solve-review, a sibling of the adversaries once the trials and controls settle; none when a sibling
+    holds first or review would not decide on them (incomplete, rejected)."""
+    trials, graded = await solver, [await control for control in controls]
+    if holds or trials is None or any(control is None for control in graded) or workpiece.submission is None:
+        return None
+    probe = ValidationResult(workpiece.submission.digest, trials, tuple(filter(None, graded)), ())
+    if isinstance(assess(probe, config.band, config.budget.max_missing_trials), Incomplete | Reject):
+        return None
+    pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
+    return await solve_review(ctx, config, resources, workpiece.proposal, workpiece.submission, pairs)
+
+
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:
     submission = workpiece.submission
     if submission is None:
@@ -424,6 +456,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
         ctx.observe(Resolved, grader_infra_unavailable)
         roster = config.policy.setting("adversary.roster", tuple)
         holds: list[BaseException] = []  # every sibling settles before a hold or an outage stops the workpiece
+        rollouts: dict[int, GradedRollout] = {}
         async with asyncio.TaskGroup() as group:
             controls = [
                 group.create_task(settled(control_result(ctx, spec, index, control), holds))
@@ -443,6 +476,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                         heartbeat=config.policy.setting("solver.heartbeat_interval", float),
                         max_missing=config.budget.max_missing_trials,
                         stopped=lambda: bool(holds),
+                        rollouts=rollouts,
                     ),
                     holds,
                 )
@@ -456,7 +490,11 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                 )
                 for i, name in enumerate(roster)
             ]
+            review = group.create_task(
+                settled(reviewed(ctx, workpiece, config, resources, solver, controls, rollouts, holds), holds)
+            )
         if holds:
             raise BaseExceptionGroup("Validation holds", holds)
         controls_done, adversaries_done = tuple(map(kept, controls)), tuple(map(kept, adversary))
-        return Validated(ValidationResult(submission.digest, kept(solver), controls_done, adversaries_done))
+        result = ValidationResult(submission.digest, kept(solver), controls_done, adversaries_done)
+        return Validated(replace(result, review=review.result()))

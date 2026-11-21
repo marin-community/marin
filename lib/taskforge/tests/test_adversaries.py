@@ -13,7 +13,7 @@ from typing import override
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources as stage_resources
-from lib.taskforge.tests.resource_doubles import FakeEnv, FakeInference
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeEnv, FakeInference
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
@@ -46,6 +46,7 @@ from taskforge.model.review import (
     Continuation,
     Defect,
     DefectClaim,
+    Incomplete,
     Modify,
     Observation,
     ObservedStatus,
@@ -126,7 +127,7 @@ async def test_both_default_briefs_report_observed_and_deserved_and_a_false_reje
     )
     log = EventLog()
     ctx = Context(log=log)
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = (await validate(ctx, workpiece, setup, bundle)).result
     accept, reject = result.adversary
     assert (accept.name, reject.name) == ("false_accept", "false_reject")
@@ -160,7 +161,7 @@ async def test_a_report_whose_own_grades_show_no_defect_is_refused_back_to_the_a
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept"]}), {})
     client = Briefed({"false_accept": [args]})
     ctx = Context(log=EventLog())
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     (result,) = (await validate(ctx, workpiece, setup, bundle)).result.adversary
     assert client.requests[1].conversation[-1].content.startswith("Invalid report: finding 0:")
     assert result.status is AdversaryStatus.FAILED and not result.findings
@@ -214,7 +215,7 @@ async def test_a_report_must_copy_the_adversarys_own_grade_of_that_candidate(
     client = graded_then_reported(brief, reply, report)
     log = EventLog()
     ctx = Context(log=log)
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = (await validate(ctx, workpiece, setup, bundle)).result
     decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
     fresh = [r.event for r in log.records if isinstance(r.event, GradeCandidate) and r.event.fresh_verifier]
@@ -243,7 +244,7 @@ async def test_a_claim_that_fails_reproduction_gets_one_revision_in_the_same_ses
         }
     )
     ctx = Context(log=EventLog())
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = (await validate(ctx, workpiece, setup, bundle)).result
     calls = {
         brief: [r for r in client.requests if phrase in r.conversation[1].content] for brief, phrase in BRIEFED.items()
@@ -264,7 +265,7 @@ async def test_a_search_is_out_of_budget_only_after_its_revision_ends_without_a_
     first = call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first")
     client = Scripted({"false_reject": (first,)})  # its revision finishes without a report
     ctx = Context(log=EventLog())
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     ((reject,),) = ((await validate(ctx, workpiece, setup, bundle)).result.adversary,)
     assert len(client.requests) == 2 and reject.status is AdversaryStatus.REPORTED
     assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False)]
@@ -302,7 +303,9 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
         }
     )
     ctx = Context(log=EventLog())
-    bundle = replace(stage_resources(ctx), envs=Exhausting(), role_inference={"adversary": client})
+    bundle = replace(
+        stage_resources(ctx), envs=Exhausting(), role_inference={"solve_review": CleanReviewer(), "adversary": client}
+    )
     result = (await validate(ctx, workpiece, setup, bundle)).result
     (reject,) = result.adversary
     assert len(client.requests) == 2 and reject.status is AdversaryStatus.REPORTED
@@ -354,7 +357,7 @@ async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_w
     first = call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first")
     client = FakeInference((first, revision))
     ctx = Context(log=EventLog())
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = (await validate(ctx, workpiece, setup, bundle)).result
     (reject,) = result.adversary
     assert len(client.requests) == 2 and reject.status is AdversaryStatus.REPORTED
@@ -385,7 +388,7 @@ async def test_a_claim_whose_fresh_verifier_crashes_is_reported_by_its_graded_ca
     bundle = replace(
         stage_resources(Context(log=EventLog())),
         grading=GradingResource(CandidateEngine(), "grader", CandidateEngine(crash)),
-        role_inference={"adversary": client},
+        role_inference={"solve_review": CleanReviewer(), "adversary": client},
     )
     install(ctx, bundle)
     result = (await validate(ctx, workpiece, setup, bundle)).result
@@ -412,7 +415,7 @@ async def test_a_zero_revision_budget_still_reproduces_the_report_and_a_negative
     client = Briefed({"false_reject": [finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0)]})
     log = EventLog()
     ctx = Context(log=log)
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = (await validate(ctx, workpiece, setup, bundle)).result
     fresh = [r.event for r in log.records if isinstance(r.event, GradeCandidate) and r.event.fresh_verifier]
     assert len(client.requests) == 1 and [grade.candidate.reply for grade in fresh] == ["12.0"]
@@ -464,7 +467,7 @@ async def test_a_named_strategy_prompt_runs_any_roster_name(
     setup = build_config(named_strategy_policy(roster, briefs=briefs), {})
     client = FakeInference((call("report", {"findings": []}, "report"),))
     ctx = Context(log=EventLog())
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     (result,) = (await validate(ctx, workpiece, setup, bundle)).result.adversary
     assert result.status is AdversaryStatus.REPORTED and len(client.requests) == 1
     assert client.requests[0].conversation[1].content.startswith(f"Review strategy: {roster[0]}\n\nTask manifest:")
@@ -483,7 +486,7 @@ async def test_a_complete_policy_without_a_revision_budget_fails_at_wiring_and_i
     historical = load_policy(N6_POLICY).overlaid({"adversary.roster": roster})
     log, client = EventLog(), FakeInference((call("report", {"findings": []}, "report"),))
     ctx = Context(log=log)
-    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     with pytest.raises(KeyError, match=re.escape("adversary.max_revisions")):
         await validate(ctx, workpiece, build_config(historical, {}), bundle)
     assert not log.records and not client.requests
@@ -503,7 +506,8 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
     that launch when a deliberate change to the prompts, tool schemas, event identities or envelopes invalidates it.
 
     The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
-    grades and the adversary's hydration replay; only the adversary's model turns are new."""
+    grades and the adversary's hydration replay; only the adversary's model turns are new. Its solver fake recorded no
+    transcripts, so the solve-review holds on that missing evidence without a call (n11)."""
     recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
     served = [
         r.event.request
@@ -517,14 +521,17 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
         (call("shell", {"command": "inspect", "timeout": 5}, "look"), call("report", {"findings": []}, "r")), ()
     )
     adversary.identity = "adversary"
-    resumed = replace(resources(Envs(), ()), inference=ServedOnce((), served), role_inference={"adversary": adversary})
+    reviewer = CleanReviewer()
+    roles = {"solve_review": reviewer, "adversary": adversary}
+    resumed = replace(resources(Envs(), ()), inference=ServedOnce((), served), role_inference=roles)
     log = EventLog(replay_from=recorded, replayable=replayable_grade)
     workpiece = await run_workpiece(proposal, build_config(policy, {}), resumed, log, install=install)
-    assert workpiece.terminal is Terminal.ACCEPTED
+    assert workpiece.terminal is Terminal.HELD and not reviewer.requests
+    assert isinstance(held := workpiece.decisions[-1], Incomplete)
+    assert "EvidenceMissing: solver trials [0, 1] have no complete transcript" in held.reasons[0]
     assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.requests
     assert executions(resumed) == (0, 0) and len(adversary.requests) == 2
     assert adversary.requests[0].conversation[1].content.startswith("Review strategy: adversary\n\n")
-    assert [result.name for result in workpiece.evidence[-1].adversary] == ["adversary"]
     was = next(r.event.config_digest for r in recorded if isinstance(r.event, StageCompleted))
     entries = {key: value for key, value in policy.entries.items() if key not in LATER_SETTINGS}
     template = policy.prompt("author.system").template
@@ -542,10 +549,13 @@ LATER_SETTINGS = frozenset(
         *(f"decision_model.{name}" for name in ("model", "route", "concurrency", "request_timeout")),
         *(f"decision_model.{name}" for name in ("unavailable_wait", "backoff_initial", "backoff_maximum")),
         "decision_model.retry_interval",
+        *(f"solve_review.{name}" for name in ("model", "context_tokens", "system", "user", "nudge")),
+        *(f"solve_review.final.{name}" for name in ("system", "user")),
+        "author.review",
     }
 )
-"""The entries the default policy gained after this fixture was recorded (n9, then n10); none enters a replay key
-while ``decision_model.model`` is empty."""
+"""The entries the default policy gained after this fixture was recorded (n9, n10, then n11); none enters a replay key
+of a recorded effect: the n10 ones while ``decision_model.model`` is empty, the n11 ones only the solve-review's own."""
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record
@@ -555,7 +565,7 @@ async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with
 ) -> None:
     policy = load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, "adversary.roster": ["false_accept", "false_reject"]})
     client = Briefed({"false_accept": ContextExceeded("model window exceeded"), "false_reject": []})
-    bundle = replace(resources(Envs(), script()), role_inference={"adversary": client})
+    bundle = replace(resources(Envs(), script()), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     log = EventLog()
     finished = await run_workpiece(proposal, build_config(policy, {}), bundle, log, install=install)
     workpiece = WORKPIECE.validate_json(WORKPIECE.dump_json(finished))  # as published

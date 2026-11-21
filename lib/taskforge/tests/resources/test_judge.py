@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
-from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
 from pydantic import TypeAdapter
 from rolloutengine import grading
@@ -174,7 +174,7 @@ async def grade_judged(
     bundle = replace(
         resources(ctx),
         grading=GradingResource(rollout_engine({}, command_timeout=None), "judge"),
-        role_inference={"judge": client},
+        role_inference={"solve_review": CleanReviewer(), "judge": client},
     )
     install(ctx, bundle)
     # A fresh verifier changes the outer grade identity, so only the judge's inference effects can replay.

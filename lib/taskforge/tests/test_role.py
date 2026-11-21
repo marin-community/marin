@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
-from lib.taskforge.tests.resource_doubles import FakeInference
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
 from lib.taskforge.tests.stage_fakes import Environments
 
 from taskforge.effects.context import Context
@@ -31,7 +31,7 @@ def finish(call_id: str) -> Completion:
 async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() -> None:
     ctx = Context(log=EventLog())
     client = FakeInference((finish("f"),))
-    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     async with sitting(ctx, role, Visit("review", "unused", None), bundle) as session:
         outcome = await session(Fresh("system", "user"))
@@ -47,7 +47,7 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     log = EventLog()
     ctx = Context(log=log)
     client = FakeInference((finish("again"),))
-    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     pending = Message(Role.ASSISTANT, "", (ToolCall("report-1", "report", "{}"),))
     saved = Conversation((Message(Role.SYSTEM, "s"), Message(Role.USER, "u"), pending), ())
