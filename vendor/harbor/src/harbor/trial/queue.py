@@ -411,8 +411,8 @@ class TrialQueue:
             with bind_attempt(attempt_context):
                 result = await self._run_admitted_attempt(trial_config, attempt)
 
-            delay_sec = retry_delay(result.exception_info, self._retry_config, attempt)
-            if delay_sec is None:
+            delay = retry_delay(result.exception_info, self._retry_config, attempt)
+            if delay is None:
                 break
 
             assert result.exception_info is not None
@@ -420,9 +420,9 @@ class TrialQueue:
                 "Trial %s failed with exception %s. Retrying in %.2f seconds...",
                 trial_config.trial_name,
                 result.exception_info.exception_type,
-                delay_sec,
+                delay,
             )
-            await asyncio.sleep(delay_sec)
+            await asyncio.sleep(delay)
 
         if result is None:
             raise RuntimeError(f"Trial {trial_config.trial_name} produced no result.")

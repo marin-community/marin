@@ -49,6 +49,7 @@ from experiments.post_training.task_curation.selection import (
     VALIDATION_FILENAME,
 )
 
+_PRESET_REVISION = "2026.11.20.8"
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -232,7 +233,7 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.8",
+    revision=_PRESET_REVISION,
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     seed=SEED,
@@ -244,7 +245,7 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
-    revision="2026.11.20.8",
+    revision=_PRESET_REVISION,
     held_out_tasks=_DEFAULT_EVAL_LITE,
     checkpoints="best",
     export="best",
@@ -269,7 +270,7 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.20.8",
+    revision=_PRESET_REVISION,
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
@@ -332,7 +333,7 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
-        revision="2026.11.20.8",
+        revision=_PRESET_REVISION,
         recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
@@ -444,7 +445,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.8",
+        revision=_PRESET_REVISION,
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),

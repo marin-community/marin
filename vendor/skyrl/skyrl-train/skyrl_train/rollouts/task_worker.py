@@ -240,10 +240,10 @@ async def _model_turn(
     )
 
 
-def _machine_diagnostics(error: TaskMachineError) -> dict[str, Any]:
+def _machine_diagnostics(error: TaskMachineError) -> dict[str, str | dict[str, int]]:
     """Return only provider metadata allowed in rollout diagnostics."""
     assert error.__cause__ is not None
-    diagnostics: dict[str, Any] = {}
+    diagnostics: dict[str, str | dict[str, int]] = {}
     diagnostics["machine_operation"] = error.operation.value
     provider_error = error.__cause__
     if isinstance(provider_error, DaytonaError):

@@ -846,11 +846,12 @@ def test_incomplete_nonterminal_or_scored_result_remains_raw_evidence(tmp_path, 
     "exception_type", ["RuntimeServiceError", "AgentTimeoutError", "UnrecognizedError"]
 )
 @pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("reward", [None, 1.0])
 def test_unconfirmed_terminal_failure_seals_without_scoring_partial_evidence(
-    tmp_path, exception_type, resumed
+    tmp_path, exception_type, resumed, reward
 ):
     root = str(tmp_path / "archive")
-    event = _end_event(tmp_path, reward=None, exception_type=exception_type)
+    event = _end_event(tmp_path, reward=reward, exception_type=exception_type)
     result = event.result
     assert result is not None
     result.completion = None
@@ -875,6 +876,7 @@ def test_unconfirmed_terminal_failure_seals_without_scoring_partial_evidence(
     assert sample.metrics == {}
     assert sample.trajectory_uri is None
     assert json.loads(sample.grading.detail)["error"]["type"] == exception_type
+    assert json.loads(sample.grading.detail)["rewards"] == {}
     prefix = f"sources/harbor/t0/attempts/{result.id}"
     assert reader.read_blob(f"{prefix}/result.json") == native.encode()
     assert reader.read_blob(f"{prefix}/trajectory.json") == partial

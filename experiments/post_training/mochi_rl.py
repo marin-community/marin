@@ -28,6 +28,7 @@ from experiments.post_training.rl_presets import (
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 
+_PRESET_REVISION = "2026.11.20.8"
 _MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
         "grug/hero-sft-fullab-step393k-v2-hf",
@@ -196,7 +197,7 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.20.8",
+    revision=_PRESET_REVISION,
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -229,7 +230,7 @@ _TRAIN_MEDIUM = replace(
     evaluations=(),
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.8"
+    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision=_PRESET_REVISION
 )
 
 MOCHI = ModelPresets(

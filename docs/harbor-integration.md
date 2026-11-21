@@ -375,10 +375,10 @@ Harbor saves each attempt's result, available trajectory and a record of whether
 trajectory exists in one transaction. Completion waits for environment cleanup, service
 shutdown and required artifact writes. Missing required evidence leaves the attempt
 incomplete. At finalization, Harbor selects the final attempt for each trial.
-A finished failed attempt with no verifier result can produce an unscored error row
-without confirmed teardown. Its partial artifacts remain raw evidence; they do not
-produce normalized trajectories or steps. An incomplete scored or successful attempt
-prevents sealing. A declared complete trajectory must have its required artifact.
+A finished failed attempt can produce an unscored error row without confirmed
+teardown. Its rewards and partial artifacts remain raw evidence; they do not
+produce normalized rewards, trajectories or steps. An unfinished attempt or an
+incomplete result without an exception prevents sealing. A declared complete trajectory must have its required artifact.
 Resume can recover matching terminal Harbor files and rebuild derived tables. It keeps
 the original artifacts from every attempt. Only selected final attempts contribute
 normalized rows.

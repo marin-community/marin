@@ -146,10 +146,19 @@ async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_conf
 
 
 @pytest.mark.asyncio
-async def test_lost_connection_in_the_setup_command_restarts_the_rollout(worker_config):
-    factory = ResettingFactory(failures=1, reset=Reset.COMMAND)
-    result, _, _ = await rollout_evidence(worker_config, factory, environment=SETUP_ENVIRONMENT)
+@pytest.mark.parametrize(
+    "operation, environment, resources",
+    [
+        (Reset.COMMAND, SETUP_ENVIRONMENT, None),
+        (Reset.UPLOAD, SHELL_ENVIRONMENT, ResourceGroups(worker=(inline_resource("input.txt", b"task input"),))),
+    ],
+    ids=["setup-command", "resource-upload"],
+)
+async def test_connection_loss_before_first_model_turn_restarts_machine(worker_config, operation, environment, resources):
+    factory = ResettingFactory(failures=1, reset=operation)
+    result, waits, _ = await rollout_evidence(worker_config, factory, environment=environment, resources=resources)
     assert factory.creations == 2
+    assert waits == [1]
     assert result.failure is None
 
 
@@ -190,16 +199,6 @@ async def test_permanent_provider_failure_does_not_restart_the_machine(worker_co
     assert waits == []
     assert result.failure.cause_type == "DaytonaError"
     assert result.failure.provider_status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_lost_connection_during_resource_upload_restarts_before_the_model_turn(worker_config):
-    factory = ResettingFactory(failures=1, reset=Reset.UPLOAD)
-    resources = ResourceGroups(worker=(inline_resource("input.txt", b"task input"),))
-    result, waits, _ = await rollout_evidence(worker_config, factory, resources=resources)
-    assert factory.creations == 2
-    assert len(waits) == 1
-    assert result.failure is None
 
 
 @pytest.mark.asyncio

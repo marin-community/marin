@@ -88,10 +88,11 @@ errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
 SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
 is installed. Composition rejects names assigned by more than one owner.
 
-SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
-infrastructure failures are excluded, agent failures receive zero reward, and
-passthrough failures retain available verifier output. Unknown names use the
-configured fallback and emit an error log.
+With error classification enabled, `skyrl_train.task_error_handling` maps
+infrastructure failures to masking, agent failures to zero reward, and passthrough
+failures to the available verifier reward. Unknown names use the configured
+fallback and emit an error log. With classification disabled, the rollout
+projection masks all failed rollouts.
 
 Add a new persisted exception name to its producer's category map. Put a name
 used by several producers in the shared map once. Per-name training overrides
@@ -137,8 +138,8 @@ replaying may duplicate work. SkyRL also keeps passthrough results terminal so
 that retries do not discard usable verifier output. Reward and masking treatment
 remain separate from the infrastructure retry classification. Native Harbor may
 retry a passthrough failure when environment teardown is unconfirmed. A selected
-native terminal failure with no verifier result can seal as an unscored archive row;
-its partial trajectory remains raw evidence.
+native terminal failure can seal as an unscored archive row;
+its reward and partial trajectory remain raw evidence.
 
 ## Run records
 

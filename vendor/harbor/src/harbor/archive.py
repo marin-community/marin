@@ -61,12 +61,8 @@ _JSON_CONTENT_TYPE = "application/json"
 _JOB_SOURCE_NAMES = (JOB_CONFIG_FILENAME, JOB_LOCK_FILENAME, JOB_RESULT_FILENAME)
 
 
-def _has_unscored_terminal_failure(result: TrialResult) -> bool:
-    return (
-        result.finished_at is not None
-        and result.exception_info is not None
-        and result.verifier_result is None
-    )
+def _is_terminal_failure(result: TrialResult) -> bool:
+    return result.finished_at is not None and result.exception_info is not None
 
 
 def _attempt_is_archivable(reader: ReadView, prefix: str) -> bool:
@@ -78,10 +74,7 @@ def _attempt_is_archivable(reader: ReadView, prefix: str) -> bool:
         return False
     result = TrialResult.model_validate_json(raw)
     if result.completion is None:
-        return (
-            metadata["trajectory_present"] is None
-            and _has_unscored_terminal_failure(result)
-        )
+        return metadata["trajectory_present"] is None and _is_terminal_failure(result)
     if (
         result.finished_at is None
         or not isinstance(metadata["trajectory_present"], bool)
@@ -107,14 +100,16 @@ def _validate_native_result(native: TrialResult, selected: TrialResult) -> None:
             f"Native attempt identity differs for trial {selected.trial_name}, attempt {selected.id}"
         )
     if native.finished_at is None or (
-        native.completion is None and not _has_unscored_terminal_failure(native)
+        native.completion is None and not _is_terminal_failure(native)
     ):
         raise ValueError(
-            f"Attempt {selected.id} has neither a finalized output manifest nor an unscored terminal failure"
+            f"Attempt {selected.id} has neither a finalized output manifest nor a terminal failure"
         )
 
 
 def _numeric_rewards(result: TrialResult) -> dict[str, float]:
+    if result.completion is None:
+        return {}
     rewards = result.verifier_result.rewards if result.verifier_result else None
     return {
         name: float(value)

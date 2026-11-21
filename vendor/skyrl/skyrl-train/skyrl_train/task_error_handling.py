@@ -82,7 +82,7 @@ def classify_failure(failure: ErrorIdentity, config: ErrorHandlingConfig) -> Err
 
 
 def treatment_excludes_from_baseline(treatment: ErrorTreatment, *, verifier_available: bool) -> bool:
-    """Translate a treatment into the RLOO-N exclusion bit for the available result."""
+    """Exclude masked rollouts and unverified passthrough rollouts from the baseline."""
     return treatment is ErrorTreatment.MASK or (treatment is ErrorTreatment.PASSTHROUGH and not verifier_available)
 
 

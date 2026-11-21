@@ -27,11 +27,12 @@ from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from skyrl_train.batch_metrics import consumed_stop_metrics
+from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
-        "timed_out",
+        TIMED_OUT_DIAGNOSTIC,
         "machine_operation",
         "provider_sdk_call",
         "provider_rate_limits",

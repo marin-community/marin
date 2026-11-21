@@ -718,6 +718,7 @@ async def test_unconfirmed_teardown_obeys_shared_exception_selection(
         if permanent:
             error.__cause__ = PermissionError("teardown permission denied")
         trial.result.exception_info = ExceptionInfo.from_exception(error)
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
         trial.result.finished_at = datetime.now(timezone.utc)
 
     async def time_out_after_teardown(trial: FakeTrial) -> None:
