@@ -332,6 +332,7 @@ def compute_demand_entries(
                         constraints=job_constraints,
                         resources=job_resources,
                         invalid_reason=invalid_reason,
+                        priority_band=job_row.priority_band,
                     )
                 )
             continue
@@ -347,6 +348,7 @@ def compute_demand_entries(
                     constraints=job_constraints,
                     resources=job_resources,
                     invalid_reason=invalid_reason,
+                    priority_band=job_row.priority_band,
                 )
             )
 

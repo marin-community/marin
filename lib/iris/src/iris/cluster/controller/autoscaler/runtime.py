@@ -28,7 +28,7 @@ from finelog.client.log_client import Table
 from rigging.auth import TokenProvider
 from rigging.timing import Duration, Timestamp, TokenBucket
 
-from iris.cluster.config import AutoscalerConfig, WorkerConfig
+from iris.cluster.config import AutoscalerConfig, ReservationReclaimConfig, WorkerConfig
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
@@ -43,6 +43,7 @@ from iris.cluster.controller.autoscaler.provisioning import (
     ERROR_MESSAGE_MAX_LEN,
     classify_create_failure,
 )
+from iris.cluster.controller.autoscaler.reclaim import ReclaimDecision, plan_reservation_reclaim
 from iris.cluster.controller.autoscaler.recovery import (
     AutoscalerCheckpoint,
     restore_autoscaler_state,
@@ -73,6 +74,7 @@ from iris.cluster.platforms.types import (
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
 from iris.rpc import job_pb2, vm_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_rank
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -185,6 +187,7 @@ class Autoscaler:
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
         provisioning_table: Table | None = None,
+        reservation_reclaim: ReservationReclaimConfig | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -203,8 +206,16 @@ class Autoscaler:
                 drain adoption (test/local mode); the factory always wires it in prod.
             provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning
                 outcomes. None disables emission (test/local mode without finelog).
+            reservation_reclaim: Reservation reclaim settings (see ``autoscaler.reclaim``). None = off.
         """
         self._groups = scale_groups
+        self._reclaim_config = reservation_reclaim or ReservationReclaimConfig()
+        # Latest controller worker snapshot (from ``refresh``), read by reservation reclaim.
+        self._worker_status: WorkerStatusMap = {}
+        # Pool -> (time, waiting group) of its last reclaim. Memory-only: a restart only resets the cooldown.
+        self._last_reclaim: dict[str, tuple[Timestamp, str]] = {}
+        # Reclaims decided but not yet handed to the controller (see ``take_reclaims``).
+        self._pending_reclaims: list[ReclaimDecision] = []
         self._make_draining_group = make_draining_group
         self._platform = platform
         self.evaluation_interval = evaluation_interval
@@ -270,6 +281,7 @@ class Autoscaler:
             worker_token_provider=worker_token_provider,
             make_draining_group=make_draining_group,
             provisioning_table=provisioning_table,
+            reservation_reclaim=config.reservation_reclaim,
         )
 
     def shutdown(self) -> None:
@@ -398,6 +410,7 @@ class Autoscaler:
             demand_entries = list(demand_entries) + probes
 
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
+        self._plan_reclaim(routing_decision.routed_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
@@ -431,6 +444,65 @@ class Autoscaler:
                 logger.debug("Scale group %s: scale up blocked", group.name)
 
         return scale_plan.decisions()
+
+    def _plan_reclaim(self, routed_entries: dict[str, list[DemandEntry]], ts: Timestamp) -> None:
+        """Decide reservation reclaims for this tick and record each one (see ``autoscaler.reclaim``)."""
+        if not self._reclaim_config.quota_pools:
+            return
+        waiting_bands: dict[str, int] = {}
+        for group_name, entries in routed_entries.items():
+            bands = [
+                e.priority_band
+                for e in entries
+                if e.coschedule_group_id is not None and e.priority_band in PRIORITY_BAND_VALUES
+            ]
+            if bands:
+                waiting_bands[group_name] = min(bands, key=priority_band_rank)
+        plan = plan_reservation_reclaim(
+            slices=[slice_ for group in self._groups.values() for slice_ in group.pool_slices()],
+            waiting_bands=waiting_bands,
+            worker_status=self._worker_status,
+            config=self._reclaim_config,
+            last_reclaim={pool: at for pool, (at, _group) in self._last_reclaim.items()},
+            now=ts,
+        )
+        for decision in plan.decisions:
+            self._last_reclaim[decision.quota_pool] = (ts, decision.group)
+            self._pending_reclaims.append(decision)
+            victims = ", ".join(f"{v.slice_id} ({v.group}, {v.chips} chips)" for v in decision.victims)
+            self._log_action(
+                "reservation_reclaim",
+                decision.group,
+                slice_id=decision.waiting_slice_id,
+                reason=(
+                    f"pool={decision.quota_pool} band={decision.preemptor_band} "
+                    f"chips_needed={decision.chips_needed} chips_freed={decision.chips_freed} victims=[{victims}]"
+                ),
+            )
+        for blocked in plan.blocked:
+            self._log_action(
+                "reclaim_blocked",
+                blocked.group,
+                slice_id=blocked.waiting_slice_id,
+                reason=(
+                    f"pool={blocked.quota_pool} band={blocked.preemptor_band} "
+                    f"chips_needed={blocked.chips_needed} chips_reclaimable={blocked.chips_reclaimable}"
+                ),
+                status="blocked",
+            )
+
+    def _held_for_reclaim(self, group: ScalingGroup, ts: Timestamp) -> bool:
+        """Hold other groups' scale-ups in a pool during its reclaim cooldown, so freed chips reach the waiting slice."""
+        reclaim = self._last_reclaim.get(group.config.quota_pool)
+        if reclaim is None:
+            return False
+        at, waiting_group = reclaim
+        return group.name != waiting_group and ts.epoch_ms() - at.epoch_ms() < self._reclaim_config.cooldown.to_ms()
+
+    def take_reclaims(self) -> list[ReclaimDecision]:
+        """Hand this tick's reclaim decisions to the controller, which fails the victims' workers."""
+        reclaims, self._pending_reclaims = self._pending_reclaims, []
+        return reclaims
 
     def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
         """Map zone -> {device_variant} the cluster has EMPIRICALLY confirmed available.
@@ -473,6 +545,9 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
+                if self._held_for_reclaim(group, timestamp):
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
+                    continue
                 # Per-group gate first: it honors the group's health/quota block,
                 # so we never spend the scarce global create budget on a group
                 # that couldn't scale anyway.
@@ -620,6 +695,7 @@ class Autoscaler:
         and folded serially (see the phase comments below).
         """
         timestamp = timestamp or Timestamp.now()
+        self._worker_status = worker_status_map
 
         # Phase 1: snapshot every slice that needs a describe() — not-yet-ready
         # slices, plus READY slices the autoscaler tracks no workers for (so an

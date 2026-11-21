@@ -1122,6 +1122,16 @@ class Controller:
             now=now,
         )
 
+        if auto_result is not None:
+            for reclaim in auto_result.reclaims:
+                self._remove_worker_capacity(
+                    [WorkerId(worker_id) for worker_id in reclaim.worker_ids],
+                    reason=(
+                        f"reservation reclaim in {reclaim.quota_pool} for a band-{reclaim.preemptor_band} "
+                        f"slice of {reclaim.group} ({reclaim.waiting_slice_id})"
+                    ),
+                )
+
         # Charge the reservation ledger only for promotions whose CAS committed, so a
         # promotion raced by a cancel does not hold phantom peer capacity. The sync
         # loop delivers each newly-PENDING handle on its next pass.
@@ -1235,12 +1245,13 @@ class Controller:
         """Build the autoscaler's complete worker view from one controller snapshot."""
         liveness = self._worker_health.all()
         worker_ids = {worker_id for worker_id, state in liveness.items() if state.usability is not WorkerUsability.DEAD}
-        running = reads.running_tasks_by_worker(snap, worker_ids)
+        running = reads.running_task_bands_by_worker(snap, worker_ids)
         return {
             worker_id: WorkerStatus(
                 worker_id=worker_id,
-                running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, set())),
+                running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, {})),
                 usability=liveness[worker_id].usability,
+                running_bands=frozenset(running.get(worker_id, {}).values()),
             )
             for worker_id in worker_ids
         }

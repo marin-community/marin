@@ -544,10 +544,28 @@ class ControllerVmConfig(_OneofConfig):
 # ---------------------------------------------------------------------------
 
 
+class ReservationReclaimConfig(_Config):
+    """Free reserved chips held by lower-priority slices for a waiting higher-priority slice.
+
+    Off unless ``quota_pools`` names a pool, for example ``v4-reserved/us-central2-b``. Reclaim deletes
+    other jobs' running slices, so each reserved pool opts in explicitly.
+    """
+
+    # Reserved pools (``ScaleGroupConfig.quota_pool``) where reclaim may run. Empty = off.
+    quota_pools: list[str] = Field(default_factory=list)
+    # How long the waiting slice must have waited on the cloud before reclaim starts.
+    min_wait: DurationField = Field(default_factory=lambda: Duration.from_minutes(10))
+    # Minimum time between two reclaims in one pool.
+    cooldown: DurationField = Field(default_factory=lambda: Duration.from_minutes(30))
+    # Highest band a victim slice may run. Victims must also be strictly below the waiting demand's band.
+    highest_victim_band: Literal["interactive", "batch"] = "interactive"
+
+
 class AutoscalerConfig(_Config):
     evaluation_interval: DurationField = Field(default_factory=lambda: Duration.from_seconds(10))
     scale_up_delay: DurationField = Field(default_factory=lambda: Duration.from_seconds(60))
     scale_down_delay: DurationField = Field(default_factory=lambda: Duration.from_seconds(600))
+    reservation_reclaim: ReservationReclaimConfig = Field(default_factory=ReservationReclaimConfig)
 
 
 class EgressAllowlistConfig(_Config):
@@ -1120,6 +1138,9 @@ def validate_autoscaler_config(config: AutoscalerConfig, context: str = "autosca
             f"{context}: scale_down_delay must be non-negative, got {config.scale_down_delay.to_ms()}ms. "
             f"Use 0 for no cooldown after scaling down."
         )
+    reclaim = config.reservation_reclaim
+    if reclaim.min_wait.to_ms() < 0 or reclaim.cooldown.to_ms() < 0:
+        raise ValueError(f"{context}: reservation_reclaim min_wait and cooldown must be non-negative")
 
 
 def _validate_cluster_name(config: IrisClusterConfig) -> None:
