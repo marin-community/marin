@@ -354,7 +354,7 @@ def validate_math(spec: MathSpec) -> None:
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
     if (
-        type(spec.positive_symbols) is not tuple
+        not isinstance(spec.positive_symbols, tuple)
         or any(
             not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
             for name in spec.positive_symbols
