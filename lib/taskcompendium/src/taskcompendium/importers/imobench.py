@@ -163,15 +163,14 @@ def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
         exact_gate=False,
         label_scores={f"<points>{points} out of 7</points>": points / 7 for points in PROOF_POINTS},
         label_scan="lines",
-        # GLM-5.3-Flash reasons for up to ~85K tokens and 340 s on IMO-GradingBench proofs, and can
-        # reason without end at temperature 0; the transport budget stays inside the evaluator's
-        # 600 s grading cap.
+        # GLM-5.3-Flash reasons for up to ~85K tokens on IMO-ProofBench proofs, some past 450 s, and
+        # can reason without end at temperature 0.
         sampling=JudgeSampling.PROVIDER_DEFAULT,
         max_completion_tokens=131072,
         completion_policy=JudgeCompletionPolicy.CONTENT,
-        request_timeout=450,
-        transport_attempts=3,
-        transport_budget=570,
+        request_timeout=900,
+        transport_attempts=2,
+        transport_budget=1200,
     )
 
 

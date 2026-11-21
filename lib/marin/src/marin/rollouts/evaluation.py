@@ -75,6 +75,23 @@ from verifyit.modes.grade_judge import JudgeConnection
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
 
 
+# Time for a judge-graded attempt's grading beyond the judge's own transport budget.
+JUDGE_GRADING_MARGIN = 30.0
+
+
+def grading_limits(limits: RolloutLimits, task: TaskSpec) -> RolloutLimits:
+    """Extend the run's grading deadline, and the attempt deadline with it, to cover the task judge's budget."""
+    judge = judge_spec(task.grader)
+    if judge is None or limits.verifier_timeout is None:
+        return limits
+    needed = max(judge.transport_budget, judge.request_timeout) + JUDGE_GRADING_MARGIN
+    extension = needed - limits.verifier_timeout
+    if extension <= 0:
+        return limits
+    attempt = None if limits.attempt_timeout is None else limits.attempt_timeout + extension
+    return limits.model_copy(update={"verifier_timeout": needed, "attempt_timeout": attempt})
+
+
 class EvaluationInfrastructureError(RuntimeError):
     """All corpora were processed, but infrastructure failures remain eligible for resume."""
 
@@ -431,7 +448,7 @@ async def _score_generation(
             else None
         ),
         judge_connection=judge_connection,
-        limits=config.limits,
+        limits=grading_limits(config.limits, task),
         trace=TraceMode.MESSAGES,
     )
     operation = case.item.operation
