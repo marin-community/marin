@@ -11,6 +11,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    DecisionModelGrader,
     GradingAttempt,
     NoGrader,
     TaskSpec,
@@ -37,6 +38,8 @@ def grade_task(
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
+    if isinstance(grader, DecisionModelGrader):
+        raise TypeError("A decision_model grader needs a connection: use grade_decision_model_answer")
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         return grade_remote_judge_answer(task, attempt, judge_connection)
     if grader.environment is None:

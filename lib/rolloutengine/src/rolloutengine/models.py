@@ -10,7 +10,9 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 from shellbox.machine import NetworkPolicy
+from taskcompendium.decision_model import DecisionModelConnection
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
@@ -519,12 +521,14 @@ class TaskRolloutSpec(BaseModel):
     """The service of a judge grader, which grades on the host. ``model_dump``, JSON, and pickle leave it out,
     so a spec loaded from them has none. Without it, the engine reads ``VERIFYIT_JUDGE_BASE_URL`` and
     ``VERIFYIT_JUDGE_API_KEY``."""
+    decision_model: SkipJsonSchema[DecisionModelConnection | None] = Field(default=None, exclude=True)
+    """The caller's decision model for a decision_model grader. Dumps, JSON, its schema, and pickle leave it out."""
     limits: RolloutLimits
     trace: TraceMode = TraceMode.EXACT_TOKENS
 
     def __getstate__(self) -> dict[Any, Any]:
-        # Pickle leaves out the judge connection and its API key, as JSON does. The state holds the live fields.
+        # Pickle leaves out the runtime connections and the judge's API key, as JSON does.
         state = super().__getstate__()
-        fields = {**state["__dict__"], "judge_connection": None}
-        fields_set = state["__pydantic_fields_set__"] - {"judge_connection"}
+        fields = {**state["__dict__"], "judge_connection": None, "decision_model": None}
+        fields_set = state["__pydantic_fields_set__"] - {"judge_connection", "decision_model"}
         return {**state, "__dict__": fields, "__pydantic_fields_set__": fields_set}
