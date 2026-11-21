@@ -19,6 +19,8 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
 )
 from marin.training.training import LevanterCheckpoint
+from rolloutengine.models import MachineRuntimeSpec
+from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
@@ -361,6 +363,77 @@ _TRAIN_MEDIUM_AGENTIC = replace(
     ),
 )
 
+TOOL_TURNS = 16
+TASK_MACHINE_STARTUP_TIMEOUT = 600
+TASK_MACHINE_CLEANUP_TIMEOUT = 60
+# Each shell-tool task runs on a machine that matches its command semantics.
+TASK_MACHINES = {
+    # ShellSim has no guest network.
+    CommandSemantics.SHELL_SIMULATOR: MachineRuntimeSpec(
+        backend=Backend.SHELLSIM,
+        network=NetworkPolicy.DENY,
+        cpus=None,
+        memory_mb=None,
+        storage_mb=None,
+        gpus=0,
+        user=None,
+        startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
+        cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
+    ),
+    CommandSemantics.LINUX_PROCESS: MachineRuntimeSpec(
+        backend=Backend.DAYTONA,
+        network=NetworkPolicy.ALLOW,
+        cpus=1,
+        memory_mb=2048,
+        storage_mb=10240,
+        gpus=0,
+        user=None,
+        startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
+        cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
+    ),
+}
+_TOOLS_PATCH = RecipePatch(
+    environment=sections.Environment(
+        task_sessions={
+            # Linux task machines and image graders are training work, so they use the RL organization.
+            "daytona": {"api_key_env": "DAYTONA_RL_API_KEY", "ttl_minutes": 60},
+            "task_spec": {
+                "session": {"max_turns": TOOL_TURNS},
+                "task_machine_by_command_semantics": {
+                    semantics.value: machine.model_dump(mode="json") for semantics, machine in TASK_MACHINES.items()
+                },
+            },
+        }
+    ),
+    trainer=sections.Trainer(
+        policy=sections.Policy(
+            # A full-window trajectory needs the GPU memory for the policy update, and Snowball's five KV
+            # heads rule out context parallelism, so the optimizer state stays on the CPU.
+            megatron_config=sections.PolicyMegatronConfig(
+                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                )
+            )
+        )
+    ),
+)
+_TOOLS_CONFIG = _TRAIN_LONG.recipe.config.merge(_TOOLS_PATCH)
+_TOOLS_BUDGET = _TOOLS_CONFIG.context_budget
+assert _TOOLS_BUDGET is not None
+_TRAIN_MEDIUM_TOOLS = replace(
+    _TRAIN_LONG.with_updates(10),
+    name="train-medium-tools",
+    revision="2026.11.20.1",
+    tasks_input="required",
+    recipe=replace(
+        _TRAIN_LONG.recipe, config=_TOOLS_CONFIG.replace(context_budget=_TOOLS_BUDGET.replace(max_turns=TOOL_TURNS))
+    ),
+    data_settings=frozenset({"shuffle"}),
+    evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+    gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap not in ("no-agentic-tasks", "no-image-sandbox")),),
+    budget="40 H100s plus Daytona sandboxes; wall time and cost are unmeasured",
+)
+
 _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -441,6 +514,7 @@ _PRESETS = (
     _TRAIN_LONG,
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
+    _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
