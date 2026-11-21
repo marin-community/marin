@@ -18,8 +18,10 @@ from jax.sharding import reshard
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 TPU_HEAD_ALIGNMENT = 128
-PagedAttentionImplementation = Literal["reference", "tpu"]
+PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32"]
 _TPU_KV_HEAD_GROUP = 8
+_FP32_QUERIES_PER_BLOCK = 128
+_FP32_KV_PAGES_PER_BLOCK = 8
 
 
 def ragged_paged_attention(
@@ -48,18 +50,20 @@ def ragged_paged_attention(
         sliding_window: Number of visible tokens, including the query itself.
         soft_cap: Optional tanh logit cap, applied before masking.
         implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
+            `tpu_fp32` uses FP32 operands in the kernel and preserves the query dtype on output.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
-    Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
-    for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
-    Lower-precision inputs use the reference path to preserve the cache's dtype semantics.
+    Padding queries produce zero. Default TPU dispatch uses the tiled kernel for
+    FP32 inputs and the reference for lower-precision inputs.
     GPU and CPU default to the reference.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
     """
     if implementation is None:
         implementation = "tpu" if jax.default_backend() == "tpu" else "reference"
-    if implementation not in ("tpu", "reference"):
+    if implementation not in ("tpu", "reference", "tpu_fp32"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
+    if implementation == "tpu_fp32" and jax.default_backend() != "tpu":
+        raise ValueError("tpu_fp32 paged attention requires a TPU")
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError("sliding_window must be positive")
     if soft_cap is not None and soft_cap <= 0:
@@ -69,6 +73,12 @@ def ragged_paged_attention(
 
     backend = {
         "tpu": _tpu_attention,
+        "tpu_fp32": partial(
+            _tpu_kernel_attention,
+            # Bound scratch space instead of using the upstream long-context tiles on v5p.
+            num_queries_per_block=min(_FP32_QUERIES_PER_BLOCK, q.shape[0]),
+            num_kv_pages_per_block=min(_FP32_KV_PAGES_PER_BLOCK, page_indices.shape[-1]),
+        ),
         "reference": _reference_attention,
     }
     fn = partial(
@@ -192,12 +202,23 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
 
 
 def _tpu_kernel_attention(
-    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
+    q,
+    kv_pages,
+    kv_lens,
+    page_indices,
+    cu_q_lens,
+    num_seqs,
+    *,
+    sm_scale,
+    sliding_window,
+    soft_cap,
+    num_queries_per_block: int | None = None,
+    num_kv_pages_per_block: int | None = None,
 ):
     original_dim = q.shape[-1]
     padding = (-original_dim) % TPU_HEAD_ALIGNMENT
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
-    pages_padded = jnp.pad(kv_pages, ((0, 0), (0, 0), (0, 0), (0, padding)))
+    pages_padded = jnp.pad(kv_pages.astype(jnp.float32), ((0, 0), (0, 0), (0, 0), (0, padding)))
     q_flat = q_padded.astype(jnp.float32).reshape(q.shape[0], -1, q_padded.shape[-1])
     if isinstance(sm_scale, (float, int)):
         kernel_scale = sm_scale
@@ -207,7 +228,7 @@ def _tpu_kernel_attention(
         kernel_scale = 1.0
     heads = q.shape[1]
     try:
-        get_min_heads_per_blk(q_flat.shape[1], 2 * heads, q_flat.dtype, kv_pages.dtype)
+        get_min_heads_per_blk(q_flat.shape[1], 2 * heads, q_flat.dtype, pages_padded.dtype)
         heads_per_group = heads
     except ValueError:
         # The upstream kernel rejects packed head counts such as 3, 5, 6, and 12.
@@ -219,6 +240,8 @@ def _tpu_kernel_attention(
         sm_scale=kernel_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
+        num_queries_per_block=num_queries_per_block,
+        num_kv_pages_per_block=num_kv_pages_per_block,
     )
     metadata = (
         jnp.maximum(kv_lens, 0),

@@ -22,10 +22,10 @@ class _PagedCase(NamedTuple):
     num_seqs: jax.Array
 
 
-def _mixed_case(dtype):
+def _mixed_case(dtype, *, kv_heads=2, queries_per_head=3, head_size=32):
     rng = np.random.default_rng(12)
-    q = rng.normal(size=(8, 2, 3, 32)).astype(np.float32)
-    pages = rng.normal(size=(7, 4, 4, 32)).astype(np.float32)
+    q = rng.normal(size=(8, kv_heads, queries_per_head, head_size)).astype(np.float32)
+    pages = rng.normal(size=(7, 4, 2 * kv_heads, head_size)).astype(np.float32)
     pages[0] = np.nan
     indices = np.array([[4, 2, -1], [6, 1, 3], [-1, -1, -1]], np.int32)
     lengths = np.array([7, 10, -1], np.int32)
@@ -95,3 +95,15 @@ def test_grug_tpu_paged_attention_matches_reference(runtime_scale):
     )
     expected = _dense_reference(args, 5, None, 0.17)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+def test_grug_tpu_fp32_paged_attention_matches_bf16_reference_with_five_kv_heads():
+    args = _mixed_case(jnp.bfloat16, kv_heads=5, queries_per_head=4, head_size=128)
+    attention = partial(ragged_paged_attention, sm_scale=128**-0.5, sliding_window=5)
+    expected = jax.jit(partial(attention, implementation="reference"))(*args)
+    actual = jax.jit(partial(attention, implementation="tpu_fp32"))(*args)
+    assert actual.dtype == args.q.dtype
+    # Accumulation order may change how the final value rounds to BF16.
+    nearest = jnp.nextafter(expected, actual)
+    np.testing.assert_array_equal(actual, nearest)
