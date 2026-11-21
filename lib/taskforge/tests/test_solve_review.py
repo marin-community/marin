@@ -1021,3 +1021,36 @@ def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: 
         and "1 of 3 solver trials have no score; placed over 2" in decision.reasons
     )
     assert not any("discarded round" in reason for reason in decision.reasons)
+
+
+@pytest.mark.parametrize(
+    "rewards,finding,line",
+    [
+        ((1.0, 0.0), True, "1 of 2 trials solved: in_band. Keep the difficulty."),
+        (
+            (1.0, 1.0),
+            False,
+            "2 of 2 trials solved: too_easy. Make the task harder while preserving correct controls and grading. "
+            "This is the one hardening attempt.",
+        ),
+        (
+            (0.0, 0.0),
+            False,
+            "0 of 2 trials solved: too_hard. Make the task more tractable while preserving its objective, correct "
+            "controls and grading.",
+        ),
+    ],
+    ids=["in band with a finding", "too easy", "too hard"],
+)
+def test_a_revision_request_carries_live_forge_s_band_line(
+    proposal: TaskProposal, rewards: tuple[float, float], finding: bool, line: str
+) -> None:
+    """Review 2026-11-21 (n11 follow-up 2): when findings turned an acceptance into a repair, the author was sent only
+    the number of proposed edits; live Forge sends the measured solve rate and what the placement asks for."""
+    setup = config()
+    solver = tuple(TrialResult(index, GradeResult(Outcome.GRADED, reward)) for index, reward in enumerate(rewards))
+    current = replace(round_with(SolveReview("v", ReviewEnd.REPORTED, (FOUND,) * finding)), solver=solver)
+    decision = default_review(
+        Workpiece("w", proposal, submission=SUBMISSION, evidence=(current,)), setup.band, setup.budget
+    )
+    assert isinstance(decision, Modify) and decision.findings[0] == line

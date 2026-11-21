@@ -58,6 +58,24 @@ def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
     )
 
 
+INSTRUCTIONS = {
+    BandOutcome.IN_BAND: "Keep the difficulty.",
+    BandOutcome.TOO_EASY: (
+        "Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
+    ),
+    BandOutcome.TOO_HARD: "Make the task more tractable while preserving its objective, correct controls and grading.",
+}
+"""What each placement asks of the author, as live Forge words it."""
+
+
+def band_line(result: ValidationResult, band: BandRules) -> tuple[BandOutcome, str]:
+    """The placement of ``result``'s scored solver trials, and live Forge's line telling the author what it asks for."""
+    scored = [trial for trial in result.solver if not missing(trial)]
+    solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
+    place = band.place(solved / len(scored))
+    return place, f"{solved} of {len(scored)} trials solved: {place}. {INSTRUCTIONS[place]}"
+
+
 def unscored(result: ValidationResult) -> tuple[str, ...]:
     """How many solver slots of ``result`` had no score, when any did, and how many its placement went over."""
     scored = sum(not missing(trial) for trial in result.solver)
@@ -154,7 +172,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         if why:
             decision = Accept(placement, (*tagged(placement), why, *decision.findings[1:], *notes))
     if isinstance(decision, Accept) and review and left:
-        decision = Modify((f"The solve-review proposed {len(review)} edit(s)",), decision.band)
+        decision = Modify((band_line(result, band)[1],), decision.band)
         placement = decision.placement
     if not isinstance(decision, Modify):
         return accepted(decision, workpiece)
@@ -221,14 +239,8 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
     )
     if findings:
         return Modify(findings)
-    solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
-    place = band.place(solved / len(scored))
+    place, line = band_line(result, band)
     notes = unscored(result)
     if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place, (*notes, *exhausted_notes(result)))
-    finding = f"{solved} of {len(scored)} trials solved: {place}"
-    if place is BandOutcome.TOO_EASY:
-        finding += (
-            ". Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
-        )
-    return Modify((finding, *notes), placement=place)
+    return Modify((line, *notes), placement=place)
