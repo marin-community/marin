@@ -9,6 +9,7 @@ from verifyit.spec import (
     ExactSpec,
     FunctionCall,
     IfevalSpec,
+    JudgeSpec,
     MathProfile,
     MathSpec,
     MathType,
@@ -166,3 +167,16 @@ def test_judge_label_tables_reject_non_numbers():
         parse_spec('mode = "judge"\nlabel_scores = { yes = "1" }\n')
     with pytest.raises(ValueError, match="expects a table of number tables"):
         parse_spec('mode = "judge"\nlabel_metrics = { yes = 2 }\n')
+
+
+@pytest.mark.parametrize("temperature", [None, 0.0, 0.7])
+def test_judge_temperature_control_survives_serialization(temperature):
+    spec = JudgeSpec(
+        references=("answer",),
+        temperature=temperature,
+        parse_attempts=3,
+        context_char_limit=120000,
+        chat_template_kwargs={"enable_thinking": "false"},
+    )
+    restored = parse_spec(render_spec(spec))
+    assert restored == spec

@@ -20,7 +20,11 @@ from taskcompendium.models import NoGrader, ScriptGrader, Source, TaskSpec, Veri
 from marinskyrl.packed_tasks import PackedTaskMaterializer, PackedTaskReference, select_task_references
 from marinskyrl.task_sources import DirectoryDataSource, TaskTroveParquetSource, data_source
 from skyrl_train.dataset.tasks import (
-    TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks, task_evaluation_identity, with_evaluation_identities,
+    TASK_ROLLOUT_COLUMN,
+    TaskDataset,
+    cache_tasks,
+    task_evaluation_identity,
+    with_evaluation_identities,
 )
 from skyrl_train.dataset.harbor_import import (
     HARBOR_TRIAL_SESSION,
@@ -283,6 +287,7 @@ class HarborTaskDataset(TaskDataset):
         *,
         cache_dir: Path,
         session: Mapping[str, Any],
+        minimum_verifier_timeout: float,
         grader_override: NoGrader | None = None,
         num_workers: int = 8,
     ):
@@ -294,11 +299,19 @@ class HarborTaskDataset(TaskDataset):
             )
 
         self.task_path = materialize_harbor_tasks(
-            data_files, cache_dir=cache_dir.expanduser(), session=session, grader_override=grader_override,
+            data_files,
+            cache_dir=cache_dir.expanduser(),
+            session=session,
+            grader_override=grader_override,
             identities=identities,
         )
         super().__init__(
-            [str(self.task_path)], tokenizer, max_prompt_length, num_workers=num_workers, prepare_source=prepare_source
+            [str(self.task_path)],
+            tokenizer,
+            max_prompt_length,
+            minimum_verifier_timeout=minimum_verifier_timeout,
+            num_workers=num_workers,
+            prepare_source=prepare_source,
         )
 
     def uid(self, index: int) -> str:

@@ -445,3 +445,65 @@ does not establish correctness for every message size or topology. Check resolve
 role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
+
+## Run-owned retrieval
+
+For tasks with `openresearcher-bm25:v1`, the caller must enter
+`marin.rl.retrieval_service.retrieval_service` once per RL run and pass its
+endpoint to the worker configuration. Keep the context open until every rollout
+and check that calls retrieval finishes. Long-loop launch wiring is a separate
+follow-up. Build a
+`RetrievalServiceLaunch` with explicit CPU, RAM, disk, concurrency, startup
+timeout and lifetime. Set the lifetime longer than that entire interval. Leave
+`target_cluster` unset so the child inherits the run cluster. CoreWeave CPU
+nodes have no region labels, so the child clears any inherited GPU region
+selector and stays on the run’s single-region controller. Select the regional
+CoreWeave cluster when launching the root run. The launcher
+passes the parent's CoreWeave storage keys as file-delivered secrets. Supply
+any other required credentials explicitly in the child environment.
+
+Stage the pinned index in the run's regional S3 bucket. The service verifies
+the manifest and every file before loading OpenResearcher's BM25 searcher and
+tokenizer once. It uses the pinned OpenResearcher image's Python interpreter
+for its packages. Private endpoint registration waits for health to match the
+task provider's complete `initial_state`, including corpus, implementation,
+tokenizer and index-manifest revisions. A cross-region index fails before
+staging starts. On Kubernetes, the backend binds a kernel-assigned port;
+health checks and private discovery use that bound port. Startup logs identify
+dependency import, index opening, tokenizer loading and HTTP socket binding.
+
+Pass the yielded endpoint as `environment.task_sessions.retrieval_service` in
+the SkyRL worker configuration. Keep that context open for every retrieval caller. Exiting the
+context terminates the service child. A failed service request fails the
+rollout; it does not fall back to another corpus or search implementation.
+
+Set `network_access: service_only` on the task's provider requirement in
+`environment_requirements.tool_providers`, and select a network-denied actor
+machine. Shellbox carries `search` and `get_document` over its managed process
+channel; the actor needs no external network route. The relay splits large
+documents into bounded frames and assembles the complete JSON tool result.
+Search keeps OpenResearcher's top-five results and snippet policy. The index
+stays on the CPU service and does not occupy the actor disk. Each task keeps
+its declared JudgeSpec, including its model and request controls.
+
+Tasks can require a backend through the typed
+`environment_requirements.required_backend` field. A LOCAL tool runs inside a
+Shellbox bubblewrap machine on the Iris worker. Enable
+`environment.task_sessions.local: {}` for that run. The common TaskSpec loader
+selects the required backend without a dataset-specific override; a different
+backend fails validation before machine or model startup. Keep the actor network
+denied and qualify its pinned image and persistent tool state on that backend.
+Canonical tasks that need an actor use `task_spec.required_actor`, whose default
+backend is Daytona. A typed backend requirement overrides that placement. A
+SHARED integrity contract selects its agent UID; validation rejects a conflicting
+explicit actor identity.
+
+The SkyRL default verifier floor is 1,800 seconds, defined by
+`environment.task_sessions.task_spec.minimum_verifier_timeout`. The common
+dataset loader applies the greater of that floor, the stored runtime limit and
+the task's declared verifier deadline. This covers fresh TaskSpecs and stored
+`task_rollout_spec` inputs. When actor and verifier limits are finite, it
+extends a finite outer attempt budget to include both phases and cleanup.
+Without a separate actor limit, it preserves the existing attempt deadline. Original grader commands retain their
+own timeouts and verdict protocol; exceeding an infrastructure deadline remains
+an infrastructure timeout, never a successful grade.

@@ -1445,6 +1445,21 @@ JUDGE_CONNECTION = JudgeConnection("http://judge.invalid/v1", "private-test-key"
 @pytest.mark.parametrize(
     "spec,error,message",
     [
+        pytest.param(
+            lambda: rollout_spec(
+                arithmetic_task(
+                    environment_requirements=EnvironmentRequirements(
+                        required_backend=Backend.DAYTONA,
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                        docker_image=FIXTURE_IMAGE,
+                    )
+                ),
+                machine=machine_runtime(),
+            ),
+            ValueError,
+            None,
+            id="required-backend-mismatch",
+        ),
         # The engine does not capture state, so it rejects a graded state task for every harness.
         pytest.param(
             lambda: rollout_spec(

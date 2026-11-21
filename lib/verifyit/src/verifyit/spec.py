@@ -25,6 +25,11 @@ from verifyit.json_objects import unique_object
 DEFAULT_REWARD_KEY = "reward"
 DEFAULT_OUTPUT = "/app/answer.txt"
 DEFAULT_WORKSPACE = "/app"
+API_DEFAULT_TEMPERATURE = "API default"
+
+
+class JudgeTemperature(StrEnum):
+    RUNTIME_DEFAULT = "runtime default"
 
 
 class Mode(StrEnum):
@@ -370,6 +375,11 @@ class JudgeSpec:
     label_scan: str = "literal"
     label_case: str = "sensitive"
     api: str = "chat_completions"
+    context_char_limit: int = field(default=60_000, kw_only=True)
+    max_turns: int = field(default=1, kw_only=True)
+    temperature: float | None | JudgeTemperature = field(default=JudgeTemperature.RUNTIME_DEFAULT, kw_only=True)
+    parse_attempts: int | None = field(default=None, kw_only=True)
+    chat_template_kwargs: dict[str, str] = field(default_factory=dict, kw_only=True)
     verdict_patterns: tuple[str, ...] = field(default=(), kw_only=True)
     label_weights: dict[str, float] = field(default_factory=dict, kw_only=True)
 
@@ -531,6 +541,10 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
             raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation == (str | None):
         return value
+    if annotation == (float | None | JudgeTemperature):
+        if value == JudgeTemperature.RUNTIME_DEFAULT:
+            return JudgeTemperature.RUNTIME_DEFAULT
+        annotation = float | None
     if annotation == (float | None):
         if value is not None and type(value) not in (int, float):
             raise ValueError(f"field {name!r} expects a number or null")
@@ -564,7 +578,19 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
     unknown = sorted(set(table) - set(declared) - {"mode"})
     if unknown:
         raise ValueError(f"mode {mode} does not accept {unknown}")
-    values = {name: _coerce(name, f.type, table[name]) for name, f in declared.items() if name in table}
+    values = {
+        name: _coerce(
+            name,
+            f.type,
+            (
+                None
+                if mode is Mode.JUDGE and name == "temperature" and table[name] == API_DEFAULT_TEMPERATURE
+                else table[name]
+            ),
+        )
+        for name, f in declared.items()
+        if name in table
+    }
     missing = [
         n
         for n, f in declared.items()
@@ -593,6 +619,9 @@ def spec_to_table(spec: Spec) -> dict[str, Any]:
     table: dict[str, Any] = {"mode": mode_of(spec).value}
     for f in fields(spec):
         value = getattr(spec, f.name)
+        if isinstance(spec, JudgeSpec) and f.name == "temperature" and value is None:
+            table[f.name] = API_DEFAULT_TEMPERATURE
+            continue
         if value is None and f.default is None:
             continue
         if isinstance(value, tuple):

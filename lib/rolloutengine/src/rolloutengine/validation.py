@@ -5,16 +5,20 @@
 
 from collections.abc import Mapping
 
-from shellbox.machine import MachineFactory
+from shellbox.machine import MachineFactory, NetworkPolicy
+from taskcompendium.integrity import SharedIntegrityContract
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
+    EXECUTION_RESOURCE_FIELDS,
     AnswerType,
     CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
+    ProviderNetworkAccess,
     ScriptGrader,
     TaskSpec,
     VerifyitGrader,
+    declared_verifier_timeout,
     grades_with_judge,
     require_resolved_environment,
 )
@@ -52,6 +56,29 @@ def task_machine_reason(task: TaskSpec) -> str | None:
 def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader."""
     task = spec.task
+    if isinstance(task.integrity_contract, SharedIntegrityContract):
+        if spec.task_machine is None or spec.task_machine.user != str(task.integrity_contract.agent_uid):
+            raise ValueError("SHARED task actor user must match the integrity contract agent_uid")
+    if any(
+        requirement.network_access is ProviderNetworkAccess.SERVICE_ONLY
+        for requirement in task.environment_requirements.tool_providers.values()
+    ):
+        if spec.task_machine is not None and spec.task_machine.network is not NetworkPolicy.DENY:
+            raise ValueError("Service-only task tools require a network-denied actor and a private relay")
+    for runtime, declared in (
+        (spec.task_machine, task.execution_requirements),
+        (spec.verifier_machine, task.verifier_execution_requirements),
+    ):
+        if runtime is None or declared is None:
+            continue
+        if any((getattr(runtime, name) or 0) < getattr(declared, name) for name in EXECUTION_RESOURCE_FIELDS):
+            raise ValueError("Selected machine is smaller than the task's declared allocation")
+    if declared := task.execution_requirements:
+        if spec.limits.total_turn_timeout is None or spec.limits.total_turn_timeout > declared.agent_timeout_sec:
+            raise ValueError("Rollout actor limit must honor the task's declared deadline")
+    minimum = declared_verifier_timeout(task)
+    if minimum is not None and spec.limits.verifier_timeout is not None and spec.limits.verifier_timeout < minimum:
+        raise ValueError("Rollout verifier limit is shorter than the task's declared deadline")
     grader = task.grader
     judge = grades_with_judge(grader)
     host_judge = judge and isinstance(grader, VerifyitGrader)

@@ -22,8 +22,8 @@ from typing import Annotated, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from shellbox.machine import Backend, PackageSpec, UnsupportedMachineSpec
 from shellbox.machine import CommandSemantics as CommandSemantics
-from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -42,6 +42,8 @@ from verifyit.spec import (
     StdioSpec,
     spec_from_table,
 )
+
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract, SharedIntegrityContract
 
 SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
@@ -329,11 +331,16 @@ class ResourceGroups(BaseModel):
         return self
 
 
+class ProviderNetworkAccess(StrEnum):
+    SERVICE_ONLY = "service_only"
+
+
 class ProviderRequirement(BaseModel):
     """One versioned action interface and literal JSON initial state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    network_access: ProviderNetworkAccess | None = Field(default=None, exclude_if=lambda value: value is None)
     action_interface: str = Field(min_length=1)
     initial_state: JsonValue = Field(repr=False)
 
@@ -358,6 +365,7 @@ class EnvironmentRequirements(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
+    required_backend: Backend | None = Field(default=None, exclude_if=lambda value: value is None)
     command_semantics: CommandSemantics | None = None
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
     docker_build: DockerBuildContext | None = None
@@ -626,7 +634,7 @@ class ScriptGrader(BaseModel):
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
-    timeout: float = Field(default=600.0, gt=0)
+    timeout: float | None = Field(default=600.0, gt=0)
     empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
     judge: JudgeSpec | None = None
 
@@ -915,6 +923,21 @@ AnswerFormat = Annotated[
 ]
 
 
+EXECUTION_RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb")
+
+
+class ExecutionRequirements(BaseModel):
+    """Task-declared machine capacity and phase deadlines, in MiB and seconds."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    cpus: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    storage_mb: int = Field(gt=0)
+    agent_timeout_sec: float = Field(gt=0)
+    verifier_timeout_sec: float = Field(gt=0)
+
+
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -923,6 +946,11 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
+    execution_requirements: ExecutionRequirements | None = Field(default=None, exclude_if=lambda value: value is None)
+    verifier_execution_requirements: ExecutionRequirements | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    integrity_contract: SharedIntegrityContract | RootDeliveryContract | MultiSweDeliveryContract | None = None
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
@@ -939,6 +967,12 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        if self.verifier_execution_requirements is not None:
+            if self.execution_requirements is None or any(
+                getattr(self.verifier_execution_requirements, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
@@ -966,3 +1000,8 @@ class TaskSpec(BaseModel):
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
         return self
+
+
+def declared_verifier_timeout(task: TaskSpec) -> float | None:
+    """Return the declared verifier budget, or None when the task has no allocation."""
+    return task.execution_requirements.verifier_timeout_sec if task.execution_requirements is not None else None

@@ -98,6 +98,12 @@ imports. A healthy baseline makes the failed task run a scored startup error; an
 baseline remains an infrastructure error. The task's original import paths and tests still
 run unchanged, so a candidate named after a standard-library module is graded as submitted.
 
+Judge tasks may set `parse_attempts` explicitly. When omitted, reference and checklist
+rubrics retain two parsing attempts and label rubrics retain one. An omitted
+`temperature` keeps Chat Completions at zero and leaves Responses at its API default.
+Explicit `None` selects the API default on either transport; TOML represents it as
+`temperature = "API default"`. Numeric temperatures are sent unchanged.
+
 For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
 budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
 request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with

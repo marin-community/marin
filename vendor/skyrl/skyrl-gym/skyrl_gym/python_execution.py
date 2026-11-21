@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from rolloutengine.cleanup import finish_cleanup
 from shellbox.machine import Command, ExitReason, Machine, Result
 
@@ -16,6 +16,7 @@ KERNEL_STARTUP_TIMEOUT = 40.0
 KERNEL_CLEANUP_TIMEOUT = 10.0
 KERNEL_OUTPUT_LIMIT_BYTES = 65536
 KERNEL_RESULT = TypeAdapter(Result)
+PYTHON_TOOL_NAME = "stateful_python_code_exec"
 
 
 class PythonKernel:
@@ -103,3 +104,13 @@ class PythonKernel:
         if result.reason != ExitReason.EXITED or result.exit_code != 0:
             raise RuntimeError(f"Python kernel cleanup failed: {result.stderr.decode(errors='replace')}")
         self.started = False
+
+
+async def python_tool_output(kernel: PythonKernel, name: str, arguments: JsonValue) -> str:
+    """Execute the NeMo stateful Python action and preserve its observation format."""
+    if name != PYTHON_TOOL_NAME:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+    if not isinstance(arguments, dict) or not isinstance(arguments.get("code"), str):
+        return json.dumps({"error": f"{PYTHON_TOOL_NAME} requires a string code argument"})
+    result = await kernel.execute(arguments["code"], timeout=10)
+    return (result.stdout + result.stderr).decode().removesuffix("\n")

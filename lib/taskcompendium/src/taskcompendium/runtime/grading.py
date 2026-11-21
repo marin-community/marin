@@ -123,7 +123,7 @@ async def _run_checked(machine: Machine, command: Command, failure: str) -> None
         )
 
 
-async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
+async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float | None) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
     result = await machine.run(
         Command(
@@ -288,7 +288,9 @@ def _reward_value(data: bytes, file_format: RewardFileFormat, key: str) -> tuple
     return reward, detail
 
 
-async def _file_reward(machine: Machine, reward: FileReward, timeout: float, diagnostics: dict[str, Any]) -> GradeResult:
+async def _file_reward(
+    machine: Machine, reward: FileReward, timeout: float | None, diagnostics: dict[str, Any]
+) -> GradeResult:
     for file in reward.files:
         result = await machine.run(
             Command(
@@ -325,7 +327,7 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
-async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float) -> GradeResult:
+async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float | None) -> GradeResult:
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
@@ -357,7 +359,7 @@ async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float)
     return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
 
 
-async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float) -> GradeResult:
+async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float | None) -> GradeResult:
     result = await machine.run(
         Command(
             (
@@ -397,7 +399,7 @@ class _SandboxGrading:
     spec: Spec | None
     environment: EnvironmentRequirements
     workspace: str
-    limit: float
+    limit: float | None
     collect: tuple[VerifierCommand, ...]
     artifacts: tuple[VerifierArtifact, ...]
 
@@ -411,7 +413,9 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
             grader, verifyit_spec(grader), grader.environment, grader_workspace(grader), limit, (), ()
         )
     elif isinstance(grader, ScriptGrader):
-        limit = grader.timeout if timeout is None else min(timeout, grader.timeout)
+        limit = grader.timeout
+        if timeout is not None:
+            limit = timeout if limit is None else min(timeout, limit)
         grading = _SandboxGrading(grader, None, grader.environment, grader.cwd, limit, grader.collect, grader.artifacts)
     else:
         raise TypeError(
@@ -635,7 +639,7 @@ async def _grade_on(
     environment: EnvironmentRequirements,
     spec: Spec | None,
     grader: VerifyitGrader | ScriptGrader,
-    timeout: float,
+    timeout: float | None,
     *,
     preparation_timeout: float | None,
     user: str | None,
