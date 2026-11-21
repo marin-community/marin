@@ -110,12 +110,22 @@ EGRESS_POLICIES = {
 }
 
 
-def _exec_was_shed(error: Exception) -> bool:
-    """The controller refused the exec before running it because its exec pool was full.
+# lib/iris's ``BoundedThreadExecutor`` raises this before the exec handler runs when the controller's exec pool is
+# full. Iris attaches no typed detail, so the text is matched exactly; a test pins it against the real executor.
+EXEC_ADMISSION_REFUSED = "Blocking RPC capacity exhausted"
 
-    Only this refusal is retried: after any other error the command may already have run.
+
+def _exec_was_refused(error: BaseException) -> bool:
+    """The controller's exec pool refused the exec before its handler ran.
+
+    Only this refusal is retried. Any other RESOURCE_EXHAUSTED may follow execution: the generated client also
+    raises it for a reply larger than its configured read limit.
     """
-    return isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED
+    return (
+        isinstance(error, ConnectError)
+        and error.code == Code.RESOURCE_EXHAUSTED
+        and error.message == EXEC_ADMISSION_REFUSED
+    )
 
 
 def _raise_if_unreachable(error: BaseException) -> None:
@@ -149,7 +159,8 @@ DEAD_CONTAINER_MARKERS = (
     "not running",
     "container not found",
 )
-# The Kubernetes client raises this when the exec websocket fails before the command is sent.
+# The Kubernetes client raises this when the exec websocket upgrade gets no reply. The client sends the command in
+# the upgrade request, so the command may have run.
 EXEC_SETUP_FAILURE = "'NoneType' object has no attribute 'decode'"
 PARENT_TERMINATED = re.compile(r"Cannot submit job: parent job .+ has terminated \(state=JOB_STATE_\w+\)")
 
@@ -252,7 +263,7 @@ class IrisMachine:
         self._in_flight: dict[str, list[str]] = {}
 
     def _send(self, argv: list[str], timeout: float | None) -> controller_pb2.Controller.ExecInContainerResponse:
-        """Send one exec, retrying only a full pool; a reply saying it was never sent raises ``ExecSetupFailed``."""
+        """Send one exec, retrying only the exec pool's admission refusal."""
         seconds = math.ceil(timeout) if timeout is not None else -1
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
@@ -273,17 +284,14 @@ class IrisMachine:
                     del self._in_flight[attempt_id]
                     self._admission.notify_all()
 
-        response = retry_with_backoff(
+        return retry_with_backoff(
             attempt,
-            retryable=_exec_was_shed,
+            retryable=_exec_was_refused,
             max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
             max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
             backoff=EXEC_SHED_BACKOFF,
             operation=f"Iris exec in {self.task.task_id}",
         )
-        if response.error == EXEC_SETUP_FAILURE:
-            raise ExecSetupFailed(f"Iris exec failed: {response.error}")
-        return response
 
     def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
         """Run a helper exec; ``run`` classifies its own command's exec separately."""
@@ -294,6 +302,8 @@ class IrisMachine:
             if isinstance(error, ConnectError):
                 self._raise_if_terminated(error)
             raise
+        if response.error == EXEC_SETUP_FAILURE:
+            raise ExecSetupFailed(f"Iris exec failed: {response.error}")
         lines = (response.error or (response.stderr if response.exit_code else "")).splitlines()
         if lines and lines[-1].startswith(UNKNOWN_EXEC_STATUS):
             detail = _exec_status_detail(lines[-1])
@@ -433,13 +443,18 @@ class IrisMachine:
             f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
-        # Only the dispatch's own proof that the command was never sent may be retried on this machine:
-        #   dispatch  setup failed, pool full, or never connected  -> ExecSetupFailed / MachineUnavailable (retry)
-        #             deadline                                     -> TIMED_OUT, machine closed
-        #             any other error                              -> unattributed outcome
-        #   decide    reply without the command's exit status      -> unattributed outcome
-        #   capture   any error                                    -> CommandOutcomeUnknown
-        #   cleanup   any error or nonzero exit                    -> logged; outcome unchanged
+        # The command may be retried on this machine only when it was positively never sent: the connection was
+        # refused before any request bytes were written, or the exec pool refused admission before its handler ran.
+        #   dispatch  never connected, or admission refused  -> MachineUnavailable (retry)
+        #             machine closed before admitting it     -> MachineTerminated
+        #             deadline                               -> TIMED_OUT, machine closed
+        #             any other error                        -> unattributed outcome
+        #   decide    reply without the command's exit status, including the WebSocket setup-failure text,
+        #             which the Kubernetes client reports after an exec whose upgrade reply was lost
+        #                                                    -> unattributed outcome
+        #   capture   guest helper failed or sandbox gone    -> GuestHelperFailed / MachineTerminated
+        #             any other error                        -> CommandOutcomeUnknown
+        #   cleanup   any error or nonzero exit              -> logged; outcome unchanged
         # An unattributed outcome is CommandOutcomeUnknown, or MachineTerminated once the sandbox is gone.
         try:
             try:
@@ -449,10 +464,10 @@ class IrisMachine:
             except TimeoutError:
                 await self.close()
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-            except (ExecSetupFailed, MachineTerminated):
-                raise  # Never sent: setup failed, or the machine closed before admitting the exec.
+            except MachineTerminated:
+                raise  # The machine closed before admitting the exec.
             except Exception as error:
-                if _exec_was_shed(error) or _never_connected(error):
+                if _exec_was_refused(error) or _never_connected(error):
                     raise MachineUnavailable(f"Iris exec was never sent: {error}") from error
                 raise await asyncio.to_thread(self._unattributed_outcome, repr(error), False) from error
             if (failure := _command_failure(response)) is not None:
@@ -461,6 +476,8 @@ class IrisMachine:
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
+            except (GuestHelperFailed, MachineTerminated):
+                raise  # Known outcomes: a broken guest helper holds, and a dead or OOM-killed sandbox keeps its kind.
             except Exception as error:
                 raise CommandOutcomeUnknown(f"The command ran; its output was lost: {error!r}") from error
             return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
