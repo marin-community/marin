@@ -215,6 +215,56 @@ class FileMachine(LocalGradingMachine):
 
 
 @pytest.mark.asyncio
+async def test_collect_graded_nop_collects_the_prepared_workspace_without_a_contract(tmp_path, monkeypatch):
+    """A shared task whose grader declares the collect bridge exports and runs its liveness control.
+
+    The nop starts the task machine, runs the declared collect commands against the prepared
+    workspace, and grades the collected state beside an empty answer in the grader's own
+    environment: the initial workspace scores zero, so the control proves no reward leakage.
+    """
+    build = DockerBuildContext(files=(
+        inline_resource("Dockerfile", b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY initial value\n"),
+        inline_resource("initial", b"base"),
+    ))
+    environment = EnvironmentRequirements(capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS,
+                                          docker_build=build, working_directory="/app")
+    source_check = 'if [ "$(cat value)" = gold ]; then printf 1; else printf 0; fi > collected.txt'
+    task = TaskSpec(
+        id="collect-graded-nop", source=Source(dataset="fixture", revision="pin", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Replace value with gold."),)),
+        answer_type=AnswerType.WORKSPACE_STATE, answer_format=PlainText(), environment_requirements=environment,
+        grader=ScriptGrader(argv=("cp", "/source-reward.txt", "/logs/verifier/reward.txt"), environment=environment, answer_path=None, timeout=None,
+                            collect=(VerifierCommand(argv=("bash", "-c", source_check), cwd="/app"),),
+                            artifacts=(VerifierArtifact(source="/app/collected.txt", target="/source-reward.txt", kind=ArtifactKind.FILE),),
+                            reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))),
+        resources=ResourceGroups(worker=(inline_resource("app/gold", b"gold"),), oracle=(inline_resource("solution/solve.sh", b"cp gold value\n"),)),
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS, docker_build=DockerBuildExecution.DECLARATIVE)
+    machines = Machines(tmp_path / "sandboxes", disk_pool=object())
+    original_create = machines.create
+
+    async def create(spec):
+        machine = await original_create(spec)
+        machine.local("/tmp").mkdir()
+        machine.local("/app/value").write_bytes((spec.source.context / "initial").read_bytes())
+        return machine
+
+    monkeypatch.setattr(machines, "create", create)
+    monkeypatch.setattr(adapter, "DaytonaDeclarativeMachineFactory", lambda client, **kwargs: machines)
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name="nop", trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="nop"),
+        environment=EnvironmentConfig(type="daytona", kwargs={"provisioning": "declarative"}),
+    ), host_capabilities=HostCapabilities(daytona=DaytonaConnection("fixture-key", "https://offline.invalid", "us")))
+    result = await trial.run()
+    assert result.exception_info is None, result.exception_info
+    # The collect ran against the prepared workspace: the initial value scores zero.
+    assert result.verifier_result.rewards == {"reward": 0.0}
+    assert len(machines.machines) == 2 and all(machine.closed for machine in machines.machines)
+
+
+@pytest.mark.asyncio
 async def test_declarative_task_spec_accepts_attempt_timeout_argument(tmp_path, monkeypatch):
     """The campaign passes trial_attempt_timeout_sec to every Daytona task; the TaskSpec
     path pins the JOB provider wait policy that argument selects and must consume it

@@ -473,6 +473,22 @@ class TaskSpecTrial(Trial):
             cleanup_timeout=self.config.trial_cleanup_grace_sec,
         )
 
+    def _empty_control_collects_workspace(self) -> bool:
+        """Whether the liveness control must collect grader inputs from the prepared workspace.
+
+        An empty submission otherwise grades in a fresh machine with no task machine. When the
+        script grader declares the collect commands or artifact copies that bridge the agent
+        workspace into grading, those declarations run against the prepared workspace exactly as
+        an oracle control's grading collects them, so the control needs the task machine.
+        """
+        task = self.specification
+        return (
+            isinstance(self.agent, TaskSpecEmptyAgent)
+            and not isinstance(task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract))
+            and isinstance(task.grader, ScriptGrader)
+            and bool(task.grader.collect or task.grader.artifacts)
+        )
+
     async def _prepare(self) -> None:
         task = self.specification
         self.result.environment_setup = TimingInfo(started_at=self._now())
@@ -552,7 +568,7 @@ class TaskSpecTrial(Trial):
                         materialize_docker_build, environment.docker_build, contexts / role
                     )
         self._resources_qualified = True
-        if self.network_policy.actor_required:
+        if self.network_policy.actor_required or self._empty_control_collects_workspace():
             factory = _NetworkFactory(self.factory, self, "task_machine")
             if (
                 isinstance(self.agent, TaskSpecOracleAgent)
@@ -751,13 +767,18 @@ class TaskSpecTrial(Trial):
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
-            if isinstance(self.agent, TaskSpecEmptyAgent) and not isinstance(task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)):
+            if isinstance(self.agent, TaskSpecEmptyAgent) and not isinstance(
+                task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)
+            ):
                 return await grade_empty_in_sandbox(
                     task,
                     factory,
                     spec,
                     timeout=self.shape.verifier_timeout_sec,
                     judge_connection=connection,
+                    # A collect-graded control collects the prepared workspace, so the
+                    # grading needs the task machine exactly as an oracle control does.
+                    task_machine=self.machine if self._empty_control_collects_workspace() else None,
                 )
             return await grade_in_sandbox(
                 task,

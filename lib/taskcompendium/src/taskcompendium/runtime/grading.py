@@ -530,16 +530,19 @@ async def grade_empty_in_sandbox(
     *,
     timeout: float | None = None,
     judge_connection: JudgeConnection | None = None,
+    task_machine: Machine | None = None,
 ) -> GradeResult:
     """Grade an agent that submitted nothing, staged in a fresh machine as ``grade_in_sandbox`` stages a rollout.
 
     The grader receives the task's resources, its conversation ending in an empty assistant reply,
     an empty file where it reads an answer file, and no workspace files. This runs the grader
     regardless of the task's empty-submission policy, so its result shows whether the grader runs
-    and what it awards an empty answer. Graders that collect inputs from the task machine are
-    unsupported. Machine failures propagate.
+    and what it awards an empty answer. Graders that collect inputs from the task machine need
+    that machine: ``task_machine`` carries the prepared workspace whose collect commands and
+    artifact copies bridge into grading, exactly as an oracle control's grading collects them.
+    Machine failures propagate.
     """
-    grading = _sandbox_grading(task, None, timeout)
+    grading = _sandbox_grading(task, task_machine, timeout)
     validate_machine_spec(grading.environment, factory, machine_spec)
     if isinstance(grading.grader, ScriptGrader):
         answer_file = grading.grader.answer_path
@@ -549,7 +552,15 @@ async def grade_empty_in_sandbox(
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
     submissions = [] if answer_file is None else [StagedFile(answer_file, b"")]
     return await _grade_staged(
-        task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ), judge_connection
+        task,
+        attempt,
+        grading,
+        submissions,
+        factory,
+        machine_spec,
+        task_machine,
+        dict(os.environ),
+        judge_connection,
     )
 
 

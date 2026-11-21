@@ -60,7 +60,7 @@ from taskcompendium.models import (
     VerifierArtifact,
     VerifierCommand,
 )
-from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.verifyit_runtime import ENTRY_PATH
 
@@ -697,3 +697,46 @@ async def test_setup_fixture_at_the_answer_path_is_replaced_after_setup(tmp_path
         GRADER_MACHINE,
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
+
+
+@pytest.mark.asyncio
+async def test_empty_submission_collects_the_prepared_workspace_and_scores_zero():
+    """The liveness control's collect path bridges the prepared workspace for an empty answer.
+
+    The nop for a collect-graded task runs the same collect commands and artifact copies
+    against the prepared workspace that an oracle control's grading runs, so the grader
+    sees the untouched initial state beside an empty answer and must not credit it. The
+    grader runs regardless of the empty-submission policy.
+    """
+    agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
+    await agent.run(Command(("sh", "-c", "printf fixture > /app/fixture.txt")))
+    report = """test "$(cat /grader/fixture.txt 2>/dev/null)" = fixture || exit 1
+test ! -s /grader/answer.txt || exit 1
+printf '{"reward": 0}' > /logs/verifier/reward.json
+"""
+    grader = ScriptGrader(
+        argv=("sh", "-c", report),
+        environment=GRADER_ENVIRONMENT,
+        answer_path="/grader/answer.txt",
+        artifacts=(VerifierArtifact(source="/app/fixture.txt", target="/grader/fixture.txt", kind=ArtifactKind.FILE),),
+        reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
+    )
+    task = arithmetic_task(grader)
+
+    result = await grade_empty_in_sandbox(task, FixtureImageFactory(), GRADER_MACHINE, task_machine=agent)
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result.error
+
+
+@pytest.mark.asyncio
+async def test_empty_submission_without_a_task_machine_refuses_a_collect_grader():
+    """A collect grader without the task machine still refuses: there is nothing to collect from."""
+    grader = ScriptGrader(
+        argv=("true",),
+        environment=GRADER_ENVIRONMENT,
+        collect=(VerifierCommand(argv=("true",)),),
+        reward=FileReward(files=(RewardFile(path=REWARD_TXT, format=RewardFileFormat.NUMBER),)),
+    )
+    task = arithmetic_task(grader)
+    with pytest.raises(ValueError, match="Collecting grader inputs requires the task machine"):
+        await grade_empty_in_sandbox(task, FixtureImageFactory(), GRADER_MACHINE)
