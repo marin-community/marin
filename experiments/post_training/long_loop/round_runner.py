@@ -529,8 +529,9 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     if round_spec.sft.first_collective_call_timeout is not None:
         sft["first_collective_call_timeout"] = round_spec.sft.first_collective_call_timeout
     if round_spec.sft.compiler_dumps:
-        sft["trainer"]["log_jaxprs"] = True
-        sft["trainer"]["log_xla_hlo"] = True
+        # Python re-tracing can run fused-CE host collectives; compiler dumps need no extra trace.
+        sft["trainer"]["log_jaxprs"] = False
+        sft["trainer"]["log_xla_hlo"] = False
         sft["trainer"]["xla_dump_upload"] = {"enabled": True, "ttl_days": 30}
         sft["xla_flags"] = [*sft["xla_flags"], "--xla_dump_to=/tmp/long-loop-xla", "--xla_dump_hlo_as_text"]
     if round_spec.sft.expert_weight_sharding:

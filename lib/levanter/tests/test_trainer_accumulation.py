@@ -16,6 +16,7 @@ from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import MAX_WANDB_ARTIFACT_BYTES, WandbTracker
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
+from levanter.utils import jax_utils
 from levanter.utils.mesh import MeshConfig
 
 
@@ -38,6 +39,54 @@ def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
 class WeightedBatch(eqx.Module):
     values: hax.NamedArray
     weights: hax.NamedArray
+
+
+@pytest.mark.parametrize("debug_path", ["jaxpr_writer", "hlo_lowering"])
+def test_multihost_debug_artifacts_never_enter_distributed_barriers(tmp_path, monkeypatch, debug_path):
+    calls = []
+
+    class Coordinator:
+        def key_value_set(self, key, value):
+            calls.append(("put", key))
+
+        def wait_at_barrier(self, barrier, **kwargs):
+            calls.append(("barrier", barrier))
+            raise RuntimeError("Only rank zero reached the debug barrier")
+
+    def debug_fn(value):
+        jax_utils.multihost_allgather_sync({"debug": True})
+        return value
+
+    class LoweringFn:
+        def lower(self, value):
+            return debug_fn(value)
+
+        def __call__(self, value):
+            return value + 1
+
+    config = TrainerConfig(
+        id="multihost-debug-barrier-regression",
+        train_batch_size=1,
+        mesh=MeshConfig(axes={"data": 1, "model": 1, "replica": 1, "context": 1}),
+        tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+        require_accelerator=False,
+        log_jaxprs=debug_path == "jaxpr_writer",
+        log_xla_hlo=debug_path == "hlo_lowering",
+    )
+    with Trainer(config, optax.sgd(0.1), lambda model, batch: model, add_default_hooks=False) as trainer:
+        monkeypatch.setattr(jax, "process_count", lambda: 32)
+        monkeypatch.setattr(jax, "process_index", lambda: 0)
+        monkeypatch.setattr(jax_utils.jax_distributed.global_state, "client", Coordinator())
+        # Reproduce the unsafe trace against the real allgather helper and a failing I/O boundary.
+        with pytest.raises(RuntimeError):
+            eqx.filter_make_jaxpr(debug_fn)(np.asarray(1.0))
+        assert [kind for kind, _ in calls] == ["put", "barrier"]
+        calls.clear()
+        if debug_path == "jaxpr_writer":
+            trainer._write_debug_artifacts("train_step", debug_fn, (np.asarray(1.0),), {}, None)
+        else:
+            assert trainer._maybe_save_jaxpr("train_step", LoweringFn(), np.asarray(1.0)) == 2.0
+        assert calls == []
 
 
 @pytest.mark.parametrize("key_factory", [jax.random.key, jax.random.PRNGKey])

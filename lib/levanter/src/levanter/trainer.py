@@ -959,7 +959,11 @@ class Trainer:
             self._compiled_journal_variants.add(name)
         if (self.config.log_jaxprs or self.config.log_xla_hlo) and name not in self._logged_jaxprs:
             self._logged_jaxprs.add(name)
-            if jax.process_index() == 0:
+            if jax.process_count() > 1:
+                logger.warning(
+                    "Skipping optional JAXPR/HLO artifacts with multiple JAX processes: tracing can synchronize ranks."
+                )
+            else:
                 try:
                     if self.config.log_xla_hlo and lowered is None:
                         lowered = fn.lower(*args, **kwargs)
@@ -986,6 +990,9 @@ class Trainer:
         return fn(*args, **kwargs)
 
     def _write_debug_artifacts(self, name, fn, args, kwargs, lowered):
+        if jax.process_count() > 1:
+            logger.warning("Refusing distributed debug tracing; use compiler-produced XLA dumps.")
+            return
         try:
             with haliax.partitioning.set_mesh(self.device_mesh), hax.axis_mapping(self.parameter_axis_mapping):
                 if self.config.log_jaxprs:
