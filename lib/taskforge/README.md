@@ -161,14 +161,19 @@ workpieces are resumed only when the launch passes `--resume-held`; use it under
 after an infrastructure outage (sandbox admission, a provider gap longer than
 `provider.unavailable_wait`). Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear.
-Each re-executed command or file operation is matched to the next unconsumed recording of the
-same operation on the same machine history, taken from the earlier launches in order; one beyond
-those recordings returns its fresh result. A matched command returns its recorded output, so later
-model calls replay even when its text drifts (a PID, a timestamp, the truncation flag); each drift
-is logged at INFO as a `Replay of <kind> diverged` note naming digests only. A matched operation
-holds the workpiece as `Unreproducible` when it fails where its recording succeeded, when a command
-exits with another status, when a read returns other bytes, or when sibling machines with one
-history recorded different results at once.
+Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
+its initial sandbox definition; each command or file operation it issues references that row, takes the
+next position in the owner's history, and its outcome references the request. A resumed attempt is
+served the outcome recorded at each position of the longest prefix its owner established, and runs a
+request at a frontier (one whose outcome was never recorded) live once; a request beyond the history
+returns its fresh result. A served command returns its recorded output, so later model calls replay
+even when its text drifts (a PID, a timestamp, the truncation flag); each drift is logged at INFO as a
+`Replay of <kind> diverged` note naming digests only. A handled guest failure (an `OSError` such as a
+missing file) is recorded by errno name and text and served again when the guest fails the same way.
+The workpiece holds as `Unreproducible` when an owner reopens on another sandbox definition, issues
+another request at a recorded position, changes an outcome (success, errno, exit status or read
+bytes), or returns normally before its recorded history ends. A journal whose sandbox rows name no
+owner (written before this format) exits 4 with its root untouched; migrate it.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
 its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
 A workpiece process cancelled in-process publishes a terminal head only with the workpiece that
