@@ -477,10 +477,17 @@ class IrisMachine:
             self._guest_timer = _timer_paths((await self._script(GUEST_TIMER_PROBE)).stdout)
         return self._guest_timer
 
-    async def _close_because(self, reason: str) -> None:
+    async def _close_because(self, reason: str, outcome: BaseException | None = None) -> None:
+        """Close for ``reason``; a failed cancel is a note on ``outcome``, which stays the error, or else logged."""
         if not self._closed:
             self._closed_because = reason
-        await self.close()
+        try:
+            await self.close()
+        except Exception as cleanup_error:
+            if outcome is None:
+                logger.warning("Sandbox cleanup failed after %s: %s", reason, cleanup_error)
+            else:
+                outcome.add_note(f"Sandbox cleanup failed: {cleanup_error}")
 
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Iris does not provide confirmed scoped descendant teardown")
@@ -582,7 +589,7 @@ class IrisMachine:
                     tail = response.stderr.strip()[-300:]
                     detail = f"no completion record ({state})" + (f": {tail}" if tail else "")
                     outcome = await asyncio.to_thread(self._unattributed_outcome, detail, False)
-                    await self._close_because(f"command {preview!r} ended with {detail}")
+                    await self._close_because(f"command {preview!r} ended with {detail}", outcome)
                     raise outcome
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
@@ -592,8 +599,8 @@ class IrisMachine:
             except Exception as error:
                 raise CommandOutcomeUnknown(f"The command ran; its output was lost: {error!r}") from error
             return Result(exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
-        except asyncio.CancelledError:
-            await self._close_because(f"command {preview!r} was cancelled")
+        except asyncio.CancelledError as cancelled:
+            await self._close_because(f"command {preview!r} was cancelled", cancelled)
             raise
         finally:
             if not self._closed:

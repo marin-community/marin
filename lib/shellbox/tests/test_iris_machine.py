@@ -1340,3 +1340,78 @@ def test_budget_is_checked_before_the_user_lookup(tmp_path, timeout) -> None:
         assert rpc.scripts == []
 
     asyncio.run(scenario())
+
+
+class CancelFailingJob(LocalJob):
+    """A sandbox job whose TerminateJob RPC fails as the generated client reports it."""
+
+    def __init__(self, code: Code):
+        super().__init__()
+        self.code = code
+
+    def cancel(self):
+        super().cancel()
+        raise ConnectError(self.code, f"TerminateJob failed: {self.code.value}")
+
+
+CANCEL_FAILURES = [Code.UNAVAILABLE, Code.PERMISSION_DENIED]  # HTTP 503 and 403.
+
+
+# Review follow-up 2026-11-21: after a lone `timer 137` was classified, a failed TerminateJob replaced the OOM or
+# unknown outcome with the bare transport error, so Taskforge exited through its generic error path, not a hold.
+@pytest.mark.parametrize("code", CANCEL_FAILURES, ids=["503", "403"])
+@pytest.mark.parametrize(
+    "status,expected", [(OOM_KILLED, MachineResourceExhausted), (RUNNING, CommandOutcomeUnknown)], ids=["oom", "unknown"]
+)
+def test_failed_close_keeps_the_classified_outcome(tmp_path, code, status, expected) -> None:
+    task = LocalTask(TaskState.RUNNING)
+    machine, job = local_machine(tmp_path, ReplyRpc("printf partial", "timer 137\n"), task, CancelFailingJob(code))
+
+    async def scenario() -> None:
+        await machine.run(Command(("true",), timeout=5))
+        task.status = observed = CountedStatus(status)
+        with pytest.raises(expected) as caught:
+            await machine.run(Command(("printf", "partial"), timeout=1))
+        assert type(caught.value) is expected
+        assert caught.value.__notes__ == [f"Sandbox cleanup failed: TerminateJob failed: {code.value}"]
+        assert observed.calls == 1 and job.cancelled
+        with pytest.raises(MachineTerminated, match=r"ended with no completion record \(timer 137\)"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("code", CANCEL_FAILURES, ids=["503", "403"])
+def test_failed_close_keeps_a_host_deadline_timeout_and_a_cancellation(tmp_path, code, caplog) -> None:
+    async def deadline() -> None:
+        machine, _ = local_machine(tmp_path, DeadlineRpc(), job=CancelFailingJob(code))
+        slow = await machine.run(Command(("sleep", "30"), timeout=0.3))
+        assert (slow.reason, slow.exit_code) == (ExitReason.TIMED_OUT, None)
+        with pytest.raises(MachineTerminated, match="got no exec reply"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(deadline())
+    assert "Sandbox cleanup failed after command 'sleep 30' got no exec reply" in caplog.text
+
+    admitted, release = threading.Event(), threading.Event()
+
+    class HeldRpc(CountingRpc):
+        def exec_in_container(self, request, timeout_ms):
+            if is_command_exec(request.command[-1]):
+                admitted.set()
+                release.wait(timeout=10)
+            return super().exec_in_container(request, timeout_ms)
+
+    async def cancelled() -> None:
+        machine, _ = local_machine(tmp_path, HeldRpc(), job=CancelFailingJob(code))
+        running = asyncio.create_task(machine.run(Command(("true",))))
+        await asyncio.to_thread(admitted.wait, 10)
+        running.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await running
+        assert caught.value.__notes__ == [f"Sandbox cleanup failed: TerminateJob failed: {code.value}"]
+        with pytest.raises(MachineTerminated, match="'true' was cancelled"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(cancelled())

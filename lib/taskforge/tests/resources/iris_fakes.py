@@ -52,6 +52,8 @@ class Fault(StrEnum):
     """The exec stream drops and the loss arrives as a ConnectRPC error."""
     OOM_KILLED = "oom-killed"
     """The sandbox task is OOM-killed: its exec stream drops and the status lookup reports OOMKilled."""
+    TIMER_KILLED = "timer-killed"
+    """The guest timer exits 137 without the command's record, as when its KILL escalation ends the command."""
 
 
 NEVER_AFTER_RUN = {
@@ -96,6 +98,8 @@ def injections(site: str, fault: Fault) -> tuple[Injection, ...]:
     """Each physically possible way ``fault`` can hit ``site``: before the exec ran and, where it can, after."""
     if fault is Fault.SETUP_FAILED_LATE:
         return () if site == "status" else ((site, fault, True),)
+    if fault is Fault.TIMER_KILLED:
+        return ((site, fault, True),) if site == "command" else ()
     unsent = (site, fault, False)
     return (unsent,) if fault in NEVER_AFTER_RUN or site == "status" else (unsent, (site, fault, True))
 
@@ -165,18 +169,22 @@ class LocalController:
             self._execute(shell, script)
         assert not (ran and fault in NEVER_AFTER_RUN), NEVER_AFTER_RUN.get(fault)
         self.oom_killed = self.oom_killed or fault is Fault.OOM_KILLED
+        if fault is Fault.TIMER_KILLED:
+            return SimpleNamespace(exit_code=0, stdout="timer 137\n", stderr="", error="")
         if fault in REPLIES:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error=REPLIES[fault])
         _raise(fault)
 
 
-def local_iris_machine(workdir: Path, controller: LocalController) -> IrisMachine:
+def local_iris_machine(
+    workdir: Path, controller: LocalController, cancel: Callable[[], None] = lambda: None
+) -> IrisMachine:
     task = SimpleNamespace(task_id=JobName.from_wire("/fixture/sandbox/0"), status=controller.status)
     return IrisMachine(
         SimpleNamespace(close=lambda: None),  # type: ignore[arg-type]
         SimpleNamespace(shutdown=lambda: None),  # type: ignore[arg-type]
         controller,  # type: ignore[arg-type]
-        SimpleNamespace(cancel=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(cancel=cancel),  # type: ignore[arg-type]
         task,  # type: ignore[arg-type]
         MachineSpec(source=RegistryImage("fixture"), workdir=str(workdir)),
     )
