@@ -195,7 +195,7 @@ async def run_adversary(
             status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
             return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
     finally:
-        await close_resource(env.close, ctx.emit)
+        await close_resource(env.close, ctx.notify)
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:

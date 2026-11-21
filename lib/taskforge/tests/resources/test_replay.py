@@ -27,12 +27,10 @@ from taskforge.resources.rollouts import SolverRollout
 
 
 def configure(ctx: Context, env: Env, client: InferenceClient, ids: Ids) -> None:
-    for resource in (env, client, ids):
-        ctx.resource(resource, resource.fingerprint)
-    ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
-    ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
-    ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
-    ctx.handle(NewId, new_id, uses=(ids,))
+    ctx.handle(RunCommand, partial(run_command, notify=ctx.notify), env)
+    ctx.handle(WriteFile, partial(write_file, notify=ctx.notify), env)
+    ctx.handle(InferenceRequest, partial(complete, notify=ctx.notify), client)
+    ctx.handle(NewId, new_id, ids)
 
 
 async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_path: Path) -> None:

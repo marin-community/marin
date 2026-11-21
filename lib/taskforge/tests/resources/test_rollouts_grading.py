@@ -171,13 +171,11 @@ async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> 
     spec = rollout_spec(arithmetic_task())
     if solver:
         resource = RolloutResource(engine, twelve, "cut-test")
-        ctx.resource(resource, resource.fingerprint)
-        ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.emit), uses=(resource,))
+        ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), resource)
         event = SolverRollout(spec, 0, 0)
     else:
         resource = GradingResource(engine, "cut-test")
-        ctx.resource(resource, resource.fingerprint)
-        ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(resource,))
+        ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
         event = GradeCandidate(spec, Candidate("12"))
     with pytest.raises(Restart):
         await ctx.emit(event)
@@ -235,8 +233,7 @@ print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/w
     )
     try:
         install_env(ctx, env)
-        ctx.resource(resource, resource.fingerprint)
-        ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(resource,))
+        ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
         await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))
         await ctx.emit(WriteFile(PurePosixPath("/workspace/answer.py"), b"print(12)"))
         await ctx.emit(WriteFile(PurePosixPath("/elsewhere/answer.py"), b"print(12)"))

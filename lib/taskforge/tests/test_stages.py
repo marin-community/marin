@@ -265,9 +265,9 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
     async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
         if event.candidate.reply == "13":
             raise OutputBudgetExhausted("output budget exhausted")
-        return await grade(event, grading, notify=ctx.emit)
+        return await grade(event, grading, notify=ctx.notify)
 
-    ctx.handle(GradeCandidate, output_limited, uses=(bundle.grading,))
+    ctx.handle(GradeCandidate, output_limited, bundle.grading)
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     (adversary,) = evidence.adversary
@@ -346,8 +346,7 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
         ),
         "broken",
     )
-    ctx.resource(grader, grader.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grader,))
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), grader)
     if cause is Cause.GRADER_INFRA:
         with pytest.raises(ExceptionGroup) as caught:
             await validate(ctx, workpiece, setup, bundle)

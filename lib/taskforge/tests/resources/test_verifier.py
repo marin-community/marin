@@ -213,8 +213,7 @@ async def test_fresh_confirmation_and_replay_require_no_shared_machine_state() -
     claim = AdversaryClaim("passes", candidate.candidate, RewardBand(Outcome.GRADED, 1, 1))
     try:
         ctx = Context(log=log)
-        ctx.resource(resource, resource.fingerprint)
-        ctx.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=ctx.emit), uses=(resource,))
+        ctx.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=ctx.notify), resource)
         first = await claim_result(ctx, candidate.spec, claim)
         await ctx.drain()
         assert first.met and first.grade is not None
@@ -222,8 +221,7 @@ async def test_fresh_confirmation_and_replay_require_no_shared_machine_state() -
         assert len(factory.machines) == 2 and factory.machines[1].closed
         await pool.close()
         replay = Context(log=EventLog(replay_from=log.records))
-        replay.resource(resource, resource.fingerprint)
-        replay.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=replay.emit), uses=(resource,))
+        replay.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=replay.notify), resource)
         assert await claim_result(replay, candidate.spec, claim) == first
         await replay.drain()
         assert len(factory.machines) == 2
@@ -282,8 +280,7 @@ async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
     fresh = FakeEngine((GradedRollout(Rollout("fresh", (), "stop"), GradeResult(Outcome.GRADED, 0)),))
     resource = GradingResource(shared, "test", fresh)
     ctx = Context(log=EventLog())
-    ctx.resource(resource, resource.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(resource,))
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
     candidate = event()
     finding = await claim_result(
         ctx, candidate.spec, AdversaryClaim("passes", candidate.candidate, RewardBand(Outcome.GRADED, 1, 1))

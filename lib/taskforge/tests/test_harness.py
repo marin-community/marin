@@ -85,14 +85,12 @@ def environment(ctx: Context) -> FakeEnv:
         ),
     }
     env = FakeEnv("image", scripts)
-    ctx.resource(env, env.fingerprint)
-    ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
-    ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
-    ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
+    ctx.handle(RunCommand, partial(run_command, notify=ctx.notify), env)
+    ctx.handle(ReadFile, partial(read_file, notify=ctx.notify), env)
+    ctx.handle(WriteFile, partial(write_file, notify=ctx.notify), env)
     web = FakeWeb({"query": "s" * 10000}, {"https://example.org": "f" * 10000})
-    ctx.resource(web, web.fingerprint)
-    ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
-    ctx.handle(WebFetch, partial(fetch, notify=ctx.emit), uses=(web,))
+    ctx.handle(WebSearch, partial(search, notify=ctx.notify), web)
+    ctx.handle(WebFetch, partial(fetch, notify=ctx.notify), web)
     return env
 
 
@@ -145,16 +143,14 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
     ) as client:
         web = ParallelWeb(client)
         ctx = Context(log=log)
-        ctx.resource(web, web.fingerprint)
-        ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
-        ctx.handle(WebFetch, partial(fetch, notify=ctx.emit), uses=(web,))
+        ctx.handle(WebSearch, partial(search, notify=ctx.notify), web)
+        ctx.handle(WebFetch, partial(fetch, notify=ctx.notify), web)
         assert json.loads(await ctx.emit(WebSearch("query"))) == {"results": ["evidence"]}
         await ctx.emit(WebFetch("https://example.org"))
         await ctx.drain()
         replay_web = FakeWeb({}, {}, identity=web.fingerprint().digest)
         replay = Context(log=EventLog(replay_from=log.records))
-        replay.resource(replay_web, replay_web.fingerprint)
-        replay.handle(WebSearch, partial(search, notify=replay.emit), uses=(replay_web,))
+        replay.handle(WebSearch, partial(search, notify=replay.notify), replay_web)
         assert json.loads(await replay.emit(WebSearch("query"))) == {"results": ["evidence"]}
         await replay.drain()
     assert [str(request.url) for request in requests] == [
@@ -170,8 +166,7 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     environment(ctx)
     settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
-    ctx.resource(grading, grading.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), grading)
     tool = GradeTool("/workspace/task.json", {}, settings)
     await ctx.emit(RunCommand("task", 30))
     first = await tool(ctx, {"reply": "12"})
@@ -274,8 +269,7 @@ async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructu
     ctx = Context(log=EventLog())
     environment(ctx)
     grading = GradingResource(Unreachable(), "fixture")
-    ctx.resource(grading, grading.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), grading)
     tool = GradeTool("/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits()))
     missing = await tool(ctx, {"reply": "12"})
     assert isinstance(missing, ToolResult) and "/workspace/task.json" in missing.content

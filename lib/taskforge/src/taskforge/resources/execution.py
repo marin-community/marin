@@ -3,7 +3,6 @@
 
 """Bounded retries shared by resource executors, outside the effect context."""
 
-import inspect
 import logging
 from asyncio import sleep
 from asyncio import timeout as deadline
@@ -12,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from taskforge.effects.events import Event, Note, Retrying
 from taskforge.effects.issues import Restart, Transient, describe_exception
 
-type Notify = Callable[[Event[None]], object]
+type Notify = Callable[[Event[None]], None]
 MAX_ATTEMPTS = 3
 
 
@@ -50,6 +49,4 @@ async def close_resource(action: Callable[[], Awaitable[None]], notify: Notify, 
     except Exception as error:
         message = f"Cleanup failed: {describe_exception(error)}"
         logging.warning(message, exc_info=error)
-        recorded = notify(Note(message))
-        if inspect.isawaitable(recorded):
-            await recorded
+        notify(Note(message))

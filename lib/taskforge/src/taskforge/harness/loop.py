@@ -65,10 +65,9 @@ class AgenticHarness(Harness):
         schemas = tuple(tool.schema for tool in tools.values())
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
-            ctx.resource(client, client.fingerprint)
-            ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
+            ctx.handle(InferenceRequest, partial(complete, notify=ctx.notify), client)
             while True:
-                await ctx.check(Hold)
+                await ctx.check()
                 if prompt_tokens >= self.max_prompt_tokens:
                     return Stopped(
                         StopReason.CONTEXT_LIMIT,
