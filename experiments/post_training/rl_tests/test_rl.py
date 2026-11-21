@@ -1148,7 +1148,6 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "use the preset's declared owned keys" in result.output
 
 
-@pytest.mark.timeout(300)  # The CLI cases each compose a native launch in the frozen CPU environment.
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
@@ -1318,12 +1317,21 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             runpy.run_module("first_model_entry", run_name="__main__", alter_sys=True)
         raise click.exceptions.Exit(completed.value.code)
 
+    def invoke(command, args=()):
+        # Native preflight has its own tests. Use the real composer to create
+        # recorded fixtures and inspect the native launch in this test.
+        with monkeypatch.context() as preflight:
+            preflight.setattr(
+                gate, "compose_configs", lambda paths, **_: [{"runtime": {"training_type": "async"}} for _ in paths]
+            )
+            return CliRunner().invoke(command, args)
+
     for override in (None, "second_model_entry"):
         coordinator_module = override or "first_model_entry"
         module("first_model_entry", entry_module=override)
         if override is not None:
             module(override)
-        result = CliRunner().invoke(entry)
+        result = invoke(entry)
         assert result.exit_code == 0, (result.output, result.exception)
         assert "best_checkpoint_step: 10" in result.output and f"{preset.evaluations[0].name}@12/scored" in result.output
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
@@ -1350,7 +1358,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             forward_env=() if mode in {"environment-mismatch", "overlapping-environment-mismatch"} else ("HF_TEST_KEY",),
             policy_forward=() if mode == "dependency-environment-mismatch" else None,
         )
-        result = CliRunner().invoke(entry)
+        result = invoke(entry)
         assert result.exit_code == 3 and "coordinator rebuilt a different RL graph" in result.output, (
             result.output,
             result.exception,
@@ -1359,7 +1367,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     mode, coordinator_module = "failed-following", "first_model_entry"
     module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
-    result = CliRunner().invoke(entry)
+    result = invoke(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output
 
@@ -1382,7 +1390,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     step = built.runs[0]
     write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None)
     planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=12"]
-    result = CliRunner().invoke(
+    result = invoke(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
         planning_args,
     )
@@ -1395,7 +1403,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     mode, coordinator_module = "valid", "first_model_entry"
     module(coordinator_module)
-    resumed = CliRunner().invoke(entry)
+    resumed = invoke(entry)
     assert resumed.exit_code == 1 and len(native_calls) == 1, (resumed.output, resumed.exception)
     assert "best_checkpoint_step: none eligible" in resumed.output
 
@@ -1410,7 +1418,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         live_record.setattr(snowball_model, "SNOWBALL", replace(table, presets=(live_preset,)))
         recorded_runs(preset.name, live.runs[0].name, fingerprint=live.runs[0].fingerprint(), inputs=live.inputs)
     live_args = [*planning_args, "--checkpoints", "none", "--checkpoint-every", "0", "--export", "none"]
-    result = CliRunner().invoke(
+    result = invoke(
         snowball.command(table, argv=tuple(live_args), init=initializer, forward_env=("HF_TEST_KEY",)), live_args
     )
     assert result.exit_code == 1, (result.output, result.exception)
@@ -1423,5 +1431,5 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     module("first_model_entry")
     with edit_receipt(source) as receipt:
         receipt["result"]["state"] = "failed"
-    result = CliRunner().invoke(entry)
+    result = invoke(entry)
     assert result.exit_code == 3 and published[-1].status == "failed", (result.output, result.exception)
