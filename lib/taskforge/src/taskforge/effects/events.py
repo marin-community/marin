@@ -132,12 +132,17 @@ class Failed(Event[None]):
 
 
 HANDLED_FAILURE = OSError
-"""The one caller-visible, recoverable failure of a re-executed request: recorded as ``Failed`` and handed to the model
-as tool feedback. Argument and JSON validation errors are not effects; transfer and machine failures are effect issues."""
+"""The one caller-visible, recoverable failure of a re-executed request: recorded as ``Failed`` and handed to the
+model as tool feedback. Argument and JSON validation errors are no effects; transfer and machine failures are issues."""
+
+
+UNNUMBERED = "OSError"
+FAILURE_CATEGORIES = frozenset({*errno.errorcode.values(), UNNUMBERED})
+"""Every category ``failure`` records: an errno name, or ``UNNUMBERED`` for an error without a known errno."""
 
 
 def failure(error: OSError) -> Failed:
-    return Failed(errno.errorcode.get(error.errno or 0, "OSError"), str(error))
+    return Failed(errno.errorcode.get(error.errno or 0, UNNUMBERED), str(error))
 
 
 @dataclass(frozen=True, slots=True)

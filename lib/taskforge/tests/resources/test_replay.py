@@ -18,7 +18,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Failed, Fingerprint, Note, ReplayPolicy, Resolved, ScopeEntered
-from taskforge.effects.issues import LogFailure, Restart, Unreproducible, UnsupportedFormat
+from taskforge.effects.issues import LogFailure, Restart, Unreproducible
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Owners, Record
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.controls import Candidate
@@ -335,7 +335,6 @@ OPEN = Record(1, 0.0, ScopeEntered("author"), opened=Opened("author/0", "definit
             LogFailure,
         ),
         ((Record(2, 0.0, ScopeEntered("author"), opened=Opened("author/0", "other")),), LogFailure),
-        ((Record(2, 0.0, READ), Record(3, 0.0, Resolved(READ, ENV, b"x"))), UnsupportedFormat),
     ],
     ids=[
         "no open row",
@@ -344,7 +343,6 @@ OPEN = Record(1, 0.0, ScopeEntered("author"), opened=Opened("author/0", "definit
         "outcome of another request",
         "two outcomes",
         "owner reopened on another definition",
-        "outcome without owner references",
     ],
 )
 def test_a_journal_whose_sandbox_rows_break_ownership_is_refused(

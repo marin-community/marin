@@ -50,7 +50,7 @@ from taskforge.wiring import endpoint_source, install, runtime
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
 OUTCOMES = {
     SUPERSEDED: ("superseded", "another writer owns this root now; nothing to do"),
-    NEEDS_MIGRATION: ("needs_migration", f"migrate this root to journal format {JOURNAL_FORMAT}, then rerun the proposal"),
+    NEEDS_MIGRATION: ("needs_migration", f"migrate to journal format {JOURNAL_FORMAT}, then rerun the proposal"),
     CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
 }
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""

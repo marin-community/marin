@@ -38,8 +38,18 @@ from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal,
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import Failed, Fingerprint, Note, ReplayPolicy, Resolved, StageCompleted, event_digest
+from taskforge.effects.events import (
+    Failed,
+    Fingerprint,
+    Note,
+    ReplayPolicy,
+    Resolved,
+    ScopeEntered,
+    StageCompleted,
+    event_digest,
+)
 from taskforge.effects.issues import (
+    CorruptJournal,
     Hold,
     LogFailure,
     OutputBudgetExhausted,
@@ -48,7 +58,7 @@ from taskforge.effects.issues import (
     Superseded,
     Transient,
 )
-from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
+from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
@@ -71,9 +81,9 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpie
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import CommandResult, EnvFactory
+from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand
 from taskforge.resources.grading import GradingResource
-from taskforge.resources.ids import Ids
+from taskforge.resources.ids import Ids, NewId
 from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
@@ -696,7 +706,9 @@ async def test_driver_refuses_a_damaged_head_or_history_before_skipping_or_claim
     chunks = (hashlib.sha256(events).hexdigest() + ".jsonl",) if events else ()
     for name in chunks:
         (destination / "chunks" / name).write_bytes(events)
-    head = HEAD_JSON.dump_python(Head(checkpoint.JOURNAL_FORMAT, "earlier", chunks, len(events), Status(), None, 0.0), mode="json")
+    head = HEAD_JSON.dump_python(
+        Head(checkpoint.JOURNAL_FORMAT, "earlier", chunks, len(events), Status(), None, 0.0), mode="json"
+    )
     (destination / HEAD).write_text(json.dumps({**head, **change}))
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
@@ -1560,7 +1572,9 @@ def plant(driver_args: Namespace, events: bytes, journal_format: int) -> Path:
 def before_first_environment_outcome(events: bytes) -> bytes:
     lines = events.splitlines(keepends=True)
     records = decode(events)
-    cut = next(n for n, r in enumerate(records) if isinstance(r.event, Resolved) and r.event.request.kind.startswith("env."))
+    cut = next(
+        n for n, r in enumerate(records) if isinstance(r.event, Resolved) and r.event.request.kind.startswith("env.")
+    )
     return b"".join(lines[:cut])
 
 
@@ -1583,7 +1597,7 @@ async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
-    with pytest.raises(LogFailure, match=f"has journal format 2; this reader reads {checkpoint.JOURNAL_FORMAT}") as raised:
+    with pytest.raises(LogFailure, match=f"has journal format 2, not {checkpoint.JOURNAL_FORMAT}") as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert f"journal format {checkpoint.JOURNAL_FORMAT}" in driver.OUTCOMES[driver.NEEDS_MIGRATION][1]
@@ -1841,6 +1855,8 @@ async def test_a_resumed_author_that_leaves_its_recorded_session_holds_without_n
     if change != "context window":
         assert not envs.created[0].files  # held before the hydration write
     assert sum(isinstance(r.event, StageCompleted) and r.event.terminal is Terminal.HELD for r in history(destination))
+    # The divergent request stays unanswered, and the held journal stays claimable for an explicit resume.
+    assert CheckpointSink(Path(driver_args.work_dir) / "claim", str(destination)).claim(published(destination))
 
 
 ROLE = "cat /fixture/role"
@@ -2096,3 +2112,102 @@ async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming
     assert workpiece.terminal is Terminal.ACCEPTED and tool_output(workpiece, "read") == "ok"
     assert workpiece.session is not None
     assert not any("File operation failed" in message.content for message in workpiece.session.messages)
+
+
+SANDBOX = (Fingerprint("env", "definition", ReplayPolicy.REEXECUTE),)
+OPENED = Record(1, 0.0, ScopeEntered("author"), opened=Opened("author/0", "definition"))
+READ_STATUS = ReadFile(STATUS)
+ANSWERED = (
+    OPENED,
+    Record(2, 0.0, READ_STATUS, attempt=1),
+    Record(3, 0.0, Resolved(READ_STATUS, SANDBOX, b"A"), answers=2),
+)
+REOPENED = (*ANSWERED, replace(OPENED, sequence=4))
+
+
+def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes:
+    """``records`` as a writer encodes them, with each (row, field, value) change applied to the encoded row."""
+    sink, rows = JsonlSink("unused"), []
+    for record in records:
+        rows.append(json.loads(sink._line(record)))
+    for row, name, value in changes:
+        rows[row - 1][name] = value
+    return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+
+
+# Review 2026-11-20: the real claim swapped the head for each of these journals, and a list-valued owner escaped as an
+# untyped TypeError. The paid id result reached both the content cache and the owner's history.
+@pytest.mark.parametrize(
+    "events",
+    [
+        lines((replace(OPENED, event=Note("entered")),)),
+        lines((OPENED, Record(2, 0.0, READ_STATUS, attempt=1, answers=1))),
+        lines(ANSWERED, (1, "sequence", True)),
+        lines((OPENED, Record(2, 0.0, Failed("ENOENT", "missing")))),
+        lines((OPENED, Record(2, 0.0, READ_STATUS))),
+        lines(
+            (
+                OPENED,
+                Record(2, 0.0, NewId("author/0/id"), attempt=1),
+                Record(3, 0.0, Resolved(NewId("author/0/id"), (Ids(lambda: "").fingerprint(),), "paid"), answers=2),
+            )
+        ),
+        lines(
+            (
+                *ANSWERED[:2],
+                replace(ANSWERED[2], event=Resolved(READ_STATUS, (replace(SANDBOX[0], digest="other"),), b"A")),
+            )
+        ),
+        lines(
+            (
+                *REOPENED,
+                Record(5, 0.0, RunCommand("ls", 5), attempt=4),
+                Record(6, 0.0, Resolved(RunCommand("ls", 5), SANDBOX, CommandResult(0, "", "", 0, False)), answers=5),
+            )
+        ),
+        lines(
+            (
+                *REOPENED,
+                Record(5, 0.0, READ_STATUS, attempt=4),
+                Record(6, 0.0, Resolved(READ_STATUS, SANDBOX, b"B"), answers=5),
+            )
+        ),
+        lines((OPENED, Record(2, 0.0, READ_STATUS, attempt=1), Record(3, 0.0, Failed("ENOTANERRNO", "x"), answers=2))),
+        lines((OPENED,), (1, "opened", {"owner": ["author/0"], "definition": "definition"})),
+    ],
+    ids=[
+        "note as open row",
+        "attempt and answers",
+        "true as row 1",
+        "unattached failure",
+        "unowned sandbox request",
+        "paid request in an attempt",
+        "another sandbox definition",
+        "contradictory answered request",
+        "contradictory answered result",
+        "unsupported failure category",
+        "list-valued owner",
+    ],
+)
+async def test_claim_refuses_a_journal_whose_rows_break_their_roles_and_leaves_the_head(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
+) -> None:
+    destination = plant(driver_args, events, checkpoint.JOURNAL_FORMAT)
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    driver_args.resume_held = True
+    with pytest.raises(CorruptJournal) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.CORRUPT
+    assert tree(destination) == before
+
+
+async def test_claim_takes_a_journal_held_on_a_divergent_unanswered_request(
+    driver_args: Namespace, tmp_path: Path
+) -> None:
+    """A resumed attempt that issued another request than was recorded leaves it unanswered and holds; it stays valid."""
+    held = (*REOPENED, Record(5, 0.0, RunCommand("ls", 5), attempt=4))
+    destination = plant(driver_args, lines(held), checkpoint.JOURNAL_FORMAT)
+    sink = CheckpointSink(tmp_path / "claim", str(destination))
+    assert rows(sink.claim(published(destination))) == rows(held)
+    assert published(destination).head.writer == sink.writer

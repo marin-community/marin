@@ -185,7 +185,7 @@ def read_journal(destination: str) -> Journal | None:
         if type(found) is not int:
             raise ValueError(f"format {found!r} is no integer")
         if found != JOURNAL_FORMAT:
-            raise UnsupportedFormat(f"{destination}/{HEAD} has journal format {found}; this reader reads {JOURNAL_FORMAT}")
+            raise UnsupportedFormat(f"{destination}/{HEAD} has journal format {found}, not {JOURNAL_FORMAT}")
         head = HEAD_JSON.validate_json(current.data)
         if head.status.terminal is not None and head.workpiece is None:
             raise ValueError(f"terminal {head.status.terminal} names no workpiece")
@@ -231,9 +231,7 @@ class CheckpointSink(Sink):
         events = journal.events() if journal else b""
         try:
             records = self.local.start(events)
-            Owners(records)  # owner references, pairing and continuity, before anything is claimed
-        except UnsupportedFormat:
-            raise
+            Owners(records)  # owner references, pairing, outcomes and continuity, before anything is claimed
         except LogFailure as error:
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)

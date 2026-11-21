@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 from taskforge.effects.events import (
     BYTES_TAG,
     EVENT_TYPES,
+    FAILURE_CATEGORIES,
     MAPPING_TAG,
     Event,
     Failed,
@@ -24,11 +25,12 @@ from taskforge.effects.events import (
     ReplayPolicy,
     Resolved,
     Retrying,
+    ScopeEntered,
     StageCompleted,
     event_digest,
     json_value,
 )
-from taskforge.effects.issues import LogFailure, Unreproducible, UnsupportedFormat
+from taskforge.effects.issues import LogFailure, Unreproducible
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
@@ -64,6 +66,43 @@ class Record:
 
 
 ENVELOPE = ("opened", "attempt", "answers")
+
+
+@dataclass(frozen=True, slots=True)
+class _Row:
+    """A journal line, strictly typed; its event is decoded separately."""
+
+    sequence: int
+    wall_time: float
+    event: dict[str, Any]
+    opened: Opened | None = None
+    attempt: int | None = None
+    answers: int | None = None
+
+
+ROW = TypeAdapter(_Row)
+
+
+def _sandbox(event: Event[object]) -> bool:
+    return event.kind.startswith("env.")  # the area of re-executed sandbox requests, per ``events``
+
+
+def _outcome(event: Event[object]) -> bool:
+    if isinstance(event, Failed):
+        return event.category in FAILURE_CATEGORIES
+    replays = {fp.replay for fp in event.fingerprints} if isinstance(event, Resolved) else set()
+    return isinstance(event, Resolved) and _sandbox(event.request) and replays == {ReplayPolicy.REEXECUTE}
+
+
+ROLES: Mapping[str | None, Callable[[Event[object]], bool]] = {
+    "opened": lambda event: isinstance(event, ScopeEntered),
+    "attempt": _sandbox,
+    "answers": _outcome,
+    None: lambda event: not (_sandbox(event) or isinstance(event, Failed) or _outcome(event)),
+}
+"""The events each row role may carry, by its one envelope field: an environment-open row enters a scope, a request is
+a re-executed sandbox event, its outcome resolves it under the sandbox or fails it with a supported category, and no
+other row is any of those. Cached, paid results thus stay outside every owner's history."""
 
 
 class Sink(Protocol):
@@ -132,16 +171,16 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
         known: dict[str, Event[object]] = {}
         decoded = []
         for line in data.splitlines():
-            row = json.loads(line)
+            row = ROW.validate_json(line, strict=True)
             before = len(known)
-            event = _decode(row["event"], known)
+            event = _decode(row.event, known)
             if first_seen is not None:
                 # Digests first decoded in this row are the newest insertions; earlier ones are never revisited.
-                first_seen.update((key, row["sequence"]) for key in islice(reversed(known), len(known) - before))
-            opened = Opened(**row["opened"]) if "opened" in row else None
-            decoded.append(
-                Record(row["sequence"], row["wall_time"], event, opened, row.get("attempt"), row.get("answers"))
-            )
+                first_seen.update((key, row.sequence) for key in islice(reversed(known), len(known) - before))
+            roles = [name for name in ENVELOPE if getattr(row, name) is not None]
+            if len(roles) > 1 or not ROLES[roles[0] if roles else None](event):
+                raise LogFailure(f"Row {row.sequence} carries {event.kind} as a {'/'.join(roles) or 'plain'} row")
+            decoded.append(Record(row.sequence, row.wall_time, event, row.opened, row.attempt, row.answers))
     except (TypeError, ValueError, KeyError) as error:
         raise LogFailure("Cannot decode the event stream") from error
     if any(record.sequence != index for index, record in enumerate(decoded, 1)):
@@ -258,8 +297,8 @@ class Owners:
         """Place ``record`` in its owner's history; a request's position is its dispatch order in its attempt.
 
         Raises:
-            LogFailure: the row breaks owner references, request/outcome pairing or one-request-at-a-time continuity.
-            UnsupportedFormat: a re-executed outcome names no request row, as before owner references.
+            LogFailure: the row breaks owner references, request/outcome pairing, its sandbox definition, an outcome
+                its owner established, or one-request-at-a-time continuity.
         """
         event = record.event
         if record.opened is not None:
@@ -278,18 +317,19 @@ class Owners:
             attempt.position, attempt.unanswered = attempt.position + 1, record.sequence
         elif record.answers is not None:
             attempt, position, request = self.requests.get(record.answers, (None, 0, ""))
-            outcome = event.value if isinstance(event, Resolved) else event
-            matched = isinstance(event, Failed) or (
-                isinstance(event, Resolved) and event_digest(event.request) == request
-            )
-            if attempt is None or attempt.unanswered != record.answers or not matched:
+            if attempt is None or attempt.unanswered != record.answers:
                 raise LogFailure(f"Row {record.sequence} answers no unanswered request {record.answers}")
+            definition = self.definitions[attempt.owner]
+            if isinstance(event, Resolved) and (
+                event_digest(event.request) != request or any(fp.digest != definition for fp in event.fingerprints)
+            ):
+                raise LogFailure(f"Row {record.sequence} resolves another request or sandbox than {record.answers}")
             attempt.unanswered = None
-            steps = self.steps[attempt.owner]
-            if steps[position] == (request, Missing()):  # an established outcome stays; a frontier gets one
-                steps[position] = Step(request, outcome)
-        elif isinstance(event, Resolved) and not cached(event.fingerprints):
-            raise UnsupportedFormat(f"Row {record.sequence} re-executed {event.request.kind} without an owner")
+            steps, step = self.steps[attempt.owner], Step(request, event.value if isinstance(event, Resolved) else event)
+            if steps[position] == (request, Missing()):  # a frontier gets its outcome
+                steps[position] = step
+            elif steps[position] != step:
+                raise LogFailure(f"Row {record.sequence} contradicts {attempt.owner}'s established step {position}")
 
 
 class EventLog:

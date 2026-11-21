@@ -224,7 +224,7 @@ async def test_an_archive_the_backend_cannot_unpack_restarts_the_stage(failure: 
     machine = MemoryMachine()
     machine.failure = failure
     env = ShellboxEnv(machine, "image", AsyncExitStack())
-    with pytest.raises(Restart, match="env.read_file transfer failed") as caught:
+    with pytest.raises(Restart, match=r"env\.read_file transfer failed") as caught:
         await read_file(ReadFile(OUTPUT), env, notify=Notes())
     assert caught.value.__cause__ is failure and machine.calls == 1
 
