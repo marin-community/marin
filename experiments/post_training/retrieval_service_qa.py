@@ -74,7 +74,7 @@ class QualificationResult(BaseModel):
 
 
 async def concurrent_search_elapsed(endpoint: str, config: QualificationConfig) -> float:
-    """Return elapsed time for the declared concurrent source-contract search batch."""
+    """Return elapsed time to complete and validate the concurrent search batch."""
     body = {"name": "search", "arguments": {"query": QA_SEARCH_QUERY}, "state": config.state.model_dump(mode="json")}
     async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
         started = time.monotonic()
