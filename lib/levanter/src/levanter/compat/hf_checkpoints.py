@@ -41,6 +41,7 @@ from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError, RemoteEntryNotFoundError
+from tokenizers import Tokenizer as HfBaseTokenizer
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -1107,8 +1108,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
         :param generation_config: explicit generation settings. Otherwise, preserves fields from
-        the pinned reference checkpoint's generation config, when present. With a tokenizer, the
-        export adds inferred turn stops.
+        the pinned reference checkpoint's generation config, when present and when the exported
+        tokenizer gives every token of the reference checkpoint's tokenizer the same id. With a
+        tokenizer, the export adds inferred turn stops.
         :param generation_config_defaults: caller policy for generation fields missing from the explicit or
         preserved generation config.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
@@ -1232,6 +1234,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
             )
 
         def save_metadata() -> None:
+            # Read the reference before writing: an export into the reference's own directory replaces its tokenizer.
+            preserved_generation_config = generation_config
+            if preserved_generation_config is None:
+                preserved_generation_config = self._load_reference_generation_config()
+
             with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
                 if path != local_path:
                     logger.info(f"Saving metadata to {path} via temp path {local_path}")
@@ -1255,9 +1262,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                preserved_generation_config = generation_config
-                if preserved_generation_config is None:
-                    preserved_generation_config = self._load_reference_generation_config()
                 if self.tokenizer is None:
                     if preserved_generation_config is None:
                         logger.warning(
@@ -1294,27 +1298,54 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
-    def _load_reference_generation_config(self) -> GenerationConfigDict | None:
-        if self.reference_checkpoint is None:
-            return None
+    def _read_reference_file(self, filename: str) -> bytes | None:
+        """Return ``filename`` from the pinned reference checkpoint, or ``None`` when the checkpoint lacks it."""
         repo, revision = self._get_ref(self.reference_checkpoint)
         if _is_url_like(repo) or os.path.isdir(repo):
-            source = StoragePath(repo) / "generation_config.json"
             try:
-                contents = source.read_bytes()
+                return (StoragePath(repo) / filename).read_bytes()
             except FileNotFoundError:
                 return None
-        else:
-            try:
-                source_path = hf_hub_download(repo_id=repo, filename="generation_config.json", revision=revision)
-            except RemoteEntryNotFoundError:
-                return None
-            with open(source_path, "rb") as source_file:
-                contents = source_file.read()
+        try:
+            source_path = hf_hub_download(repo_id=repo, filename=filename, revision=revision)
+        except RemoteEntryNotFoundError:
+            return None
+        with open(source_path, "rb") as source_file:
+            return source_file.read()
+
+    def _load_reference_generation_config(self) -> GenerationConfigDict | None:
+        """Return the reference checkpoint's generation config, if it has one that applies to the exported tokenizer.
+
+        The config's token ids index the reference checkpoint's tokenizer, so with an exported tokenizer it is kept
+        only when that tokenizer gives every token in the reference's ``tokenizer.json`` the same id: the reference
+        tokenizer itself, or one padded or extended from it. A Qwen3 model trained with the Llama 3 tokenizer, or a
+        reference without ``tokenizer.json``, gets ``None``, and the export derives its settings from the exported
+        tokenizer.
+        """
+        if self.reference_checkpoint is None:
+            return None
+        contents = self._read_reference_file(GENERATION_CONFIG_FILENAME)
+        if contents is None:
+            return None
         config = json.loads(contents)
         if not isinstance(config, dict):
             raise ValueError(f"Reference generation config must be a JSON object: {self.reference_checkpoint}")
-        return config
+        if self.tokenizer is None:
+            return config
+        reference_tokenizer = self._read_reference_file("tokenizer.json")
+        if reference_tokenizer is None:
+            logger.info(
+                "Not preserving the generation config of %s: it has no tokenizer.json", self.reference_checkpoint
+            )
+            return None
+        reference_vocab = HfBaseTokenizer.from_buffer(reference_tokenizer).get_vocab()
+        if reference_vocab.items() <= self.tokenizer.get_vocab().items():
+            return config
+        logger.info(
+            "Not preserving the generation config of %s: the exported tokenizer gives its tokens other ids",
+            self.reference_checkpoint,
+        )
+        return None
 
     def _save_code_local(self, path):
         if self.reference_checkpoint is None:
