@@ -35,7 +35,7 @@ from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
-from skyrlrecipe.model_staging import model_metadata_subpath
+from skyrlrecipe.model_staging import model_metadata_subpath, tokenizer_metadata_subpath
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -674,7 +674,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 model_path = f"/native-tmp/{model_metadata_subpath(source['uri'], source['identity'])}"
                 tokenizer_path = model_path
                 if tokenizer_uri := source["tokenizer_uri"]:
-                    tokenizer_key = model_metadata_subpath(tokenizer_uri, source["tokenizer_revision"] or "main")
+                    tokenizer_key = tokenizer_metadata_subpath(tokenizer_uri, source["tokenizer_revision"])
                     tokenizer_path = f"/native-tmp/{tokenizer_key}"
                 for role in ("policy", "ref"):
                     document["skyrl"]["trainer"][role]["model"].update(

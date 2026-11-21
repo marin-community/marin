@@ -50,7 +50,7 @@ from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
-from skyrlrecipe.model_staging import model_metadata_subpath
+from skyrlrecipe.model_staging import model_metadata_subpath, tokenizer_metadata_subpath
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -366,10 +366,6 @@ def stage_hugging_face_models(config: DictConfig) -> None:
             stage_model(mirror)
 
 
-def _metadata_path(source_uri: str, identity: str) -> str:
-    return str(Path(tempfile.gettempdir()) / model_metadata_subpath(source_uri, identity))
-
-
 @dataclass(frozen=True)
 class PreparedPolicyModel:
     source_uri: str
@@ -430,7 +426,7 @@ def prepare_policy_model(args: argparse.Namespace) -> PreparedPolicyModel | None
 
     assert source_uri and source_identity
     RuntimeProfile(args.runtime_profile)
-    local_path = _metadata_path(source_uri, source_identity)
+    local_path = str(Path(tempfile.gettempdir()) / model_metadata_subpath(source_uri, source_identity))
     if args.rollout_model_loading is RolloutModelLoading.STAGE_LOCAL:
         staged_bytes = stage_artifact_model(source_uri, source_identity, local_path)
         validate_hf_model_weights({path.name for path in Path(local_path).iterdir()}, source_uri)
@@ -484,7 +480,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
         return None
 
     revision = args.policy_tokenizer_revision
-    local_path = _metadata_path(tokenizer_path, revision or "main")
+    local_path = str(Path(tempfile.gettempdir()) / tokenizer_metadata_subpath(tokenizer_path, revision))
     target = Path(local_path)
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)

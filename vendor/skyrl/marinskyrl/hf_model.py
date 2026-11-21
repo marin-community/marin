@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import huggingface_hub.constants
-from skyrlrecipe.model_staging import immutable_model_cache_key as immutable_model_cache_key
 
 from .environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
 
