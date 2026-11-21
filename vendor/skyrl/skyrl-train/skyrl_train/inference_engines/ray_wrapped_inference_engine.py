@@ -13,6 +13,7 @@ from ray.actor import ActorHandle, ActorMethod
 from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement_group, remove_placement_group
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
 from marinskyrl.inference_startup_diagnostics import capture_startup_timeout
@@ -188,17 +189,21 @@ def _reserve_engine_rendezvous(
     placement_group,
     bundle_index: int,
     data_parallel_size: int,
-    allocated_ports: set[int],
+    allocated_ports: dict[str, set[int]],
 ) -> ReservedRendezvousPorts | None:
     if data_parallel_size == 1:
         return None
+    (address,) = get_pg_bundle_node_ips(placement_group, [bundle_index])
+    node_ports = allocated_ports.setdefault(address, set())
     rendezvous = reserve_rendezvous_ports(
         placement_group,
         bundle_index,
         port_count=1 + VLLM_DATA_PARALLEL_MASTER_PORT_COUNT,
-        excluded_ports=allocated_ports,
+        excluded_ports=node_ports | set(range(*DEFAULT_TASK_PORT_RANGE)),
     )
-    allocated_ports.update(rendezvous.ports)
+    assert rendezvous.address == address, "Rendezvous reservation moved away from its placement-group node"
+    node_ports.update(rendezvous.ports)
+    logger.info("Reserved vLLM DP rendezvous on {}: {}", address, rendezvous.ports)
     return rendezvous
 
 
@@ -470,10 +475,10 @@ def create_ray_wrapped_inference_engines_with_retry(
 ) -> List[InferenceEngineInterface]:
     """Retry a failed remote vLLM actor gang within one startup deadline.
 
-    RunAI's S3 streamer reports a transient object-store read failure only after
-    the EngineCore processes have exited, so the parent sees an ``ActorDiedError``
-    without the underlying status code. A data-parallel pool must restart as a
-    gang: retrying one rank would leave it on a different coordinator generation.
+    An EngineCore rendezvous collision or transient S3 read failure can reach
+    the parent as an ``ActorDiedError`` after the subprocess has exited. A
+    data-parallel pool must restart as a gang: retrying one rank would leave it
+    on a different coordinator generation.
     """
     started = time.monotonic()
 
@@ -781,7 +786,7 @@ def create_ray_wrapped_inference_engines(
             _release_node_local_gang([], per_engine_pgs)
             raise
 
-    allocated_rendezvous_ports: set[int] = set()
+    allocated_rendezvous_ports: dict[str, set[int]] = {}
     for i in range(num_inference_engines):
         if placement_mode is EnginePlacementMode.PER_ENGINE:
             engine_pg = per_engine_pgs[i]
