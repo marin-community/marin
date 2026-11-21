@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tarfile
+import threading
 import time
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -29,6 +30,7 @@ from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInfer
 from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
+from pydantic import ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
@@ -1489,6 +1491,72 @@ def in_process(monkeypatch: pytest.MonkeyPatch, command: list[str]) -> SimpleNam
         return 0
 
     return SimpleNamespace(wait=wait, poll=lambda: 0)
+
+
+class HeldChild:
+    """A child process that runs until it is terminated."""
+
+    def __init__(self, command: list[str]) -> None:
+        self.proposal = command[command.index("--proposals") + 1]
+        self.stopped = threading.Event()
+        self.joined = False
+
+    def wait(self) -> int:
+        self.stopped.wait()
+        self.joined = True
+        return -15
+
+    def poll(self) -> int | None:
+        return -15 if self.stopped.is_set() else None
+
+    def terminate(self) -> None:
+        self.stopped.set()
+
+
+def held_children(driver_args: Namespace, tmp_path: Path, names: Sequence[str]) -> list[Path]:
+    paths = [tmp_path / f"{name}.proposal.json" for name in names]
+    for name, path in zip(names, paths, strict=True):
+        path.write_bytes(b"{" if name == "bad" else Path(driver_args.proposals).read_bytes())
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("\n".join(map(str, paths)))
+    driver_args.proposals, driver_args.concurrency = str(manifest), len(paths)
+    return paths
+
+
+async def test_a_failing_dispatch_terminates_and_joins_every_held_child(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = held_children(driver_args, tmp_path, ("first", "second", "bad"))
+    children: list[HeldChild] = []
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: children.append(HeldChild(command)) or children[-1])
+    with pytest.raises(ValidationError):
+        await driver.run(driver_args)
+    assert [child.proposal for child in children] == [str(path) for path in paths[:2]]
+    assert all(child.stopped.is_set() and child.joined for child in children)
+    assert "SUMMARY" not in capsys.readouterr().out
+
+
+async def test_a_cancelled_run_terminates_and_joins_every_held_child(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = held_children(driver_args, tmp_path, ("first", "second"))
+    children: list[HeldChild] = []
+    launched = asyncio.Event()
+
+    def launch(command: list[str]) -> HeldChild:
+        children.append(HeldChild(command))
+        if len(children) == len(paths):
+            launched.set()
+        return children[-1]
+
+    monkeypatch.setattr(driver.subprocess, "Popen", launch)
+    running = asyncio.create_task(driver.run(driver_args))
+    await launched.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert [child.proposal for child in children] == list(map(str, paths))
+    assert all(child.stopped.is_set() and child.joined for child in children)
 
 
 async def test_a_superseded_child_with_another_failure_fails_the_parent(
