@@ -1908,6 +1908,22 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         assert captures is not None
         return logits, caches, captures
 
+    def decode_for_sampling(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        sample_indices: NamedArray,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        """Prefill the cache and project only the rows needed by the sampler."""
+        if self.config.projection_implementation != "native":
+            raise ValueError("Selected-row decoding requires Snowball's native projection")
+        logits, caches, _ = self._decode(
+            input_ids, kv_cache, batch_info, pos_ids, capture_routes=False, sample_indices=sample_indices
+        )
+        return logits, caches
+
     @named_call
     def _decode(
         self,
@@ -1918,6 +1934,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
         capture_routes: bool,
+        sample_indices: NamedArray | None = None,
     ) -> tuple[NamedArray, ListCache[KvPageCache], SnowballDecodeRouteCaptureBatch | None]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
@@ -1970,15 +1987,19 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             layer_step, hidden, (stacked, cache_pages, long_schedule)
         )
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
+        caches = ListCache(
+            tuple(KvPageCache(hax.named(stacked_cache_pages[i], cache_axes)) for i in range(len(kv_cache)))
+        )
+        if sample_indices is not None:
+            hidden = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
+            logits = jnp.einsum("pd,dv->pv", hidden, self.transformer.output_proj, out_sharding=P())
+            return hax.named(logits, (*sample_indices.axes, self.Vocab)), caches, None
         if self.config.projection_implementation == "fixed_schedule":
             logits = _fixed_schedule_projection(hidden, self.transformer.output_proj)
         else:
             logits = jnp.einsum(
                 "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
             )
-        caches = ListCache(
-            tuple(KvPageCache(hax.named(stacked_cache_pages[i], cache_axes)) for i in range(len(kv_cache)))
-        )
         if not capture_routes:
             return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, None
         assert stacked_captures is not None

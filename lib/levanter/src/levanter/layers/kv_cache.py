@@ -13,7 +13,6 @@ import jax
 import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
-from jax import lax
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 
@@ -169,10 +168,12 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
         update_spec = cache_sharding.spec.update(partitions=(None, *cache_sharding.spec[2:]))
         kv_ev = jax.reshard(kv_ev, cache_sharding.update(spec=update_spec))
 
-    def body(i, buf):
-        p = t_pages[i]
-        s = t_slots[i]
-        ins = kv_ev[i][None, None, :, :]
-        return lax.dynamic_update_slice(buf, ins, (p, s, 0, 0))
-
-    return lax.fori_loop(0, K, body, kv_pages)
+    rows = jnp.arange(t_pages.shape[0], dtype=jnp.int32)
+    active = rows < K
+    invalid_page = kv_pages.shape[0]
+    pages = jnp.where(active, t_pages, invalid_page)
+    slots = jnp.where(active, t_slots, 0)
+    # Resolve repeated destinations before the scatter so the last write wins.
+    last_write = jnp.full(kv_pages.shape[:2], -1, dtype=jnp.int32).at[pages, slots].max(rows, mode="drop")
+    keep = active & (last_write.at[pages, slots].get(mode="fill", fill_value=-1) == rows)
+    return kv_pages.at[jnp.where(keep, pages, invalid_page), slots].set(kv_ev, mode="drop")

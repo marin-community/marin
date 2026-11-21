@@ -474,9 +474,12 @@ def _prefill_kernel(
         routes = _SnowballRouteBuffer.init(model, tokens.axis_size("position") + decode_state.max_seqs)
         logits, cache, captured = model.decode_with_route_captures(tokens, gen_state.cache, binfo, pos_ids)
         routes = routes.append(captured, slot_ids)
+        logits_at_samples = _gather_logits(logits, sample_indices)
+    elif isinstance(model, SnowballLMHeadModel) and model.config.projection_implementation == "native":
+        logits_at_samples, cache = model.decode_for_sampling(tokens, gen_state.cache, binfo, pos_ids, sample_indices)
     else:
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-    logits_at_samples = _gather_logits(logits, sample_indices)
+        logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(

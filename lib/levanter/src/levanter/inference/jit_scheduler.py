@@ -369,24 +369,13 @@ class SequenceTable(eqx.Module):
         seq_lens = new_lens["seq", safe_updated]
         seq_lens = hax.where(mask, seq_lens, INVALID)
 
-        token_dests = hax.full(token_slot_ids.shape, INVALID, dtype=jnp.int32)
-
-        def token_body(i, token_dests):
-            seq_id = token_slot_ids["position", i].scalar()
-            pos_id = token_pos_ids["position", i].scalar()
-
-            def assign(dest):
-                page_idx = pos_id // self.page_size
-                page_offset = pos_id % self.page_size
-                page = page_indices["seq", seq_id, "page", page_idx]
-                dest_value = hax.where(is_invalid(page), INVALID, page * self.page_size + page_offset)
-                return dest.at["position", i].set(dest_value)
-
-            seq_valid = (seq_id >= 0) & (seq_id < self.max_seqs) & is_valid(seq_id)
-            pos_valid = is_valid(pos_id)
-            return jax.lax.cond(seq_valid & pos_valid, assign, lambda d: d, token_dests)
-
-        token_dests = jax.lax.fori_loop(0, token_slot_ids.axis_size("position"), token_body, token_dests)
+        valid = is_valid(token_slot_ids) & (token_slot_ids < self.max_seqs) & is_valid(token_pos_ids)
+        safe_slots = hax.where(valid, token_slot_ids, 0)
+        safe_positions = hax.where(valid, token_pos_ids, 0)
+        pages = page_indices["seq", safe_slots, "page", safe_positions // self.page_size]
+        token_dests = hax.where(
+            valid & is_valid(pages), pages * self.page_size + safe_positions % self.page_size, INVALID
+        )
 
         batch_info = PageBatchInfo(
             slot_ids=updated_seqs,
