@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import importlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -22,7 +23,7 @@ from taskcompendium.models import DECISION_LEVELS, DECISION_QUESTION, DecisionMo
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, Retrying
-from taskforge.effects.issues import DecisionModelUnavailable
+from taskforge.effects.issues import DecisionModelUnavailable, Hold
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.client import Progress, Segment
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
@@ -30,6 +31,7 @@ from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_se
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.proposal import TaskProposal
+from taskforge.model.review import AdversaryResult, AdversaryStatus, Cause, ControlResult, TrialResult
 from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -53,6 +55,7 @@ from taskforge.wiring import build_config, build_resources, decision_model_polic
 
 MODEL = "clef@fixture-1"
 ROLES = ("author", "solver", "adversary")
+validate_stage = importlib.import_module("taskforge.stages.validate")  # the package re-exports the stage
 GRADER = DecisionModelGrader(deliverable="Six plus six.", rubric="The sum, as a number.", reference="12", cut=3.0)
 
 
@@ -449,10 +452,11 @@ async def late_twelve(_progress: Progress) -> Segment:
 
 
 async def validated(
-    proposal: TaskProposal, reader: FakeReader, history: Sequence[Record] = (), concurrency: int = 3
+    proposal: TaskProposal, reader: FakeReader, history: Sequence[Record] = (), concurrency: int = 3, roster: int = 0
 ) -> tuple[Validated | BaseExceptionGroup, int, Sequence[Record]]:
     """Validate a decision-model task: three solver trials answering 12, and the controls 12 and 13."""
-    policy = overlaid().overlaid({"decision_model.unavailable_wait": 10.0, "solver.concurrency": concurrency})
+    overlay = {"decision_model.unavailable_wait": 10.0, "solver.concurrency": concurrency}
+    policy = overlaid().overlaid({**overlay, "adversary.roster": ["false_accept"] * roster})
     solver = ScriptedProvider((late_twelve,) * 3)
     log = EventLog(replay_from=history)
     ctx = Context(log=log)
@@ -462,10 +466,54 @@ async def validated(
         async with ctx.scope("workpiece"):
             built = installed(policy, reader, solver, ctx, VirtualTime())
             outcome = await validate(ctx, workpiece, build_config(policy, {}), built)
-    except* DecisionModelUnavailable as error:
+    except* (DecisionModelUnavailable, Hold) as error:
         outcome = error
     await ctx.drain()
     return outcome, len(solver.bodies), log.records
+
+
+def human(outcome: object) -> str:
+    """The reasons that keep ``outcome`` a human hold, empty when it awaits the decision model alone."""
+    rest = outcome.split(DecisionModelUnavailable)[1] if isinstance(outcome, BaseExceptionGroup) else None
+    return "" if rest is None else repr(rest)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 2): the negative control's outage was raised before the grade observer
+# joined, so the off-scale grades' hold was dropped and the run deferred as if only the decision model were missing.
+async def test_a_held_grade_beside_an_outage_keeps_the_wave_a_human_hold(proposal: TaskProposal) -> None:
+    held, _, _ = await validated(proposal, FakeReader(levels={"12": 7}, down={"13"}))
+    assert "returned 7, not a level in 0..4" in human(held)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 2): a failed adversary, or a solver refusal over the allowance that
+# returned before a control's outage, disappeared beside it, and the automatic resume bought the adversary again or
+# reused the refusal on a second launch. Every finished sibling's disposition is settled before the wave waits.
+@pytest.mark.parametrize("sibling", ["adversary", "solver"])
+async def test_a_human_disposition_finished_before_a_late_outage_outranks_it(
+    proposal: TaskProposal, sibling: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = validate_stage.control_result
+
+    async def control(ctx: Context, spec: TaskRolloutSpec, index: int, control: Control) -> ControlResult:
+        if index == 0:
+            return await real(ctx, spec, index, control)
+        for _ in range(1000):  # after every sibling has finished
+            await asyncio.sleep(0)
+        raise DecisionModelUnavailable(f"{MODEL} gave no read")
+
+    async def refused(*_args: object, **_kwargs: object) -> tuple[TrialResult, ...]:
+        return (TrialResult(0, None, Cause.HELD, "the model server refused"),)
+
+    async def failed(*args: object) -> AdversaryResult:
+        return AdversaryResult(str(args[5]), AdversaryStatus.FAILED, (), ("the search lost its machine",))
+
+    monkeypatch.setattr(validate_stage, "control_result", control)
+    monkeypatch.setattr(validate_stage, "adversary_result", failed)
+    if sibling == "solver":
+        monkeypatch.setattr(validate_stage, "solver_batch", refused)
+    held, _, _ = await validated(proposal, FakeReader(), roster=int(sibling == "adversary"))
+    reason = "the search lost its machine" if sibling == "adversary" else "the model server refused"
+    assert reason in human(held)
 
 
 # The decision model is down for the negative control's answer only, so its grade waits while the solver wave and
