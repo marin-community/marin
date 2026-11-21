@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 2:43 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 3:10 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,8 +21,8 @@ protocol for internal rollout and learner traffic.
 | H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 24 more H100 and 24 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Two CPU hosts also passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
-| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
-| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Native serving passed two TPUv4 optimizer updates. The typed learner reproduced exact CPU restart and expert-block publication. | Verify cross-host native serving and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
+| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
+| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify cross-host native serving and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
@@ -312,19 +312,27 @@ Both 25-update recipes passed read-only preflight on the frozen source
 against the regional task selection. Megatron uses version `2026.11.20.6`
 and Levanter uses `2026.11.20.7`. Both enable publication verification.
 The trainer differences are the learner strategy, batch builder and
-Levanter policy configuration. Submission follows smoke acceptance.
+Levanter policy configuration. Submit the control first after smoke acceptance.
+Before each submission, confirm that Iris and the durable and scratch prefixes
+have no prior attempt for that version. The launcher creates a fresh coordinator
+ID and the trainer can resume from an existing checkpoint.
 
-For each arm, collect Finelog rows for the successful child and attempt.
-The trainer mirrors its metrics as `WANDB_MIRROR` events. Match them by
-optimizer step with the rollout and update completion lines. Check that
-each arm starts at step 0, completes steps 1–25, and commits the step-25
-checkpoint. Require acknowledgement from the expected receivers at version
-25 and generation with stamp 26 during the final evaluation.
-Report admitted groups, generated tokens and consumed loss tokens
-separately. Filtering can change the workload each learner sees.
+For each arm, collect Finelog rows for the successful child and its task attempts.
+Match the `WANDB_MIRROR` metrics by optimizer step with rollout and update
+completion lines. Require a step-0 start and one applied optimizer update in
+`policy/policy_update_steps` at each step through 25, with finite optimizer
+metrics. A step-completion line can accompany a skipped update. Check the
+step-25 checkpoint marker and committed policy even when the successful
+terminal receipt has `model: null`, as expected with HF export disabled.
+Require zero byte mismatches on all eight receivers at version 25 and nonempty
+generation with stamp 26 between the publication acknowledgement and the final
+evaluation result. Verify the panel rows separately.
+Report admitted groups, admitted response tokens, generated tokens when available
+and consumed loss tokens separately. Filtering can change the workload each
+learner sees.
 Measure training and publication wall time from the initial evaluation
 result to the acknowledgement of version 25. Report allocation wall time
-separately.
+separately. [Matched-run auditor and tests][h100-matched-audit]
 
 The frozen evaluator writes per-dataset rows beneath `exports/dumped_evals`
 with ordinal UIDs assigned after prompt-length filtering. Verify that no
@@ -656,8 +664,24 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   generation intact. The test used
   local TensorStore with in-process actor dispatch. Separate metadata
   probes passed stale-writer rejection and exact retry acknowledgement
-  on CoreWeave S3 and GCS. The accelerator restart remains a deployment
-  gate. [Durable recovery source and tests][native-durable-recovery-source]
+  on CoreWeave S3 and GCS.
+  [Durable CPU recovery source and tests][native-durable-recovery-source]
+
+  The same recovery gate on `63fb947665` passed on one four-chip TPUv4
+  host with the typed learner and serving pipes. Ten serial worker
+  processes used the 256-token fixture with BF16 and Splash Attention
+  in the learner. An injected step-2 write failure left step 1 committed.
+  Fresh processes restored the exact prompt cursor and learner state,
+  reran 64 scored targets and reproduced the uninterrupted step-2 model,
+  Adam, PRNG, step and averaging fingerprints. The four live replay frames
+  matched after normalizing request IDs. The retry committed a new
+  generation, and the final server returned 16 tokens under policy 2.
+  The test used local TensorStore and in-process actor dispatch. The
+  four-learner-host handoff and restart on the pinned checkpoint remain
+  deployment gates.
+  [TPUv4 restart run][iris-native-tpu-recovery] ·
+  [Verified frames and receipt][native-tpu-recovery-results] ·
+  [Submitted harness and independent verifier][native-tpu-recovery-source]
 - During native training, fixed-panel evaluation uses a separate binary
   sampling call bound to the installed weight digest. A local isolated
   CPU test matched an independently configured local sampler's token IDs and
@@ -708,6 +732,7 @@ arms. [Prior timing comparison][timing]
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
 [iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a8ae164919e7
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
+[h100-matched-audit]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-matched-audit%2F2026.11.21.1%2Fh100-matched-audit.tar.zst
 [frozen-validation-panel]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04%2Fvalidation.parquet
 [frozen-receiver-numbering]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/weight_sync/expert_block/schedule.py#L117-L118
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
@@ -743,6 +768,9 @@ arms. [Prior timing comparison][timing]
 [native-callback-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.15%2Fcallback-recovery-reproduction.tar.zst
 [native-durable-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.16%2Fdurable-checkpoint-recovery.tar.zst
 [typed-learner-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.17%2Ftyped-learner-wire.tar.zst
+[iris-native-tpu-recovery]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-recovery-tpu-20261121-21
+[native-tpu-recovery-results]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.21%2Foutputs.tar.zst
+[native-tpu-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.21%2Ftpu-recovery-source.tar.zst
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
