@@ -488,6 +488,7 @@ class TaskSpecTrial(Trial):
                     raise FileNotFoundError(f"Original package lock is unavailable: {environment.packages_lock}")
         kwargs = dict(self.config.environment.kwargs)
         self.judge_endpoint = kwargs.pop("model_endpoint", None)
+        self.grader_machine_image = kwargs.pop("grader_machine_image", None)
         supplied_model = kwargs.pop("model_name", None)
         judge = judge_spec(task.grader)
         self.judge_model = None
@@ -712,7 +713,11 @@ class TaskSpecTrial(Trial):
             return await self._grade_in_process(relay, connection)
         assert grader.environment is not None
         source = grader.environment.package_spec or HostImage()
-        if "verifier" in self._build_sources:
+        if self.grader_machine_image is not None:
+            # The harness resolved this frozen lock-only grader environment to its composed
+            # toolchain image; deliver the grader machine from it instead of the host.
+            source = RegistryImage(self.grader_machine_image)
+        elif "verifier" in self._build_sources:
             source = self._build_sources["verifier"]
         elif grader.environment.docker_image is not None:
             source = RegistryImage(grader.environment.docker_image)

@@ -3,6 +3,8 @@
 
 """Provider credentials reach the verifier env from the wave's resolved bundle, never free text."""
 
+import json
+
 import pytest
 
 pytest.importorskip("harbor")
@@ -10,12 +12,18 @@ pytest.importorskip("harbor")
 from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason
 
 from experiments.post_training.task_curation import difficulty_trials
+from experiments.post_training.task_curation.datasets.environments import LEAN_GRADER_PACKAGES
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_trials import (
     grader_infrastructure_reason,
     resolve_provider_secrets,
     task_guest_environment,
     task_required_provider_secrets,
+)
+from experiments.post_training.task_curation.images.build import (
+    DEFAULT_REPOSITORY,
+    identity_digest,
+    image_tag,
 )
 
 
@@ -79,6 +87,63 @@ def test_resolved_credentials_grant_the_guest_environment(judged_bundle, monkeyp
         judge_model=None,
     )
     assert task_guest_environment(task, resolved) == {"TOGETHER_API_KEY": "resolved-together_api_key"}
+
+
+def _fake_storage_path(payloads: dict[str, str]):
+    class _FakePath:
+        def __init__(self, url: str):
+            self._url = url
+
+        def read_text(self) -> str:
+            return payloads[self._url]
+
+    return _FakePath
+
+
+def test_normalized_lock_drops_only_the_staging_comment():
+    staged = (
+        "pandas==2.2.2 \\\n    --hash=sha256:aa\n"
+        "    # via -r /var/folders/x/tmpABC/requirements.in\n\nskyrl-gym==0.1.0\n"
+    )
+    plain = "pandas==2.2.2 \\\n    --hash=sha256:aa\n\nskyrl-gym==0.1.0\n"
+    assert difficulty_trials._normalized_lock(staged) == difficulty_trials._normalized_lock(plain)
+
+
+def test_frozen_lock_resolves_to_the_declared_toolchain_image(monkeypatch):
+
+    lean_lock = "# via -r /var/folders/x/tmpABC/requirements.in\npandas==2.2.2\n"
+    monkeypatch.setattr(difficulty_trials, "StoragePath", _fake_storage_path({"s3://fixture/lock": lean_lock}))
+    monkeypatch.setattr(difficulty_trials, "_declared_lock", lambda environment: "pandas==2.2.2\n")
+    image = difficulty_trials.declared_grader_machine_image("s3://fixture/lock")
+    assert image == image_tag(DEFAULT_REPOSITORY, identity_digest(LEAN_GRADER_PACKAGES))
+
+
+def test_unmatched_lock_keeps_the_existing_lock_built_machine(monkeypatch):
+    monkeypatch.setattr(difficulty_trials, "StoragePath", _fake_storage_path({"s3://fixture/lock": "pandas==2.2.2\n"}))
+    monkeypatch.setattr(difficulty_trials, "_declared_lock", lambda environment: "sympy==1.13.3\n")
+    assert difficulty_trials.declared_grader_machine_image("s3://fixture/lock") is None
+
+
+def test_task_spec_grader_image_resolution(tmp_path, monkeypatch):
+    lock_url = "s3://fixture/lock"
+    bundle = tmp_path / "packet"
+    bundle.mkdir()
+    (bundle / "task-spec.json").write_text(json.dumps({"grader": {"environment": {"packages_lock": lock_url}}}))
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(bundle),
+        workload="task_spec",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    monkeypatch.setattr(difficulty_trials, "declared_grader_machine_image", lambda url: "ghcr.io/x:tag")
+    assert difficulty_trials.task_spec_grader_machine_image(task) == "ghcr.io/x:tag"
+    native = task.model_copy(update={"workload": "native"})
+    assert difficulty_trials.task_spec_grader_machine_image(native) is None
+    (bundle / "task-spec.json").unlink()
+    assert difficulty_trials.task_spec_grader_machine_image(task) is None
 
 
 def test_verifier_phase_failures_classify_as_typed_grader_infrastructure():

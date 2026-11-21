@@ -16,7 +16,9 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
@@ -43,6 +45,7 @@ from taskcompendium.grading_result import GradingFailure
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
+from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import (
     TASK_PROVIDER_SECRETS,
@@ -51,6 +54,7 @@ from experiments.post_training.task_curation.difficulty_config import (
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
+from experiments.post_training.task_curation.environment import Environment
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
@@ -113,6 +117,71 @@ def read_verdict(trial: Trial) -> dict | None:
     if not path.exists():
         return None
     return json.loads(path.read_text())
+
+
+_LOCK_TEMPDIR_COMMENT = re.compile(r"^\s*#.*requirements\.in")
+
+
+def _normalized_lock(lock: str) -> str:
+    """The lock's pinned content, without the compile comment lines that name the staging directory."""
+    return "".join(line for line in lock.splitlines(keepends=True) if not _LOCK_TEMPDIR_COMMENT.match(line))
+
+
+@cache
+def _declared_lock(environment: Environment) -> str | None:
+    """The declared environment's compiled lock content, or None when its lock cannot compile."""
+    # The image-build module pulls in the Marin execution graph, which the Harbor runtime
+    # environment does not carry; resolve it only when a grader lock actually needs matching.
+    from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415
+        LOCK_FILE,
+        compile_lock,
+    )
+
+    try:
+        with TemporaryDirectory() as directory:
+            compile_lock(environment.requirements, Path(directory) / LOCK_FILE)
+            return _normalized_lock((Path(directory) / LOCK_FILE).read_text())
+    except Exception:
+        return None
+
+
+def declared_grader_machine_image(lock_url: str) -> str | None:
+    """The composed toolchain image for a frozen lock-only grader environment, when one is declared.
+
+    The frozen panel's grader environment records a packages lock whose machine lacked the
+    toolchain. The declared environment whose compiled lock carries the same pinned packages and a
+    Dockerfile fragment owns the composed image that delivers both, so the grader machine runs from
+    it instead of the host. Returns None when no declaration matches, keeping the existing
+    lock-built machine; callers that need the toolchain fail closed at the toolchain probe.
+    """
+    from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415
+        DEFAULT_REPOSITORY,
+        identity_digest,
+        image_tag,
+    )
+
+    lock = _normalized_lock(StoragePath(lock_url).read_text())
+    for environment in BUILDABLE_ENVIRONMENTS:
+        if environment.dockerfile is None:
+            continue
+        declared = _declared_lock(environment)
+        if declared is not None and declared == lock:
+            return image_tag(DEFAULT_REPOSITORY, identity_digest(environment))
+    return None
+
+
+def task_spec_grader_machine_image(task: PreparedTask) -> str | None:
+    """The composed grader machine image for one prepared task-spec task, when its lock resolves."""
+    if task.path is None or task.workload != "task_spec":
+        return None
+    spec_path = Path(task.path) / "task-spec.json"
+    if not spec_path.is_file():
+        return None
+    spec = json.loads(spec_path.read_text())
+    lock_url = ((spec.get("grader") or {}).get("environment") or {}).get("packages_lock")
+    if not lock_url:
+        return None
+    return declared_grader_machine_image(lock_url)
 
 
 def grader_infrastructure_reason(*, verifier_reached: bool, verdict: dict | None) -> str | None:
@@ -417,6 +486,9 @@ def run_task(
             [DifficultyAttempt(task_id=task.task_id, status="pending", reward=None, reason=task.reason)], task.reason
         )
     attempts = []
+    machine_image = task_spec_grader_machine_image(task)
+    if machine_image is not None:
+        LOGGER.info("Grader machine for %s runs from the composed toolchain image %s", task.task_id, machine_image)
     pending_reason = None
     math_deadlines = prior_math_deadlines
     for number in range(config.attempts_per_task):
@@ -450,6 +522,8 @@ def run_task(
 
         options = dict(config.environment_options)
         authentication = {endpoint: "EMPTY"}
+        if machine_image is not None:
+            options["grader_machine_image"] = machine_image
         if task.backend == "daytona":
             # Daytona tasks ignore the worker-local options; their environment
             # takes the provisioning mode and the attempt timeout. The judge
