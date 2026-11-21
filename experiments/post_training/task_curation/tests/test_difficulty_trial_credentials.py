@@ -114,6 +114,7 @@ def test_frozen_lock_resolves_to_the_declared_toolchain_image(monkeypatch):
     lean_lock = "# via -r /var/folders/x/tmpABC/requirements.in\npandas==2.2.2\n"
     monkeypatch.setattr(difficulty_trials, "StoragePath", _fake_storage_path({"s3://fixture/lock": lean_lock}))
     monkeypatch.setattr(difficulty_trials, "_declared_lock", lambda environment: "pandas==2.2.2\n")
+    difficulty_trials.declared_grader_machine_image.cache_clear()
     image = difficulty_trials.declared_grader_machine_image("s3://fixture/lock")
     assert image == image_tag(DEFAULT_REPOSITORY, identity_digest(LEAN_GRADER_PACKAGES))
 
@@ -121,6 +122,7 @@ def test_frozen_lock_resolves_to_the_declared_toolchain_image(monkeypatch):
 def test_unmatched_lock_keeps_the_existing_lock_built_machine(monkeypatch):
     monkeypatch.setattr(difficulty_trials, "StoragePath", _fake_storage_path({"s3://fixture/lock": "pandas==2.2.2\n"}))
     monkeypatch.setattr(difficulty_trials, "_declared_lock", lambda environment: "sympy==1.13.3\n")
+    difficulty_trials.declared_grader_machine_image.cache_clear()
     assert difficulty_trials.declared_grader_machine_image("s3://fixture/lock") is None
 
 
