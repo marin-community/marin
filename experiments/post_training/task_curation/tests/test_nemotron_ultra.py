@@ -245,6 +245,16 @@ def test_reasoning_gym_rejects_confirmed_invalid_tsumego_ground_truth():
     )
 
 
+def test_competitive_code_rejects_a_statement_one_stored_output_cannot_check():
+    path = "ultra_sft_step3200_comp_coding"
+    row = COMPONENT_ROWS[path]
+    statement = "Build a tree. If there are multiple answers, print any of them."
+    request = {**row["responses_create_params"], "input": [{"role": "user", "content": statement}]}
+    result = convert_row(RECIPES[pipeline_name("rlvr2", path)], {**row, "responses_create_params": request})
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "any_valid_output")
+
+
 def test_competitive_code_rejects_constructive_problem_without_its_special_judge():
     path = "ultra_sft_step3200_comp_coding"
     result = convert_row(

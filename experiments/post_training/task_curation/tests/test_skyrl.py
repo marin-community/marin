@@ -308,6 +308,38 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert grader_config(task)["test_cases"] == [{"input": "1 2\n", "output": "3\n", "testtype": "stdin"}]
 
 
+def eurus2_stdin_row(statement: str) -> dict:
+    return {**ROWS["eurus2_code"], "prompt": [{"role": "user", "content": statement}]}
+
+
+@pytest.mark.parametrize(
+    ("statement", "reason"),
+    [
+        ("Build a tree. If there are multiple answers, print any of them.", "any_valid_output"),
+        ("Find the path with the minimum cost. If there are multiple answers, print any.", "any_valid_output"),
+        ("Print the distance. It is considered correct if its absolute error is below 1e-6.", "float_tolerance"),
+        ("This is an interactive problem. Query the judge.", "interactive_problem"),
+        ("You don't need to read input. Complete the function sum2().", "function_template_with_example_tests"),
+    ],
+)
+def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, reason):
+    result = convert_row(RECIPES["eurus2_code"], eurus2_stdin_row(statement))
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, reason)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "Read two integers and print their sum. Do not print any extra spaces.",
+        "If there are multiple answers, print any of them with the smallest first element.",
+        "Complete the function add in the editor below.\n\nInput Format\n\nTwo integers.",
+    ],
+)
+def test_eurus2_row_with_one_right_output_stays(statement):
+    assert isinstance(convert_row(RECIPES["eurus2_code"], eurus2_stdin_row(statement)), TaskSpec)
+
+
 @pytest.mark.parametrize(
     ("name", "constraints"),
     [

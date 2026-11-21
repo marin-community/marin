@@ -6,7 +6,11 @@
 import ast
 import re
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Any
+
+from taskcompendium.convert.answers import source_defect
+from taskcompendium.pipeline.models import ImportRejection
 
 CODE_GRADER_MEMORY_MB = 5120
 """The LiveCodeBench child process may use 4 GiB; the grading machine also needs room for its runtime."""
@@ -14,10 +18,43 @@ THREAD_ENVIRONMENT = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 """Run each test's numeric libraries on one thread."""
 CODE_BLOCK = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
 """A fenced code block as the source scorers match one; they run the last block in a reply."""
+_ANY_VALID_OUTPUT = re.compile(
+    r"\b(if|when|in case)\b[^.\n]{0,40}\b(several|multiple|many|more than one)\b[^.\n]{0,80}\b(any|either)\b"
+    r"|\b(several|multiple|many|more than one)\b[^.\n]{0,30}\b(answers?|solutions?|ways?|outputs?|results?)\b"
+    r"[^.\n]{0,60}\b(any|either)\b"
+    r"|\b(print|output|find|return)\s+any\s+(one\s+)?(of\s+(them|these)|valid|correct|possible|such|solution|answer)\b"
+    r"|\bany\s+(valid|correct)\s+(answer|solution|output|sequence|permutation|arrangement|assignment|construction)\b"
+    r"|\b(answers?|solutions?)\s+(is|are)\s+not\s+unique\b",
+    re.IGNORECASE,
+)
+_ONE_ANSWER_CHOSEN = re.compile(
+    r"lexicographically|smallest possible|with the (smallest|largest|minimum|maximum)|the one with", re.IGNORECASE
+)
+_FLOAT_TOLERANCE = re.compile(
+    r"absolute or relative|relative or absolute|relative error|absolute error"
+    r"|error (does not|must not|should not|doesn't) exceed"
+    r"|within (an? )?(error|tolerance)|accurate to within|considered correct if",
+    re.IGNORECASE,
+)
+"""A clause accepting any answer within a numeric tolerance, worded with or without the word "error"."""
+_INTERACTIVE = re.compile(r"\binteractive problem\b", re.IGNORECASE)
+_FUNCTION_TEMPLATE = re.compile(
+    r"you (don'?t|do not) (need|have) to (read|take) (any )?input|no need to read input"
+    r"|complete the (given )?(function|method|class)",
+    re.IGNORECASE,
+)
+_INPUT_FORMAT = re.compile(r"input format|-+\s*input\s*-+", re.IGNORECASE)
 
 
-def validate_code_cases(cases: Mapping[str, Any] | list[Any]) -> None:
-    """Reject decoded test layouts the LiveCodeBench scorer cannot normalize."""
+class CodeTestMode(StrEnum):
+    """How hidden tests run a reply: on standard input, or by calling one function."""
+
+    STDIN = "stdin"
+    FUNCTIONAL = "functional"
+
+
+def code_case_mode(cases: Mapping[str, Any] | list[Any]) -> CodeTestMode:
+    """The test cases' mode. Raises for a layout the LiveCodeBench scorer cannot normalize."""
     if isinstance(cases, Mapping) and "test_cases" in cases:
         if cases.get("language") not in (None, "python"):
             raise ValueError("LCB supports only Python verification specs")
@@ -40,7 +77,7 @@ def validate_code_cases(cases: Mapping[str, Any] | list[Any]) -> None:
         if kind in ("stdin", "stdin_stdout"):
             if not isinstance(case.get("input"), str) or not isinstance(case.get("output"), str):
                 raise ValueError("Standard-input LCB cases require string input and output")
-            modes.add("stdin")
+            modes.add(CodeTestMode.STDIN)
         elif kind in ("functional", "call_based"):
             metadata = case.get("metadata")
             name = case.get("fn_name") or (metadata.get("func_name") if isinstance(metadata, Mapping) else None)
@@ -48,12 +85,29 @@ def validate_code_cases(cases: Mapping[str, Any] | list[Any]) -> None:
                 raise ValueError("Functional LCB cases require a function name")
             if not isinstance(case.get("input"), str | list):
                 raise ValueError("Functional LCB input must be a list or encoded string")
-            modes.add("functional")
+            modes.add(CodeTestMode.FUNCTIONAL)
             names.add(name)
         else:
             raise ValueError("Unsupported LCB test-case type")
     if len(modes) != 1 or len(names) > 1:
         raise ValueError("LCB cases must share one execution mode and function name")
+    return modes.pop()
+
+
+def ungradable_statement(statement: str, mode: CodeTestMode) -> ImportRejection | None:
+    """Reject a statement whose replies comparison with one stored output cannot grade, else return None."""
+    any_valid = _ANY_VALID_OUTPUT.search(statement)
+    if any_valid and not _ONE_ANSWER_CHOSEN.search(statement, any_valid.end(), any_valid.end() + 120):
+        reason = "any_valid_output"
+    elif _FLOAT_TOLERANCE.search(statement):
+        reason = "float_tolerance"
+    elif _INTERACTIVE.search(statement):
+        reason = "interactive_problem"
+    elif mode == CodeTestMode.STDIN and _FUNCTION_TEMPLATE.search(statement) and not _INPUT_FORMAT.search(statement):
+        reason = "function_template_with_example_tests"
+    else:
+        return None
+    return source_defect(reason, "Comparing with one stored output cannot grade replies to this statement")
 
 
 def has_code_block(response: str) -> bool:
