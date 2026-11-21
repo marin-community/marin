@@ -80,10 +80,9 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
 
 
 def config(harness: RecordingHarness | None = None) -> TaskforgeConfig:
-    return replace(
-        build_config(load_policy(DEFAULTS_DIR), {}),
-        author=harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))),
-    )
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    author = harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    return replace(setup, author=replace(setup.author, harness=author))
 
 
 def adversary_config(harness: RecordingHarness) -> TaskforgeConfig:
@@ -91,8 +90,7 @@ def adversary_config(harness: RecordingHarness) -> TaskforgeConfig:
     return replace(
         setup,
         policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
-        adversaries={"finder": harness},
-        tools={"finder": {}},
+        adversary=replace(setup.adversary, harness=harness, tools={}),
     )
 
 
@@ -305,8 +303,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
     setup = replace(
         setup,
         policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
-        adversaries={"finder": harness},
-        tools={"finder": tools},
+        adversary=replace(setup.adversary, harness=harness, tools=tools),
     )
 
     async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
@@ -544,7 +541,8 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         assert isinstance(outcome, Returned)
         harness = RecordingHarness(outcome)
         harness.run = run
-        setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
+        setup = config()
+        setup = replace(setup, adversary=replace(setup.adversary, harness=harness, tools={}))
         result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
         if failures == 2:
             assert (result.status, result.limit, result.findings) == (
@@ -761,7 +759,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     assert workpiece.submission is not None
     setup = config()
     harness = AgenticHarness(32, sampling(setup.policy, LLMPolicy()), "report findings", 20000, replay_arguments)
-    setup = replace(setup, adversaries={"finder": harness}, tools={"finder": {}})
+    setup = replace(setup, adversary=replace(setup.adversary, harness=harness, tools={}))
     client = FakeInference(
         (
             (

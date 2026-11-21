@@ -1570,7 +1570,8 @@ async def test_stage_result_without_a_transition_from_that_stage_fails(
     proposal: TaskProposal, result: Exit | None, named: str
 ) -> None:
     author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
-    settings = replace(config(), author=author)
+    settings = config()
+    settings = replace(settings, author=replace(settings.author, harness=author))
     with pytest.raises(ValueError, match=named):
         await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
     assert author.calls == 1

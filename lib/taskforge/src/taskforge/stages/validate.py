@@ -15,18 +15,16 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
-from taskforge.effects.log import Opened
 from taskforge.harness.protocol import Returned, Stopped, StopReason
+from taskforge.harness.role import Fresh, Visit, sitting
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from taskforge.lowering import (
     InvalidTaskSpec,
-    host_requirements,
     lower_with_settings,
     lowering_settings,
     requirements,
 )
 from taskforge.model.controls import Control
-from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
 from taskforge.model.review import (
     AdversaryFinding,
@@ -38,13 +36,11 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import Conversation, Workpiece
+from taskforge.model.workpiece import Workpiece
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import WriteFiles
-from taskforge.resources.execution import close_resource
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.author import install_env, sandbox_limits
+from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
 from taskforge.stages.summary import task_manifest
@@ -144,83 +140,59 @@ async def run_adversary(
     owner: str,
 ) -> AdversaryResult | None:
     """One adversary search and the reproduction of its claims; ``None`` when the search ran out of output."""
-    requested = (
+    workdir = config.policy.setting("author.workdir", str)
+    machine = (
         spec.task.environment_requirements
         if spec.task_machine is not None
-        else requirements(
-            image=config.policy.setting("adversary.image", str) or None,
-            workdir=config.policy.setting("author.workdir", str),
-        )
+        else requirements(image=config.policy.setting("adversary.image", str) or None, workdir=workdir)
     )
-    files = (*spec.task.resources.all, *spec.task.resources.worker)
-    env = await resources.envs.create(host_requirements(requested))
-    try:
-        async with ctx.scope(f"adversary:{name}", Opened(owner, env.fingerprint().digest)):
-            install_env(ctx, env)
-            task_json = spec.task.model_dump_json().encode()
-            await ctx.emit(
-                WriteFiles(
-                    (
-                        *((PurePosixPath("/", file.path), resource_bytes(file)) for file in files),
-                        (PurePosixPath(config.policy.setting("author.workdir", str), "task.json"), task_json),
-                    )
-                )
+    shared = (*spec.task.resources.all, *spec.task.resources.worker)
+    files = (
+        *((PurePosixPath("/", file.path), resource_bytes(file)) for file in shared),
+        (PurePosixPath(workdir, "task.json"), spec.task.model_dump_json().encode()),
+    )
+    opening = Fresh(
+        config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
+        config.policy.prompt("adversary.user").render(
+            task=task_manifest(spec.task), proposal=render(workpiece.proposal), name=name, workdir=workdir
+        ),
+    )
+    visit = Visit(f"adversary:{name}", owner, machine, opening, files, {"report": ReportTool(spec.task)})
+    async with sitting(ctx, config.adversary, visit, resources) as session:
+        try:
+            outcome = await session()
+        except* OutputBudgetExhausted:
+            # Only the search session's own output counts as an exhausted search, never claim reproduction.
+            outcome = None
+        if outcome is None:
+            return None
+        if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
+            return exhausted(name, SearchLimit.CONTEXT_WINDOW)
+        if (
+            not isinstance(outcome, Returned)
+            or outcome.tool != "report"
+            or not isinstance(outcome.payload, AdversaryReport)
+        ):
+            reason = (
+                f"{outcome.summary} without report"
+                if isinstance(outcome, Stopped)
+                else f"Expected report, got {type(outcome).__name__}"
             )
-            tools = {**config.tools[name], "report": ReportTool(spec.task)}
-            session = Conversation(
-                (
-                    Message(
-                        Role.SYSTEM,
-                        config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
-                    ),
-                    Message(
-                        Role.USER,
-                        config.policy.prompt("adversary.user").render(
-                            task=task_manifest(spec.task),
-                            proposal=render(workpiece.proposal),
-                            name=name,
-                            workdir=config.policy.setting("author.workdir", str),
-                        ),
-                    ),
-                ),
-                tuple(tool.schema for tool in tools.values()),
-            )
-            try:
-                outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
-            except* OutputBudgetExhausted:
-                # Only the search session's own output counts as an exhausted search, never claim reproduction.
-                outcome = None
-            if outcome is None:
-                return None
-            if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
-                return exhausted(name, SearchLimit.CONTEXT_WINDOW)
-            if (
-                not isinstance(outcome, Returned)
-                or outcome.tool != "report"
-                or not isinstance(outcome.payload, AdversaryReport)
-            ):
-                reason = (
-                    f"{outcome.summary} without report"
-                    if isinstance(outcome, Stopped)
-                    else f"Expected report, got {type(outcome).__name__}"
-                )
-                return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
-            report = outcome.payload
-            async with asyncio.TaskGroup() as group:
-                claims = [
-                    group.create_task(reproduced(ctx, spec, claim, index)) for index, claim in enumerate(report.findings)
-                ]
-            results = [claim.result() for claim in claims]
-            # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
-            reasons = tuple(
-                f"reproducing {finding.claim!r} was inconclusive: {reason}"
-                for finding, failure in results
-                for reason in failure
-            )
-            status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
-            return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
-    finally:
-        await close_resource(env.close, ctx.notify)
+            return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
+        report = outcome.payload
+        async with asyncio.TaskGroup() as group:
+            claims = [
+                group.create_task(reproduced(ctx, spec, claim, index)) for index, claim in enumerate(report.findings)
+            ]
+        results = [claim.result() for claim in claims]
+        # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
+        reasons = tuple(
+            f"reproducing {finding.claim!r} was inconclusive: {reason}"
+            for finding, failure in results
+            for reason in failure
+        )
+        status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
+        return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:

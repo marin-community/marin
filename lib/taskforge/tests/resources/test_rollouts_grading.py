@@ -52,7 +52,7 @@ from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
-from taskforge.stages.author import install_env
+from taskforge.harness.role import install_env
 
 
 def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None:

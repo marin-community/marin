@@ -36,7 +36,7 @@ from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import Ids, NewId, new_id
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.author import install_env
+from taskforge.harness.role import install_env
 
 
 def configure(ctx: Context, env: Env, client: InferenceClient, ids: Ids) -> None:

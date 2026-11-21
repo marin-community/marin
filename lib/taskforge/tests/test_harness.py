@@ -66,7 +66,7 @@ from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import Engine
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.resources.web import ParallelWeb, WebFetch, WebSearch, fetch, search
-from taskforge.stages.author import install_env
+from taskforge.harness.role import install_env
 
 pytestmark = pytest.mark.asyncio
 
