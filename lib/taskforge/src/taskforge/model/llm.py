@@ -16,6 +16,8 @@ class FinishReason(StrEnum):
     TOOL_CALLS = "tool_calls"
     ABORT = "abort"
     """vLLM aborted the request, for example while draining a worker; the model client retries it."""
+    CONTEXT_EXCEEDED = "context_exceeded"
+    """The provider refused the conversation because its context window is full; ``content`` holds its reason."""
 
 
 class Role(StrEnum):
