@@ -6,7 +6,7 @@
 import json
 from collections.abc import Sequence
 
-from marina.client import DEFAULT_MARINA_URL, applet_query
+from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
 
@@ -50,6 +50,25 @@ def published_panel_sources(ledger: str) -> list[CatalogSource]:
     return sources
 
 
+def declarations_for_populations(query: AppletQuery, missing: Sequence[dict]) -> dict[str, dict]:
+    """Read complete declarations in bounded batches from their original catalog load."""
+    full_declarations = {}
+    for start in range(0, len(missing), DECLARATION_BATCH_SIZE):
+        batch = missing[start : start + DECLARATION_BATCH_SIZE]
+        parameters = {"load_id": batch[0]["load_id"], **{f"source_{i}": row["id"] for i, row in enumerate(batch)}}
+        placeholders = ",".join(f":source_{i}" for i in range(len(batch)))
+        full = query(
+            "SELECT id, declaration FROM atlas_sources WHERE load_id=:load_id AND id IN ("
+            + placeholders
+            + ") ORDER BY id",
+            parameters,
+        )["rows"]
+        if {row["id"] for row in full} != {row["id"] for row in batch}:
+            raise ValueError("Frozen catalog snapshot lacks a requested source declaration")
+        full_declarations.update({row["id"]: row["declaration"] for row in full})
+    return full_declarations
+
+
 def served_catalog(
     applet_id: str,
     queues: tuple[tuple[str, str], ...] = DEFAULT_QUEUES,
@@ -76,20 +95,7 @@ def served_catalog(
         for row in declarations
         if (canonical_source_id(row["id"]), declaration_population_revision(row["declaration"])) not in panels
     ]
-    full_declarations = {}
-    for start in range(0, len(missing), DECLARATION_BATCH_SIZE):
-        batch = missing[start : start + DECLARATION_BATCH_SIZE]
-        parameters = {"load_id": batch[0]["load_id"], **{f"source_{i}": row["id"] for i, row in enumerate(batch)}}
-        placeholders = ",".join(f":source_{i}" for i in range(len(batch)))
-        full = query(
-            "SELECT id, declaration FROM atlas_sources WHERE load_id=:load_id AND id IN ("
-            + placeholders
-            + ") ORDER BY id",
-            parameters,
-        )["rows"]
-        if {row["id"] for row in full} != {row["id"] for row in batch}:
-            raise ValueError("Frozen catalog snapshot lacks a requested source declaration")
-        full_declarations.update({row["id"]: row["declaration"] for row in full})
+    full_declarations = declarations_for_populations(query, missing)
     sources = []
     for row in declarations:
         declaration = row["declaration"]
