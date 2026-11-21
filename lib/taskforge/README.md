@@ -231,8 +231,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   `solve_review.context_tokens` as their prompt limits. There is no output cap;
   the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
-  out of band gets one revision round and is then accepted at its own placement, tagged
-  `accepted_with: <band>`; only a fault (or the author stopping) reverts to the earlier submission.
+  out of band gets one band-only revision round within the shared budget and is then accepted at its own
+  placement, tagged `accepted_with: <band>`; only a fault or the author stopping reverts to the stored fallback.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
@@ -257,20 +257,30 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   why it stopped: `reported`, `budget_exhausted` or `held`, and the digest of its conversation at the
   stop) for a workflow that continues an exhausted search; the default workflow does not.
 - **Solve-review**: once a round's solver trials and controls are clean and its placement is
-  reviewable, one session with no machine reads the recorded trials (each conversation, then its grade)
-  and the task's files through `list_evidence`, `read_evidence` (bounded pages addressed by source, part
-  and character offset) and `search_evidence`, and calls `report` with findings of four kinds
-  (`ambiguous_prompt`, `grader_defect`, `answer_leak`, `environment_problem`), each with a proposed edit and
-  citations `{source, start, end, quote}`. A finding is kept only when every quote occurs, whitespace
-  collapsed, in the parts it addresses; any other is recorded as dropped with its reason. The report must
-  account for every trial that did not pass. The opening names the index's digest, so a resumed round
-  replays its review only when the evidence is unchanged. While a round is left, kept findings send the
-  task back for one revision (the author may decline a finding by number, with a reason, on `submit`),
-  which is validated again and restores the reviewed version through the fallback on a fault; after that
-  they are the acceptance's `notes`. An acceptance names what it went without in `missing`: no review ran
-  (`solve_review`), the review ended without a report (`solve_review`), or trials had no transcript
-  (`transcripts`; with none at all the review is skipped). Missing evidence never holds a task. The
-  review runs over any set of trials, so a later step can reuse it with its own prompts and report.
+  reviewable, one session with no machine reads the recorded trials and the task's files through
+  `list_evidence` (resumable from a source number), `read_evidence` (pages addressed by source, part and
+  character offset) and `search_evidence`, and calls `report`. Sources have their own namespaces:
+  `trial/<n>` (each message, an interruption's marker, then the grade), `task/task.json`, `task/prompt.md`,
+  `task/controls.json`, and `resource/<group>/<path>` for each resource, whose summary names the sha256 of
+  its bytes (bytes that are not UTF-8 are named opaque, with no parts). Every reply, diagnostics included,
+  fits in `tools.output_chars` with its headers and continuation line, so nothing spills to a file; a visit
+  without a machine refuses a tool that does not bound its replies. Evidence renders canonically (sorted
+  JSON, integral floats as integers, tool-call ids kept), and the opening always ends with the index's
+  digest outside the editable template, so a resumed round, cold or warm, replays its review only when the
+  evidence is unchanged. Findings have one of four kinds (`ambiguous_prompt`, `grader_defect`,
+  `answer_leak`, `environment_problem`), a description and edit with text beyond whitespace, and citations
+  `{source, start, end, quote}`. A finding is kept only when every quote occurs, whitespace collapsed, in
+  the parts it addresses; any other is recorded as dropped with its reason. The report must account for
+  every trial that did not pass, by a real trial number, and a failure attributed to a task defect needs a
+  finding that survived its citations; otherwise the report goes back to the reviewer. While the shared
+  budget has a round left, kept findings send the task back for a revision (the author may decline a
+  finding by number, with a reason, on `submit`), which is validated again and restores the reviewed
+  version through the fallback on a fault; after that they are the acceptance's `notes`. A restore carries
+  the review and missing evidence of the round it restores. An acceptance names what it went without in
+  `missing`: no review ran or it ended without a report (`solve_review`), or trials lacked a complete
+  transcript (`transcripts`; an interrupted trial is reviewed by its prefix, and only a round where no
+  trial recorded a message skips the review). Missing evidence never holds a task. The review runs over
+  any set of trials, so a later step can pass its own prompts and report tool.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
