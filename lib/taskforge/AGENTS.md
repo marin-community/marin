@@ -22,8 +22,8 @@ effects, never whole stages.
   `./infra/pre-commit.py --all-files --fix`.
 - Keep dependency direction: model <- effects <- resources <- lowering <- harness
   <- config <- stages <- coordinator. Copy modules with a source citation.
-- `taskforge.llm` is the GLM transport kept from the previous package; extend it
-  rather than adding a second client.
+- `taskforge.llm.client.ModelClient` is the one owner of model retries; a new model host is a `Provider`
+  and a new model is a `ModelProfile`, never a second client or a retry loop around one.
 - `Event` alone uses an explicit covariant `TypeVar`: PEP 695 infers invariance
   for its phantom result type. The event-class registry, keyed by each class's stable `kind`, is the module-state
   exception needed for typed replay; logs never dynamically import classes.

@@ -18,7 +18,7 @@ This file covers how to run it.
 | `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `report`, `finish`, web) |
 | `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
-| `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, wire helpers |
+| `src/taskforge/llm/` | the model client (the one retry owner), the `Provider` protocol and its GLM default, model profiles, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
 | `src/taskforge/lowering.py` | `TaskSpec` → `TaskRolloutSpec` for the host; the only place that chooses machines |
 | `src/taskforge/coordinator.py` | author → validate → review, decisions and budgets, bounded stage replay |
@@ -225,13 +225,47 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
-  `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`.
+  `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`. The run refuses a
+  `solver.turn_timeout` shorter than the window plus a stall, or too short for a first attempt to reach its
+  first token inside the solver's generation bound (the turn less 60 s).
 - **Tools**: `tools.output_chars`; longer output is saved to `.tool-output/<digest>.txt` in the
   workspace and the model gets the head plus the path.
 
 Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the live
 `TaskSpec` and control schemas, and the adversary's user prompt renders the task without file
 payloads (they are in the workdir).
+
+## Models and providers
+
+Every model call goes through one `ModelClient` (`llm/client.py`), the only place that retries.
+It sends each attempt through a `Provider` and decides from the attempt's outcome:
+
+| Failure | What happens |
+|---|---|
+| 400 context overflow | `ContextExhausted`: a solver trial ends at the generation limit (counted, never solved); the author and adversary get `ContextExceeded` as before |
+| other rejection (401, 400, ...) | `ModelRequestRejected`, a typed bug; never retried |
+| 408/429/5xx, 404 `no route`, no endpoint, refused connection, stall, cut or aborted stream | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
+| two stalls in a row inside an open tool call | an empty `finish_reason=length` completion (degenerate output) |
+| a solver generation still healthy at the turn deadline less 60 s | the trial ends at the generation limit |
+
+The defaults are `GlmProvider` (the GLM router, `llm/glm_provider.py`) for every role and the
+`GLM_5_3` profile (`llm/policy.py`: sampling defaults, context window, no output limit, tool-call
+argument repair). A caller overrides either per role through the public wiring:
+
+```python
+from dataclasses import replace
+from taskforge.llm.policy import GLM_5_3
+from taskforge.wiring import runtime
+
+profiles = {"author": replace(GLM_5_3, max_output_tokens=32_768)}
+providers = {"adversary": MyProvider()}  # any object with `model`, `stream(body, events)` and `no_workers()`
+async with runtime(policy, source, parallel_api_key, providers=providers, profiles=profiles) as (config, resources):
+    ...
+```
+
+`build_config(policy, factories, profiles)` and `build_resources(policy, providers, factories, web, profiles)` take the
+same mappings when the caller builds the bindings itself. The policy's `<role>.model` and `sampling.*` keys still apply
+on top of the profile. Replay keys carry only the model, the role and the request, so neither choice moves a recorded journal.
 
 ## Environments
 

@@ -23,6 +23,7 @@ import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
+from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
@@ -61,6 +62,7 @@ from taskforge.effects.issues import (
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_provider import EndpointSource
+from taskforge.llm.policy import GLM_5_3
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
@@ -90,7 +92,7 @@ from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
-from taskforge.wiring import build_config, install
+from taskforge.wiring import build_config, build_resources, install
 
 
 def published(destination: Path) -> Journal:
@@ -313,6 +315,26 @@ async def test_stage_replay_budget_restarts_after_each_completed_stage(proposal:
     wp = await run_workpiece(proposal, replace(config(), review=retry_once), bundle, EventLog(), install=install)
     assert [type(decision) for decision in wp.decisions] == [Retry, Accept]
     assert wp.terminal == Terminal.ACCEPTED and not any(solver.failures.values())
+
+
+async def test_a_workpiece_runs_end_to_end_on_a_caller_provider_and_profile(proposal: TaskProposal) -> None:
+    """The library's GLM provider and GLM-5.3 profile are defaults: a caller passes its own per role through wiring."""
+    author = ScriptedProvider(tuple(segment(c.content, c.tool_calls, FinishReason.TOOL_CALLS) for c in script()))
+    solver = ScriptedProvider((segment("12"), segment("9")))
+    providers = {"author": author, "solver": solver, "adversary": ScriptedProvider(())}
+    profiles = {"author": replace(GLM_5_3, max_output_tokens=4096)}
+    policy = load_policy(DEFAULTS_DIR).overlaid(SETTINGS)
+    built = build_resources(policy, providers, {}, FakeWeb({}, {}), profiles)
+    bundle = replace(
+        built,
+        envs=Envs(),
+        rollouts=replace(built.rollouts, engine=CandidateEngine()),
+        grading=GradingResource(CandidateEngine(), "grader"),
+    )
+    wp = await run_workpiece(proposal, build_config(policy, {}, profiles), bundle, EventLog(), install=install)
+    assert wp.terminal == Terminal.ACCEPTED
+    assert [body["max_tokens"] for body in author.bodies] == [4096] * len(script())
+    assert len(solver.bodies) == 2 and not any("max_tokens" in body for body in solver.bodies)
 
 
 @pytest.fixture
