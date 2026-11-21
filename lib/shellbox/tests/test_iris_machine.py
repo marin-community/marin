@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import math
 import os
 import pwd
 import re
@@ -39,6 +40,7 @@ from shellbox.machine import (
     Command,
     CommandOutcomeUnknown,
     ExecSetupFailed,
+    ExitReason,
     GuestHelperFailed,
     GuestPathError,
     MachineCancelled,
@@ -56,13 +58,22 @@ GUEST_SH = shutil.which("dash") or "sh"
 
 
 class LocalRpc:
+    """Runs each exec locally; past the RPC deadline it ends the exec's processes and raises as the client does."""
+
     def exec_in_container(self, request, timeout_ms):
-        del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error="[Errno 7] Argument list too long: 'docker'")
         command = [GUEST_SH if request.command[0] == "sh" else request.command[0], *request.command[1:]]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
+        with subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=min(timeout_ms / 1000, 30))
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out") from None
+        return SimpleNamespace(exit_code=process.returncode, stdout=stdout, stderr=stderr, error="")
 
 
 class FailingRpc:
@@ -72,23 +83,39 @@ class FailingRpc:
 
 
 class RefusingRpc(LocalRpc):
-    """Fails the first ``refusals`` execs with ``code`` before running anything, then runs them locally."""
+    """Fails the first ``refusals`` execs containing ``only`` with ``code`` before running anything."""
 
-    def __init__(self, code: Code, refusals: int, cause: Exception | None = None, message: str = "refused"):
+    def __init__(
+        self, code: Code, refusals: int, cause: Exception | None = None, message: str = "refused", only: str = ""
+    ):
         self.code = code
         self.refusals = refusals
         self.cause = cause
         self.message = message
+        self.only = only
         self.scripts: list[str] = []
 
     def exec_in_container(self, request, timeout_ms):
         self.scripts.append(request.command[-1])
-        if len(self.scripts) <= self.refusals:
+        if self.only in request.command[-1] and self.sent(self.only) <= self.refusals:
             raise ConnectError(self.code, self.message) from self.cause
         return super().exec_in_container(request, timeout_ms)
 
     def sent(self, marker: str) -> int:
         return sum(marker in script for script in self.scripts)
+
+
+class CountingRpc(LocalRpc):
+    """Runs each exec locally after ``prelude`` and records its script."""
+
+    def __init__(self, prelude: str = ""):
+        self.prelude = prelude
+        self.scripts: list[str] = []
+
+    def exec_in_container(self, request, timeout_ms):
+        *shell, script = request.command
+        self.scripts.append(script)
+        return super().exec_in_container(SimpleNamespace(command=[*shell, self.prelude + script]), timeout_ms)
 
 
 class LocalTask:
@@ -619,20 +646,111 @@ def test_oom_termination_reports_effective_memory_request(tmp_path, memory_mb):
         asyncio.run(machine.run(Command(("true",))))
 
 
-def test_command_exec_carries_the_command_deadline(tmp_path):
-    machine, _ = local_machine(tmp_path)
+NO_GUEST_TIMEOUT = "timeout() { echo 'timeout: not found' >&2; return 127; }; "
+
+
+@pytest.mark.parametrize("bounded", [True, False], ids=["guest-timeout", "no-guest-timeout"])
+def test_command_exec_deadlines_leave_the_guest_bound_room_to_fire_first(tmp_path, bounded):
+    rpc = CountingRpc(prelude="" if bounded else NO_GUEST_TIMEOUT)
+    machine, _ = local_machine(tmp_path, rpc)
     requests = []
 
-    class Rpc(LocalRpc):
+    class Rpc(CountingRpc):
         def exec_in_container(self, request, timeout_ms):
             requests.append((request.command[-1], request.timeout_seconds, timeout_ms))
-            return super().exec_in_container(request, timeout_ms)
+            return rpc.exec_in_container(request, timeout_ms)
 
     machine.rpc = Rpc()
     assert asyncio.run(machine.run(Command(("printf", "ok"), timeout=180.1))).stdout == b"ok"
     command = [request for request in requests if "printf ok" in request[0]]
-    assert [request[1:] for request in command] == [(181, (181 + iris_backend.RPC_PADDING_SECONDS) * 1000)]
+    if bounded:
+        # The controller's exec deadline outlasts the guest bound and its kill grace; the RPC outlasts both.
+        seconds = math.ceil(180.1 + iris_backend.GUEST_KILL_GRACE_SECONDS + iris_backend.GUEST_EXEC_MARGIN_SECONDS)
+        assert [request[1:] for request in command] == [(seconds, (seconds + iris_backend.RPC_PADDING_SECONDS) * 1000)]
+    else:
+        # Unbounded in the guest, the command's own timeout is the RPC deadline, inside the controller's.
+        assert [request[1:] for request in command] == [(241, 180100)]
     asyncio.run(machine.close())
+
+
+def test_command_outliving_its_timeout_keeps_the_machine_and_its_output_so_far(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path)
+        try:
+            await machine.run(Command(("sh", "-c", "printf kept > before.txt")))
+            slow = await machine.run(Command(("sh", "-c", "printf early; printf warn >&2; sleep 30"), timeout=0.3))
+            assert (slow.reason, slow.exit_code, slow.stdout, slow.stderr) == (
+                ExitReason.TIMED_OUT,
+                None,
+                b"early",
+                b"warn",
+            )
+            # The same machine keeps its files and runs the next command.
+            after = await machine.run(Command(("cat", "before.txt"), timeout=5))
+            assert (after.reason, after.exit_code, after.stdout) == (ExitReason.EXITED, 0, b"kept")
+            # A command that itself exits with timeout's status is an ordinary exit.
+            own = await machine.run(Command(("sh", "-c", "exit 124"), timeout=5))
+            assert (own.reason, own.exit_code) == (ExitReason.EXITED, 124)
+            assert not job.cancelled
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+class DeadlineRpc(CountingRpc):
+    """An admitted command exec that never replies: the client's RPC deadline expires."""
+
+    def exec_in_container(self, request, timeout_ms):
+        if "2> /tmp/.shellbox-" in request.command[-1]:
+            raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
+        return super().exec_in_container(request, timeout_ms)
+
+
+@pytest.mark.parametrize(
+    "rpc,deadline",
+    [
+        (
+            DeadlineRpc(),
+            math.ceil(0.3 + iris_backend.GUEST_KILL_GRACE_SECONDS + iris_backend.GUEST_EXEC_MARGIN_SECONDS)
+            + iris_backend.RPC_PADDING_SECONDS,
+        ),
+        (CountingRpc(prelude=NO_GUEST_TIMEOUT), 0.3),
+    ],
+    ids=["exec-never-replies", "no-guest-timeout"],
+)
+def test_host_deadline_closes_the_machine_and_names_the_command_in_later_errors(tmp_path, rpc, deadline) -> None:
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path, rpc)
+        try:
+            slow = await machine.run(Command(("sleep", "30"), timeout=0.3))
+            assert (slow.reason, slow.exit_code) == (ExitReason.TIMED_OUT, None)
+            assert job.cancelled
+            with pytest.raises(MachineTerminated) as closed:
+                await machine.run(Command(("true",)))
+            assert str(closed.value) == (
+                f"Machine is closed: command 'sleep 30' got no exec reply within its {deadline:g} s deadline "
+                "(command timeout 0.3 s)"
+            )
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+# Pilot 2026-11-21 (d09): a 30 s deadline also covered the controller's admission retries, so a slow controller
+# timed out a trivial `cp` and closed the sandbox under the grading replay.
+def test_command_queued_behind_admission_refusals_longer_than_its_timeout_still_runs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.2, maximum=0.2))
+    refusal = pool_refusal()
+    rpc = RefusingRpc(refusal.code, refusals=2, message=refusal.message, only="echo ran")
+    machine, job = local_machine(tmp_path, rpc)
+
+    result = asyncio.run(machine.run(Command(("echo", "ran"), timeout=0.1)))
+
+    assert (result.reason, result.exit_code, result.stdout) == (ExitReason.EXITED, 0, b"ran\n")
+    assert rpc.sent("echo ran") == 3
+    assert not job.cancelled
 
 
 @pytest.mark.requires_linux_procfs
@@ -817,19 +935,6 @@ def test_download_of_a_file_that_vanishes_mid_read_fails_while_an_empty_file_suc
     asyncio.run(scenario())
     assert not (tmp_path / "vanishing.out").exists()
     assert (tmp_path / "empty.out").read_bytes() == b""
-
-
-class CountingRpc(LocalRpc):
-    """Runs each exec locally after ``prelude`` and records its script."""
-
-    def __init__(self, prelude: str = ""):
-        self.prelude = prelude
-        self.scripts: list[str] = []
-
-    def exec_in_container(self, request, timeout_ms):
-        *shell, script = request.command
-        self.scripts.append(script)
-        return super().exec_in_container(SimpleNamespace(command=[*shell, self.prelude + script]), timeout_ms)
 
 
 # Review 2026-11-20 (follow-up 1): a directory read was archived over five RPCs; writes through a link cycle, a
