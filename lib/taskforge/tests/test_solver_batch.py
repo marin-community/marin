@@ -13,6 +13,7 @@ import pytest
 from lib.taskforge.tests.resources.rollout_fakes import twelve
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     GradedRollout,
     Model,
     Rollout,
@@ -94,9 +95,11 @@ def requests(log: EventLog) -> list[SolverRollout]:
 async def test_validation_slots_keep_their_identity_and_a_second_phase_numbers_past_them() -> None:
     engine = Slots()
     ctx, log = context(engine)
-    validation = await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT)
+    validation = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     existing = [trial.trial for trial in validation]
-    confirmation = await solver_batch(ctx, SPEC, "confirmation", 0, existing, 8, concurrency=2, heartbeat=HEARTBEAT)
+    confirmation = await solver_batch(
+        ctx, SPEC, "confirmation", 0, existing, len(existing), 8, concurrency=2, heartbeat=HEARTBEAT
+    )
     await ctx.drain()
     issued = [event_digest(event) for event in requests(log)]
     # The identities every validation journal recorded: SolverRollout(spec, trial, len(evidence)).
@@ -105,13 +108,33 @@ async def test_validation_slots_keep_their_identity_and_a_second_phase_numbers_p
     assert len(set(issued)) == len(engine.executed) == 8  # no confirmation slot reused or re-ran a validation slot
 
 
+# Review 2026-11-21: a confirmation batch given the eligible slots reused a cached timed-out slot's id; given every
+# occupied slot it subtracted the timeout from its target. Either way it ended one eligible score short.
+async def test_new_slots_number_past_every_occupied_one_and_fill_the_eligible_target() -> None:
+    engine = Slots(stops={2: TOTAL_TURN_TIMEOUT_STOP_REASON})
+    ctx, log = context(engine)
+    validation = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
+    eligible = [trial.trial for trial in validation if trial.cause is None]
+    assert eligible == [0, 1] and validation[2].cause is Cause.AGENT_TIMEOUT
+    occupied = [trial.trial for trial in validation]
+    fresh = await solver_batch(
+        ctx, SPEC, "confirmation", 0, occupied, len(eligible), 8, concurrency=4, heartbeat=HEARTBEAT
+    )
+    await ctx.drain()
+    assert [trial.trial for trial in fresh] == [3, 4, 5, 6, 7, 8] and all(trial.cause is None for trial in fresh)
+    assert (
+        len(eligible) + len(fresh) == 8
+        and len(engine.executed) == len({event_digest(event) for event in requests(log)}) == 9
+    )
+
+
 # Review 2026-11-21 (Romain): lowering concurrency on resume must keep completed shards.
 async def test_a_resumed_batch_executes_only_its_unfinished_slot_under_other_scheduling() -> None:
     gate = asyncio.Event()
     first = Slots(gates={2: gate})
     ctx, log = context(first)
     two = resolved(ctx, 2)
-    run = asyncio.create_task(solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT))
+    run = asyncio.create_task(solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT))
     await two.wait()
     run.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -119,7 +142,7 @@ async def test_a_resumed_batch_executes_only_its_unfinished_slot_under_other_sch
     assert len(first.executed) == 3  # the third was executing when the batch was interrupted
     again = Slots(failures={0: AssertionError("slot 0 executed again"), 1: AssertionError("slot 1 executed again")})
     resumed, _ = context(again, log.records)
-    results = await solver_batch(resumed, SPEC, "validation", 0, (), 3, concurrency=1, heartbeat=HEARTBEAT / 7)
+    results = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 3, concurrency=1, heartbeat=HEARTBEAT / 7)
     await resumed.drain()
     assert again.executed == ["arithmetic:2:0"]
     assert [(trial.trial, trial.grade and trial.grade.reward) for trial in results] == [(0, 1.0), (1, 1.0), (2, 1.0)]
@@ -156,7 +179,7 @@ async def test_a_long_slot_heartbeats_at_the_policy_cadence_without_touching_its
     ctx, log = context(engine)
     run = asyncio.create_task(
         solver_batch(
-            ctx, SPEC, "validation", 0, (), 1, concurrency=1, heartbeat=HEARTBEAT, sleep=clock.sleep, clock=clock
+            ctx, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT, sleep=clock.sleep, clock=clock
         )
     )
     await engine.entered.wait()
@@ -175,7 +198,7 @@ async def test_a_long_slot_heartbeats_at_the_policy_cadence_without_touching_its
     assert all((record.opened, record.attempt, record.answers) == (None, None, None) for record in beats)
     replayed = Slots(failures={0: AssertionError("a heartbeat made the slot execute again")})
     resumed, _ = context(replayed, log.records)
-    again = await solver_batch(resumed, SPEC, "validation", 0, (), 1, concurrency=4, heartbeat=1.0)
+    again = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 1, concurrency=4, heartbeat=1.0)
     await resumed.drain()
     assert again == (result,) and not replayed.executed
 
@@ -199,7 +222,7 @@ def lost() -> RolloutInterrupted:
 async def test_a_held_slot_is_typed_missing_evidence_beside_its_finished_siblings() -> None:
     engine = Slots(failures={1: rejected()})
     ctx, _ = context(engine)
-    results = await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT)
+    results = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await ctx.drain()
     assert results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
     assert [trial.grade and trial.grade.reward for trial in (results[0], results[2])] == [1.0, 1.0]
@@ -211,12 +234,12 @@ async def test_a_held_slot_survives_a_sibling_restart_and_replays_without_runnin
     engine = Slots(failures={1: rejected(), 2: lost()})
     ctx, log = context(engine)
     with pytest.raises(ExceptionGroup) as raised:
-        await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=1)
+        await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=1)
     await ctx.drain()
     assert [type(error) for error in raised.value.exceptions] == [Restart]
     again = Slots(failures={0: AssertionError("slot 0 ran again"), 1: AssertionError("slot 1 ran again")})
     replayed, _ = context(again, log.records)
-    results = await solver_batch(replayed, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT)
+    results = await solver_batch(replayed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await replayed.drain()
     assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
 
@@ -225,7 +248,7 @@ async def test_holds_beyond_the_missing_allowance_hold_the_batch_before_a_siblin
     engine = Slots(failures={1: rejected(), 2: lost()})
     ctx, _ = context(engine)
     with pytest.raises(Hold, match="solver trial 1: " + REFUSED):
-        await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=0)
+        await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=0)
     await ctx.drain()
     assert sorted(engine.executed) == ["arithmetic:0:0", "arithmetic:1:0", "arithmetic:2:0"]
 
@@ -239,7 +262,7 @@ async def test_only_a_slot_local_refusal_is_missing_evidence_and_every_other_hol
 ) -> None:
     ctx, _ = context(Slots(failures={1: hold}))
     with pytest.raises(ExceptionGroup) as raised:
-        await solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=3)
+        await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=3)
     await ctx.drain()
     assert [type(error) for error in raised.value.exceptions] == [type(hold)]
 
@@ -247,11 +270,11 @@ async def test_only_a_slot_local_refusal_is_missing_evidence_and_every_other_hol
 @pytest.mark.parametrize("resume", [False, True])
 async def test_a_recorded_slot_refusal_runs_again_only_on_explicit_resume(resume: bool) -> None:
     ctx, log = context(Slots(failures={1: rejected()}))
-    await solver_batch(ctx, SPEC, "validation", 0, (), 2, concurrency=2, heartbeat=HEARTBEAT, max_missing=1)
+    await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=2, heartbeat=HEARTBEAT, max_missing=1)
     await ctx.drain()
     again = Slots(failures={0: AssertionError("slot 0 ran again")})
     relaunched, _ = context(again, log.records, resume=resume)
-    results = await solver_batch(relaunched, SPEC, "validation", 0, (), 2, concurrency=2, heartbeat=HEARTBEAT)
+    results = await solver_batch(relaunched, SPEC, "validation", 0, (), 0, 2, concurrency=2, heartbeat=HEARTBEAT)
     await relaunched.drain()
     assert again.executed == (["arithmetic:1:0"] if resume else [])
     assert results[1].cause is (None if resume else Cause.HELD)
@@ -261,7 +284,7 @@ async def test_a_generation_limit_is_a_failed_slot_and_an_outage_restarts_after_
     gate = asyncio.Event()
     engine = Slots(gates={0: gate}, failures={1: lost()}, stops={2: LENGTH_STOP_REASON})
     ctx, log = context(engine)
-    run = asyncio.create_task(solver_batch(ctx, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT))
+    run = asyncio.create_task(solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT))
     await resolved(ctx, 1).wait()  # the generation-limited slot; the lost one has already failed
     gate.set()  # its sibling was not cancelled by the outage
     with pytest.raises(ExceptionGroup) as raised:
@@ -271,7 +294,7 @@ async def test_a_generation_limit_is_a_failed_slot_and_an_outage_restarts_after_
     assert "pod lost" in str(raised.value.exceptions[0])
     again = Slots(failures={0: AssertionError("slot 0 ran again"), 2: AssertionError("slot 2 ran again")})
     resumed, _ = context(again, log.records)
-    results = await solver_batch(resumed, SPEC, "validation", 0, (), 3, concurrency=3, heartbeat=HEARTBEAT)
+    results = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await resumed.drain()
     assert again.executed == ["arithmetic:1:0"]  # the outage recorded no slot, so only it executes
     assert results[2].cause is Cause.GENERATION_LIMIT and results[2].grade is not None  # a failed, graded trial

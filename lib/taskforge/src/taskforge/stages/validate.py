@@ -87,7 +87,8 @@ async def solver_batch(
     spec: TaskRolloutSpec,
     phase: str,
     attempt: int,
-    existing: Sequence[int],
+    occupied: Sequence[int],
+    eligible: int,
     target: int,
     *,
     concurrency: int,
@@ -96,14 +97,15 @@ async def solver_batch(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[TrialResult, ...]:
-    """Fill ``phase``'s ``existing`` trial indices up to ``target`` with slots numbered past them, each its own
-    ``SolverRollout`` of ``attempt``, so no two phases' slots share an identity.
+    """Add ``target - eligible`` slots to ``phase``, each its own ``SolverRollout`` of ``attempt`` numbered past every
+    ``occupied`` trial index, eligible or not: fresh evidence takes a fresh identity, so no two phases share one,
+    while a retry or replay of one unresolved slot keeps its own.
 
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
     enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
     re-executes only it; more than ``max_missing`` held slots hold the batch instead.
     """
-    first = max(existing, default=-1) + 1
+    first = max(occupied, default=-1) + 1
     gate, running = asyncio.Semaphore(concurrency), dict[int, float]()
 
     async def slot(trial: int) -> TrialResult | Restart:
@@ -126,7 +128,7 @@ async def solver_batch(
     ticker = asyncio.create_task(beat())
     try:
         async with asyncio.TaskGroup() as group:
-            slots = [group.create_task(slot(trial)) for trial in range(first, first + target - len(existing))]
+            slots = [group.create_task(slot(trial)) for trial in range(first, first + target - eligible)]
     finally:
         ticker.cancel()
         await asyncio.gather(ticker, return_exceptions=True)
@@ -404,6 +406,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                     "validation",
                     len(workpiece.evidence),
                     (),
+                    0,
                     k,
                     concurrency=config.policy.setting("solver.concurrency", int),
                     heartbeat=config.policy.setting("solver.heartbeat_interval", float),

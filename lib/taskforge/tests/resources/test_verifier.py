@@ -421,7 +421,7 @@ async def test_batch_slots_generate_before_verifier_admission_and_a_grade_is_adm
     await pool.lock.acquire()  # a grade holds the verifier
     held = True
     try:
-        slots = asyncio.create_task(solver_batch(ctx, spec, "validation", 0, (), 3, concurrency=3, heartbeat=300.0))
+        slots = asyncio.create_task(solver_batch(ctx, spec, "validation", 0, (), 0, 3, concurrency=3, heartbeat=300.0))
         await asyncio.wait_for(everyone.wait(), 30)  # each slot generated while the verifier was held
         grade = asyncio.create_task(resource.grade(candidate))
         await asyncio.sleep(0)  # the grade runs up to its admission
