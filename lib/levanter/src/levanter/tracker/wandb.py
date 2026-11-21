@@ -28,7 +28,7 @@ from rigging.secrets import get_secret
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.tracker import Tracker, TrackerConfig
+from levanter.tracker.tracker import Tracker, TrackerConfig, artifact_size_bytes
 from levanter.utils import jax_utils
 
 logger = logging.getLogger(__name__)
@@ -50,25 +50,8 @@ class _WandbInitStatus(TypedDict):
     metadata: dict[str, Any] | None
 
 
-def _artifact_size_bytes(artifact_path: str | os.PathLike[str]) -> int:
-    """Return the number of regular-file bytes that W&B would upload for a path."""
-    path = os.fspath(artifact_path)
-    if os.path.isfile(path):
-        return os.path.getsize(path)
-    if not os.path.isdir(path):
-        raise FileNotFoundError(path)
-
-    total = 0
-    for directory, _, filenames in os.walk(path):
-        for filename in filenames:
-            file_path = os.path.join(directory, filename)
-            if not os.path.islink(file_path):
-                total += os.path.getsize(file_path)
-    return total
-
-
 def _validate_wandb_artifact_size(artifact_path: str | os.PathLike[str], *, artifact_name: str | None = None) -> None:
-    size = _artifact_size_bytes(artifact_path)
+    size = artifact_size_bytes(artifact_path)
     if size > MAX_WANDB_ARTIFACT_BYTES:
         display_name = artifact_name or os.path.basename(os.fspath(artifact_path)) or "artifact"
         raise ValueError(
@@ -197,19 +180,14 @@ class WandbTracker(Tracker):
             return
         self.run.summary.update(self._prepare_summary(metrics))
 
-    def validate_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None) -> None:
-        """Reject an artifact that would exceed Marin's W&B storage limit."""
-        del type
-        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
-        _validate_wandb_artifact_size(artifact_path, artifact_name=artifact_name)
+    @property
+    def max_artifact_bytes(self) -> Optional[int]:
+        return MAX_WANDB_ARTIFACT_BYTES
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
             return
-        try:
-            self.validate_artifact(artifact_path, name=name, type=type)
-        except ValueError as error:
-            logger.warning("Skipping W&B artifact %s: %s", artifact_path, error)
+        if self.skip_artifact_over_limit(artifact_path, name=name):
             return
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
