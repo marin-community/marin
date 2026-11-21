@@ -3,11 +3,14 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, scale_with_grug_muonh
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig as HeroMuonHConfig
+from experiments.grug.moe_hero_ep.train import clip_by_total_norm
 
 _NUM_EXPERTS, _INTERMEDIATE, _HIDDEN, _VOCAB = 2, 8, 16, 32
 _UINT_DTYPE = {"bfloat16": jnp.uint16, "float32": jnp.uint32}
@@ -208,3 +211,178 @@ def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
     assert block_mask["mlp"]["expert_mlp"]["w_down"] == "adamh_expert"
     assert block_mask["shared"]["w_gate"] == "adamh_expert"
     assert mask["token_embed"] == "adam"
+
+
+@pytest.mark.parametrize("stacked", [False, True])
+def test_muonh_groups_match_hero_for_stacked_and_unstacked_models(stacked):
+    layer = (2,) if stacked else ()
+    params = {
+        "blocks": {
+            "rms_attn": {"weight": jnp.ones((*layer, 4))},
+            "rms_mlp": {"weight": jnp.ones((*layer, 4))},
+            "mlp": {
+                "expert_mlp": {name: jnp.ones((*layer, 2, 4, 3)) for name in ("w_gate", "w_up", "w_down")},
+                "router": jnp.ones((*layer, 4, 2)),
+            },
+            "attn": {"w_q": jnp.ones((*layer, 4, 4)), "attn_gate": jnp.ones((*layer, 4))},
+            "attn_gated_norm": {"w_up": jnp.ones((*layer, 4, 2))},
+        },
+        "token_embed": jnp.ones((8, 4)),
+        "output_proj": jnp.ones((4, 8)),
+    }
+    actual = GrugMoeMuonHConfig().create_mask(params)
+    assert actual == HeroMuonHConfig().create_mask(params)
+    assert actual["blocks"]["rms_attn"]["weight"] == "adam"
+    assert actual["blocks"]["rms_mlp"]["weight"] == "adam"
+    assert set(actual["blocks"]["mlp"]["expert_mlp"].values()) == {"muonh"}
+    assert actual["blocks"]["attn_gated_norm"]["w_up"] == "muonh"
+    assert actual["blocks"]["mlp"]["router"] == "adam"
+    assert actual["blocks"]["attn"]["w_q"] == "muonh"
+    assert actual["blocks"]["attn"]["attn_gate"] == "adam"
+    assert actual["token_embed"] == "adam"
+    assert actual["output_proj"] == "adamh"
+
+
+@pytest.mark.parametrize("clip", [None, 0.1])
+def test_muonh_update_matches_hero_with_optional_global_clip(clip):
+    params = {
+        "matrix": jnp.arange(1, 13, dtype=jnp.float32).reshape(3, 4),
+        "stacked_matrix": jnp.arange(1, 25, dtype=jnp.float32).reshape(2, 3, 4),
+        "mlp": {"expert_mlp": {"w_gate": jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4)}},
+        "rms_attn": {"weight": jnp.ones((2, 4))},
+    }
+    settings = dict(learning_rate=0.02, warmup=0, max_grad_norm=None, use_syrk=False, expert_normalization="all_experts")
+    actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
+    reference = HeroMuonHConfig(**settings).build(100)
+    actual_state = actual.init(params)
+    expected_state = reference.init(params)
+    actual_params = params
+    expected_params = params
+    for step in range(2):
+        scale = step + 1
+        grads = jax.tree.map(lambda x, s=scale: jnp.sin(x * s) * 0.2, actual_params)
+        reference_grads = clip_by_total_norm(grads, clip).grads if clip is not None else grads
+        actual_updates, actual_state = actual.update(grads, actual_state, actual_params)
+        expected_updates, expected_state = reference.update(reference_grads, expected_state, expected_params)
+        for actual_leaf, expected_leaf in zip(
+            jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
+        ):
+            np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
+        if clip is None:
+            np.testing.assert_array_equal(
+                actual_updates["mlp"]["expert_mlp"]["w_gate"], expected_updates["mlp"]["expert_mlp"]["w_gate"]
+            )
+        actual_params = jax.tree.map(lambda p, u: p + u, actual_params, actual_updates)
+        expected_params = jax.tree.map(lambda p, u: p + u, expected_params, expected_updates)
+
+
+def test_global_clipping_preserves_optimizer_state_paths():
+    params = {"matrix": jnp.ones((3, 4)), "mlp": {"expert_mlp": {"w_gate": jnp.ones((2, 2, 3, 4))}}}
+    unclipped = GrugMoeMuonHConfig(use_syrk=False).build(100).init(params)
+    clipped = GrugMoeMuonHConfig(use_syrk=False, global_grad_norm=1.0).build(100).init(params)
+    assert unclipped.hyperparams.keys() == clipped.hyperparams.keys()
+    assert [path for path, _ in jax.tree_util.tree_flatten_with_path(unclipped)[0]] == [
+        path for path, _ in jax.tree_util.tree_flatten_with_path(clipped)[0]
+    ]
+
+
+@pytest.mark.parametrize("stacked", [False, True])
+def test_muonh_state_matches_hero_layout(stacked):
+    shape = (2, 2, 3, 4) if stacked else (2, 3, 4)
+    params = {"mlp": {"expert_mlp": {"w_gate": jnp.ones(shape)}}, "rms_attn": {"weight": jnp.ones(4)}}
+    actual = GrugMoeMuonHConfig(use_syrk=False).build(100).init(params)
+    expected = HeroMuonHConfig(use_syrk=False).build(100).init(params)
+    actual_leaves = jax.tree_util.tree_flatten_with_path(actual)[0]
+    expected_leaves = jax.tree_util.tree_flatten_with_path(expected)[0]
+    assert [(p, x.shape, x.dtype) for p, x in actual_leaves] == [(p, x.shape, x.dtype) for p, x in expected_leaves]
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize("clip", [None, 0.5])
+def test_muonh_sharded_expert_update_matches_hero(clip):
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()), ("data",), axis_types=(jax.sharding.AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        expert_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None, "data", None, None))
+        matrix_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data", None))
+        params = {
+            "matrix": jax.device_put(jnp.arange(1, 17, dtype=jnp.float32).reshape(4, 4), matrix_sharding),
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate": jax.device_put(jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4), expert_sharding)
+                }
+            },
+        }
+        grads = jax.tree.map(lambda x: jax.sharding.reshard(jnp.sin(x), x.sharding), params)
+        settings = dict(learning_rate=0.02, warmup=0, use_syrk=False, expert_normalization="all_experts")
+        actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
+        reference = HeroMuonHConfig(**settings).build(100)
+        reference_grads = clip_by_total_norm(grads, clip).grads if clip is not None else grads
+        actual_updates, _ = jax.jit(actual.update)(grads, actual.init(params), params)
+        expected_updates, _ = jax.jit(reference.update)(reference_grads, reference.init(params), params)
+        for actual_leaf, expected_leaf in zip(
+            jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
+        ):
+            np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
+
+
+def test_scale_with_grug_muonh_rejects_4d_updates():
+    # _grug_scale_with_muon skips Newton-Schulz on 4-D leaves; direct callers must fail fast.
+    params = {"mlp": {"expert_mlp": {"w_gate": jnp.ones((2, 2, 3, 4), dtype=jnp.float32)}}}
+    grads = jax.tree.map(jnp.ones_like, params)
+    transform = scale_with_grug_muonh()
+    with pytest.raises(ValueError, match="4-D"):
+        transform.update(grads, transform.init(params), params)
+
+
+@pytest.mark.parametrize("expert_normalization", ["per_expert", "all_experts"])
+def test_muonh_stacked_4d_bfloat16_zero_lr_exact_and_positive_lr_preserves_norm(expert_normalization):
+    w_gate = (jax.random.normal(jax.random.PRNGKey(0), (2, 4, 64, 64)) * 0.05).astype(jnp.bfloat16)
+    params = {"blocks": {"mlp": {"expert_mlp": {"w_gate": w_gate}}}}
+
+    zero_cfg = GrugMoeMuonHConfig(
+        learning_rate=0.0,
+        adam_lr=0.0,
+        lr_schedule="constant",
+        use_syrk=False,
+        expert_normalization=expert_normalization,
+    )
+    initial, final = _run_steps(zero_cfg, params, num_steps=3)
+    assert not bool(
+        _bits_differ(
+            initial["blocks"]["mlp"]["expert_mlp"]["w_gate"],
+            final["blocks"]["mlp"]["expert_mlp"]["w_gate"],
+        ).any()
+    )
+
+    pos_cfg = GrugMoeMuonHConfig(
+        learning_rate=0.01,
+        adam_lr=0.01,
+        lr_schedule="constant",
+        use_syrk=False,
+        expert_normalization=expert_normalization,
+    )
+    initial_pos, final_pos = _run_steps(pos_cfg, params, num_steps=15)
+    axes = (1, 2, 3) if expert_normalization == "all_experts" else (2, 3)
+    ref_norm = jnp.sqrt(
+        jnp.sum(jnp.square(initial_pos["blocks"]["mlp"]["expert_mlp"]["w_gate"].astype(jnp.float32)), axis=axes)
+    )
+    cur_norm = jnp.sqrt(
+        jnp.sum(jnp.square(final_pos["blocks"]["mlp"]["expert_mlp"]["w_gate"].astype(jnp.float32)), axis=axes)
+    )
+    drift = float(jnp.max(jnp.abs(cur_norm / ref_norm - 1.0)))
+    assert drift <= _NORM_DRIFT_TOLERANCE, f"4-D BF16 expert norm drifted ({expert_normalization}): {drift:.3e}"
+
+
+@pytest.mark.parametrize("shape", [(3, 4), (2, 3, 4)])
+def test_muonh_unstacked_update_matches_existing_backend(shape):
+    size = int(np.prod(shape))
+    param = jnp.arange(1, size + 1, dtype=jnp.float32).reshape(shape)
+    grad = jnp.linspace(-0.5, 0.7, size).reshape(shape)
+    params = {"mlp": {"expert_mlp": {"w_gate": param}}}
+    grads = {"mlp": {"expert_mlp": {"w_gate": grad}}}
+    config = GrugMoeMuonHConfig(learning_rate=0.02, warmup=0, max_grad_norm=None, use_syrk=False)
+    optimizer = config.build(100)
+    update, _ = optimizer.update(grads, optimizer.init(params), params)
+    backend = scale_with_grug_muonh(learning_rate=config.lr_scheduler(100)(0))
+    expected, _ = backend.update(grads, backend.init(params), params)
+    np.testing.assert_array_equal(update["mlp"]["expert_mlp"]["w_gate"], expected["mlp"]["expert_mlp"]["w_gate"])
