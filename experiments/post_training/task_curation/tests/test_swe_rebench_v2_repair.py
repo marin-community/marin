@@ -14,7 +14,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
-    SETUP_TIMEOUT_SEC as declared,
+    SETUP_TIMEOUT_SEC,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     _flatten,
@@ -552,4 +552,4 @@ def test_gate_doubles_the_setup_deadline_for_the_slow_tail():
            "test_files": ["tests/test_x.py"], "test_patch": "diff --git a/tests/test_x.py"}
     files = row_variant_files(row, "condensed", "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64)
     document = tomlkit.parse(files["task.toml"])
-    assert document["environment"]["setup"]["timeout_sec"] == declared * 2
+    assert document["environment"]["setup"]["timeout_sec"] == SETUP_TIMEOUT_SEC * 2
