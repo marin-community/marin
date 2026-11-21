@@ -370,7 +370,7 @@ def build_config(
         agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3)),
         adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
     )
-    for prompt in ("system", "user"):
+    for prompt in ("system", "user", "final.system", "final.user"):
         policy.prompt(f"solve_review.{prompt}")  # a missing prompt fails here, not at a round's first review
     solve_review = Role(
         "solve_review", agentic_harness(policy, "solve_review", profiles.get("solve_review", GLM_5_3)), {}
@@ -381,8 +381,12 @@ def build_config(
         policy.setting("budget.max_missing_trials", int),
     )
     slots, beat = policy.setting("solver.concurrency", int), policy.setting("solver.heartbeat_interval", float)
-    if slots < 1 or not 0 < beat < math.inf or budget.max_missing_trials < 0:
-        raise ValueError("solver.concurrency, solver.heartbeat_interval or budget.max_missing_trials is out of range")
+    confirmation = policy.setting("solver.confirmation_k", int)
+    if slots < 1 or not 0 < beat < math.inf or min(budget.max_missing_trials, confirmation) < 0:
+        raise ValueError(
+            "solver.concurrency, solver.heartbeat_interval, budget.max_missing_trials or solver.confirmation_k is out "
+            "of range"
+        )
     band = BandRules(
         policy.setting("band.low", float),
         policy.setting("band.high", float),

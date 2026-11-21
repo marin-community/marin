@@ -109,6 +109,7 @@ class EvidenceKind(StrEnum):
 
     SOLVE_REVIEW = "solve_review"
     TRANSCRIPTS = "transcripts"
+    CONFIRMATION_TRIALS = "confirmation_trials"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +130,7 @@ class ReviewEnd(StrEnum):
 class SolveReview:
     """One solve-review of the evidence index whose digest is ``evidence``. ``findings`` passed their citation checks
     and ``dropped`` did not, each beside why; ``missing`` is the evidence it went without (its own report, or complete
-    transcripts)."""
+    transcripts). A final review sorts its surviving findings: ``findings`` send the task back, ``notes`` ship with it."""
 
     evidence: str
     end: ReviewEnd
@@ -137,6 +138,7 @@ class SolveReview:
     dropped: tuple[tuple[ReviewFinding, str], ...] = ()
     accounts: tuple[TrialAccount, ...] = ()
     missing: tuple[MissingEvidence, ...] = ()
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +194,17 @@ class Modify:
 
 
 @dataclass(frozen=True, slots=True)
+class Revise:
+    """The final review's one revision, outside the shared modification budget: ``findings`` is the band line of every
+    trial of the confirmed submission, ``review`` the final review's revise findings. It keeps no fallback."""
+
+    findings: tuple[str, ...]
+    placement: BandOutcome
+    review: tuple[ReviewFinding, ...]
+    kind: Literal["revise"] = "revise"
+
+
+@dataclass(frozen=True, slots=True)
 class Retry:
     cause: Cause
     count: int
@@ -217,7 +230,7 @@ class Abandon:
             raise ValueError("Abandon requires non-empty reasons")
 
 
-type Decision = Annotated[Accept | Reject | Modify | Retry | Incomplete | Abandon, Field(discriminator="kind")]
+type Decision = Annotated[Accept | Reject | Modify | Revise | Retry | Incomplete | Abandon, Field(discriminator="kind")]
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +407,9 @@ class ValidationResult:
     lowering_error: str | None = None
     lowering_cause: Cause | None = None
     review: Annotated[SolveReview | None, OMIT_NONE] = None
+    confirms: Annotated[int | None, OMIT_NONE] = None
+    """A confirmation record: the evidence index of the validation round whose submission it confirms. Its ``solver``
+    holds that round's scored trials and the new ones, its ``review`` the final review."""
 
 
 @dataclass(frozen=True, slots=True)

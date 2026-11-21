@@ -214,7 +214,13 @@ def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
     )
 
 
-SETTINGS: Mapping[str, object] = {"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1}
+SETTINGS: Mapping[str, object] = {
+    "solver.k": 2,
+    "adversary.roster": [],
+    "budget.max_modify_rounds": 1,
+    "solver.confirmation_k": 0,
+}
+"""Without the confirmation step (n12), whose own tests are in ``test_confirmation.py``."""
 
 
 def config() -> TaskforgeConfig:

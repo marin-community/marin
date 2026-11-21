@@ -682,9 +682,14 @@ def evidence(solved: int = 1, *, controls_met: bool = True) -> ValidationResult:
     )
 
 
+UNCONFIRMED = {"solver.confirmation_k": 0}
+"""An acceptance is terminal at its validation round: these are the validation rules; ``test_confirmation.py`` has
+the confirmation step's."""
+
+
 def reviewed(wp: Workpiece, settings: Mapping[str, object] | None = None) -> Workpiece:
     wp = wp.with_(session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
-    setup = build_config(load_policy(DEFAULTS_DIR).overlaid(settings or {}), {})
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({**UNCONFIRMED, **(settings or {})}), {})
     return apply_decision(wp, default_review(wp, setup.band, setup.budget), setup.budget, setup.policy)
 
 
@@ -1012,7 +1017,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     decision = (await review(ctx, wp, setup, bundle)).decision
     assert isinstance(decision, verdict)
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
-    after = apply_decision(wp.with_(session=author), decision, setup.budget, setup.policy)
+    after = apply_decision(wp.with_(session=author), decision, setup.budget, setup.policy.overlaid(UNCONFIRMED))
     if isinstance(decision, Accept):
         assert f"false_accept: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):

@@ -12,7 +12,7 @@ checks read the same index: a citation is valid when it quotes text the reviewer
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import override
 
 from taskforge.effects.context import Context
@@ -239,6 +239,15 @@ def report(
     return ReturnRequest("report", review)
 
 
+FINDING_FIELDS = (
+    "Each finding has `kind` (ambiguous_prompt, grader_defect, answer_leak, environment_problem), `description` (what "
+    "is wrong), `edit` (the concrete change to the task that removes it) and `citations`: one or more {source, start, "
+    "end, quote}, where quote is text copied verbatim from parts start..end of that source. `accounts` gives every "
+    "trial that did not pass one {trial, attribution, reason}: solver (the outcome reflects the solver's own work), "
+    "defect (a finding you report produced it) or uninformative (it ended for reasons that say nothing about the task)."
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ReportArgs:
     findings: tuple[ReviewFinding, ...]
@@ -250,12 +259,7 @@ class ReportTool(ValidatedTool[ReportArgs]):
     evidence: Evidence
     name = "report"
     description = (
-        "Finish the review. `findings` is empty when the trials show no task defect. Each finding has `kind` "
-        "(ambiguous_prompt, grader_defect, answer_leak, environment_problem), `description` (what is wrong), `edit` "
-        "(the concrete change to the task that removes it) and `citations`: one or more {source, start, end, quote}, "
-        "where quote is text copied verbatim from parts start..end of that source. `accounts` gives every trial that "
-        "did not pass one {trial, attribution, reason}: solver (the outcome reflects the solver's own work), defect (a "
-        "finding you report produced it) or uninformative (it ended for reasons that say nothing about the task)."
+        "Finish the review. `findings` is empty when the trials show no task defect. " + FINDING_FIELDS
     )
     args_type = ReportArgs
 
@@ -264,6 +268,36 @@ class ReportTool(ValidatedTool[ReportArgs]):
         return report(self.evidence, args.findings, args.accounts)
 
 
-def evidence_tools(evidence: Evidence, report_tool: type[ReportTool]) -> Mapping[str, Tool[object]]:
+@dataclass(frozen=True, slots=True)
+class FinalReportArgs:
+    revise: tuple[ReviewFinding, ...]
+    note: tuple[ReviewFinding, ...]
+    accounts: tuple[TrialAccount, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FinalReportTool(ValidatedTool[FinalReportArgs]):
+    """The final review's exit: the round review's checks over its new findings, sorted into revise and note."""
+
+    evidence: Evidence
+    name = "report"
+    description = (
+        "Finish the review with the NEW findings only (none an earlier report already gave). `revise` lists those "
+        "severe enough that the task should go back to its author; `note` lists those the task can be accepted with, "
+        "recorded as notes. Both are empty when the trials show nothing new. " + FINDING_FIELDS
+    )
+    args_type = FinalReportArgs
+
+    @override
+    async def run(self, ctx: Context, args: FinalReportArgs) -> ToolResult | ReturnRequest[SolveReview]:
+        outcome = report(self.evidence, (*args.revise, *args.note), args.accounts)
+        if isinstance(outcome, ToolResult):
+            return outcome
+        kept = outcome.payload.findings
+        revise, note = (tuple(f for f in found if f in kept) for found in (args.revise, args.note))
+        return ReturnRequest("report", replace(outcome.payload, findings=revise, notes=note))
+
+
+def evidence_tools(evidence: Evidence, report_tool: Callable[[Evidence], Tool[object]]) -> Mapping[str, Tool[object]]:
     tools = (ListTool(evidence), ReadTool(evidence), SearchTool(evidence), report_tool(evidence))
     return {tool.schema.name: tool for tool in tools}

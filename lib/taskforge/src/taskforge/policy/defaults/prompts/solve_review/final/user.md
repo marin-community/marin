@@ -1,0 +1,11 @@
+Task manifest (resource paths, byte sizes and roles; payloads omitted; read files with read_evidence):
+{task}
+
+Proposal the task was built from:
+{proposal}
+
+Earlier solve-review reports for this task, oldest first, and what became of each defect:
+{previous}
+
+Evidence sources of the accepted task:
+{evidence}

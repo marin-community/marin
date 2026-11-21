@@ -25,6 +25,7 @@ from taskforge.effects.issues import DecisionModelUnavailable, Hold, OutputBudge
 from taskforge.harness.protocol import Returned, Stopped, StopReason
 from taskforge.harness.role import Answer, Files, Fresh, Visit, sitting
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
+from taskforge.harness.tools.evidence import FinalReportTool
 from taskforge.lowering import (
     InvalidTaskSpec,
     lower_with_settings,
@@ -38,6 +39,7 @@ from taskforge.model.proposal import render
 from taskforge.model.review import (
     AdversaryFinding,
     AdversaryResult,
+    Accept,
     AdversaryStatus,
     Cause,
     Continuation,
@@ -54,15 +56,15 @@ from taskforge.model.review import (
     ValidationResult,
 )
 from taskforge.model.stage import Exit
-from taskforge.model.workpiece import Conversation, Workpiece
+from taskforge.model.workpiece import Conversation, Submission, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
-from taskforge.stages.rules import actionable, assess
-from taskforge.stages.solve_review import solve_review
+from taskforge.stages.rules import actionable, assess, missing, shipped
+from taskforge.stages.solve_review import earlier_reports, solve_review
 from taskforge.stages.summary import task_manifest
 
 
@@ -433,14 +435,17 @@ async def reviewed(
     return await solve_review(ctx, config, resources, workpiece.proposal, workpiece.submission, pairs)
 
 
+def solver_spec(submission: Submission, config: TaskforgeConfig, resources: Resources) -> TaskRolloutSpec:
+    task = lower_with_settings(submission.task, lowering_settings(config.policy), resources.factories)
+    return task.model_copy(update={"trace": TraceMode.MESSAGES})
+
+
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:
     submission = workpiece.submission
     if submission is None:
         raise ValueError("Validation requires a submission")
-    settings = lowering_settings(config.policy)
-    task = submission.task
     try:
-        spec = lower_with_settings(task, settings, resources.factories).model_copy(update={"trace": TraceMode.MESSAGES})
+        spec = solver_spec(submission, config, resources)
     except (ValueError, NotImplementedError) as error:
         return Validated(
             ValidationResult(
@@ -496,3 +501,44 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
         controls_done, adversaries_done = tuple(map(kept, controls)), tuple(map(kept, adversary))
         result = ValidationResult(submission.digest, kept(solver), controls_done, adversaries_done)
         return Validated(replace(result, review=review.result()))
+
+
+async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:
+    """The confirmation step of the pending acceptance: the round it ships (``shipped``, a restore's included) keeps its
+    scored trials, read from the journal, never bought again; the existing batch adds slots past every index that
+    round used, up to ``solver.k + solver.confirmation_k`` under a fresh attempt, so no validation slot's identity
+    changes; then the final review reads all of them. Controls and adversaries are not run again.
+    """
+    accepted, submission = workpiece.decisions[-1], workpiece.submission
+    assert isinstance(accepted, Accept) and submission is not None, "confirmation follows an acceptance"
+    index = shipped(accepted, workpiece)
+    round_, policy, max_missing = workpiece.evidence[index], config.policy, config.budget.max_missing_trials
+    spec = solver_spec(submission, config, resources)
+    base = tuple(trial for trial in round_.solver if not missing(trial))
+    async with ctx.scope("confirm"):
+        ctx.observe(Resolved, grader_infra_unavailable)
+        recorded = {t.trial: ctx.recorded(SolverRollout(spec, t.trial, index)) for t in base}
+        rollouts = {trial: rollout for trial, rollout in recorded.items() if rollout is not None}
+        added = await solver_batch(
+            ctx,
+            spec,
+            "confirmation",
+            len(workpiece.evidence),
+            [trial.trial for trial in round_.solver],
+            len(base),
+            policy.setting("solver.k", int) + policy.setting("solver.confirmation_k", int),
+            concurrency=policy.setting("solver.concurrency", int),
+            heartbeat=policy.setting("solver.heartbeat_interval", float),
+            max_missing=max_missing,
+            rollouts=rollouts,
+        )
+        await ctx.check()
+        if held := refusal(added, max_missing):
+            raise held
+        trials = (*base, *added)
+        pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
+        previous = earlier_reports(workpiece)
+        review = await solve_review(
+            ctx, config, resources, workpiece.proposal, submission, pairs, "solve_review.final", FinalReportTool, previous
+        )
+    return Validated(ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index))

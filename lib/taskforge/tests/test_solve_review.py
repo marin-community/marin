@@ -414,16 +414,19 @@ async def test_a_decline_must_name_a_finding_once() -> None:
         assert text(outcome) == "declined names each finding at most once, by its number 0..0"
 
 
-async def test_a_format_6_root_is_refused_before_claim_and_left_untouched(
+@pytest.mark.parametrize("found", [6, 7])
+async def test_an_earlier_reviewed_format_root_is_refused_before_claim_and_left_untouched(
     driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
+    found: int,
 ) -> None:
     """A format-6 acceptance, recorded at the base, names no missing evidence although no solve-review ran, and
-    resuming a format-6 round would buy a review its history never had; such a root waits for a migration."""
-    destination = plant(driver_args, b"", checkpoint.JOURNAL_FORMAT - 1)
+    resuming a format-6 round would buy a review its history never had; such a root waits for a migration. A format-7
+    acceptance (n11) likewise names no missing confirmation, and its resumed round would buy one (n12)."""
+    destination = plant(driver_args, b"", found)
     before = sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file())
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(LogFailure, match="has journal format 6, not 7"):
+    with pytest.raises(LogFailure, match=f"has journal format {found}, not 8"):
         await driver.one(driver_args)
     assert sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file()) == before
 

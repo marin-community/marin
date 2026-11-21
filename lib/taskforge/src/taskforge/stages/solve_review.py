@@ -10,7 +10,7 @@ confirmation step's final review) passes its own, not a new path. Decision rules
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 
 from pydantic import TypeAdapter
@@ -21,7 +21,7 @@ from taskcompendium.runtime.resources import resource_bytes, resource_inventory,
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.harness.protocol import Returned, Stopped
+from taskforge.harness.protocol import Returned, Stopped, Tool
 from taskforge.harness.role import Fresh, Visit, sitting
 from taskforge.harness.tools.evidence import (
     RESOURCE,
@@ -38,8 +38,18 @@ from taskforge.harness.tools.evidence import (
 )
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import TaskProposal, render
-from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
-from taskforge.model.workpiece import Submission
+from taskforge.model.review import (
+    Accept,
+    EvidenceKind,
+    MissingEvidence,
+    Modify,
+    ReviewEnd,
+    ReviewFinding,
+    Revise,
+    SolveReview,
+    TrialResult,
+)
+from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.inference import InferenceRequest
 from taskforge.stages.rules import passed
@@ -193,9 +203,11 @@ async def solve_review(
     submission: Submission,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]],
     prompts: str = "solve_review",
-    report: type[ReportTool] = ReportTool,
+    report: Callable[[Evidence], Tool[object]] = ReportTool,
+    previous: str = "",
 ) -> SolveReview:
-    """Review ``trials`` of ``submission``; emits only the reviewer's inference effects.
+    """Review ``trials`` of ``submission``; emits only the reviewer's inference effects. The final review passes its
+    own prompts, its report tool and the earlier reports (``earlier_reports``) as the template's ``{previous}``.
 
     The opening ends with the index's version whatever the policy's template renders, so changed evidence never
     replays a recorded review.
@@ -216,6 +228,7 @@ async def solve_review(
             proposal=render(proposal),
             evidence=source_listing(index),
             version=index.version,  # an earlier template's slot
+            previous=previous,
         )
         + f"\n\nEvidence version: {index.version}",  # outside the template, so no overlay can drop it
     )
@@ -232,3 +245,38 @@ async def solve_review(
     reason = f"solve-review ended without a report: {reason}"
     missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, reason), *missing)
     return SolveReview(index.version, ReviewEnd.NO_REPORT, missing=missing)
+
+
+def earlier_reports(workpiece: Workpiece) -> str:
+    """Every solve-review of ``workpiece``, oldest first, each finding with what became of it, for the final review."""
+    current = workpiece.submission.digest if workpiece.submission else None
+    kept = (workpiece.submission, workpiece.fallback.submission if workpiece.fallback else None)
+    declined = {d.finding: d.reason for submission in kept if submission for d in submission.declined}
+    blocks = []
+    for index, result in enumerate(workpiece.evidence):
+        if (review := result.review) is None:
+            continue
+        kind = "Solve-review" if result.confirms is None else "Final review"
+        subject = "this submission" if result.task_digest == current else "an earlier submission"
+        head = f"{kind} of validation record {index} ({subject}, {len(result.solver)} trials):"
+        if review.end is not ReviewEnd.REPORTED:
+            blocks.append(f"{head} no report ({'; '.join(m.detail for m in review.missing)})")
+            continue
+        lines = [
+            f"- [{f.kind}] {f.description} Edit: {f.edit} Outcome: {fate(workpiece, f, declined)}."
+            for f in (*review.findings, *review.notes)
+        ]
+        blocks.append("\n".join((head, *lines)) if lines else f"{head} no findings.")
+    return "\n\n".join(blocks) or "No earlier solve-review reports."
+
+
+def fate(workpiece: Workpiece, finding: ReviewFinding, declined: Mapping[ReviewFinding, str]) -> str:
+    """What the decisions did with ``finding``: declined by the author with its reason, sent to the author, recorded
+    as a note, or neither."""
+    if finding in declined:
+        return f"the author declined it: {declined[finding]}"
+    if any(isinstance(d, Modify | Revise) and finding in d.review for d in workpiece.decisions):
+        return "given to the author, who revised the task"
+    if any(isinstance(d, Accept) and finding in d.notes for d in workpiece.decisions):
+        return "recorded as a note on the acceptance"
+    return "not acted on"

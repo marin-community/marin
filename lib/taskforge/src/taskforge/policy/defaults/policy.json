@@ -3,6 +3,7 @@
   "band.high": 0.75,
   "band.accept_too_easy": true,
   "solver.k": 3,
+  "solver.confirmation_k": 5,
   "adversary.roster": ["false_accept", "false_reject"],
   "adversary.image": "${GRADER_BASE_IMAGE}",
   "adversary.max_revisions": 1,

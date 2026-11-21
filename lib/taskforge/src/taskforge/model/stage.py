@@ -11,6 +11,7 @@ class Stage(StrEnum):
     AUTHOR = "author"
     VALIDATE = "validate"
     REVIEW = "review"
+    CONFIRM = "confirm"
 
 
 @dataclass(frozen=True, slots=True)

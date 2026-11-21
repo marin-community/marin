@@ -214,10 +214,11 @@ async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, numbe
 HELD_JOURNAL = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
 COLD_READER = """
 import gzip, sys
-from taskforge.stages import STAGES, StageFn, author, review, validate
+from taskforge.stages import STAGES, StageFn, author, confirm, review, validate
 import taskforge.harness.events
 from taskforge.effects.log import decode
-assert all(map(callable, (author, review, validate))) and set(STAGES.values()) == {author, review, validate}
+stages = {author, review, validate, confirm}
+assert all(map(callable, stages)) and set(STAGES.values()) == stages
 print(len(decode(gzip.decompress(open(sys.argv[1], "rb").read()))))
 """
 

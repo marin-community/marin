@@ -17,7 +17,7 @@ from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lowering_settings, requirements
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import render
-from taskforge.model.review import VALIDATION_RESULT, Modify
+from taskforge.model.review import VALIDATION_RESULT, Modify, Revise
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
@@ -122,7 +122,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     # A round has one author visit, which a stage restart reconstructs on its fresh machine. The caller's files are
     # prepared inside it and the opening after hydration, so either failing is journalled and its machine closed.
     tools: dict[str, Tool[object]] = {}
-    if workpiece.decisions and isinstance(revise := workpiece.decisions[-1], Modify) and revise.review:
+    if workpiece.decisions and isinstance(revise := workpiece.decisions[-1], Modify | Revise) and revise.review:
         submit = config.author.tools["submit"]
         assert isinstance(submit, SubmitTool)
         tools = {"submit": RevisedSubmitTool(submit, revise.review)}
