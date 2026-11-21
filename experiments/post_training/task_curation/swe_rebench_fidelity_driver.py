@@ -54,6 +54,7 @@ from taskcompendium.integrity import SharedDependencyState
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+    SETUP_TIMEOUT_SEC,
     WORKSPACE,
     dockerfile,
     family_config,
@@ -241,6 +242,17 @@ def row_variant_files(row: dict, variant: str, base_image: str) -> dict[str, byt
         config["test_cmd"] = flat["test_cmd"]
     files["tests/config.json"] = json.dumps(config, indent=1, ensure_ascii=False).encode() + b"\n"
     harden_shared_source(files, profile=swe_rebench_profile(), dependency_state=SharedDependencyState.AGENT_MUTABLE)
+    # The setup deadline doubles at the gate, AFTER the hardening: the hardening rewrites
+    # the setup command and re-stamps the declared timeout. The measured trial population
+    # finishes its setup in ~126-185 s, but a long tail of heavy installs (sqlglot-3683,
+    # infinitest-431, raiden-contracts-1213) exceeds the declared 1800 s and dies as
+    # "Public fixture initialization timed out" (ruling 2026-11-21: raise that specific
+    # timeout). The gate profile's 4cpu/8GB is slower than the declared 6cpu/24GB, which
+    # stretches the tail further.
+    task_document = tomlkit.parse(files["task.toml"])
+    if task_document["environment"].get("setup") is not None:
+        task_document["environment"]["setup"]["timeout_sec"] = SETUP_TIMEOUT_SEC * 2
+        files["task.toml"] = tomlkit.dumps(task_document).encode()
     # The declared image: the row's own digest for the upstream variant, the group's shared
     # base for the condensed variant (both pull directly on Daytona; the Dockerfile remains
     # as provenance only). The upstream images carry no interpreter-provisioning layer, so the

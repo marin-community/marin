@@ -534,3 +534,26 @@ def test_verifier_timeout_fails_closed_and_never_feeds_the_churn_window():
     for _ in range(60):
         monitor.record(False)
     assert not monitor.tripped()
+
+
+def test_gate_doubles_the_setup_deadline_for_the_slow_tail():
+    """Ruling 2026-11-21 (the EnvironmentStartTimeout diagnosis): the measured trial
+    population finishes its setup in ~126-185 s, but a long tail of heavy installs exceeds
+    the declared 1800 s and dies as "Public fixture initialization timed out". The gate's
+    trial package doubles the setup deadline (the 4cpu/8GB profile stretches the tail)."""
+    from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+        SETUP_TIMEOUT_SEC as declared,
+    )
+    import tomlkit as _tomlkit
+    from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import _flatten
+    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import row_variant_files
+    from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import row_base
+
+    row = {**PYTHON_ROW, "tags": ["swe-rebench"], "quality_flags": [], "env": [],
+           "image_name": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64,
+           "problem_statement": "Fix the bug.", "patch": "diff --git a/x",
+           "FAIL_TO_PASS": ["tests/test_x.py::test_a"], "PASS_TO_PASS": ["tests/test_x.py::test_b"],
+           "test_files": ["tests/test_x.py"], "test_patch": "diff --git a/tests/test_x.py"}
+    files = row_variant_files(row, "condensed", "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64)
+    document = _tomlkit.parse(files["task.toml"])
+    assert document["environment"]["setup"]["timeout_sec"] == declared * 2
