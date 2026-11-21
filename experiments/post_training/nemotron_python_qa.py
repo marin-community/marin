@@ -13,7 +13,6 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from marinskyrl.local_images import LocalMachineSettings, local_machine_factory
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -21,6 +20,7 @@ from rolloutengine.harness.shell import ToolContext
 from rolloutengine.machines import task_machine
 from rolloutengine.models import MachineRuntimeSpec
 from rolloutengine.validation import validate_spec
+from shellbox.backends.iris.local_images import LocalMachineSettings, local_machine_factory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, Command, NetworkPolicy
 from skyrl_gym.rollout_specs import TOOL_PROVIDERS, rollout_spec

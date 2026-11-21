@@ -11,8 +11,8 @@ from rigging.filesystem import transfer
 from rigging.fsutil.verified_copy import verified_copy_prefix
 from shellbox.image import ImageCache, RegistryImage
 
-from marinskyrl.local_images import LocalImageMirror, LocalMachineSettings, cached_mirror_image, local_machine_factory
-import marinskyrl.local_images as local_images
+from shellbox.backends.iris.local_images import LocalImageMirror, LocalMachineSettings, cached_mirror_image, local_machine_factory
+import shellbox.backends.iris.local_images as local_images
 import shellbox.image as image_runtime
 
 

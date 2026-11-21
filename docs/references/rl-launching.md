@@ -498,6 +498,52 @@ backend is Daytona. A typed backend requirement overrides that placement. A
 SHARED integrity contract selects its agent UID; validation rejects a conflicting
 explicit actor identity.
 
+### Run-owned LOCAL machine service
+
+An amd64 task image needs an x86 execution host. On ARM GPU workers, keep
+training placement unchanged and run the LOCAL machines in a CPU service owned
+by the RL run. `marin.rl.local_machine_service.local_machine_service` submits
+one child through the current Iris client, waits for prepared images and verified
+readiness, and terminates the child on success or failure.
+
+Construct a `LocalMachineServiceLaunch` with the run region and regional image
+mirrors, a unique endpoint name for the run attempt, explicit machine slots,
+per-machine CPU and memory, CPU child resources, environment, startup and RPC
+timeouts, and the run lifetime. The child needs working bubblewrap and umoci.
+Its CPU and memory allocation must cover every slot plus the control process.
+Reserve disk for the verified image cache, unpacked machine roots and transfers.
+The child inherits the run cluster, verifies its actual Iris worker region and
+x86 architecture, and prepares every digest-pinned image before registration.
+Missing worker-region metadata fails readiness before any image transfer.
+
+Bind the endpoint only after the context yields:
+
+```python
+with local_machine_service(launch) as endpoint:
+    document = yaml.safe_load(config.launch_config_yaml)
+    sessions = document["skyrl"]["environment"]["task_sessions"]
+    sessions["local"] = None
+    sessions["local_service"] = endpoint.task_session_config()
+    bound = replace(config, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
+    result = run_skyrl(bound)
+```
+
+`local` and `local_service` are separate factory configurations; set only one.
+The service retains the LOCAL backend identity, original image digest and task
+network policy. Commands, binary output, persistent process pipes, scoped
+cancellation and file transfers use Iris Actor Connect RPC with bounded frames.
+The client sends each mutation once and treats a lost response as an infrastructure failure.
+Task phase deadlines still control execution. Machine creation waits for a free
+slot within the caller's attempt budget, and cancellation owns late acquisitions
+through cleanup. The parent closes the child when the run exits.
+
+Actor endpoints trust their peers to execute Python code. Keep the endpoint on
+the run's trusted private network or behind an authenticated controller proxy.
+The transport accepts only the prepared registry images; caller-host paths,
+package environments, disk quotas and GPU allocations are unsupported. Live
+qualification must include the original image on the CPU host and an ARM caller
+through the rollout loader before selecting this consumer for an ARM run.
+
 ### LOCAL image mirrors
 
 For an authenticated registry that a worker cannot reach, configure a regional

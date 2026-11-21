@@ -50,7 +50,7 @@ from cloud.iris.rl_config_translation import (
 )
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from skyrlrecipe import RLEntrypoint
-from marinskyrl.local_images import LocalMachineSettings
+from shellbox.backends.iris.local_images import LocalMachineSettings
 from marinskyrl.resource_locator import (
     is_cloud_uri,
     join_resource_path,
