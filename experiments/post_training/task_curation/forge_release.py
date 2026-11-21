@@ -391,9 +391,19 @@ def main() -> None:
     parser.add_argument("--records", required=True, help="the forge export root holding inputs/ and records/")
     parser.add_argument("--target", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--release-root",
+        help="optional object-storage root (s3:// or gs://) receiving the three release artifacts",
+    )
     args = parser.parse_args()
     configure_coreweave_s3()
     manifest = write_release(read_records(args.records), args.target, args.output, args.records)
+    if args.release_root is not None:
+        root = StoragePath(args.release_root)
+        if (root / MANIFEST_FILENAME).exists():
+            raise FileExistsError(f"Release root already holds a manifest: {args.release_root}")
+        for filename in (LOWERED_FILENAME, SELECTION_FILENAME, MANIFEST_FILENAME):
+            (root / filename).write_bytes((args.output / filename).read_bytes())
     print(json.dumps({key: value for key, value in manifest.items() if key != "rule"}, indent=2))
 
 
