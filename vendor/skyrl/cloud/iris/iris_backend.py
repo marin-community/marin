@@ -228,10 +228,15 @@ def _gpu_constraints(
     *,
     replicas: int,
     target_cluster: str | None,
+    excluded_nvlink_domains: tuple[str, ...],
 ) -> list[Constraint]:
     constraints = []
     if target_cluster:
         constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
+    constraints.extend(
+        Constraint.create(key="nvlink.domain", op=ConstraintOp.NE, value=domain)
+        for domain in excluded_nvlink_domains
+    )
     inferred = infer_preemptible_constraint(resources, replicas, constraints)
     if inferred is not None:
         constraints.append(inferred)
@@ -283,6 +288,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         gpus_per_node=int(allocation["gpus_per_node"]),
         gpu_variant=allocation["gpu_variant"],
         role_topology=derive_launch_topology(raw).role_topology,
+        excluded_nvlink_domains=tuple(iris["excluded_nvlink_domains"]),
         cpu=float(allocation["cpu"]),
         memory=allocation["memory"],
         disk=allocation["disk"],
@@ -883,6 +889,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         resources_proto,
         replicas=replicas,
         target_cluster=args.target_cluster,
+        excluded_nvlink_domains=args.excluded_nvlink_domains,
     )
 
     priority_band = job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{args.priority.upper()}")

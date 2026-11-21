@@ -372,15 +372,25 @@ def _pod_group_name(task_id: JobName, attempt_id: int) -> str:
     return f"iris-pg-{_task_hash(_job_path(task_id))}-{attempt_id}"
 
 
-def _constraints_to_node_selector(
+def _constraints_to_node_placement(
     constraints: Sequence[job_pb2.Constraint],
-) -> dict[str, str]:
-    """Map Iris constraints to k8s nodeSelector entries.
+) -> tuple[dict[str, str], dict]:
+    """Map placement constraints to Kubernetes selectors and required affinity.
 
     Unknown keys are silently skipped. Known keys require EQ with a value.
     """
     node_selector: dict[str, str] = {}
+    domain_expressions = []
     for c in constraints:
+        if c.key == COSCHEDULE_NVLINK_DOMAIN:
+            if c.mode != job_pb2.CONSTRAINT_MODE_REQUIRED or c.op != job_pb2.CONSTRAINT_OP_NE:
+                raise PodManifestError("NVLink domain exclusions require a hard NE constraint")
+            if not c.HasField("value") or not c.value.string_value:
+                raise PodManifestError("NVLink domain exclusions require a nonempty domain")
+            domain_expressions.append(
+                {"key": CW_LABEL_NVLINK_DOMAIN, "operator": "NotIn", "values": [c.value.string_value]}
+            )
+            continue
         label_key = _CONSTRAINT_KEY_TO_NODE_LABEL.get(c.key)
         if label_key is None:
             continue
@@ -391,7 +401,16 @@ def _constraints_to_node_selector(
                 f"Unsupported constraint op={c.op} for key={c.key!r}: "
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
-    return node_selector
+    affinity = {}
+    if domain_expressions:
+        affinity = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [{"matchExpressions": domain_expressions}]
+                }
+            }
+        }
+    return node_selector, affinity
 
 
 def _region_constraint_error(constraints: Sequence[job_pb2.Constraint], regions: Sequence[str]) -> str | None:
@@ -1111,7 +1130,7 @@ def _build_pod_manifest(
     }
     if run_req.attempt_uid:
         labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
-    node_selector = _constraints_to_node_selector(run_req.constraints)
+    node_selector, node_affinity = _constraints_to_node_placement(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
     if network is not TaskNetwork.CLUSTER:
@@ -1260,6 +1279,8 @@ def _build_pod_manifest(
         node_selector[managed_label] = "true"
     if node_selector:
         spec["nodeSelector"] = node_selector
+    if node_affinity:
+        spec["affinity"] = node_affinity
 
     if gpu_count > 0:
         spec.setdefault("tolerations", []).append(NVIDIA_GPU_TOLERATION)

@@ -874,6 +874,14 @@ the published BF16 SkyRL wheel `marin-vllm-gpu-20261113-0ac9dcb157ee`, pinned
 in the `vllm` extra in [SkyRL dependencies](../../../vendor/skyrl/pyproject.toml).
 These are configuration ports. CPU validation does not establish GPU fit, serving readiness or throughput.
 
+The one-rack round excludes `dh1-r136-us-east-08a` through
+`rl.execution.excluded_nvlink_domains`. The launch document carries these domains
+as required `nvlink.domain NE` Iris constraints. The Kubernetes backend translates
+them to required node affinity on `ds.coreweave.com/nvlink.domain`. The target
+controller must run this backend support before submitting an excluded-domain
+job; an older controller does not enforce this constraint. NVLink role locality
+alone does not exclude a rack.
+
 ```bash
 uv run python -m experiments.post_training.long_loop.round_runner \
   --round experiments/post_training/long_loop/rounds/mochi-one-rack.yaml \

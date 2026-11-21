@@ -70,6 +70,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         gpus_per_node=4 if groups else 8,
         num_nodes=sum(groups) if groups else 2,
         role_topology=RoleTopology(("policy",), LocalityPlan(groups, (0,))) if groups else None,
+        excluded_nvlink_domains=("dh1-r136-us-east-08a",) if groups else (),
         cpu=32,
         memory="512GB",
         disk="512GB",
@@ -100,6 +101,10 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert tuple(request.coscheduling.group_sizes) == groups
     assert request.coscheduling.group_by == ("nvlink.domain" if groups else "leafgroup")
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
+    exclusions = [constraint for constraint in request.constraints if constraint.key == "nvlink.domain"]
+    assert [(constraint.op, constraint.value.string_value, constraint.mode) for constraint in exclusions] == (
+        [(job_pb2.CONSTRAINT_OP_NE, "dh1-r136-us-east-08a", job_pb2.CONSTRAINT_MODE_REQUIRED)] if groups else []
+    )
     expected_interface = interface or ("^ibs,ibp,lo,docker,veth,cilium,lxc" if args.cluster == "cw-rno2a" else None)
     assert request.environment.env_vars.get("NCCL_SOCKET_IFNAME") == expected_interface
 

@@ -504,6 +504,7 @@ class IrisSkyRLExecution:
     coordinator_secret_sources: tuple[tuple[str, str], ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
     role_topology: RoleTopologyMode | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -1037,6 +1038,7 @@ def _launch_config_yaml(
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
             "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
+            "excluded_nvlink_domains": list(execution.excluded_nvlink_domains),
             "allocation": {
                 "num_nodes": num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
