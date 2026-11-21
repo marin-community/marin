@@ -7,6 +7,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 
 import yaml
 from fray.types import ResourceConfig
@@ -148,8 +149,6 @@ MIXTURE_SPEC = replace(
     per_device_parallelism=1,
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
-MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
-
 # The same mixture on cw-rno2a, reading a copy of its caches and tokenizer in that region's bucket.
 _RNO_BUCKET = "s3://marin-us-east-08a"
 _RNO_NAME = f"{_MIXTURE_NAME}-rno2a"
@@ -162,8 +161,8 @@ _RNO_DATA = apply(
     sha256=_MANIFEST_SHA256,
     bucket=_RNO_BUCKET,
 )
-MIXTURE_262K_32NODE_RNO2A = SFTPreset(
-    _RNO_NAME,
+_MIXTURE_RNO2A = SFTPreset(
+    _MIXTURE_NAME,
     replace(
         MIXTURE_SPEC,
         name=f"checkpoints/snowball/{_RNO_NAME}",
@@ -173,7 +172,10 @@ MIXTURE_262K_32NODE_RNO2A = SFTPreset(
     ),
     replace(MIXTURE_RESOURCES, regions=("RNO2A",), target_cluster="cw-rno2a"),
 )
-SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE, MIXTURE_262K_32NODE_RNO2A)
+MIXTURE_262K_32NODE = SFTPreset(
+    _MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES, regional=MappingProxyType({"cw-rno2a": _MIXTURE_RNO2A})
+)
+SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
 
 
 if __name__ == "__main__":
