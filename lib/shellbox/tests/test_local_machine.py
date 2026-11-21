@@ -1579,3 +1579,26 @@ def test_apply_sandbox_apt_config_ignores_missing_state_trees(tmp_path):
     (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
     machine_module._apply_sandbox_apt_config(tmp_path)
     assert (tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE).exists()
+
+
+def test_prepared_image_allow_network_uses_runtime_resolver_without_changing_image(executable_oci_image, tmp_path):
+    umoci = shutil.which("umoci")
+    if umoci is None:
+        pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
+    factory = make_factory(umoci=Path(umoci))
+    image = executable_oci_image
+    original = {path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()}
+
+    async def scenario():
+        machine = await factory.create(MachineSpec(image, network=NetworkPolicy.ALLOW))
+        try:
+            resolver = await machine.run(Command(("cat", "/etc/resolv.conf")))
+            assert resolver.exit_code == 0, resolver.stderr
+            assert resolver.stdout == Path("/etc/resolv.conf").read_bytes()
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert {
+        path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()
+    } == original

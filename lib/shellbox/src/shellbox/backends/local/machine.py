@@ -1550,6 +1550,11 @@ class LocalMachineFactory:
                 )
                 if hosts.exit_code != 0:
                     raise RuntimeError(f"Cannot prepare task aliases: {hosts.stderr.decode(errors='replace')}")
+            if effective.network is NetworkPolicy.ALLOW:
+                resolver = parent / "resolv.conf"
+                resolver.write_bytes(Path("/etc/resolv.conf").read_bytes())
+                resolver.chmod(0o644)
+                await machine.upload(resolver, "/etc/resolv.conf")
             result = await machine._control('mkdir -p -- "$1"', _absolute_path(effective.workdir))
             if result.exit_code != 0:
                 raise RuntimeError(f"Cannot create image workdir: {result.stderr.decode(errors='replace')}")

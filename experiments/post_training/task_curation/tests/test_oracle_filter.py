@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
+from pydantic import ValidationError
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole
 from taskcompendium.identity import canonical_sha256
@@ -851,3 +852,22 @@ def test_default_mode_still_rejects_changed_native(tmp_path):
     _recollected_trial_fixture(tmp_path, task, "b" * 64)
     with pytest.raises(ValueError, match="Native task changed after its oracle trial"):
         collect_trials(tmp_path / "jobs")
+
+
+@pytest.mark.parametrize("resources", ['memory = "1G"\nstorage = "5G"', "memory_mb = 1024\nstorage_mb = 5120"])
+def test_native_requirements_reads_declared_harbor_resource_units(tmp_path, resources):
+    (tmp_path / "task.toml").write_text(
+        "[environment]\ncpus = 1\n" + resources + "\n[agent]\ntimeout_sec = 600\n[verifier]\ntimeout_sec = 300\n"
+    )
+    assert native_requirements(tmp_path) == ExecutionRequirements(
+        cpus=1, memory_mb=1024, storage_mb=5120, agent_timeout_sec=600, verifier_timeout_sec=300
+    )
+
+
+@pytest.mark.parametrize("resources", ['storage = "5G"', 'memory = "1G"\nmemory_mb = 2048\nstorage = "5G"'])
+def test_native_requirements_rejects_missing_or_conflicting_native_resources(tmp_path, resources):
+    (tmp_path / "task.toml").write_text(
+        "[environment]\ncpus = 1\n" + resources + "\n[agent]\ntimeout_sec = 600\n[verifier]\ntimeout_sec = 300\n"
+    )
+    with pytest.raises(ValidationError):
+        native_requirements(tmp_path)

@@ -154,10 +154,14 @@ def declared_native_requirements(
 
 
 def native_requirements(path: Path) -> ExecutionRequirements:
+    from harbor_config.models.task.config import EnvironmentConfig as NativeEnvironmentConfig  # noqa: PLC0415
+
     document = tomllib.loads((path / "task.toml").read_text())
-    environment = document["environment"]
+    environment = NativeEnvironmentConfig.model_validate(document["environment"])
     return ExecutionRequirements(
-        **{name: environment[name] for name in ("cpus", "memory_mb", "storage_mb")},
+        cpus=environment.cpus,
+        memory_mb=environment.memory_mb,
+        storage_mb=environment.storage_mb,
         agent_timeout_sec=document["agent"]["timeout_sec"],
         verifier_timeout_sec=document["verifier"]["timeout_sec"],
     )
