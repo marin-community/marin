@@ -2129,6 +2129,63 @@ def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(p
         TypeAdapter(Accept).validate_json(b'{"band": "in_band", "restore": ""}')
 
 
+def restoring_bundle(engine: Engine) -> Resources:
+    """A too-easy first round, then a faulted resubmission whose review restores the first submission."""
+    resubmit = (*script()[:3], call("submit", {"notes": "revised notes"}, "submit"))
+    bundle = resources(Envs(), (*script(), *resubmit))
+    return replace(bundle, rollouts=replace(bundle.rollouts, engine=engine))
+
+
+# Review 2026-11-21 (follow-up 2): after the coordinator returned the accepted fallback, an OSError on runtime exit
+# published HELD with the faulted revision's notes and [Modify, Incomplete], though the journal recorded the Accept.
+async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpiece(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @asynccontextmanager
+    async def failing_exit(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), restoring_bundle(FirstRoundSolves())
+        raise OSError(errno.EIO, "runtime cleanup failed")
+
+    monkeypatch.setattr(driver, "runtime", failing_exit)
+    with pytest.raises(OSError, match="runtime cleanup failed"):
+        await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert [type(decision) for decision in workpiece.decisions] == [Modify, Accept, Incomplete]
+    assert workpiece.submission is not None and workpiece.submission.notes == "done"
+    assert any(isinstance(r.event, StageCompleted) and r.event.exit == "Decided" for r in history(destination))
+
+
+class RevisionWaits(FirstRoundSolves):
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        if run_id is not None and not run_id.endswith(":0"):
+            self.entered.set()
+            await asyncio.Event().wait()  # until cancelled
+        return await super().run_task(spec, model, run_id=run_id)
+
+
+async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = RevisionWaits()
+    serve(monkeypatch, restoring_bundle(engine))
+    run = asyncio.create_task(driver.one(driver_args))
+    await engine.entered.wait()
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    journal = published(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    workpiece = journal.workpiece()
+    assert journal.head.status.terminal is None and workpiece is not None  # a running head, resumed by replay
+    assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
+
+
 # Review 2026-11-21 (follow-up 1): a disk-full error persisting the final review held the run from the initial
 # workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
