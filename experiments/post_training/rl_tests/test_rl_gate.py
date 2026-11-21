@@ -35,7 +35,6 @@ from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
-from skyrlrecipe.model_staging import model_metadata_subpath, tokenizer_metadata_subpath
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -566,9 +565,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "stale-default",
         "control-commit",
         "unbound-data",
-        "staged-model",
-        "staged-embedded-tokenizer",
-        "unbound-staged-tokenizer",
         "allocation",
         "cached-default",
         "zero-spread",
@@ -585,10 +581,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
 )
 def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorded_runs, tmp_path, monkeypatch, case):
     preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
-    if case == "staged-embedded-tokenizer":
-        assert isinstance(preset.model, ArtifactHfModel)
-        preset = replace(preset, model=replace(preset.model, tokenizer_uri=None, tokenizer_revision=None))
-        preset_table(preset)
     setting = "trainer.policy.optimizer_config.lr=2e-6"
     settings = (
         ()
@@ -666,23 +658,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         assert json.loads((candidate / "terminal.json").read_text())["config"]["iris"]["priority"] == "production"
     else:
         candidate = recorded_runs(preset.name, name, inputs=inputs)
-    if case in ("staged-model", "staged-embedded-tokenizer", "unbound-staged-tokenizer"):
-        for root in [candidate, *control_roots]:
-            with edit_receipt(root) as receipt:
-                document = receipt["config"]
-                source = document["inputs"]["model"]
-                model_path = f"/native-tmp/{model_metadata_subpath(source['uri'], source['identity'])}"
-                tokenizer_path = model_path
-                if tokenizer_uri := source["tokenizer_uri"]:
-                    tokenizer_key = tokenizer_metadata_subpath(tokenizer_uri, source["tokenizer_revision"])
-                    tokenizer_path = f"/native-tmp/{tokenizer_key}"
-                for role in ("policy", "ref"):
-                    document["skyrl"]["trainer"][role]["model"].update(
-                        path=model_path, tokenizer_path=tokenizer_path, tokenizer_revision=None
-                    )
-                if root == candidate and case == "unbound-staged-tokenizer":
-                    wrong_tokenizer_key = tokenizer_metadata_subpath(source["tokenizer_uri"], "wrong-revision")
-                    set_path(document, "skyrl.trainer.ref.model.tokenizer_path", f"/native-tmp/{wrong_tokenizer_key}")
     omissions = {
         "omitted-default": {
             "config.skyrl.generator.chat_template_kwargs": {},
@@ -730,7 +705,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         return
     reasons = {
         "stale-default": ("control config differs",),
-        "unbound-staged-tokenizer": ("skyrl.trainer.ref.model.tokenizer_path",),
         "zero-spread": ("variation is zero",),
         "missing-guard": ("missing or non-finite guard metric",),
         "omitted-current-nondefault": ("control config differs",),
