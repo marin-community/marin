@@ -249,7 +249,7 @@ class Gateway(FakeReader):
 NO_READ = f"{MODEL} gave no read within 100s: "
 
 
-# Review 2026-11-21 (n10 finding 3): reads queued behind the concurrency cap waited outside the availability window, so
+# Review 2026-11-21: reads queued behind the concurrency cap waited outside the availability window, so
 # a slow unavailable gateway outlived the verifier deadline and the driver published an ordinary held state. One bound
 # now covers the wait for a read slot and every attempt; queued reads report the outage another read observed, and a
 # queue on an answering model says so instead.
@@ -284,10 +284,10 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
 HUGE = 10**5000  # 5,001 digits: no repr within the default limit
 
 
-# Review 2026-11-21 (n10 finding 4): an override returning "4" was graded INFRA_ERROR, then replayed from the journal as
+# Review 2026-11-21: an override returning "4" was graded INFRA_ERROR, then replayed from the journal as
 # the level 4.0 and passed with no new read; an unconvertible string made the journal unreadable. A level is checked
-# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume. Follow-up 1
-# (finding 4): a 5,001-digit integer was formatted before X2 saw it, raising a rollout restart; X2 bounds the diagnostic.
+# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume.
+# A 5,001-digit integer was formatted before X2 saw it, raising a rollout restart; X2 bounds the diagnostic.
 @pytest.mark.parametrize(
     "level, shown",
     [(7, "7"), ("4", "a value of type str"), ("four", "a value of type str"), (HUGE, "a value of type int")],
@@ -315,7 +315,7 @@ async def test_an_off_scale_level_is_an_infrastructure_error_recorded_nowhere_an
     assert repaired.reads == [request("12")]
 
 
-# Review 2026-11-21 (n10 finding 4): three solver answers and two controls bought five reads for two requests, and the
+# Review 2026-11-21: three solver answers and two controls bought five reads for two requests, and the
 # round's verifier and a fresh one could see different rewards for one key. Equal requests in flight share one read;
 # a waiter that is cancelled leaves it to the others, and a read that fails is not shared with the next request.
 async def test_equal_reads_in_flight_share_one_paid_read_and_survive_a_cancelled_waiter() -> None:
@@ -352,7 +352,7 @@ class Answers(FakeReader):
         return self.answers.pop(0)
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 1): an equal request arriving after the shared read left the table but
+# Review 2026-11-21: an equal request arriving after the shared read left the table but
 # before its waiter recorded the level paid again, and the two read 1 and 4 for one key. The flight is owned until a
 # waiter has recorded its result: at every interleaving around completion, one call and one level.
 @pytest.mark.parametrize("steps", range(6))
@@ -373,7 +373,7 @@ async def test_an_equal_request_around_a_reads_completion_shares_its_one_recorde
     assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
 
 
-# Review 2026-11-21 (n10 follow-up 2, finding 1): a waiter cancelled after the read completed evicted it while another
+# Review 2026-11-21: a waiter cancelled after the read completed evicted it while another
 # waiter had yet to record the level; an equal request then paid again, and the two recorded 1 and 4 for one key. A
 # cancelled waiter only leaves: the read stays shared until its last waiter leaves or one records it.
 @pytest.mark.parametrize("steps", range(6))
@@ -403,7 +403,7 @@ async def test_a_waiter_cancelled_after_the_read_completes_leaves_it_to_the_wait
     assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 1): with every waiter cancelled, the shared read kept retrying after the
+# Review 2026-11-21: with every waiter cancelled, the shared read kept retrying after the
 # drain. The last waiter to leave cancels and joins it: nothing runs on, and nothing is recorded resolved.
 async def test_a_read_every_waiter_left_stops_before_the_drain_and_records_nothing() -> None:
     reader, ctx = FakeReader(down={"12"}), Context(log=EventLog())
@@ -518,14 +518,14 @@ def human(outcome: object) -> str:
     return "" if rest is None else repr(rest)
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 2): the negative control's outage was raised before the grade observer
+# Review 2026-11-21: the negative control's outage was raised before the grade observer
 # joined, so the off-scale grades' hold was dropped and the run deferred as if only the decision model were missing.
 async def test_a_held_grade_beside_an_outage_keeps_the_wave_a_human_hold(proposal: TaskProposal) -> None:
     held, _, _ = await validated(proposal, FakeReader(levels={"12": 7}, down={"13"}))
     assert "returned 7, not a level in 0..4" in human(held)
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 2): a failed adversary, or a solver refusal over the allowance that
+# Review 2026-11-21: a failed adversary, or a solver refusal over the allowance that
 # returned before a control's outage, disappeared beside it, and the automatic resume bought the adversary again or
 # reused the refusal on a second launch. Every finished sibling's disposition is settled before the wave waits.
 @pytest.mark.parametrize("sibling", ["adversary", "solver"])
@@ -574,7 +574,7 @@ async def test_an_outage_mid_wave_keeps_finished_siblings_and_resumes_paying_onl
     assert [trial.grade.reward for trial in resumed.result.solver if trial.grade] == [1.0] * 3
 
 
-# Review 2026-11-21 (n10 finding 2): with one solver slot at a time and the negative control already waiting for the
+# Review 2026-11-21: with one solver slot at a time and the negative control already waiting for the
 # decision model, every solver slot still started. One admission stop serves the batch and its validation siblings:
 # the running slot finishes and keeps its row, and no other slot is bought to wait beside the outage.
 async def test_a_control_outage_admits_no_further_solver_slot_and_resumes_only_what_never_ran(
@@ -632,7 +632,7 @@ async def test_the_default_reader_asks_clef_the_whole_request_and_returns_the_ex
     }
 
 
-# Review 2026-11-21 (n10 follow-up 2, finding 2): the shared read ran in an empty context, so a caller's scoped Iris
+# Review 2026-11-21: the shared read ran in an empty context, so a caller's scoped Iris
 # client was gone and the installed grade raised Restart before any POST, though the same reader called directly read
 # 4.0. The read keeps the caller's context and leaves only Taskforge's effect scope.
 async def test_the_installed_grade_reads_clef_through_the_callers_iris_client() -> None:
@@ -708,7 +708,7 @@ async def length_stopped(
     return outcome, len(solver.bodies)
 
 
-# Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded, and an off-scale level is a
+# Review 2026-11-21: an answer cut at its length limit is still graded, and an off-scale level is a
 # grader infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made
 # no solver call and no read and republished the hold.
 async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_the_model_recovers(

@@ -139,7 +139,7 @@ class Profile:
         return Fingerprint("inference", self.name, ReplayPolicy.CACHE)
 
 
-# Review 2026-11-21 (n10 follow-up 3, finding 1): cold launches under author profiles A, then B, then A reported
+# Review 2026-11-21: cold launches under author profiles A, then B, then A reported
 # cumulative author tokens 40/20, 80/40 and 120/60: the third bought again what A had already paid. It reports 80/40.
 async def test_a_launch_under_a_profile_already_paid_adds_no_reported_tokens(
     tmp_path: Path, proposal: TaskProposal

@@ -545,8 +545,8 @@ LATER_SETTINGS = frozenset(
         "decision_model.retry_interval",
     }
 )
-"""The entries the default policy gained after this fixture was recorded (n9, then n10); none enters a replay key
-while ``decision_model.model`` is empty."""
+"""The entries the default policy gained after this fixture was recorded (by the solver batch, then the decision
+model); none enters a replay key while ``decision_model.model`` is empty."""
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record

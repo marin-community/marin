@@ -461,7 +461,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         policy=str(overlay),
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
-        resume_held=False,  # and no probe: an in-process caller built before the flag existed (follow-up 2)
+        resume_held=False,  # and no probe: an in-process caller built before the flag existed
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -3184,7 +3184,7 @@ async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_una
     assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2
 
 
-# Review 2026-11-21 (n10 finding 1): an ordinary launch entered a human hold and replayed its refusals as if an
+# Review 2026-11-21: an ordinary launch entered a human hold and replayed its refusals as if an
 # operator had passed --resume-held. Only the exact typed marker that an outage-only hold records is entered again,
 # and the refusal replay rule always sees the operator's own flag.
 @pytest.mark.parametrize(
@@ -3217,7 +3217,7 @@ async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators
     assert entered == [False] * (1 + enters)
     held_wp = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
     assert held_wp.terminal is Terminal.HELD and driver.deferred(held_wp) is enters
-    positional = Incomplete(("held",), "incomplete")  # the n9 constructor: the second argument is still the kind
+    positional = Incomplete(("held",), "incomplete")  # the earlier constructor: the second argument is still the kind
     assert (positional.kind, positional.awaits) == ("incomplete", None)
     assert not driver.deferred(held_wp.with_(decisions=(*held_wp.decisions, positional)))
 
@@ -3284,7 +3284,7 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     assert "submitted=4 completed=4 failed=0 skipped=0" in out
 
 
-# Review 2026-11-21 (n10 finding 5): with one child slot, a code proposal never started while a health read was
+# Review 2026-11-21: with one child slot, a code proposal never started while a health read was
 # pending. The run reads health in the background and keeps reaping and launching children while it waits.
 async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
@@ -3302,7 +3302,7 @@ async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
     assert launches == ["first", "code", "first"]
 
 
-# Review 2026-11-21 (n10 finding 5): without a health route, a probe child that crashed, was superseded, needed a
+# Review 2026-11-21: without a health route, a probe child that crashed, was superseded, needed a
 # migration or found a corrupt journal reopened the queue. Only a probe that is not deferred again releases the
 # rest; any other exit is reported as usual and another parked proposal probes after the interval.
 @pytest.mark.parametrize("code", [1, driver.SUPERSEDED, driver.NEEDS_MIGRATION, driver.CORRUPT])
@@ -3327,7 +3327,7 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
 
 
-# Review 2026-11-21 (n10 follow-up 2, finding 5): an ordinary child exiting 10 was counted a success. Only the
+# Review 2026-11-21: an ordinary child exiting 10 was counted a success. Only the
 # designated probe's 10 is an answer; from any other child it is the unexpected exit it is.
 async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
     driver_args: Namespace,
@@ -3343,7 +3343,7 @@ async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
     assert f"OUTCOME failed exit={driver.ANSWERED} proposal={tmp_path / 'code.proposal.json'}" in capsys.readouterr().out
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 3): a probe whose grade replayed a cached read exited 0 having made no
+# Review 2026-11-21: a probe whose grade replayed a cached read exited 0 having made no
 # decision-model call, and released every parked proposal. A probe that proves no fresh answer stays a probe: each
 # parked proposal probes in turn after the interval, and none is released on its evidence.
 async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
@@ -3356,7 +3356,7 @@ async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
     assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 3): after one healthy reading the first released child deferred again,
+# Review 2026-11-21: after one healthy reading the first released child deferred again,
 # and the rest of the released queue kept starting while the next health read was pending. A fresh outage parks
 # everything not yet started: no decision-model child launches while health is being read.
 async def test_a_fresh_outage_parks_released_work_that_has_not_started(
@@ -3416,7 +3416,7 @@ def probe_bundles(
     ]
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 3): what a probe child reports. Only a probe that resolved a decision-
+# Review 2026-11-21: what a probe child reports. Only a probe that resolved a decision-
 # model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
 async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -3444,10 +3444,10 @@ CLEF_BODIES: Mapping[str, httpx.Response] = {
 }
 
 
-# Review 2026-11-21 (n10 follow-up 4): through the default reader, one 200 followed only by an off-scale level, an
+# Review 2026-11-21: through the default reader, one 200 followed only by an off-scale level, an
 # HTTP 403 or a 200 without answers left the earlier answer standing, and the probe released its peers with the root
 # manual. Every dispatched read that fails records the failure, whatever its class; only the caller's own cancellation
-# of a read in flight leaves the earlier answer standing. Follow-up 5: a read whose own request deadline expired, its
+# of a read in flight leaves the earlier answer standing. A read whose own request deadline expired, its
 # waiter then cancelled during the HTTP cleanup, ended in CancelledError and was taken for the caller's leaving; a
 # cancellation is the caller's only while neither the request's deadline nor the overall wait has expired.
 @pytest.mark.parametrize(
@@ -3502,7 +3502,7 @@ async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
     assert held.terminal is Terminal.HELD and not driver.deferred(held) and sent == ["12", second]
 
 
-# Review 2026-11-21 (n10 follow-ups 2 and 3): a probe that read 200 and then met a 503 ended on a human hold yet
+# Review 2026-11-21: a probe that read 200 and then met a 503 ended on a human hold yet
 # answered, first in general and then when the 503's retry row landed before the 200's resolution in one loop turn;
 # and three answers followed by a fourth dispatched read that expired in flight left no row at all and answered. The
 # reader's last physical outcome in the probe's process decides: a later failure, or a dispatched read unanswered at

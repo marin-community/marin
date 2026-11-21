@@ -419,7 +419,7 @@ def waits() -> RolloutInterrupted:
     return error
 
 
-# Review 2026-11-21 (n10 finding 2): a refusal beside a slot waiting for the decision model was dropped, the child
+# Review 2026-11-21: a refusal beside a slot waiting for the decision model was dropped, the child
 # deferred, and the next launch bought the refused slot again. Holds beyond the allowance outrank the outage; within it
 # the outage defers alone and the recorded refusal replays.
 @pytest.mark.parametrize("allowance", [0, 1])
@@ -442,7 +442,7 @@ async def test_a_refusal_beside_a_decision_model_outage_is_settled_before_the_ba
     assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
 
 
-# Review 2026-11-21 (n10 follow-up 2, finding 3): an operator retried a refused slot, the replacement met a decision-
+# Review 2026-11-21: an operator retried a refused slot, the replacement met a decision-
 # model outage, and the healthy automatic resume replayed the superseded refusal, asking for a second approval. The
 # replacement's start supersedes the refusal it replaces: it resumes, while a refusal it never reached still replays.
 async def test_an_authorised_replacement_cut_short_by_an_outage_resumes_and_never_replays_its_refusal() -> None:
