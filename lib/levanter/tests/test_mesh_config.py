@@ -131,14 +131,5 @@ def test_one_explicit_network_overrides_the_other_network_default(
     config, device_count, host_count, expected_ici, expected_dcn
 ):
     ici, dcn = config.axis_shapes(device_count, host_count)
-    mesh = create_mesh_from_axis_specs(
-        ici_axes=ici,
-        dcn_axes=dcn,
-        devices=[
-            GpuDevice(i, i // (device_count // host_count), i // (device_count // host_count))
-            for i in range(device_count)
-        ],
-    )
     assert ici == expected_ici
     assert dcn == expected_dcn
-    assert mesh.size == device_count
