@@ -48,6 +48,7 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_s3,
     fake_s3_checkpoint,
     replace_evaluations,
+    write_artifact_record,
     write_published_artifact,
     write_receipt,
     write_skyrl_run_record,
@@ -1173,6 +1174,23 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
+    training_selection = recipe.selection_artifact(preset.tasks)
+    write_artifact_record(
+        Path(training_selection.path()),
+        training_selection.name,
+        training_selection.version,
+        Artifact,
+        config={"seed": 42},
+    )
+    published_selections = Path(recipe.SELECTION_ROOT)
+
+    def selection_files():
+        return {
+            path: (path.stat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in (published_selections, *published_selections.rglob("*"))
+        }
+
+    before_launch = selection_files()
     built = snowball.build_experiment(
         preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
     )
@@ -1330,6 +1348,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "best_checkpoint_step: 10" in result.output and f"{preset.evaluations[0].name}@12/scored" in result.output
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
+    assert selection_files() == before_launch
     assert published[-1].optimizer_steps == published[-1].planned_updates == 12
     assert (published[-1].model, published[-1].issue) == ("snowball", None)
 

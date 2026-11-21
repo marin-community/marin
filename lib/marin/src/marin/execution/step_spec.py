@@ -81,6 +81,9 @@ class StepSpec:
     plain callable runs inline in the runner thread.
     """
 
+    read_only: bool = False
+    """Require an existing output path without running a function or writing any metadata."""
+
     @cached_property
     def dep_paths(self) -> list[str]:
         """Physical and resolved output paths of all dependencies."""
