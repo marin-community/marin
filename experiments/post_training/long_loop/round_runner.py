@@ -111,6 +111,7 @@ class RoundSft:
     expert_weight_sharding: dict = dataclasses.field(default_factory=dict)
     compiler_dumps: bool = False
     wall_clock_cooldown_fraction: float | None = None
+    first_collective_call_timeout: int | None = None
 
 
 @dataclass(frozen=True)
@@ -467,6 +468,14 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
 def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict) -> SFTSpec:
     """Bind and verify the round's declared precision, token rates and LR controls."""
     spec = shared_sft_spec(name, version, recipe)
+    timeout = round_spec.sft.first_collective_call_timeout
+    if timeout is not None:
+        if timeout <= 0:
+            raise ValueError("first_collective_call_timeout must be positive seconds")
+        spec = dataclasses.replace(
+            spec,
+            xla_flags=(*spec.xla_flags, f"--xla_gpu_first_collective_call_terminate_timeout_seconds={timeout}"),
+        )
     section_value = recipe.get("special_token_lr_multiplier")
     round_value = round_spec.sft.special_token_lr_multiplier
     if section_value is not None and round_value is not None and section_value != round_value:
@@ -517,6 +526,8 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     sft["mesh"] = round_spec.sft.mesh
     sft["trainer"]["mesh"] = round_spec.sft.mesh
     sft["resources"] = round_spec.sft.resources
+    if round_spec.sft.first_collective_call_timeout is not None:
+        sft["first_collective_call_timeout"] = round_spec.sft.first_collective_call_timeout
     if round_spec.sft.compiler_dumps:
         sft["trainer"]["log_jaxprs"] = True
         sft["trainer"]["log_xla_hlo"] = True

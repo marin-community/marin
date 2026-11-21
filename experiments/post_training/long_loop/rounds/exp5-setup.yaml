@@ -2,7 +2,7 @@
 # OpenResearcher's 5% share remains reserved; downstream RL is held.
 schema: 1
 name: long-loop-exp5/round5
-version: "2026.11.21.105"
+version: "2026.11.21.106"
 slug: mochi-exp5
 cluster: cw-rno2a
 storage:
@@ -26,6 +26,8 @@ sft:
   wall_clock_cooldown_fraction: 0.15
   mp: "p=bf16,c=bf16"
   compiler_dumps: true
+  # Allow cold-start host skew; the native NCCL operation watchdog remains enabled.
+  first_collective_call_timeout: 600
   special_token_lr_multiplier: 5.656854249492381
   # R1 uses cross-node data FSDP and context-sharded expert ownership.
   expert_weight_sharding:

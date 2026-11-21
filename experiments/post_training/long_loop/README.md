@@ -723,6 +723,13 @@ the updates actually run, final LR near min_lr), the special-token LR multiplier
 default of 1.0 with explicit-override semantics (R2), a permanent output prefix,
 and the final-SFT-checkpoint retention rule (R1, enforced again at archive time).
 
+`sft.first_collective_call_timeout` sets XLA's first-call rendezvous termination
+timeout in seconds. It allows cold-start skew between local GPUs without changing
+the training computation or the separate NCCL operation watchdog. Exp5 uses
+600 seconds after a 32-rank native-update qualification found matching compiled
+programs and correctly sharded inputs; this is a timeout mitigation, not a proven
+root-cause fix for the earlier first-step failure.
+
 To define a new round:
 
 1. Copy the previous round's YAML, for example `rounds/exp5.yaml` to

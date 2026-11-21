@@ -16,9 +16,13 @@ import math
 import tarfile
 from pathlib import Path
 
+import draccus
 import pytest
 import yaml
 from click.testing import CliRunner
+from fray.types import ResourceConfig
+from iris.rpc.proto_display import priority_band_value
+from marin.execution.lazy import StepContext
 from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import StoragePath
@@ -49,6 +53,7 @@ from experiments.post_training.long_loop.tests.test_initializer_stage import (
 from experiments.post_training.long_loop.tests.test_initializer_stage import (
     staged_initializer as staged_initializer,
 )
+from experiments.sft.launcher import levanter_train_request, sft_step
 
 # pytest resolves these fixtures through the imported module-level names; the tuple
 # keeps the re-exports used so the test parameters below are not treated as
@@ -339,6 +344,27 @@ def test_round_sft_spec_holds_the_ruled_multiplier_by_construction(production_re
         _annealed_recipe(production_recipe),
     )
     assert override.snowball_sft.special_token_lr_multiplier == 1.0
+
+
+@pytest.mark.parametrize("timeout", [None, 600])
+def test_round_first_collective_timeout_reaches_native_worker(production_recipe, tmp_path, timeout):
+    recipe = _annealed_recipe(production_recipe)
+    spec = round_sft_spec(
+        _round_spec(recipe, first_collective_call_timeout=timeout), "round-test/sft", "2026.11.21.106", recipe
+    )
+    step = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
+    context = StepContext.for_run(str(tmp_path / "trained"), str(tmp_path), runtime_args=step.runtime_args)
+    request = levanter_train_request(
+        step.build_config(context), task_timeout_seconds=72000, priority=priority_band_value("production")
+    )
+    flags = request.environment.env_vars["XLA_FLAGS"].split()
+    first_call = [
+        flag for flag in flags if flag.startswith("--xla_gpu_first_collective_call_terminate_timeout_seconds=")
+    ]
+    assert first_call == (
+        [] if timeout is None else [f"--xla_gpu_first_collective_call_terminate_timeout_seconds={timeout}"]
+    )
+    assert "--xla_gpu_nccl_termination_timeout_seconds=600" in flags
 
 
 @pytest.mark.parametrize(
