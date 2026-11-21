@@ -58,6 +58,7 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
             job_pb2.EgressRule(domain="*.example.com", ports=[443]),
             job_pb2.EgressRule(cidr="203.0.113.0/24"),
         ],
+        tags=job_pb2.JobTags(project="tokenizer-sweep", category="pre-training", description="Sweep tokenizer sizes."),
     )
     request.entrypoint.setup_commands.append("uv sync")
     request.entrypoint.run_command.argv[:] = ["python", "train.py"]

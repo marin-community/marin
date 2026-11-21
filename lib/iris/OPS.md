@@ -116,6 +116,13 @@ Logs default to the last 1,000 lines. Search older output server-side:
 iris job logs /user/job --max-lines 400000 --no-tail --substring 'Saving checkpoint'
 ```
 
+Tag each root job you submit with what it is for: `--project <effort>`,
+`--category <kind>` and `--description "<what it does>"` (SDK:
+`IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested categories:
+`data-processing`, `data-generation`, `pre-training`, `post-training`,
+`evaluation`, `external-collaboration`, `infrastructure`. On a child job, each
+tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
+
 Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job
 state alone does not prove process death.

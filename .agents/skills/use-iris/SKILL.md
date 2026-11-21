@@ -20,6 +20,8 @@ Read only the material needed for the request:
 
 Resolve cluster facts from `lib/iris/config/<cluster>.yaml`; do not copy live coordinates from memory.
 
+When you submit a root job, tag it with `--project` and `--category` (see "Job Management" in `lib/iris/OPS.md`).
+
 Use `manage-hero-run` for production lineage, checkpoint retention, and recovery
 decisions; `launch-rl` and `run-ferries` own their recipes. This skill supplies
 execution operations without replacing those workflows' authorization or

@@ -132,6 +132,11 @@ message Controller {
     // when the job runs under ALLOWLIST; an explicit policy must be ALLOWLIST.
     repeated iris.job.EgressRule egress_allow = 40;
 
+    // What the job is for, for compute accounting. On a child job, each unset
+    // field comes from the parent. Bookkeeping only; not interpreted by the
+    // scheduler.
+    iris.job.JobTags tags = 42;
+
     // Set only when a federation parent hands a whole job off to this cluster as
     // a peer. Its presence marks the job as peer-owned: the receiving controller
     // records the handing-off cluster's ownership (so FederationSync reports the
