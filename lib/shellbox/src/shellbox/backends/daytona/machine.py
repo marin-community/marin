@@ -125,10 +125,10 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
             try:
                 sandbox = await client.get(name)
                 await client.delete(sandbox)
-                telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "released"})
+                telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "delete_requested"})
                 return
             except DaytonaNotFoundError:
-                telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "released"})
+                telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "destroyed"})
                 return
             except DaytonaError as error:
                 if error.status_code not in TRANSIENT_DAYTONA_STATUS:

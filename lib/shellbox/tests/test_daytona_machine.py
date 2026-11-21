@@ -313,7 +313,8 @@ class LocalDaytona:
         self.closed = True
 
 
-def test_daytona_lifecycle_reports_provider_cpu_and_release(monkeypatch):
+@pytest.mark.parametrize("image_build", [DaytonaImageBuild.SNAPSHOT, DaytonaImageBuild.DECLARATIVE])
+def test_daytona_lifecycle_reports_provider_cpu_and_delete_request(monkeypatch, image_build):
     events = []
     monkeypatch.setattr(
         "shellbox.backends.daytona.machine.telemetry.event",
@@ -331,7 +332,7 @@ def test_daytona_lifecycle_reports_provider_cpu_and_release(monkeypatch):
         client = LocalDaytona()
         client.sandbox.cpu = 4
         client.sandbox.process = SetupProcess()
-        machine = await DaytonaMachineFactory(lambda: client).create(
+        machine = await DaytonaMachineFactory(lambda: client, image_build=image_build).create(
             MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2, workdir="/fixture")
         )
         await machine.close()
@@ -340,7 +341,7 @@ def test_daytona_lifecycle_reports_provider_cpu_and_release(monkeypatch):
                 "daytona_sandbox_lifecycle",
                 {"sandbox_name": client.params.name, "state": "acquired", "vcpu": 4},
             ),
-            ("daytona_sandbox_lifecycle", {"sandbox_name": client.params.name, "state": "released"}),
+            ("daytona_sandbox_lifecycle", {"sandbox_name": client.params.name, "state": "delete_requested"}),
         ]
 
     asyncio.run(scenario())
