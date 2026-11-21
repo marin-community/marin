@@ -418,8 +418,9 @@ def test_answers_math_verify_cannot_compare_grade_by_their_meaning(expected, can
     assert grade_math.grade_math_candidate(spec, candidate).reward == reward
 
 
-# Under antlr 4.9.3 and 4.11, latex2sympy2_extended 1.11.0 raised on every percent number, and
-# math-verify fell back to the raw text or to the number before the sign: 20\% rejected 0.2.
+# Under antlr 4.9.3 and 4.11, latex2sympy2_extended 1.11.0 from PyPI raises on every percent number,
+# and math-verify falls back to the raw text or to the number before the sign: 20\% rejected 0.2.
+# The workspace overrides it with a fixed build (pyproject.toml).
 @pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
 @pytest.mark.parametrize(
     ("expected", "candidate", "reward"),

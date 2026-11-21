@@ -76,7 +76,7 @@ def test_gsm8k_strict_match_uses_the_flexible_equivalence_rules(response, refere
     assert (metrics["exact_match,strict-match"], metrics["exact_match,flexible-extract"]) == (expected, expected)
 
 
-# Under the antlr 4.11 pin, latex2sympy2_extended 1.11.0 raised on every percent number, and
+# Under the antlr 4.11 pin, latex2sympy2_extended 1.11.0 from PyPI raises on every percent number, and
 # these scorers compared the raw text: \boxed{10\%} scored 0 against MATH500's reference 10.
 @pytest.mark.parametrize(
     ("scorer", "config", "response", "reward"),

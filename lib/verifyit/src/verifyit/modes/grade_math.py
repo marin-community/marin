@@ -62,8 +62,6 @@ def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = N
     from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
-    import verifyit.latex_percent  # noqa: F401, PLC0415
-
     configs = list(extraction_config or [LatexExtractionConfig(), ExprExtractionConfig()])
     parsed = parse(text, extraction_config=configs, **kwargs)
     if not any(isinstance(item, str) and _DANGLING_OPERATOR.search(item) for item in parsed):

@@ -129,6 +129,12 @@ override-dependencies = [
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
     "antlr4-python3-runtime==4.11",
+    # latex2sympy2_extended 1.11.0, math-verify 0.9.0's pin, raises on every LaTeX percentage under
+    # antlr 4.9.3 and 4.11: its converter calls FUNC_GAMMA, which only its 4.13.2 parser has. This
+    # build checks FUNC_GAMMA last and ships the 1.11.0 parsers. vendor/skyrl/pyproject.toml and the
+    # grader environments (task_curation/datasets/environments.py) pin the same commit. Drop all three
+    # once math-verify pins a latex2sympy2_extended release with the fix.
+    "latex2sympy2-extended @ git+https://github.com/XiaoyuanWang111/latex2sympy2_extended@8178050ae0122dbe8ef711c8e7ee1b724b8e98c4",
     "python-multipart>=0.0.27",
     "wheel>=0.46.2",
     "datasets>=5.0.1,<6",

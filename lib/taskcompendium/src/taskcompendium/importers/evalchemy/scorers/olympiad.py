@@ -11,7 +11,6 @@ import re
 import threading
 from collections.abc import Sequence
 
-import verifyit.latex_percent  # noqa: F401
 from math_verify import parse, verify
 from verifyit.adapters.completion import END_OF_TURN
 from verifyit.grade import Reward, invalid_task, scored
