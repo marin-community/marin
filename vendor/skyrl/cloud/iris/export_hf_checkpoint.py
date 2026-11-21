@@ -60,6 +60,7 @@ from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 from marinskyrl.model_manifest import ModelManifest
 from omegaconf import DictConfig, OmegaConf
+from rigging.filesystem.storage_path import StoragePath
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
     DEFAULT_HF_HUB_REVISION,
@@ -67,6 +68,7 @@ from skyrl_train.hf_export_schema import (
     HFExportRequest,
     HFExportStatus,
     HFUploadMode,
+    TRAINER_STATE_FILENAME,
 )
 from skyrl_train.hf_publisher import publish_verified_hf_export
 from skyrl_train.io import io
@@ -258,6 +260,7 @@ def argument_parser() -> argparse.ArgumentParser:
         required=True,
         help="the complete resolved launch document for the training run",
     )
+    ap.add_argument("--recover-best", action="store_true", help="export the best checkpoint using only --launch-config")
     ap.add_argument("--model_path", help="base model path, as at training time")
     ap.add_argument("--model-source-uri", help="object-store model source for a task-local --model_path")
     ap.add_argument("--model-source-identity", help="immutable identity for --model-source-uri")
@@ -270,7 +273,7 @@ def argument_parser() -> argparse.ArgumentParser:
     ap.add_argument("--disk")
     ap.add_argument("--num-nodes", type=int)
     ap.add_argument("--gpus-per-node", type=int)
-    ap.add_argument("--gpu-variant", required=True)
+    ap.add_argument("--gpu-variant")
     ap.add_argument(
         "--allocation-gpus-per-node",
         type=int,
@@ -496,20 +499,35 @@ def _export_job_spec(training_config: DictConfig, request: HFExportRequest) -> E
     )
 
 
-def validate_checkpoint_export(training_config: DictConfig) -> None:
-    """Validate the derived policy export without reading a checkpoint or submitting a job."""
-    trainer = training_config.skyrl.trainer
-    request = HFExportRequest.from_trainer(
-        trainer,
-        step=trainer.max_steps if trainer.max_steps is not None else 0,
+def _training_export_request(training_config: DictConfig, step: int) -> HFExportRequest:
+    return HFExportRequest.from_trainer(
+        training_config.skyrl.trainer,
+        step=step,
         checkpoint_root=str(training_config.artifacts.checkpoint_root),
         export_root=str(training_config.artifacts.export_root),
     )
+
+
+def validate_checkpoint_export(training_config: DictConfig) -> None:
+    """Validate the derived policy export without reading a checkpoint or submitting a job."""
+    step = training_config.skyrl.trainer.max_steps
+    request = _training_export_request(training_config, step if step is not None else 0)
     export = checkpoint_export_launch_config(training_config, request, _export_job_spec(training_config, request))
     validate_launch_config(export)
 
 
-def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str, ...] = ()) -> None:
+def _print_export_command(spec: ExportJobSpec, command: list[str]) -> None:
+    print("[export-hf] converting checkpoint step", spec.request.step)
+    print("[export-hf]", " ".join(command))
+
+
+def export_terminal_policy(
+    training_config_path: Path,
+    *,
+    forward_env: tuple[str, ...] = (),
+    recover_best: bool = False,
+    dry_run: bool = False,
+) -> None:
     """Derive and run the terminal policy export from one training launch document."""
     from cloud.iris.artifacts import terminal_checkpoint_step  # noqa: PLC0415 - artifact IO belongs to execution
 
@@ -517,25 +535,46 @@ def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
     selected = selected_export_checkpoint(
         checkpoint_root,
-        str(training_config.skyrl.trainer.hf_export_checkpoint),
-        terminal_checkpoint_step(checkpoint_root),
+        "best" if recover_best else str(training_config.skyrl.trainer.hf_export_checkpoint),
+        0 if recover_best else terminal_checkpoint_step(checkpoint_root),
     )
-    if selected is None or selected.initializer_uri is not None:
+    if selected is None:
+        if recover_best:
+            raise ValueError(f"No best checkpoint record at {checkpoint_root}")
+        return
+    if selected.initializer_uri is not None:
+        if recover_best:
+            print(f"[export-hf] best step-zero checkpoint is the initializer {selected.initializer_uri}")
         return
     checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{selected.step}")
     request = _read_hf_export_request(checkpoint_path)
+    if request is None and recover_best and (StoragePath(checkpoint_path) / TRAINER_STATE_FILENAME).exists():
+        request = _training_export_request(training_config, selected.step)
     if request is None:
         raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
     if request.status is HFExportStatus.COMPLETE:
+        if recover_best and not dry_run:
+            export_path = policy_export_path(request.export_path, request.step)
+            if not _has_completed_hf_model_export(export_path):
+                raise ValueError(f"completed request has no verified policy export at {export_path}")
         return
     spec = _export_job_spec(training_config, request)
     resolved_spec = _with_checkpoint_export_config(training_config_path, spec)
-    submit_requested_export(resolved_spec, build_command(resolved_spec, forward_env=forward_env))
+    command = build_command(resolved_spec, forward_env=forward_env)
+    if dry_run:
+        _print_export_command(resolved_spec, command)
+        return
+    submit_requested_export(resolved_spec, command)
 
 
 def main() -> None:
     parser = argument_parser()
     args = parser.parse_args()
+    if args.recover_best:
+        export_terminal_policy(Path(args.launch_config), recover_best=True, dry_run=args.dry_run)
+        return
+    if args.gpu_variant is None:
+        parser.error("--gpu-variant is required")
     if args.timeout <= 0:
         parser.error("--timeout must be positive for an export job")
     if args.request:
@@ -553,8 +592,7 @@ def main() -> None:
 
     cmd = build_command(spec)
 
-    print("[export-hf] converting checkpoint step", spec.request.step)
-    print("[export-hf]", " ".join(cmd))
+    _print_export_command(spec, cmd)
     if args.dry_run:
         return
     if request is None:

@@ -416,6 +416,7 @@ class SkyRLRetentionPolicy:
 
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
+    checkpoints_in_run_output: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 10:
@@ -644,7 +645,7 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    model: SkyRLModelSource
+    model: SkyRLModelSource | ResolvedModelLocator
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
     topology: SkyRLTopology
@@ -1143,10 +1144,11 @@ def skyrl_step(
 ) -> ArtifactStep[SkyRLRun]:
     """Build a versioned SkyRL training artifact."""
     step_name = spec.name
+    model_deps = () if isinstance(spec.model, ResolvedModelLocator) else spec.model.deps()
     deps = tuple(
         dict.fromkeys(
             (
-                *spec.model.deps(),
+                *model_deps,
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
                 *(dep for _, sources in spec.evaluation_data for source in sources for dep in source.deps()),
@@ -1167,7 +1169,9 @@ def skyrl_step(
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
+            checkpoint_root=prefix_join(
+                ctx.output_path if spec.retention.checkpoints_in_run_output else temporary_root, "checkpoints"
+            ),
             export_root=prefix_join(ctx.output_path, EXPORTS_SUBDIRECTORY),
             attempts_root=attempts_root,
             resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
@@ -1182,7 +1186,7 @@ def skyrl_step(
             else None
         )
         run_id = f"{step_name}-{spec.version}"
-        model = spec.model.resolve(ctx)
+        model = spec.model if isinstance(spec.model, ResolvedModelLocator) else spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
         evaluation_data = tuple(

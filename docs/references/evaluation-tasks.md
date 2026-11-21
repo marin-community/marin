@@ -252,7 +252,9 @@ does not divide by the total number of continuation tokens.
 Groups use the declared reduction independently. MRCR's headline is a row mean;
 its cell means are separate summaries, with no equal weighting of cells in the
 headline. NUPA uses ordinary means; task/bucket stratification constructs the
-population and supplies group labels. FinanceBench uses means. SimpleQA and
+population and supplies group labels. FinanceBench uses means. EconEvals uses a
+weighted mean of `win_rate` over judged games, so 0.5 is parity with the
+baseline: the paper's o3-mini, or o3 for the `-o3` variants. SimpleQA and
 SimpleQAMini use classification summaries.
 
 The shared evaluation CLI and checkpoint menus now select these curated corpora.
