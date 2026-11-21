@@ -368,14 +368,15 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
 
 
 # Review 2026-11-21: a gateway refusing a resumed read (HTTP 400), or answering it with all-zero probabilities or
-# without a level's probability, escaped its slot as a bug, cancelled the read of a sibling slot's fresh answer, failed
+# without a level's probability, or with one too large for a float, escaped its slot as a bug, cancelled the read of a sibling slot's fresh answer, failed
 # the child, and so made recovery buy that answer again: six solvers, not five.
 @pytest.mark.parametrize(
     "failure, reason",
     [
         ("refused", "Hold: Decision model refused the read with HTTP 400: bad state"),
-        ("zero", "Hold: Decision model answered unusably (ValueError: probabilities [0.0, 0.0, 0.0, 0.0, 0.0] are not"),
-        ("missing", "Hold: Decision model answered unusably (KeyError: '4')"),
+        ("zero", "Hold: Decision model answered unusably: ValueError: probabilities [0.0, 0.0, 0.0, 0.0, 0.0] are not"),
+        ("missing", "Hold: Decision model answered unusably: KeyError: '4'"),
+        ("overflow", "Hold: Decision model answered unusably: OverflowError"),
         ("off-scale", "returned 7.0"),
     ],
 )

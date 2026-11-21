@@ -10,9 +10,10 @@ published terminal and what it awaits; ``resume`` adds the published generation 
 and confirmation usage.
 
 The ``sibling-*`` modes run three validation slots two at a time. ``sibling-record`` checkpoints slots 0 and 1 in an
-outage. ``sibling-refused``, ``sibling-zero``, ``sibling-missing`` and ``sibling-off-scale`` resume unflagged: slot 1
-grades, slot 2 generates, and once slot 2's read is in flight the gateway refuses slot 0's read with HTTP 400, answers
-it with all-zero probabilities or without the top level's probability, or answers it off the scale.
+outage. ``sibling-refused``, ``sibling-zero``, ``sibling-missing``, ``sibling-overflow`` and ``sibling-off-scale``
+resume unflagged: slot 1 grades, slot 2 generates, and once slot 2's read is in flight the gateway refuses slot 0's read with
+HTTP 400, answers it with all-zero probabilities, without the top level's probability or with a probability too large
+for a float, or answers it off the scale.
 ``sibling-recover`` then resumes with ``--resume-held`` and a healthy decision model."""
 
 import asyncio
@@ -135,10 +136,12 @@ async def main(mode: str, directory: Path) -> None:
     time = VirtualTime()
     zero = {"answers": {"whole": {"probabilities": dict.fromkeys(map(str, range(5)), 0.0)}}}
     missing = {"answers": {"whole": {"probabilities": {"0": 0.5, "1": 0.5, "2": 0.0, "3": 0.0}}}}
+    huge = {"answers": {"whole": {"probabilities": {**dict.fromkeys(map(str, range(4)), 0), "4": 10**309}}}}
     failing = {
         "sibling-refused": httpx.Response(400, text="bad state"),
         "sibling-zero": httpx.Response(200, json=zero),
         "sibling-missing": httpx.Response(200, json=missing),
+        "sibling-overflow": httpx.Response(200, content=json.dumps(huge).encode()),
     }
     reader = Sibling(failing.get(mode)) if mode in (*failing, "sibling-off-scale") else None
     reader = reader or Answered(set(ANSWERS) if recording else set())

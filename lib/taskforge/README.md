@@ -193,8 +193,9 @@ row reaches the published journal with the next checkpoint and with the held pub
 abruptly between the read's failure and that publication, or at any time while the read is still waiting, the
 next launch generates the answer again. A gateway refusing the resumed read (an HTTP 4xx other than 404, 408 and
 429), or answering it with an HTTP 200 that is no distribution over the levels (a body that is not JSON, a missing
-field or level, another shape, a non-finite or negative probability, or all zero), is no outage: the reader raises a
-hold with a bounded diagnostic and records no read, the solver batch lets every admitted slot settle and starts no
+field or level, another shape, a boolean, a number too large for a float, a non-finite or negative probability, a
+non-finite sum, or all zero), is no outage: the reader raises a hold whose diagnostic (cause and body together) is
+capped at 300 characters and records no read, the solver batch lets every admitted slot settle and starts no
 further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
 stage. A refusal of a slot's first read still restarts the stage, as before.
 

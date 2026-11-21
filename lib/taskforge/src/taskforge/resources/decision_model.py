@@ -41,6 +41,8 @@ CLEF_MODEL, CLEF_QUESTION = "clef", "whole"
 DOWN_STATUSES = frozenset({404, 408, 429})
 """Besides any 5xx, the gateway statuses that mean Clef cannot answer now, such as its 503 ``clef_unavailable``."""
 HEALTH_TIMEOUT = 5.0
+DIAGNOSTIC_LIMIT = 300
+"""Characters of an unusable answer's diagnostic, its cause and the body together, that a hold keeps."""
 
 
 class DecisionModelHealth(StrEnum):
@@ -104,14 +106,18 @@ class ClefReader(DecisionModelReader):
             raise Hold(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")  # no outage
         try:  # any answer that is no distribution over the levels is one refusal: a retry would read it again
             probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
-            weights = [float(probabilities[str(level)]) for level in range(len(request.levels))]
-            if not all(map(math.isfinite, weights)) or min(weights) < 0 or not sum(weights) > 0:
+            values = [probabilities[str(level)] for level in range(len(request.levels))]
+            if any(isinstance(value, bool) for value in values):
+                raise TypeError("a boolean is no probability")
+            weights = [float(value) for value in values]
+            total = sum(weights)
+            if not all(map(math.isfinite, (*weights, total))) or min(weights) < 0 or not total > 0:
                 raise ValueError(f"probabilities {weights} are not a distribution")
-        except (ValueError, LookupError, TypeError) as error:  # malformed JSON, a missing field or level, another shape
-            raise Hold(
-                f"Decision model answered unusably ({describe_exception(error)}): {response.text[:300]}"
-            ) from None
-        return sum(level * weight for level, weight in enumerate(weights)) / sum(weights)
+        except (ValueError, LookupError, TypeError, ArithmeticError) as error:  # malformed JSON, a missing field or
+            # level, another shape, a number too large for a float
+            detail = f"{describe_exception(error)}; body {response.text}"
+            raise Hold(f"Decision model answered unusably: {detail[:DIAGNOSTIC_LIMIT]}") from None
+        return sum(level * weight for level, weight in enumerate(weights)) / total
 
     @override
     async def health(self) -> DecisionModelHealth:
