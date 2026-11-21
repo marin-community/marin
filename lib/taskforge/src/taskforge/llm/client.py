@@ -377,7 +377,8 @@ class ModelClient:
             duration, events = time.monotonic() - started, tuple(progress.events)
             call.attempts.append(Attempt(segment, outcome, limit or 0, started_wall, duration, status, detail, events))
             if result is not None:
-                served(result.finish_reason)  # any provider, the stock one or an injected one
+                # Any provider, the stock one or an injected one: a raw string becomes the member a replay decodes.
+                result = replace(result, finish_reason=served(FinishReason(result.finish_reason)))
                 call.generated += progress.generated()
                 # vLLM's GLM tool parser reports a reply cut off inside a tool call as ``tool_calls`` (measured live).
                 if limit is not None and result.finish_reason is FinishReason.TOOL_CALLS:
