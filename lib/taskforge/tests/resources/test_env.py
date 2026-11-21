@@ -6,14 +6,23 @@ import errno
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
-from lib.taskforge.tests.resources.iris_fakes import RPC_SITES, Fault, LocalController, local_iris_machine
+from lib.taskforge.tests.resources.iris_fakes import (
+    RPC_SITES,
+    Fault,
+    Injection,
+    LocalController,
+    injections,
+    local_iris_machine,
+)
+from rigging.timing import ExponentialBackoff
 from rolloutengine.test_support import machine_runtime
+from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
     Command,
@@ -377,54 +386,110 @@ def _counted(tmp_path: Path) -> RunCommand:
     return RunCommand(f"echo ran >> {tmp_path / 'counter'}; printf done; printf oops >&2", 5)
 
 
+def _injected(names: Sequence[str]) -> list[Injection]:
+    """Parse ``site:fault:ran`` or ``site:fault:unsent`` names into fixture injections."""
+    return [(site, Fault(fault), ran == "ran") for site, fault, ran in (name.split(":") for name in names)]
+
+
+def _appends(tmp_path: Path) -> int:
+    counter = tmp_path / "counter"
+    return len(counter.read_text().splitlines()) if counter.exists() else 0
+
+
+@pytest.fixture
+def fast_refusal_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
+
+
 # Review 2026-11-20: a lost Iris reply after the exec ran made the handler run the command again and succeed.
 # Follow-up 1: so did a capture or cleanup RPC that failed before it was sent, and a cleanup failure after a lost
 # reply replaced the primary failure. Follow-up 2: a lost exec stream whose diagnostic status lookup was refused
-# retried in place, and one with a healthy status escaped raw. Only a primary exec never sent may be retried.
+# retried in place, and one with a healthy status escaped raw. Follow-up 3: the WebSocket setup-failure text after
+# a lost upgrade reply, and a reply over the client's size limit, both reran an executed command in place.
+# Only a connection refused before sending, or the exec pool's admission refusal, may be retried.
 @pytest.mark.parametrize(
     "faults,outcome",
     [
-        (("command:lose-reply",), "restart"),
-        (("command:stream-lost",), "restart"),
-        (("command:stream-lost-raised",), "restart"),
-        (("command:stream-lost", "status:connect-refused"), "restart"),
-        (("command:stream-lost", "status:lose-reply"), "restart"),
-        (("stdout-size:lose-reply",), "restart"),
-        (("stdout-size:setup-failed",), "restart"),
-        (("cleanup:setup-failed",), "result"),
-        (("cleanup:lose-reply",), "result"),
-        (("command:lose-reply", "cleanup:connect-refused"), "restart"),
-        (("command:connect-refused",), "retried"),
-        (("command:setup-failed",), "retried"),
+        (("command:lose-reply:ran",), "restart"),
+        (("command:stream-lost:ran",), "restart"),
+        (("command:stream-lost-raised:ran",), "restart"),
+        (("command:setup-failed:ran",), "restart"),
+        (("command:reply-too-large:ran",), "restart"),
+        (("command:stream-lost:ran", "status:connect-refused:unsent"), "restart"),
+        (("command:stream-lost:ran", "status:lose-reply:unsent"), "restart"),
+        (("stdout-size:lose-reply:ran",), "restart"),
+        (("stdout-size:setup-failed:unsent",), "restart"),
+        (("cleanup:setup-failed:unsent",), "result"),
+        (("cleanup:lose-reply:ran",), "result"),
+        (("command:lose-reply:ran", "cleanup:connect-refused:unsent"), "restart"),
+        (("command:connect-refused:unsent",), "retried"),
+        (("command:admission-refused:unsent",), "admitted"),
     ],
 )
-async def test_command_runs_once_whichever_iris_rpc_fails(tmp_path: Path, faults: tuple[str, ...], outcome: str) -> None:
-    env = _iris_env(
-        tmp_path, LocalController([(site, Fault(fault)) for site, fault in (name.split(":") for name in faults)])
-    )
+async def test_command_runs_once_whichever_iris_rpc_fails(
+    tmp_path: Path, fast_refusal_backoff: None, faults: tuple[str, ...], outcome: str
+) -> None:
+    controller = LocalController(_injected(faults))
     events: list[Event[None]] = []
     if outcome == "restart":
         with pytest.raises(Restart, match="outcome unknown"):
-            await run_command(_counted(tmp_path), env, notify=events.append)
+            await run_command(_counted(tmp_path), _iris_env(tmp_path, controller), notify=events.append)
     else:
-        result = await run_command(_counted(tmp_path), env, notify=events.append)
+        result = await run_command(_counted(tmp_path), _iris_env(tmp_path, controller), notify=events.append)
         assert (result.exit_code, result.stdout, result.stderr) == (0, "done", "oops")
-    assert (tmp_path / "counter").read_text() == "ran\n"
+    assert _appends(tmp_path) == 1
+    # A refused connection is retried by Taskforge; an admission refusal by the machine's own send.
+    assert controller.sent("command") == 1 + (outcome in ("retried", "admitted"))
     assert sum(isinstance(event, Retrying) for event in events) == (outcome == "retried")
 
 
+# Review 2026-11-20 (follow-up 3): a missing `wc` or an OOM-killed sandbox during capture restarted on a fresh
+# sandbox, three appends before the hold; each held after one at 47749c2e21.
+@pytest.mark.parametrize("cause", [GuestHelperFailed, MachineResourceExhausted])
+async def test_capture_failure_with_a_known_cause_holds_after_one_run(tmp_path: Path, cause: type[Exception]) -> None:
+    if cause is GuestHelperFailed:
+        controller = LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; ")
+    else:
+        controller = LocalController([("stdout-size", Fault.OOM_KILLED, True)])
+    events: list[Event[None]] = []
+    with pytest.raises(Hold, match="wc: not found" if cause is GuestHelperFailed else "OOMKilled") as caught:
+        await run_command(_counted(tmp_path), _iris_env(tmp_path, controller), notify=events.append)
+    assert isinstance(caught.value.__cause__, cause)
+    assert _appends(tmp_path) == 1 and controller.sent("command") == 1
+    assert not events
+
+
+RETRIED_IN_PLACE = (Fault.CONNECT_REFUSED, Fault.ADMISSION_REFUSED)
 REPLY_LOSSES = (Fault.LOSE_REPLY, Fault.STREAM_LOST, Fault.STREAM_LOST_RAISED)
-# Every RPC ``IrisMachine.run`` makes once its command was dispatched, failed in every way: capture and cleanup
-# after a reply, or the status diagnostic and cleanup after each way the reply can be lost.
-AFTER_DISPATCH_RPCS = [
-    *(((site, fault),) for site in RPC_SITES if site not in ("command", "status") for fault in Fault),
-    *((("command", loss), (site, fault)) for loss in REPLY_LOSSES for site in ("status", "cleanup") for fault in Fault),
+# Every RPC ``IrisMachine.run`` makes, failed in every physically possible way, before and after the controller ran
+# the exec: the command's own dispatch, capture and cleanup after a reply, and the status diagnostic and cleanup
+# after each way the reply can be lost. ``NEVER_AFTER_RUN`` names the faults that cannot follow an executed exec.
+FAULT_PLANS = [
+    *((injection,) for fault in Fault for injection in injections("command", fault)),
+    *(
+        (injection,)
+        for site in RPC_SITES
+        if site not in ("command", "status")
+        for fault in Fault
+        for injection in injections(site, fault)
+    ),
+    *(
+        (("command", loss, True), injection)
+        for loss in REPLY_LOSSES
+        for site in ("status", "cleanup")
+        for fault in Fault
+        for injection in injections(site, fault)
+    ),
 ]
 
 
-@pytest.mark.parametrize("faults", AFTER_DISPATCH_RPCS, ids=lambda faults: "+".join(map(":".join, faults)))
+@pytest.mark.parametrize(
+    "faults",
+    FAULT_PLANS,
+    ids=lambda faults: "+".join(f"{site}:{fault}:{'ran' if ran else 'unsent'}" for site, fault, ran in faults),
+)
 async def test_no_failure_after_dispatch_reruns_the_command_or_escapes(
-    tmp_path: Path, faults: tuple[tuple[str, Fault], ...]
+    tmp_path: Path, fast_refusal_backoff: None, faults: tuple[Injection, ...]
 ) -> None:
     controller = LocalController(faults)
     events: list[Event[None]] = []
@@ -432,11 +497,17 @@ async def test_no_failure_after_dispatch_reruns_the_command_or_escapes(
         result = await run_command(_counted(tmp_path), _iris_env(tmp_path, controller), notify=events.append)
     except Restart as error:
         assert "outcome unknown" in str(error) or "environment terminated" in str(error)
+    except Hold as error:
+        assert isinstance(error.__cause__, MachineResourceExhausted)
     else:
         assert (result.exit_code, result.stdout, result.stderr) == (0, "done", "oops")
     assert not controller.faults, "every injected fault must fire"
-    assert (tmp_path / "counter").read_text() == "ran\n"
-    assert not any(isinstance(event, Retrying) for event in events)
+    (site, fault, ran), *_ = faults
+    retried = site == "command" and fault in RETRIED_IN_PLACE
+    # Only the two never-sent dispatch failures resend the command, and then it runs once.
+    assert controller.sent("command") == 1 + retried
+    assert _appends(tmp_path) == (0 if site == "command" and not ran and not retried else 1)
+    assert sum(isinstance(event, Retrying) for event in events) == (retried and fault is Fault.CONNECT_REFUSED)
 
 
 async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.MonkeyPatch) -> None:

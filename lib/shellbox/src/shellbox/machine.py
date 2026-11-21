@@ -248,7 +248,7 @@ class MachineCancelled(RuntimeError):
 
 
 class ExecSetupFailed(RuntimeError):
-    """The command transport failed before the command was sent, so a retry cannot run it twice."""
+    """A helper exec's transport reported a setup failure; Kubernetes also reports one after a lost upgrade reply."""
 
 
 class CommandOutputLost(RuntimeError):
