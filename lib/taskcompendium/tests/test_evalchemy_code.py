@@ -29,6 +29,7 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.assets import code_protocol
+from taskcompendium.importers.evalchemy.assets.code_protocol import test_program as build_test_program
 from taskcompendium.importers.evalchemy.code import convert_python, python_item, read_crux
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -218,3 +219,39 @@ def test_execution_program_fails_a_nonterminating_program_within_its_budget(tmp_
     reward, duration = _execute(tmp_path, program, 1)
     assert reward == 0.0
     assert duration < 10
+
+
+@pytest.mark.parametrize(
+    ("direction", "response"),
+    [
+        (
+            "output",
+            "assert f([('u', 1), ('s', 7), ('u', -5)]) == [('u', 1), ('s', 7), ('u', -5)]<|eot_id|>",
+        ),
+        (
+            "input",
+            "[ANSWER]assert f([('u', 1), ('s', 7), ('u', -5)]) == [('u', 1), ('s', 7), ('u', -5)][/ANSWER]",
+        ),
+    ],
+)
+def test_crux_program_accepts_nested_call_and_terminal_turn_token(direction, response):
+    problem = {
+        "code": "def f(value): return value",
+        "input": "[('u', 1), ('s', 7), ('u', -5)]",
+        "output": "[('u', 1), ('s', 7), ('u', -5)]",
+    }
+    program = build_test_program(problem, response, "cruxeval", direction)
+    exec(compile(program, "<candidate>", "exec"), {})
+
+
+def test_crux_program_accepts_untagged_answer_with_terminal_turn_token():
+    problem = {"code": "def f(value): return value", "input": "7", "output": "7"}
+    program = build_test_program(problem, "assert f(7) == 7<|eot_id|>", "cruxeval", "output")
+    exec(compile(program, "<candidate>", "exec"), {})
+
+
+def test_crux_program_rejects_untagged_fenced_answer():
+    problem = {"code": "def f(value): return value", "input": "7", "output": "7"}
+    program = build_test_program(problem, "```python\nassert f(7) == 7\n```", "cruxeval", "output")
+    with pytest.raises(SyntaxError):
+        compile(program, "<candidate>", "exec")

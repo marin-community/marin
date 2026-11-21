@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
@@ -14,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from jaxtyping import Float
 import ray
 from ray import ObjectRef
+from finestore.rl.run_records import CheckpointReference
 import torch
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
@@ -62,6 +64,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
 )
 from skyrl_train.objective.teacher import teacher_advantages
+from skyrl_train.config.placement_geometry import num_rollout_gpus
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
     boundary_route_metrics,
@@ -71,7 +74,7 @@ from skyrl_train.closure_training import (
 )
 from skyrl_train.ftpo import select_ftpo_candidates
 from skyrl_train.distillation_adapters import collate_student_selected_rollout
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import parse_trajectory_reward_shaping_config
+from skyrl_train.config.reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.distributed.dispatch import (
     ActorInfo,
     MeshRank,
@@ -95,33 +98,38 @@ from skyrl_train.group_admission import (
     assert_training_groups_eligible,
 )
 from marinskyrl.checkpoint_paths import (
-    BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
-    selected_export_step,
+    selected_export_checkpoint,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
-from skyrl_train.checkpoint_listing import extract_step_from_path
+from skyrl_train.checkpoint_listing import (
+    ROLLOUT_STATE_FILENAME,
+    best_checkpoint_step,
+    cleanup_old_checkpoints,
+    extract_step_from_path,
+    periodic_checkpoint_steps,
+)
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
-    cleanup_old_checkpoints,
     run_on_each_node,
     get_node_ids,
     validate_consistency_for_latest_checkpoint,
     ResumeMode,
     build_eval_dataloader,
 )
-from skyrl_train.utils.utils import (
-    configure_ray_worker_logging,
-    moe_router_replay_requested,
-    policy_per_gpu_bundles_enabled,
-    policy_force_cvd_mask_enabled,
-)
+from skyrl_train.utils.utils import configure_ray_worker_logging, policy_per_gpu_bundles_enabled, policy_force_cvd_mask_enabled
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
+from skyrl_train.metric_names import PROMPTS_DROPPED_TOO_LONG_METRIC
+from skyrl_train.evaluation_profiles import (
+    EvaluationProfile,
+    evaluation_profile_config,
+)
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
@@ -147,11 +155,8 @@ from marinskyrl.runtime_options import WeightSyncTransport
 from skyrl_train.utils.logging_utils import log_exception_as_text
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
 from skyrl_train.hf_export_schema import (
-    DEFAULT_HF_HUB_REVISION,
-    DEFAULT_HF_UPLOAD_MODE,
     HFExportRequest,
     HFExportStatus,
-    HFUploadMode,
     TRAINER_STATE_FILENAME,
 )
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
@@ -260,7 +265,11 @@ class RayPPOTrainer:
         eval_dataset: Optional[PromptDataset] = None,
         eval_trajectory_runner: TrajectoryRunner | None = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        additional_eval_datasets: Mapping[str, PromptDataset] | None = None,
     ):
+        self.additional_eval_dataloaders = {
+            name: build_eval_dataloader(cfg, dataset) for name, dataset in (additional_eval_datasets or {}).items()
+        }
         self.cfg = cfg
         self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
@@ -307,6 +316,7 @@ class RayPPOTrainer:
         self._restored_rollout_state: TrainingContextState | None = None
         self.global_step = 0
         self.loaded_checkpoint_path: str | None = None
+        self._resume_checkpoint: CheckpointReference | None = None
         self._last_saved_step: int | None = None
         self._last_evaluated_step: int | None = None
         self._inference_policy_step: int | None = None
@@ -421,25 +431,21 @@ class RayPPOTrainer:
     async def eval(
         self,
         *,
-        sampling_params: Dict[str, Any] | None = None,
-        n_samples_per_prompt: int | None = None,
+        profile: EvaluationProfile | None = None,
         val_set_name: str | None = None,
         evaluation_pool: EvaluationPool | None = None,
     ) -> Dict[str, float]:
-        """Evaluate the current policy with optional sampling overrides and a named output directory."""
-        overrides = {"generator": {}, "trainer": {}}
-        if n_samples_per_prompt is not None:
-            overrides["generator"]["eval_n_samples_per_prompt"] = n_samples_per_prompt
-        if val_set_name is not None:
-            overrides["trainer"]["export_path"] = join_resource_path(self.cfg.trainer.export_path, val_set_name)
-        cfg = OmegaConf.merge(self.cfg, overrides)
-        for key, value in (sampling_params or {}).items():
-            OmegaConf.update(cfg, f"generator.eval_sampling_params.{key}", value, force_add=True)
+        """Evaluate the current policy with a named dataset and sampling profile."""
+        profile = profile or EvaluationProfile()
+        cfg = evaluation_profile_config(self.cfg, profile, val_set_name)
+        dataloader = (
+            self.additional_eval_dataloaders[val_set_name] if profile.data_files is not None else self.eval_dataloader
+        )
         evaluator = evaluate_step_wise if cfg.trainer.step_wise_training else evaluate
         session = nullcontext(evaluation_pool) if evaluation_pool is not None else self._evaluation_session()
         async with session as pool:
             return await evaluator(
-                eval_dataloader=self.eval_dataloader,
+                eval_dataloader=dataloader,
                 trajectory_runner=self.eval_trajectory_runner,
                 cfg=cfg,
                 global_step=self.global_step,
@@ -447,6 +453,7 @@ class RayPPOTrainer:
                 trajectory_sink=self.eval_trajectory_sink,
                 val_set_name=val_set_name,
                 evaluation_pool=pool,
+                records_export_root=str(self.cfg.trainer.export_path),
             )
 
     # ------------------------------------------------------------------
@@ -731,7 +738,7 @@ class RayPPOTrainer:
         io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
         self._last_saved_step = snapshot.step
         cleanup_started = time.monotonic()
-        self._cleanup_old_checkpoints()
+        self._cleanup_old_checkpoints(snapshot.step)
         cleanup_duration = time.monotonic() - cleanup_started
         return time.monotonic() - snapshot.upload_started_at, cleanup_duration
 
@@ -1226,6 +1233,10 @@ class RayPPOTrainer:
                 self._restored_rollout_state = None
                 restored_data = True
 
+        self.tracker.start(
+            resumed_step=self.global_step if self.loaded_checkpoint_path is not None else None,
+            checkpoint=self._resume_checkpoint,
+        )
         await self._start_draft_trainer()
         await self._sync_policy_for_rollouts(reason="initial")
 
@@ -1293,6 +1304,7 @@ class RayPPOTrainer:
             if self._control.should_log:
                 log_payload = {
                     **self.all_metrics,
+                    PROMPTS_DROPPED_TOO_LONG_METRIC: self.train_dataset.prompts_dropped_too_long,
                     **{f"timing/{k}": v for k, v in self.all_timings.items()},
                     **get_system_memory_metrics(),
                 }
@@ -1382,7 +1394,6 @@ class RayPPOTrainer:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
-        generator = self.cfg.generator
         consumed = summary.work
         self.all_metrics.update(
             async_step_metrics(
@@ -1394,12 +1405,7 @@ class RayPPOTrainer:
                 consumed_loss_tokens=consumed.loss_tokens,
                 consumed_response_tokens=consumed.response_tokens,
                 policy_gpus=placement.policy_num_nodes * placement.policy_num_gpus_per_node,
-                inference_gpus=(
-                    generator.num_inference_engines
-                    * generator.inference_engine_tensor_parallel_size
-                    * generator.inference_engine_pipeline_parallel_size
-                    * generator.inference_engine_data_parallel_size
-                ),
+                inference_gpus=num_rollout_gpus(self.cfg),
             )
         )
 
@@ -1821,23 +1827,13 @@ class RayPPOTrainer:
         if cfg.trainer.strategy == "megatron" and cfg.trainer.policy.nccl_buffer_size_bytes is not None:
             policy_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.policy.nccl_buffer_size_bytes)}
         ref_actor_env_vars = None
-        if (
-            use_ref_model
-            and cfg.trainer.strategy == "megatron"
-            and cfg.trainer.ref.nccl_buffer_size_bytes is not None
-        ):
+        if use_ref_model and cfg.trainer.strategy == "megatron" and cfg.trainer.ref.nccl_buffer_size_bytes is not None:
             ref_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.ref.nccl_buffer_size_bytes)}
 
         if cfg.trainer.placement.colocate_all:
             num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
             num_ref_gpus = cfg.trainer.placement.ref_num_gpus_per_node * cfg.trainer.placement.ref_num_nodes
-            num_rollout_gpus = (
-                cfg.generator.num_inference_engines
-                * cfg.generator.inference_engine_tensor_parallel_size
-                * cfg.generator.inference_engine_pipeline_parallel_size
-                * cfg.generator.inference_engine_data_parallel_size
-            )
-            assert num_policy_gpus == num_rollout_gpus, (
+            assert num_policy_gpus == num_rollout_gpus(cfg), (
                 "num_policy_gpus and num_rollout_gpus must be the same when colocating all models"
             )
             pg = self.colocate_pg
@@ -2440,13 +2436,7 @@ class RayPPOTrainer:
         data["advantages"] = advantages
 
         data = data.to("cpu")
-        self.all_metrics.update(
-            advantage_metrics(
-                data,
-                algorithm=self.cfg.trainer.algorithm,
-                step_wise=self.cfg.trainer.step_wise_training,
-            )
-        )
+        self.all_metrics.update(advantage_metrics(data, step_wise=self.cfg.trainer.step_wise_training))
         avg_rewards = data.metadata["metrics"]["avg_final_rewards"]
         avg_response_length = data.metadata["avg_response_length"]
         logger.info(f"avg_final_rewards: {avg_rewards}, avg_response_length: {avg_response_length}")
@@ -2765,8 +2755,10 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        """Ensure a complete checkpoint is published for the current step."""
         await self._drain_checkpoint_upload()
+        if self._last_saved_step == self.global_step:
+            return
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
@@ -2808,7 +2800,7 @@ class RayPPOTrainer:
         )
 
         # Serialize rollout data state for publication with the trainer state.
-        rollout_state_path = os.path.join(global_step_folder, "data.pt")
+        rollout_state_path = os.path.join(global_step_folder, ROLLOUT_STATE_FILENAME)
         rollout_state_buffer = stdlib_io.BytesIO()
         torch.save(rollout_state, rollout_state_buffer)
 
@@ -2834,7 +2826,7 @@ class RayPPOTrainer:
             marker_path=latest_checkpoint_file,
         )
 
-    def _cleanup_old_checkpoints(self):
+    def _cleanup_old_checkpoints(self, step: int):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep
         # A negative limit keeps all checkpoints. The payload is a no-op at
         # this value, so skip the per-node Ray lease entirely. Leasing a fresh
@@ -2844,12 +2836,11 @@ class RayPPOTrainer:
             return
 
         protected_steps = protected_hf_export_steps(self.cfg.trainer.ckpt_path)
-        best_path = join_resource_path(self.cfg.trainer.ckpt_path, BEST_CHECKPOINT_FILENAME)
-        if io.exists(best_path):
-            with io.open_file(best_path, "r") as stream:
-                best = json.load(stream)
-            if best["model_format"] == "native":
-                protected_steps.add(best["step"])
+        if best_step := best_checkpoint_step(self.cfg.trainer.ckpt_path):
+            protected_steps.add(best_step)
+        protected_steps.update(
+            periodic_checkpoint_steps(self.cfg.trainer.ckpt_path, self.cfg.trainer.get("checkpoint_keep_every"), step)
+        )
 
         if not self._node_ids:
             self._node_ids = get_node_ids(self.policy_model, self.ref_model)
@@ -2940,7 +2931,7 @@ class RayPPOTrainer:
         # Define paths for different checkpoint components
         policy_ckpt_dir = os.path.join(checkpoint_path, POLICY_CHECKPOINT_SUBDIRECTORY)
         trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
-        rollout_state_path = os.path.join(checkpoint_path, "data.pt")
+        rollout_state_path = os.path.join(checkpoint_path, ROLLOUT_STATE_FILENAME)
 
         # Validate that required checkpoint files exist
         if not io.exists(trainer_state_path):
@@ -2950,6 +2941,12 @@ class RayPPOTrainer:
         with io.open_file(trainer_state_path, "rb") as f:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
+        saved_config = trainer_state["config"]
+        saved_attempt = saved_config.get("runtime", {}).get("attempt_id")
+        if saved_attempt is not None:
+            self._resume_checkpoint = CheckpointReference(
+                export_root=str(saved_config["trainer"]["export_path"]), attempt_id=str(saved_attempt), step=global_step
+            )
         self._ftpo_stopped = bool(trainer_state.get("ftpo_stopped", False))
         if not recovering_own_checkpoint and self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
             self.distillation_scored_tokens_total = 0
@@ -2998,6 +2995,8 @@ class RayPPOTrainer:
         logger.info("Successfully loaded policy checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
+        if recovering_own_checkpoint:
+            self._last_saved_step = global_step
         if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0
@@ -3009,9 +3008,12 @@ class RayPPOTrainer:
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:
-        export_step = selected_export_step(
+        selected = selected_export_checkpoint(
             self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
         )
+        if selected is None or selected.initializer_uri is not None:
+            return
+        export_step = selected.step
         checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
         trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
@@ -3020,22 +3022,11 @@ class RayPPOTrainer:
                 f"completed checkpoint marker is missing at {trainer_state_path}"
             )
 
-        placement = self.cfg.trainer.placement
-        model = self.cfg.trainer.policy.model
-        request = HFExportRequest(
+        request = HFExportRequest.from_trainer(
+            self.cfg.trainer,
             step=export_step,
-            checkpoint_base_path=self.cfg.trainer.ckpt_path,
-            checkpoint_path=checkpoint_path,
-            export_path=self.cfg.trainer.export_path,
-            model_path=model.path,
-            num_nodes=placement.policy_num_nodes,
-            gpus_per_node=placement.policy_num_gpus_per_node,
-            model_source_uri=model.source_uri,
-            model_source_identity=model.source_identity,
-            hf_hub_repo_id=self.cfg.trainer.get("hf_hub_repo_id"),
-            hf_hub_private=self.cfg.trainer.get("hf_hub_private", False),
-            hf_hub_revision=self.cfg.trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
-            hf_upload_mode=HFUploadMode(self.cfg.trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
+            checkpoint_root=self.cfg.trainer.ckpt_path,
+            export_root=self.cfg.trainer.export_path,
         )
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:

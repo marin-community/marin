@@ -37,7 +37,6 @@ PYTHON_IMPORTS = (
     "from typing import *",
     "from collections import *",
 )
-CRUX_CALL = re.compile(r"f\(.*?\)")
 CRUX_ANSWER_SPAN = re.compile(r"\[ANSWER\](.*?)\[/ANSWER\]", flags=re.DOTALL)
 FUNCTION_INSTRUCTION = (
     "Please continue to complete the function. You are not allowed to modify the given code and do the completion only. "
@@ -92,12 +91,17 @@ def generation_code(problem: Mapping[str, Any], response: str, suite: str) -> st
 
 def crux_answer(response: str, direction: str) -> str:
     """Extract the first answer block holding a CruxEval candidate."""
+    response = response.rstrip()
+    for marker in END_OF_TURN[:5]:
+        if response.endswith(marker):
+            response = response.removesuffix(marker).rstrip()
+            break
     spans = [span.strip() for span in CRUX_ANSWER_SPAN.findall(response)]
     answer = spans[0] if spans else response
     for span in spans:
         candidate = _crux_expression(span, direction)
         if direction == "input":
-            if CRUX_CALL.search(span) is not None:
+            if "f(" in candidate:
                 answer = span
                 break
         else:
@@ -111,14 +115,15 @@ def crux_answer(response: str, direction: str) -> str:
 
 
 def _crux_expression(answer: str, direction: str) -> str:
-    """Read an answer block by CRUXEval's harness rule."""
-    # Split at the first "==" as CRUXEval's harness does (inference/tasks/*_prediction.py): an input answer is the
-    # call before it, and an output answer is the text after it, including any later "==" where the harness stops.
-    if "==" in answer:
-        answer = answer.split("==", 1)[0 if direction == "input" else 1].strip()
-    if direction == "input" and "assert f" in answer:
-        answer = "f" + answer.split("assert f", 1)[1].strip()
-    return answer
+    """Read the call or literal on either side of the first assertion equality, as CRUXEval's harness does."""
+    call, separator, literal = answer.partition("==")
+    if direction == "input":
+        call = call.strip()
+        if "assert f" in call:
+            # CRUXEval's harness (inference/tasks/input_prediction.py) keeps the call that follows "assert f".
+            return "f" + call.split("assert f", 1)[1].strip()
+        return call
+    return (literal if separator else answer).strip()
 
 
 def test_program(problem: Mapping[str, Any], response: str, suite: str, direction: str = "") -> str:

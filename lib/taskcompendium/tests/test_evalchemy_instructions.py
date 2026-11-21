@@ -28,6 +28,63 @@ from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from taskcompendium.runtime.resources import resource_bytes
 
+EUROPEAN_CAPITALS_NORTH_OF_45 = (
+    "Reykjavik",
+    "Helsinki",
+    "Oslo",
+    "Tallinn",
+    "Stockholm",
+    "Riga",
+    "Moscow",
+    "Copenhagen",
+    "Vilnius",
+    "Minsk",
+    "Dublin",
+    "Berlin",
+    "Amsterdam",
+    "Warsaw",
+    "London",
+    "Brussels",
+    "Kyiv",
+    "Prague",
+    "Luxembourg",
+    "Paris",
+    "Vienna",
+    "Bratislava",
+    "Budapest",
+    "Vaduz",
+    "Chisinau",
+    "Bern",
+    "Ljubljana",
+    "Zagreb",
+)
+
+
+@pytest.mark.parametrize(
+    ("capitals", "expected"),
+    [
+        (EUROPEAN_CAPITALS_NORTH_OF_45, 1),
+        (tuple(capital for capital in EUROPEAN_CAPITALS_NORTH_OF_45 if capital != "Kyiv"), 0),
+        ((*EUROPEAN_CAPITALS_NORTH_OF_45[:15], "Kyiv", "Brussels", *EUROPEAN_CAPITALS_NORTH_OF_45[17:]), 0),
+        ((*EUROPEAN_CAPITALS_NORTH_OF_45[:16], "Rome", *EUROPEAN_CAPITALS_NORTH_OF_45[17:]), 0),
+    ],
+)
+def test_ifbench_european_capitals_requires_complete_latitude_order(capitals, expected):
+    pytest.importorskip("nltk")
+    pytest.importorskip("emoji")
+    pytest.importorskip("syllapy")
+    spec = InstructionSpec(
+        constraints=(Constraint("custom:european_capitals_sort", {}),),
+        profile=InstructionProfile.IFBENCH,
+        prompt="List European capitals north of 45 degrees in descending latitude order.",
+    )
+
+    result = grade_source_instructions(spec, ", ".join(capitals))
+
+    assert result.reward == expected
+    assert result.detail["metrics"]["strict_prompt_accuracy"] == expected
+    assert result.detail["metrics"]["loose_prompt_accuracy"] == expected
+
 
 @pytest.mark.parametrize("profile", list(InstructionProfile))
 def test_instruction_publication_preserves_prompt_channel_and_private_constraints(profile, tmp_path):

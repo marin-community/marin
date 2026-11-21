@@ -12,9 +12,10 @@ from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
+    task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
 from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
@@ -92,52 +93,6 @@ def run_on_each_node(node_ids: List[str], fn: Callable, *args, **kwargs):
         refs.append(node_task.remote(*args, **kwargs))
 
     return ray.get(refs)
-
-
-def cleanup_old_checkpoints(
-    checkpoint_base_path: str, max_checkpoints: int, protected_steps: set[int] | None = None
-) -> None:
-    """
-    Keep the most recent `max_checkpoints` and protected checkpoints; remove the rest.
-
-    Args:
-        checkpoint_base_path: Base path where checkpoints are stored
-        max_checkpoints: Maximum number of recent checkpoints to keep
-        protected_steps: Additional checkpoint steps retained until external work completes
-    """
-    if max_checkpoints < 0:
-        return
-
-    checkpoint_dirs = list_checkpoint_dirs(checkpoint_base_path)
-
-    if len(checkpoint_dirs) <= max_checkpoints:
-        return
-
-    # Sort by step number (extract number from global_step_N)
-    def extract_step(dirname):
-        try:
-            return int(dirname.split("global_step_")[1])
-        except (IndexError, ValueError):
-            return 0
-
-    checkpoint_dirs.sort(key=extract_step)
-
-    protected_steps = protected_steps or set()
-    recent = set(checkpoint_dirs[-max_checkpoints:]) if max_checkpoints > 0 else set()
-    dirs_to_remove = [
-        directory
-        for directory in checkpoint_dirs
-        if directory not in recent and extract_step(directory) not in protected_steps
-    ]
-
-    for dir_name in dirs_to_remove:
-        full_path = os.path.join(checkpoint_base_path, dir_name)
-        try:
-            io.remove(full_path)
-            step_num = extract_step(dir_name)
-            logger.info(f"Cleaned up old checkpoint: global_step_{step_num} at {full_path}")
-        except Exception as e:
-            logger.warning(f"Failed to remove old checkpoint {full_path}: {e}")
 
 
 def validate_consistency_for_latest_checkpoint(
@@ -219,6 +174,7 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
     stops = trajectory_batch.get("stop_reasons")
     metrics = {key.removeprefix("consumed/"): value for key, value in consumed_stop_metrics(stops, count).items()}
     if trajectory_batch.get("env_metrics") is not None:
+        metrics.update(task_timing_metrics(trajectory_batch["env_metrics"]))
         environments = set(trajectory_batch["env_classes"])
         for environment in environments:
             indices = [i for i, name in enumerate(trajectory_batch["env_classes"]) if name == environment]
@@ -311,6 +267,10 @@ def dump_per_dataset_eval_results(
     concat_all_envs: List[str],
     eval_metrics: Dict[str, float],
     uids: List[str],
+    *,
+    attempt_id: str,
+    step: int,
+    ordinals: List[int],
 ):
     """Dump evaluation results per dataset and overall aggregated results."""
 
@@ -337,6 +297,12 @@ def dump_per_dataset_eval_results(
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
+                    "attempt_id": attempt_id,
+                    "step": step,
+                    "ordinal": ordinals[i],
+                    "is_last_step": (trajectory_batch.get("is_last_step") or [True] * len(input_prompts))[i],
+                    "identity_disposition": "task_spec" if trajectory_batch.get("task_ids") else "preference_input",
+                    "task_id": (trajectory_batch.get("task_ids") or [None] * len(input_prompts))[i],
                     "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
                     "response_token_ids": trajectory_batch["response_ids"][i],
                     "input_prompt": input_prompts[i],

@@ -46,12 +46,8 @@ from skyrl_train.training_batch import (
 from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.utils.profiler import Profiler
 from skyrl_train.utils.progress import tqdm
-from skyrl_train.utils.utils import (
-    get_physical_gpu_id,
-    moe_router_replay_requested,
-    str_to_torch_dtype,
-    update_model_config,
-)
+from skyrl_train.utils.utils import get_physical_gpu_id, str_to_torch_dtype, update_model_config
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 from skyrl_train.weight_sync.expert_block.sender import ExpertBlockSender
 from skyrl_train.weight_sync.weight_extractor import validate_weight_sync_mode
 from skyrl_train.workers.grug_validation import GrugValidationSnapshot

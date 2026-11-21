@@ -9,7 +9,7 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.utils import validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
@@ -319,6 +319,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         (
             {
                 "trainer.policy.megatron_config.moe_router_replay": True,
+                "generator.engine_init_kwargs.enable_return_routed_experts": True,
                 "batch.rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4,
             },
             "g0.*route dtype without the model expert count",

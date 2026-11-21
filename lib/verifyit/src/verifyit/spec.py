@@ -160,6 +160,7 @@ class MathSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     profile: MathProfile = MathProfile.ANCHORED
     allow_additive_constant: bool = False
+    positive_symbols: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -315,7 +316,8 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
+RUBRIC_PAIRWISE = "pairwise"
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_PAIRWISE})
 
 
 class JudgeCompletionPolicy(StrEnum):
@@ -332,6 +334,12 @@ class JudgeSpec:
     question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside the
     answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
+
+    Rubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once
+    in each position, as Arena-Hard does. ``prompt_template`` places the two answers with
+    ``{answer_a}`` and ``{answer_b}``. The last match of the first ``verdict_patterns`` entry that
+    matches the reply names a verdict, ``label_scores`` gives assistant A's score for it, and
+    ``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).
     """
 
     references: tuple[str, ...] = ()
@@ -362,6 +370,8 @@ class JudgeSpec:
     label_scan: str = "literal"
     label_case: str = "sensitive"
     api: str = "chat_completions"
+    verdict_patterns: tuple[str, ...] = field(default=(), kw_only=True)
+    label_weights: dict[str, float] = field(default_factory=dict, kw_only=True)
 
 
 class JudgeRuntimeSource(StrEnum):

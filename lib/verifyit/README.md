@@ -38,7 +38,7 @@ process exit after a verdict has been written.
 | `pytest` | pytest JSON report with required and protected tests |
 | `junit` | JUnit XML report |
 | `gotest` | `go test -json` events |
-| `judge` | reference-answer or checklist rubric through a configured model endpoint |
+| `judge` | reference-answer, checklist, label or pairwise rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 `structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
@@ -64,6 +64,11 @@ Surrounding prose is ignored, including negation: `Definitely not 42` extracts `
 When a box is present, its entire content must be a numeric literal, optionally wrapped in math delimiters.
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
+
+Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
+explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
+whether the parsed scalar expressions simplify to exactly the same value under those assumptions.
+The default is an empty list, so unrestricted variables keep their usual comparison.
 
 Numeric `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
 are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
@@ -100,6 +105,14 @@ each request. Reference verdicts record `attempt_count` and `attempts` in `detai
 verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
 and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
 `infra_error`, with the available attempt diagnostics in `detail`.
+
+The `judge` pairwise rubric ports Arena-Hard's comparison with one baseline answer in `references`.
+It sends the judge two requests, with the baseline as assistant A and then as assistant B. Each
+reply's verdict is the last match of the first `verdict_patterns` entry that matches. `label_scores`
+gives assistant A's score for each verdict and `label_weights` counts a verdict as several games.
+The reward is the candidate's weighted mean score over both games. `detail.metrics.win_rate` repeats
+it and `detail.metric_weights.win_rate` holds the game count, so a weighted mean over rows equals
+Arena-Hard's mean over games. A reply without a declared verdict is an `infra_error`.
 
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;

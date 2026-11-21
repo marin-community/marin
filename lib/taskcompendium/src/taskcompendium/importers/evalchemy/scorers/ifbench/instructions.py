@@ -1731,7 +1731,7 @@ class EuropeanCapitalsSortChecker(Instruction):
 	def check_following(self, value):
 		"""Checks if the response lists the relevant capitals of Europe in correct order."""
 		order = ["Reykjavik", "Helsinki", "Oslo", "Tallinn", "Stockholm", "Riga", "Moscow", "Copenhagen", "Vilnius",
-				 "Minsk", "Dublin", "Berlin", "Amsterdam", "Warsaw", "London", "Brussels", "Prague", "Luxembourg",
+				 "Minsk", "Dublin", "Berlin", "Amsterdam", "Warsaw", "London", "Brussels", "Kyiv", "Prague", "Luxembourg",
 				 "Paris", "Vienna", "Bratislava", "Budapest", "Vaduz", "Chisinau", "Bern", "Ljubljana", "Zagreb"]
 
 		def normalize_text(text):
