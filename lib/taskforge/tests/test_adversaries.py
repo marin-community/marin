@@ -33,6 +33,7 @@ from taskforge.effects.log import EventLog, decode
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion
+from taskforge.model.llm import Role as Speaker
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     Accept,
@@ -158,6 +159,69 @@ async def test_a_report_whose_own_grades_show_no_defect_is_refused_back_to_the_a
     (result,) = (await validate(ctx, workpiece, setup, bundle)).result.adversary
     assert client.requests[1].conversation[-1].content.startswith("Invalid report: finding 0:")
     assert result.status is AdversaryStatus.FAILED and not result.findings
+
+
+class Scripted(InferenceClient):
+    """Each adversary serves ``turns[<its brief>]`` in order, one completion per assistant turn, then finishes."""
+
+    def __init__(self, turns: Mapping[str, Sequence[Completion]]) -> None:
+        self.turns = turns
+        self.requests: list[InferenceRequest] = []
+
+    @override
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("inference", "scripted", ReplayPolicy.CACHE)
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        self.requests.append(request)
+        brief = next(name for name, phrase in BRIEFED.items() if phrase in request.conversation[1].content)
+        turn = sum(message.role == Speaker.ASSISTANT for message in request.conversation)
+        served = self.turns[brief]
+        return served[turn] if turn < len(served) else call("finish", {"reason": "done"}, "finish")
+
+
+def graded_then_reported(brief: str, reply: str, report: dict[str, object]) -> Scripted:
+    """``brief`` grades ``reply`` itself, reports ``report``, and corrects a refused report with an empty one."""
+    turns = (
+        call("grade", {"reply": reply, "files": []}, "own-grade"),
+        call("report", {"findings": [report]}, "report"),
+        call("report", {"findings": []}, "correction"),
+    )
+    return Scripted({brief: turns})
+
+
+# Review 2026-11-21: a report whose grader_observed_* contradicted the adversary's own grade of that exact candidate
+# reproduced on the real grader in the claimed direction and turned a correct grader into Modify.
+@pytest.mark.parametrize(
+    ("brief", "reply", "report", "refused"),
+    [
+        ("false_accept", "12", finding(Defect.FALSE_ACCEPT, "12", 0.75, 0.0), True),  # graded 1.0 itself
+        ("false_reject", "9", finding(Defect.FALSE_REJECT, "9", 0.25, 1.0), True),  # graded 0.0 itself
+        ("false_reject", "12.0", finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0), False),  # a real false reject
+    ],
+    ids=["false accept of the right answer", "false reject of a wrong answer", "consistent false reject"],
+)
+async def test_a_report_must_copy_the_adversarys_own_grade_of_that_candidate(
+    workpiece: Workpiece, brief: str, reply: str, report: dict[str, object], refused: bool
+) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": [brief]}), {})
+    client = graded_then_reported(brief, reply, report)
+    log = EventLog()
+    ctx = Context(log=log)
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    fresh = [r.event for r in log.records if isinstance(r.event, GradeCandidate) and r.event.fresh_verifier]
+    answers = [request.conversation[-1].content for request in client.requests[2:]]
+    if refused:
+        (answer,) = answers  # the refusal, answered by the empty correction
+        assert answer.startswith("Invalid report: finding 0: your grade call on this exact candidate returned graded")
+        assert isinstance(decision, Accept) and not fresh
+        assert result.adversary[0].status is AdversaryStatus.REPORTED and not result.adversary[0].findings
+    else:
+        assert not answers  # the report ended the session
+        assert isinstance(decision, Modify) and [grade.candidate.reply for grade in fresh] == ["12.0"]
 
 
 def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:

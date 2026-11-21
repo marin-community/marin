@@ -194,8 +194,17 @@ async def run_adversary(
             workdir=workdir,
         ),
     )
-    visit = Visit(f"adversary:{name}", owner, machine, opening, files, {"report": ReportTool(spec.task)})
+    graded: dict[str, Observation] = {}
+
+    async def remember(event: Resolved[object]) -> None:
+        # Every grade of a candidate in this visit, the adversary's own and the replays alike.
+        if isinstance(event.request, GradeCandidate) and isinstance(event.value, GradeResult):
+            if (shown := observation(event.value, spec.task)) is not None:
+                graded[digest(event.request.candidate)] = shown
+
+    visit = Visit(f"adversary:{name}", owner, machine, opening, files, {"report": ReportTool(spec.task, graded)})
     async with sitting(ctx, config.adversary, visit, resources) as session:
+        ctx.observe(Resolved, remember)
         try:
             outcome = await session()
         except* OutputBudgetExhausted:

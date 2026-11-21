@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, override
 
@@ -13,6 +14,7 @@ from taskforge.harness.protocol import ReturnRequest, ToolResult
 from taskforge.harness.tools.base import ValidatedTool
 from taskforge.harness.tools.grade import CandidateArgs, read_candidate
 from taskforge.lowering import check_candidates
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate
 from taskforge.model.review import Defect, DefectClaim, Observation, ObservedStatus
 
@@ -67,6 +69,8 @@ def defect_claim(args: FindingArgs) -> DefectClaim:
 @dataclass(frozen=True, slots=True)
 class ReportTool(ValidatedTool[ReportArgs]):
     task: TaskSpec
+    # The visit's latest grade of each candidate by digest, filled by the stage; a report must copy it.
+    graded: Mapping[str, Observation]
     name = "report"
     description = (
         "Report demonstrated grading defects, or an empty findings list when no defect was demonstrated. "
@@ -95,6 +99,14 @@ class ReportTool(ValidatedTool[ReportArgs]):
                 except ValueError as error:
                     raise ValueError(f"finding {index}: {error}") from error
                 candidate = await read_candidate(ctx, finding.candidate, self.task)
+                own = self.graded.get(digest(candidate))
+                if own is not None and not own.matches(claim.observed):
+                    raise ValueError(
+                        f"finding {index}: your grade call on this exact candidate returned {own.status} with reward "
+                        f"{own.reward}, not {claim.observed.status} with reward {claim.observed.reward}. The "
+                        "grader_observed fields copy what the grader returned; the reward the candidate should get "
+                        "goes in deserved_reward"
+                    )
                 findings.append(AdversaryClaim(finding.why_the_grade_is_wrong, candidate, claim))
             check_candidates(self.task, tuple(finding.candidate for finding in findings))
         except (ValueError, HANDLED_FAILURE) as error:

@@ -162,6 +162,11 @@ class Observation:
         if (self.status is ObservedStatus.GRADED) != (self.reward is not None and math.isfinite(self.reward)):
             raise ValueError("an observed reward is given, and finite, exactly when the status is graded")
 
+    def matches(self, other: "Observation") -> bool:
+        if self.reward is None or other.reward is None:
+            return self.status is other.status
+        return abs(self.reward - other.reward) <= REWARD_TOLERANCE
+
 
 @dataclass(frozen=True, slots=True)
 class DefectClaim:
