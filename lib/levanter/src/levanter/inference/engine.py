@@ -48,6 +48,8 @@ from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_
 
 logger = logging.getLogger(__name__)
 
+TokenCallback = Callable[[int, int, list[int]], None]
+
 
 @dataclass(frozen=True)
 class InferenceEngineConfig:
@@ -1161,7 +1163,12 @@ class InferenceEngine:
         )
 
     def generate(
-        self, requests: Sequence[Request], step_callback=None, *, should_abort: Callable[[], bool] | None = None
+        self,
+        requests: Sequence[Request],
+        step_callback=None,
+        *,
+        should_abort: Callable[[], bool] | None = None,
+        on_tokens: TokenCallback | None = None,
     ) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
@@ -1173,8 +1180,9 @@ class InferenceEngine:
             step_callback: Optional callback function called at each decode iteration with iteration number
             should_abort: Host predicate checked before prefill and between decode rounds.
                 Unfinished choices return their exact partial output with an ABORT reason.
+            on_tokens: Called on the host with a request ID, choice index, and newly sampled tokens.
         """
-        return self._generate(requests, step_callback, should_abort=should_abort)
+        return self._generate(requests, step_callback, should_abort=should_abort, on_tokens=on_tokens)
 
     def _generate(
         self,
@@ -1183,6 +1191,7 @@ class InferenceEngine:
         *,
         should_abort: Callable[[], bool] | None = None,
         replay: _SnowballReplayCollector | None = None,
+        on_tokens: TokenCallback | None = None,
     ) -> GenerationResult:
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
@@ -1258,7 +1267,7 @@ class InferenceEngine:
         aborted = should_abort is not None and should_abort()
         if not aborted:
             decode_outputs = self._prefill_batch(requests, replay)
-            self._extract_outputs(decode_outputs, replay)
+            self._extract_outputs(decode_outputs, replay, on_tokens)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1279,7 +1288,7 @@ class InferenceEngine:
                 break
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending, replay)
-                self._extract_outputs(prefill_outputs, replay)
+                self._extract_outputs(prefill_outputs, replay, on_tokens)
                 pending = [request for request in pending if request.request_id not in self.sequences]
                 if prefill_outputs is not None:
                     continue
@@ -1305,7 +1314,7 @@ class InferenceEngine:
             self.gen_state = future_state
 
             extract_start = time.time()
-            new_tokens = self._extract_outputs(decode_outputs, replay)
+            new_tokens = self._extract_outputs(decode_outputs, replay, on_tokens)
             extract_time = time.time() - extract_start
 
             iter_end = time.time()
@@ -1419,6 +1428,7 @@ class InferenceEngine:
         self,
         pending_outputs: _DecodeOutputs | _SnowballDecodeOutputs | None,
         replay: _SnowballReplayCollector | None = None,
+        on_tokens: TokenCallback | None = None,
     ) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
@@ -1440,6 +1450,7 @@ class InferenceEngine:
 
         appended = 0
         unmapped = 0
+        new_tokens: dict[tuple[int, int], list[int]] = {}
         for i in range(n):
             local_slot = int(sids_arr[i])
             tok = int(toks_arr[i])
@@ -1454,6 +1465,12 @@ class InferenceEngine:
                 dr.logprobs.append(float(pending_outputs.logprobs.array[i]))
             dr.tokens_decoded += 1
             appended += 1
+            if on_tokens is not None:
+                new_tokens.setdefault((rid, cid), []).append(tok)
+
+        if on_tokens is not None:
+            for (rid, cid), tokens in new_tokens.items():
+                on_tokens(rid, cid, tokens)
 
         # Update done flags based on snapshot
         for local_slot, is_done in enumerate(fins):

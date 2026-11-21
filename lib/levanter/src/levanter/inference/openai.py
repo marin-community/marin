@@ -39,6 +39,9 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
+from tokenizers.decoders import DecodeStream
+from tokenizers.models import BPE
+from transformers import PreTrainedTokenizerFast
 from levanter.inference.engine import (
     InferenceEngine,
     InferenceEngineConfig,
@@ -94,6 +97,9 @@ class InferenceServerConfig:
     port: int = 0  # auto-assign port
 
 
+ChatTokenCallback = collections.abc.Callable[[int, list[int], int], None]
+
+
 @dataclass
 class InferenceRequest:
     """Internal request structure for the inference thread"""
@@ -109,6 +115,7 @@ class InferenceRequest:
     admission_epoch: int = 0
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
+    on_tokens: ChatTokenCallback | None = None
 
 
 @dataclass
@@ -277,6 +284,7 @@ class InferenceContext:
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        on_tokens: ChatTokenCallback | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -294,6 +302,7 @@ class InferenceContext:
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            on_tokens=on_tokens,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -439,9 +448,17 @@ class InferenceContext:
             )
             service_requests.append(service_req)
 
-        # Generate responses
+        def on_tokens(request_index: int, choice: int, tokens: list[int]) -> None:
+            callback = requests[request_index].on_tokens
+            if callback is not None:
+                callback(choice, tokens, self.model_version)
+
         start_time = time.time()
-        result = self.engine.generate(service_requests, should_abort=self.pause_event.is_set)
+        result = self.engine.generate(
+            service_requests,
+            should_abort=self.pause_event.is_set,
+            on_tokens=on_tokens if any(request.on_tokens is not None for request in requests) else None,
+        )
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
 
@@ -499,14 +516,19 @@ def _sse_event(payload: str) -> str:
     return f"data: {payload}\n\n"
 
 
-def _chat_completion_events(completion: ChatCompletion, *, include_usage: bool) -> collections.abc.Iterator[str]:
-    """Render a finished chat completion as an OpenAI server-sent-event stream.
-
-    The engine returns each generation whole, so a choice is delivered as one content chunk
-    followed by a chunk carrying its finish reason: the events are well-formed but not
-    incremental, and a client sees the whole completion in the first delta it receives.
-    """
+def _chat_completion_events(
+    completion: ChatCompletion,
+    *,
+    include_usage: bool,
+    emitted_text: dict[int, list[str]] | None = None,
+) -> collections.abc.Iterator[str]:
+    """Emit any remaining text, the finish reasons, and optional usage."""
     for choice in completion.choices:
+        prefix = "" if emitted_text is None else "".join(emitted_text.get(choice.index, ()))
+        text = choice.message.content or ""
+        if not text.startswith(prefix):
+            raise ValueError("Final completion does not match the streamed text")
+        suffix = text[len(prefix) :]
         logprobs = (
             ChunkChoiceLogprobs(content=choice.logprobs.content, refusal=choice.logprobs.refusal)
             if choice.logprobs is not None
@@ -514,7 +536,7 @@ def _chat_completion_events(completion: ChatCompletion, *, include_usage: bool) 
         )
         content = ChatCompletionChunkChoice(
             index=choice.index,
-            delta=ChoiceDelta(role="assistant", content=choice.message.content),
+            delta=ChoiceDelta(role=None if prefix else "assistant", content=suffix),
             logprobs=logprobs,
         )
         if choice.model_extra and "token_ids" in choice.model_extra:
@@ -522,7 +544,7 @@ def _chat_completion_events(completion: ChatCompletion, *, include_usage: bool) 
         finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta()).model_copy(
             update={"finish_reason": choice.finish_reason}
         )
-        for chunk_choice in (content, finish):
+        for chunk_choice in (content, finish) if suffix or not prefix else (finish,):
             chunk = ChatCompletionChunk(
                 id=completion.id,
                 object="chat.completion.chunk",
@@ -853,110 +875,216 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
-    """Create a chat completion using OpenAI API format."""
-    try:
-        # Convert Pydantic models to dicts for tokenizer
-        if request.top_logprobs:
-            raise HTTPException(status_code=400, detail="Generated top-logprob candidates are not supported")
-        prompt_tokens = request.exact_prompt_token_ids
-        if prompt_tokens is None:
-            prompt_tokens = _compute_tokens(
-                request.messages,
-                ctx.tokenizer,
-                request.tools,
-                request.chat_template_kwargs,
-                add_generation_prompt=request.add_generation_prompt,
-                continue_final_message=request.continue_final_message,
-            )
-        _validate_prompt_ids(ctx, prompt_tokens)
-
-        stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
-        if request.stop_token_ids:
-            stop_tokens = [*(stop_tokens or []), *([token] for token in request.stop_token_ids)]
-
-        # Create future and submit request
-        future: asyncio.Future = asyncio.Future()
-        ctx.submit_request(
-            prompt_tokens=prompt_tokens,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            stop_tokens=stop_tokens,
-            seed=request.seed,
-            future=future,
-            n_generations=request.n or 1,
+def _submit_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, *, on_tokens: ChatTokenCallback | None = None
+) -> tuple[list[int], asyncio.Future[list[InferenceResponse]]]:
+    if request.top_logprobs:
+        raise HTTPException(status_code=400, detail="Generated top-logprob candidates are not supported")
+    prompt_tokens = request.exact_prompt_token_ids
+    if prompt_tokens is None:
+        prompt_tokens = _compute_tokens(
+            request.messages,
+            ctx.tokenizer,
+            request.tools,
+            request.chat_template_kwargs,
+            add_generation_prompt=request.add_generation_prompt,
+            continue_final_message=request.continue_final_message,
         )
+    _validate_prompt_ids(ctx, prompt_tokens)
 
-        # Wait for result
-        results: List[InferenceResponse] = await future
+    stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+    if request.stop_token_ids:
+        stop_tokens = [*(stop_tokens or []), *([token] for token in request.stop_token_ids)]
 
-        # Format response
-        choices = []
-        total_completion_tokens = 0
+    future: asyncio.Future[list[InferenceResponse]] = asyncio.get_running_loop().create_future()
+    ctx.submit_request(
+        prompt_tokens=prompt_tokens,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+        top_p=request.top_p,
+        stop_tokens=stop_tokens,
+        seed=request.seed,
+        future=future,
+        n_generations=request.n or 1,
+        on_tokens=on_tokens,
+    )
+    return prompt_tokens, future
 
-        for i, generation in enumerate(results):
-            # Format logprobs if available
-            logprobs = None
-            if request.logprobs:
-                generated_tokens = generation.tokens
 
-                # Create content logprobs in OpenAI format
-                content_logprobs = []
-                assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
-                for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
-                    token_str = (
-                        f"{TOKEN_ID_PREFIX}{token_id}"
-                        if request.return_tokens_as_token_ids
-                        else ctx.tokenizer.convert_ids_to_tokens(token_id)
-                    )
-                    content_logprobs.append(
-                        ChatCompletionTokenLogprob(
-                            token=token_str,
-                            logprob=float(lp),
-                            bytes=list(token_str.encode("utf-8")),
-                            top_logprobs=[],
-                        )
-                    )
+def _format_chat_completion(
+    ctx: InferenceContext,
+    request: ChatCompletionRequest,
+    prompt_tokens: list[int],
+    results: list[InferenceResponse],
+    *,
+    completion_id: str,
+    created: int,
+) -> ChatCompletion:
+    # Format response
+    choices = []
+    total_completion_tokens = 0
 
-                logprobs = ChoiceLogprobs(content=content_logprobs)
+    for i, generation in enumerate(results):
+        # Format logprobs if available
+        logprobs = None
+        if request.logprobs:
+            generated_tokens = generation.tokens
 
-            choices.append(
-                ChatCompletionChoice(
-                    index=i,
-                    message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
-                    logprobs=logprobs,
+            # Create content logprobs in OpenAI format
+            content_logprobs = []
+            assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
+            for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
+                token_str = (
+                    f"{TOKEN_ID_PREFIX}{token_id}"
+                    if request.return_tokens_as_token_ids
+                    else ctx.tokenizer.convert_ids_to_tokens(token_id)
                 )
+                content_logprobs.append(
+                    ChatCompletionTokenLogprob(
+                        token=token_str,
+                        logprob=float(lp),
+                        bytes=list(token_str.encode("utf-8")),
+                        top_logprobs=[],
+                    )
+                )
+
+            logprobs = ChoiceLogprobs(content=content_logprobs)
+
+        choices.append(
+            ChatCompletionChoice(
+                index=i,
+                message=ChatCompletionMessage(role="assistant", content=generation.text),
+                finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
+                logprobs=logprobs,
             )
-            if generation.finish_reason == FinishReason.ABORT:
-                choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
-            if request.return_token_ids:
-                choices[-1] = choices[-1].model_copy(update={"token_ids": generation.tokens})
-            total_completion_tokens += generation.completion_tokens
-
-        response = ChatCompletion(
-            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            object="chat.completion",
-            created=int(time.time()),
-            model=request.model,
-            choices=choices,
-            usage=CompletionUsage(
-                prompt_tokens=len(prompt_tokens),
-                completion_tokens=total_completion_tokens,
-                total_tokens=len(prompt_tokens) + total_completion_tokens,
-            ),
         )
-        response = response.model_copy(update={"model_version": results[0].model_version})
+        if generation.finish_reason == FinishReason.ABORT:
+            choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
         if request.return_token_ids:
-            response = response.model_copy(update={"prompt_token_ids": prompt_tokens})
-        return response
+            choices[-1] = choices[-1].model_copy(update={"token_ids": generation.tokens})
+        total_completion_tokens += generation.completion_tokens
 
+    response = ChatCompletion(
+        id=completion_id,
+        object="chat.completion",
+        created=created,
+        model=request.model,
+        choices=choices,
+        usage=CompletionUsage(
+            prompt_tokens=len(prompt_tokens),
+            completion_tokens=total_completion_tokens,
+            total_tokens=len(prompt_tokens) + total_completion_tokens,
+        ),
+    )
+    response = response.model_copy(update={"model_version": results[0].model_version})
+    if request.return_token_ids:
+        response = response.model_copy(update={"prompt_token_ids": prompt_tokens})
+    return response
+
+
+async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
+    try:
+        prompt_tokens, future = _submit_chat_completion(ctx, request)
+        return _format_chat_completion(
+            ctx,
+            request,
+            prompt_tokens,
+            await future,
+            completion_id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            created=int(time.time()),
+        )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error in chat completion: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.exception("Error in chat completion")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _chat_stream_tokenizer(tokenizer: MarinTokenizer) -> PreTrainedTokenizerFast | None:
+    if not isinstance(tokenizer, PreTrainedTokenizerFast):
+        return None
+    if not tokenizer.clean_up_tokenization_spaces:
+        return tokenizer
+    # Transformers skips the whitespace cleanup for BPE unless explicitly enabled.
+    if isinstance(tokenizer.backend_tokenizer.model, BPE) and not getattr(
+        tokenizer, "clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output", True
+    ):
+        return tokenizer
+    return None
+
+
+async def _stream_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerFast, *, include_usage: bool
+) -> StreamingResponse:
+    loop = asyncio.get_running_loop()
+    updates: asyncio.Queue[tuple[int, list[int], int] | None] = asyncio.Queue()
+    closed = threading.Event()
+
+    def on_tokens(choice: int, tokens: list[int], model_version: int) -> None:
+        if not closed.is_set():
+            loop.call_soon_threadsafe(updates.put_nowait, (choice, tokens, model_version))
+
+    def on_done(future: asyncio.Future[list[InferenceResponse]]) -> None:
+        if not future.cancelled():
+            future.exception()  # The client may have disconnected before awaiting the result.
+        if not closed.is_set():
+            updates.put_nowait(None)
+
+    prompt_tokens, future = _submit_chat_completion(ctx, request, on_tokens=on_tokens)
+    future.add_done_callback(on_done)
+    header = ChatCompletionChunk(
+        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        choices=[],
+        created=int(time.time()),
+        model=request.model,
+        object="chat.completion.chunk",
+    )
+    try:
+        first = await updates.get()
+        if first is None:
+            future.result()  # Preserve the HTTP error status if generation failed before any tokens.
+    except asyncio.CancelledError:
+        closed.set()
+        raise
+    except Exception as exc:
+        closed.set()
+        logger.exception("Error before chat streaming started")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def events() -> collections.abc.AsyncIterator[str]:
+        decoders: dict[int, DecodeStream] = {}
+        emitted: dict[int, list[str]] = {}
+        update = first
+        try:
+            while update is not None:
+                choice, tokens, version = update
+                if choice not in decoders:
+                    decoders[choice] = DecodeStream(skip_special_tokens=True)
+                text = decoders[choice].step(tokenizer.backend_tokenizer, tokens)
+                if text:
+                    pieces = emitted.setdefault(choice, [])
+                    delta = ChoiceDelta(role=None if pieces else "assistant", content=text)
+                    pieces.append(text)
+                    chunk = header.model_copy(
+                        update={
+                            "choices": [ChatCompletionChunkChoice(index=choice, delta=delta)],
+                            "model_version": version,
+                        }
+                    )
+                    yield _sse_event(chunk.model_dump_json())
+                update = await updates.get()
+            completion = _format_chat_completion(
+                ctx, request, prompt_tokens, future.result(), completion_id=header.id, created=header.created
+            )
+            for event in _chat_completion_events(completion, include_usage=include_usage, emitted_text=emitted):
+                yield event
+        except Exception:
+            logger.exception("Error during chat streaming")
+            yield _sse_event('{"error":{"message":"Chat generation failed","type":"server_error"}}')
+        finally:
+            closed.set()
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 class InferenceServer:
@@ -1022,10 +1150,16 @@ class InferenceServer:
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
         async def create_chat_completion(request: ChatCompletionRequest):
+            include_usage = (request.stream_options or {}).get("include_usage") is True
+            if request.stream and not request.logprobs and not request.return_token_ids:
+                tokenizer = _chat_stream_tokenizer(inference_context.tokenizer)
+                if tokenizer is not None:
+                    return await _stream_chat_completion(
+                        inference_context, request, tokenizer, include_usage=include_usage
+                    )
             completion = await _create_chat_completion(inference_context, request)
             if not request.stream:
                 return completion
-            include_usage = (request.stream_options or {}).get("include_usage") is True
             return StreamingResponse(
                 _chat_completion_events(completion, include_usage=include_usage), media_type="text/event-stream"
             )

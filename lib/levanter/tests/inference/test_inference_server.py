@@ -12,9 +12,11 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from levanter.inference.jit_scheduler import FinishReason
+from levanter.inference.utils import INVALID
 from levanter.layers.kv_cache import KvPageCache
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
@@ -25,6 +27,10 @@ try:
     from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+    from transformers import PreTrainedTokenizerFast
 
     from levanter.inference.engine import (
         InferenceEngine,
@@ -881,19 +887,95 @@ async def test_pause_invalidates_requests_collected_before_the_barrier():
 class _BlockingTokenModel(_TokenSensitiveCompletionModel):
     entered: threading.Event = eqx.field(static=True)
     release: threading.Event = eqx.field(static=True)
+    block_position: int = eqx.field(static=True)
 
-    def __init__(self, entered, release):
+    def __init__(self, entered, release, block_position=0):
         super().__init__()
         self.entered = entered
         self.release = release
+        self.block_position = block_position
 
-    def _wait_for_release(self):
+    def _wait_for_release(self, positions):
+        positions = np.asarray(positions)
+        if not ((positions >= self.block_position) & (positions != INVALID)).any():
+            return
         self.entered.set()
         assert self.release.wait(30), "test did not release the in-flight model call"
 
     def decode(self, input_ids, cache, batch_info, pos_ids):
-        jax.debug.callback(self._wait_for_release)
+        jax.debug.callback(self._wait_for_release, pos_ids.array)
         return super().decode(input_ids, cache, batch_info, pos_ids)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_delivers_content_before_decode_completes():
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    model = _BlockingTokenModel(entered, release, block_position=2)
+    backend = Tokenizer(WordLevel({"A": 0, "B": 1, "X": 2, "Y": 3}))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        chat_template="{{ messages[0].content }}",
+        clean_up_tokenization_spaces=False,
+    )
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, tokenizer)
+
+    body = json.dumps(
+        {
+            "model": "gpt2",
+            "messages": [{"role": "user", "content": "A B"}],
+            "max_completion_tokens": 2,
+            "temperature": 0,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+    ).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"spec_version": "2.4"},
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"",
+    }
+    first_content = asyncio.get_running_loop().create_future()
+    payloads = []
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            assert message["status"] == 200
+        elif chunk := message.get("body"):
+            payload = chunk.decode().removeprefix("data: ").rstrip("\n")
+            payloads.append(payload)
+            if payload != "[DONE]" and not first_content.done():
+                choices = json.loads(payload)["choices"]
+                if choices and (content := choices[0]["delta"]["content"]):
+                    first_content.set_result(content)
+
+    stream = asyncio.create_task(server.app(scope, receive, send))
+    try:
+        assert await asyncio.wait_for(first_content, timeout=20) == "Y"
+        assert await asyncio.to_thread(entered.wait, 10)
+        assert not stream.done()
+    finally:
+        release.set()
+        try:
+            await asyncio.wait_for(stream, timeout=20)
+        finally:
+            server.shutdown()
+
+    assert payloads[-1] == "[DONE]"
+    chunks = [json.loads(payload) for payload in payloads[:-1]]
+    assert len({chunk["id"] for chunk in chunks}) == 1
+    choices = [choice for chunk in chunks for choice in chunk["choices"]]
+    assert "".join(choice["delta"]["content"] or "" for choice in choices) == "Y B"
+    assert choices[-1]["finish_reason"] == "length"
+    assert chunks[-1]["usage"]["completion_tokens"] == 2
 
 
 @pytest.mark.parametrize("stream", [False, True])
