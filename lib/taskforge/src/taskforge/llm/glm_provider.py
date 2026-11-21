@@ -4,9 +4,9 @@
 """The library's default ``Provider``: the GLM router's chat completions through the ``openai`` SDK.
 
 Each ``stream`` call is one streamed request with the SDK's retries off; ``ModelClient`` owns every retry. A stream
-is abandoned after ``stall_timeout`` seconds without progress (``client.progressed``), never on wall-clock time. A
-request not answered (streaming headers, or a whole error body) within ``stall_timeout`` seconds of sending, or that
-finds no free pooled connection within ``POOL_TIMEOUT``, is a transport failure. A 400 naming the context
+is abandoned after ``stall_timeout`` seconds without progress (``client.progressed``), never on wall-clock time, and a
+request that finds no free pooled connection within ``POOL_TIMEOUT`` is a transport failure. An error answer whose
+whole body has not arrived within ``stall_timeout`` seconds of its headers is a stall. A 400 naming the context
 window (vLLM's and sglang's wordings, or the code ``context_length_exceeded``) is a context overflow; a 404 naming the
 route is a missing route; every 5xx is an outage.
 
@@ -223,7 +223,15 @@ class GlmProvider(Provider):
     def _open_pool(self) -> _LoopPool:
         limit = self.max_connections
         limits = httpx.Limits(max_connections=limit, max_keepalive_connections=limit, keepalive_expiry=KEEPALIVE_EXPIRY)
-        return _LoopPool(httpx.AsyncClient(limits=limits))
+        return _LoopPool(httpx.AsyncClient(limits=limits, event_hooks={"response": [self._read_error_body]}))
+
+    async def _read_error_body(self, response: httpx.Response) -> None:
+        """Read an error answer's whole body within ``stall_timeout``; the SDK would wait between bytes only."""
+        try:
+            if not response.is_success:  # a streamed answer is read, and its stalls timed, by ``_stream``
+                await asyncio.wait_for(response.aread(), self.stall_timeout)
+        except TimeoutError as error:
+            raise httpx.ReadTimeout(f"error body unread in {self.stall_timeout}s", request=response.request) from error
 
     def _pool(self) -> _LoopPool:
         """The running event loop's pool, opened on first use; closed loops' pools are dropped."""
@@ -300,14 +308,9 @@ class GlmProvider(Provider):
             async with self._leased() as (sdk, _, _):
                 model, messages = body["model"], body["messages"]
                 extra = {key: value for key, value in body.items() if key not in ("model", "messages")}
-                request = sdk.chat.completions.create(
+                chunks = await sdk.chat.completions.create(
                     model=model, messages=messages, stream=True, stream_options={"include_usage": True}, extra_body=extra
                 )
-                try:
-                    # ``create`` reads a whole error body, which a trickle of bytes keeps inside httpx's timeouts.
-                    chunks = await asyncio.wait_for(request, stall_timeout)
-                except TimeoutError as error:
-                    raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"no answer in {stall_timeout}s") from error
                 assert isinstance(chunks, openai.AsyncStream)
                 progress.admit()
                 async with chunks:
@@ -379,7 +382,7 @@ class GlmProvider(Provider):
         """Whether ``/health`` answers 200 with zero workers in this endpoint's pool.
 
         False, unknown, for an unresolvable endpoint, an unreachable ``/health``, a read longer than ``HEALTH_TIMEOUT``,
-        a non-200 answer or a report that is not JSON or lacks the pool.
+        a non-200 answer or a report that is not JSON or lacks an integer count (JSON false is not zero) for the pool.
         """
         try:
             async with asyncio.timeout(HEALTH_TIMEOUT), self._leased() as (_, http, endpoint):
@@ -393,6 +396,6 @@ class GlmProvider(Provider):
         if response.status_code != 200:
             return False
         try:
-            return response.json()["workers"][str(endpoint.pool)] == 0
+            return type(workers := response.json()["workers"][str(endpoint.pool)]) is int and workers == 0
         except (ValueError, KeyError, TypeError):
             return False

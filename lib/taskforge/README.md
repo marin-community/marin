@@ -245,9 +245,9 @@ relay, the transport or local admission may have caused is an outage, and no fai
 | Failure | Evidence checked | What happens |
 |---|---|---|
 | 400 context overflow (recognised wording or `context_length_exceeded`) | the rejection itself | `ContextExhausted`: a solver trial ends at the generation limit (counted, never solved); the author and adversary get `ContextExceeded` |
-| solver generation past `solver.turn_timeout` less 60 s | the same stream still generating: a second generated payload at least `CONFIRMATION_INTERVAL` (1 s) after its first one past the bound, with no finish, abort, cut or stall in between; counted from each attempt's first token; then `/health` (one read bounded by `provider.unavailable_wait`) | the trial ends at the generation limit, unless `/health` reports the pool empty, which is an outage; a healthy or unknown answer leaves the limit standing |
+| solver generation past `solver.turn_timeout` less 60 s | the same stream still generating: a second generated payload at least `CONFIRMATION_INTERVAL` (1 s) after its first one past the bound, with no finish, abort, cut or stall in between; counted from each attempt's first token; one `/health` read started at that first payload past the bound | the trial ends at the generation limit, unless that read has already reported the pool empty (an integer zero), which is an outage; a healthy, failed or still pending read leaves the limit standing and is cancelled, never waited for |
 | other rejection (401, unknown 400 wording, ...) | the status | `ModelRequestRejected`, never retried; a solver rollout holds at once with the status and reason |
-| 408, 429, any 5xx, 404 `no route`, no endpoint, registry lookup failure, refused connection, full local pool, no answer (streaming headers or a whole error body) within `provider.stall_timeout` of sending, stall (also inside a tool call), cut or aborted stream (also past the bound) | `/health` while waiting | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
+| 408, 429, any 5xx, 404 `no route`, no endpoint, registry lookup failure, refused connection, full local pool, an error body not whole within `provider.stall_timeout` of its headers, stall (also inside a tool call), cut or aborted stream (also past the bound) | `/health` while waiting | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
 
 Generated text is nonempty content, reasoning, a function name or an argument fragment; a role, an index or
 an empty string is not (`progressed`), and the bound, stall detection and window renewal all use that one
@@ -257,7 +257,7 @@ that outlasts `HEALTH_TIMEOUT` or the remaining window, counts as unknown availa
 
 Known limit: the generation bound is measured where the client reads the stream. Output still queued on the path
 when its worker exited can keep arriving for longer than `CONFIRMATION_INTERVAL` and is then charged as a failed
-trial, unless `/health` reports the pool empty. A wall-clock bound also makes the failed-trial rate depend on fleet
+trial, unless `/health` has reported the pool empty by confirmation. A wall-clock bound also makes the failed-trial rate depend on fleet
 decode speed; a server-enforced output-token limit (`finish_reason=length`) would not.
 
 The defaults are `GlmProvider` (the GLM router, `llm/glm_provider.py`) for every role and the

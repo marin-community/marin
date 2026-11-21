@@ -22,6 +22,8 @@ class ScriptedStream:
     send_done: bool
     stall: threading.Event | None
     interval: float
+    head_interval: float = 0.0
+    """The pause, in seconds, before each line of the response head (status line, header, blank line)."""
 
 
 @dataclass
@@ -60,11 +62,13 @@ class FakeGlm:
         stall_after_first: bool = False,
         raw_payload: str | None = None,
         interval: float = 0.0,
+        head_interval: float = 0.0,
     ) -> None:
         """Queue one streamed reply; ``tool_calls`` holds ``(name, arguments)`` pairs.
 
         ``raw_payload`` is sent verbatim as the second ``data:`` line, for malformed-stream tests.
-        ``interval`` is the pause, in seconds, before each event after the first.
+        ``interval`` is the pause, in seconds, before each event after the first; ``head_interval`` is
+        ``ScriptedStream.head_interval``.
         """
         deltas: list[dict] = [{"role": "assistant", "content": ""}]
         deltas += [{"reasoning": part} for part in _halves(reasoning)]
@@ -93,7 +97,7 @@ class FakeGlm:
         if raw_payload is not None:
             payloads.insert(1, raw_payload)
         stall = self.released if stall_after_first else None
-        self.responses.append(ScriptedStream(payloads, send_done, stall, interval))
+        self.responses.append(ScriptedStream(payloads, send_done, stall, interval, head_interval))
 
     def status(self, code: int, body: str, headers: dict[str, str] | None = None, trickle: int = 0) -> None:
         self.responses.append(ScriptedStatus(code, body, headers or {}, trickle))
@@ -141,9 +145,9 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
             if isinstance(response, ScriptedStatus):
                 self._send(response.code, response.body, response.headers, response.trickle)
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
+            for line in (f"{self.protocol_version} 200 OK", "Content-Type: text/event-stream", ""):
+                time.sleep(response.head_interval)
+                self.wfile.write(f"{line}\r\n".encode())
             for index, event in enumerate(response.events):
                 if index:
                     time.sleep(response.interval)

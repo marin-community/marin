@@ -828,8 +828,8 @@ class Fleet(Provider):
     """A solver fleet on a virtual clock. While it is up, requests get ``acts`` in order; ``lose`` takes every worker
     away, after which each request is refused with a 503 and ``/health`` reports the pool empty."""
 
-    def __init__(self, time: LoopTime, acts: Sequence[Act]) -> None:
-        self.time, self.acts, self.alive = time, list(acts), True
+    def __init__(self, time: LoopTime, acts: Sequence[Act], health_delay: float = 0.0) -> None:
+        self.time, self.acts, self.alive, self.health_delay = time, list(acts), True, health_delay
         self.requests = 0
         self.served = asyncio.Event()
 
@@ -847,6 +847,9 @@ class Fleet(Provider):
 
     @override
     async def no_workers(self) -> bool:
+        """Answers after ``health_delay`` seconds, which pass on the shared clock one second at a time."""
+        for _ in range(int(self.health_delay)):
+            await self.time.sleep(1.0)
         return not self.alive
 
     async def answer(self, _progress: Progress) -> Segment:
@@ -1000,11 +1003,16 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
 
 # Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged while the pool reports healthy
 # (a known limit of the client-side bound); only a pool reported empty vetoes it (the empty-pool fault above).
-@pytest.mark.parametrize("tail", [False, True], ids=["live", "tail-on-a-healthy-pool"])
+# Follow-up 3: a /health read slower than the rest of the turn, made after confirmation, turned the limit into a Restart.
+@pytest.mark.parametrize(
+    ("tail", "health_delay"),
+    [(False, 0.0), (True, 0.0), (False, 100.0)],
+    ids=["live", "tail-on-a-healthy-pool", "slow-health"],
+)
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
-    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: bool
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: bool, health_delay: float
 ) -> None:
-    fleet = Fleet(LoopTime(), ())
+    fleet = Fleet(LoopTime(), (), health_delay)
     past = partial(fleet.tails_past_the_bound, pool_empties=False) if tail else fleet.generates_past_the_bound
     fleet.acts = [past, fleet.answer]
     serve(monkeypatch, fleet_resources(driver.run_policy(driver_args.policy), fleet))

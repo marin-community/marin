@@ -550,6 +550,50 @@ def test_a_call_waiting_for_a_local_connection_is_unavailable_not_a_generation(
     assert set(outcomes(error)) == {AttemptOutcome.TRANSPORT_ERROR}
 
 
+SHORT_WINDOW = RetryPolicy(1.0, 0.001, 0.001, 1.0)
+
+
+# Review 2026-11-21 follow-up 3: under a 300 ms stall timeout and one pooled connection, the second of two replies whose
+# headers took 195 ms was abandoned after both requests reached the server.
+def test_a_request_queued_for_the_pool_keeps_the_read_timeout_for_its_own_reply(fake_glm: FakeGlm) -> None:
+    for reply in ("first", "second"):
+        fake_glm.stream(content=reply, head_interval=0.065)
+
+    async def call() -> list[Completion]:
+        async with GlmProvider(FixedEndpoint(endpoint(fake_glm.base_url)), GLM_MODEL, 0.3, 1) as glm:
+            client = ModelClient(glm, LIMITED, SHORT_WINDOW, role="test")
+            return list(await asyncio.gather(*(client.complete(MESSAGES, LLMPolicy()) for _ in range(2))))
+
+    completions = asyncio.run(call())
+    assert sorted(completion.content for completion in completions) == ["first", "second"]
+    assert [outcomes(completion) for completion in completions] == [[AttemptOutcome.COMPLETED]] * 2
+    assert len(fake_glm.requests) == 2
+
+
+# Review 2026-11-21 follow-up 3: a 200 whose head arrived in fragments 110 ms apart under a 170 ms read timeout
+# exhausted the client after 4 POSTs and 3 GETs; it had completed after 1 POST and 0 GETs.
+def test_a_reply_whose_head_arrives_in_fragments_within_the_read_timeout_completes(fake_glm: FakeGlm) -> None:
+    fake_glm.stream(content="served", head_interval=0.11)
+    completion = complete(FixedEndpoint(endpoint(fake_glm.base_url)), SHORT_WINDOW, stall_timeout=0.17)
+    assert completion.content == "served"
+    assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 0)
+
+
+# Review 2026-11-21 follow-up 3: JSON false compared equal to zero workers and vetoed a generation cutoff.
+@pytest.mark.parametrize(("workers", "empty"), [(0, True), (False, False), (None, False), ("0", False), (1, False)])
+def test_only_an_integer_zero_worker_count_reports_the_pool_empty(
+    fake_glm: FakeGlm, workers: object, empty: bool
+) -> None:
+    fake_glm.health_workers.clear()
+    fake_glm.health_workers.append({"high": workers})
+
+    async def call() -> bool:
+        async with provider(FixedEndpoint(endpoint(fake_glm.base_url))) as glm:
+            return await glm.no_workers()
+
+    assert asyncio.run(call()) is empty
+
+
 # Review 2026-11-21: a 529 was a rejection; a 503 then an HTML /health reply escaped as JSONDecodeError.
 @pytest.mark.parametrize(("status", "health"), [(529, None), (503, "<html>gateway</html>")], ids=["529", "html-health"])
 def test_every_5xx_is_an_outage_and_an_undecodable_health_reply_is_unknown(

@@ -24,7 +24,8 @@ renewal all use it. ``generation_timeout`` bounds the seconds a call spends gene
 of each attempt, adding the call's completed segments, so neither admission nor an earlier fault counts. Crossing the
 bound is not itself evidence: the call ends as ``GenerationTimedOut`` only when the same stream delivers progress again
 ``CONFIRMATION_INTERVAL`` after its first progress past the bound, with no finish, abort, cut or stall in between, and
-the provider does not then report the pool empty (a read bounded by ``unavailable_wait``); an empty pool is an outage.
+a pool read begun at that first progress has not already reported the pool empty (an outage); one still pending then
+is unknown availability, cancelled without delaying the decision.
 """
 
 import asyncio
@@ -192,8 +193,9 @@ class Progress:
     stream.
     """
 
-    def __init__(self, clock: Callable[[], float], remaining: float | None) -> None:
-        self.clock, self.remaining = clock, remaining
+    def __init__(self, clock: Callable[[], float], remaining: float | None, pool: Callable[[], Awaitable[bool]]) -> None:
+        self.clock, self.remaining, self.pool_empty = clock, remaining, pool
+        self.pool_read: asyncio.Future[bool] | None = None
         self.events: list[str] = []
         self.admitted: float | None = None
         self.first_token: float | None = None
@@ -220,10 +222,19 @@ class Progress:
         if any(choice.get("finish_reason") for choice in chunk.get("choices") or ()):
             return True
         if self.past_bound is None:
-            self.past_bound = now
+            self.past_bound, self.pool_read = now, asyncio.ensure_future(self.pool_empty())
         elif now - self.past_bound >= CONFIRMATION_INTERVAL:
             raise _BoundReached
         return True
+
+    async def end_pool_read(self) -> bool:
+        """Cancel the pool read begun past the bound; whether it had already finished reporting no workers."""
+        if (read := self.pool_read) is None:
+            return False
+        empty = read.done() and not read.cancelled() and read.exception() is None and read.result()
+        read.cancel()
+        await asyncio.gather(read, return_exceptions=True)  # a failed read is unknown, not an unhandled error
+        return empty
 
     def generated(self) -> float:
         """Seconds from the attempt's first generated token to its last."""
@@ -360,18 +371,20 @@ class ModelClient:
         limit = min((body[key] for key in TOKEN_LIMIT_FIELDS if key in body), default=None)
         bound = self.retry.generation_timeout
         while True:
-            progress = Progress(self.clock, None if bound is None else bound - call.generated)
+            progress = Progress(self.clock, None if bound is None else bound - call.generated, self.provider.no_workers)
             started_wall, started = time.time(), time.monotonic()
             result, failure = None, None
             try:
                 result = await self.provider.stream(body, progress)
             except _BoundReached as reached:
-                # A pool reported empty vetoes the cutoff; a healthy or unknown answer certifies nothing.
-                if not await self._pool_empty(self.retry.unavailable_wait):
+                # A pool reported empty vetoes the cutoff; a healthy, pending or failed read certifies nothing.
+                if not await progress.end_pool_read():
                     raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
                 failure = AttemptFailed(AttemptOutcome.ABORTED, "generation bound reached on a pool with no workers")
             except AttemptFailed as error:
                 failure = error
+            finally:
+                await progress.end_pool_read()
             outcome, status, detail = (
                 (failure.outcome, failure.http_status, failure.detail)
                 if failure
@@ -394,13 +407,6 @@ class ModelClient:
                 raise ModelRequestRejected(status, detail, call.attempts) from failure
             await self._wait(failure, progress, call)
 
-    async def _pool_empty(self, timeout: float) -> bool:
-        """Whether the provider reports no workers within ``timeout``; a longer read is unknown availability."""
-        try:
-            return await asyncio.wait_for(self.provider.no_workers(), timeout)
-        except TimeoutError:
-            return False
-
     async def _wait(self, failure: AttemptFailed, progress: Progress, call: _Call) -> None:
         """Back off after an unavailable attempt, then poll while the provider reports no workers.
 
@@ -415,7 +421,10 @@ class ModelClient:
         waited = False
         while (remaining := call.remaining()) > 0:
             if waited:
-                empty = await self._pool_empty(remaining)
+                try:
+                    empty = await asyncio.wait_for(self.provider.no_workers(), remaining)
+                except TimeoutError:
+                    empty = False  # a health read that outlasts the window is unknown availability
                 if call.remaining() <= 0:
                     break
                 if not empty:
