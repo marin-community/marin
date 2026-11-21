@@ -604,6 +604,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
+            "2026.11.20.6": "621a02e9",
         },
         "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
         "eval-short": {
