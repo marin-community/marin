@@ -32,6 +32,7 @@ def grade(spec: StructuredExactSpec, _tests_dir: Path, workspace: Path) -> Rewar
         return scored(0.0, reason="no_output")
     try:
         candidate = json.loads(text, object_pairs_hook=unique_object)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # The decoder raises RecursionError for nesting deeper than the interpreter's limit.
         return scored(0.0, reason="invalid_json")
     return grade_structured_exact_candidate(spec, candidate)

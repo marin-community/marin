@@ -88,6 +88,7 @@ def grade(spec: PredictedActionSpec, _tests_dir: Path, workspace: Path) -> Rewar
         )
         assert isinstance(calls, PredictedActionSpec)
         validate_predicted_action(calls)
-    except (ValueError, InvalidTask):
+    except (ValueError, InvalidTask, RecursionError):
+        # Decoding or validating arguments nested deeper than the interpreter's limit raises RecursionError.
         return scored(0.0, reason="invalid_function_calls")
     return grade_predicted_action_candidate(spec, calls.expected_calls)
