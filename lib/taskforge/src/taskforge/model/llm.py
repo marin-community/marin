@@ -17,7 +17,15 @@ class FinishReason(StrEnum):
     ABORT = "abort"
     """vLLM aborted the request, for example while draining a worker; the model client retries it."""
     CONTEXT_EXCEEDED = "context_exceeded"
-    """The provider refused the conversation because its context window is full; ``content`` holds its reason."""
+    """Never served: the agent harness's record of a provider refusing a full context window (``content`` holds its
+    reason). A provider reporting it is refused as any unknown finish reason is (``served``)."""
+
+
+def served(reason: FinishReason) -> FinishReason:
+    """``reason`` as a provider may report it: the harness's internal refusal marker is no wire finish reason."""
+    if reason is FinishReason.CONTEXT_EXCEEDED:
+        raise ValueError(f"{reason.value!r} is not a valid FinishReason")
+    return reason
 
 
 class Role(StrEnum):

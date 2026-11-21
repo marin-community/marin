@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 from taskforge.effects.context import Context
-from taskforge.effects.issues import Hold, OutputBudgetExhausted
+from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted
 from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.harness.protocol import (
     FinishRequest,
@@ -31,15 +31,25 @@ from taskforge.harness.protocol import (
 )
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import digest
-from taskforge.model.llm import FinishReason, Message, Role
+from taskforge.model.llm import Completion, FinishReason, Message, Role
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation
 from taskforge.resources.env import WriteFile
+from taskforge.resources.execution import Notify
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 
 # A session ends only through an exit tool, so an empty completion gets a nudge. This many empty
 # completions in a row mean the provider is failing.
 MAX_EMPTY_COMPLETIONS = 3
+
+
+async def settled(event: InferenceRequest, client: InferenceClient, *, notify: Notify) -> Completion:
+    """The harness's inference: a provider's context refusal settles the visit, so it is a recorded result (with the
+    retries before it) that a reconstructed visit replays, never a raise that leaves the request to be asked again."""
+    try:
+        return await complete(event, client, notify=notify)
+    except ContextExceeded as error:
+        return Completion(str(error), finish_reason=FinishReason.CONTEXT_EXCEEDED, retries=error.retries)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +79,7 @@ class AgenticHarness(Harness):
         schemas = tuple(tool.schema for tool in tools.values())
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
-            ctx.handle(InferenceRequest, partial(complete, notify=ctx.notify), client)
+            ctx.handle(InferenceRequest, partial(settled, notify=ctx.notify), client)
             while True:
                 await ctx.check()
                 if prompt_tokens >= self.max_prompt_tokens:
