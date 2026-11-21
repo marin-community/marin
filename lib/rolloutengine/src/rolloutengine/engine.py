@@ -125,13 +125,14 @@ class RolloutEngine:
         )
         started = time.monotonic()
         try:
-            events.emit(AttemptStarted())
+            events.emit(AttemptStarted(spec.harness, spec.trace, spec.task.source.dataset))
             failure = await self._attempt(attempt)
             duration = time.monotonic() - started
+            turns, total_tokens = attempt.recorder.turns, attempt.recorder.spent_tokens
             if failure is None:
-                events.emit(AttemptEnded(attempt.recorder.stop_reason, None, None, duration))
+                events.emit(AttemptEnded(attempt.recorder.stop_reason, None, None, duration, turns, total_tokens))
             else:
-                events.emit(AttemptEnded(None, failure[0], repr(failure[1]), duration))
+                events.emit(AttemptEnded(None, failure[0], repr(failure[1]), duration, turns, total_tokens))
             delivery = await events.close(spec.limits.cleanup_timeout)
         finally:
             events.cancel()

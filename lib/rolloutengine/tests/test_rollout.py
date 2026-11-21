@@ -2630,7 +2630,7 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
     """Payloads through the first turn of a rollout whose first response writes the answer file."""
     observation = model.requests[1].messages[-1]
     return [
-        AttemptStarted(),
+        AttemptStarted(SHELL, TraceMode.EXACT_TOKENS, "fixture"),
         MachineReady(0.0),
         ConversationStarted(model.requests[0].messages, model.requests[0].options, 0.0),
         ModelTurnCompleted(0, model.requests[1].messages[-2], "stop", 2, 1, None, {}, 0.0),
@@ -2651,16 +2651,21 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
         ModelTurnCompleted(1, record.rollout.conversations[-1].messages[-1], "stop", 5, 1, None, {}, 0.0),
         TransitionCompleted(1, True, (), 0.0),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded("stop", None, None, 0.0),
+        AttemptEnded("stop", None, None, 0.0, 2, 9),
     ]
+    assert [event.index for event in observer.events] == list(range(len(observer.events)))
     assert asdict(observer.events[-1]) == {
         "run_id": "arithmetic/3",
         "task_id": "arithmetic",
+        "index": len(observer.events) - 1,
+        "time": observer.events[-1].time,
         "payload": {
             "stop_reason": "stop",
             "operation": None,
             "error": None,
             "duration": observer.events[-1].payload.duration,
+            "turns": 2,
+            "total_tokens": 9,
             "type": RolloutEventType.ATTEMPT_ENDED,
         },
     }
@@ -2685,7 +2690,7 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
+        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0, 1, 3),
     ]
 
 

@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import time
 
 from rolloutengine.models import RolloutEvent, RolloutEventPayload, RolloutObserver
 
@@ -37,12 +38,13 @@ class _EventDelivery:
     def emit(self, payload: RolloutEventPayload) -> None:
         if self.task is None:
             return
+        index = self.emitted
         self.emitted += 1
         # After a failure nothing delivers, so the event counts as undelivered without being queued.
         if self.failed:
             return
         try:
-            self.queue.put_nowait(RolloutEvent(self.run_id, self.task_id, payload))
+            self.queue.put_nowait(RolloutEvent(self.run_id, self.task_id, index, time.time(), payload))
         except asyncio.QueueFull:
             self.dropped += 1
 
