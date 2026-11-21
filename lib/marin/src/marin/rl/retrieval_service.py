@@ -19,7 +19,7 @@ from fray.current_client import current_client
 from fray.types import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, require_secret
@@ -76,11 +76,7 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
         raise RuntimeError("Retrieval service must run inside its owning Iris job tree")
     if info.worker_region is not None and info.worker_region.lower() != config.region.lower():
         raise ValueError("Retrieval service worker is outside the configured run region")
-    bucket = data_buckets()[StoragePath(config.index_uri).bucket]
-    if bucket.store is not StoreType.COREWEAVE or bucket.signing_region is None:
-        raise ValueError("Retrieval service requires a declared regional CoreWeave bucket")
-    if bucket.signing_region.lower() != config.region.lower():
-        raise ValueError("Stage the index in the RL run region before launching its service")
+    require_regional_coreweave_bucket(config.index_uri, config.region)
     configure_coreweave_s3()
     stage_index(config)
     port = context.get_port(RETRIEVAL_PORT_NAME)
