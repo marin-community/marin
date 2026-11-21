@@ -1151,7 +1151,7 @@ def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refuse
         sent.append(workers)
 
     # Each row counts 9 bytes, so two rows fit in one request of 20 bytes.
-    monkeypatch.setattr(log_client_mod, "MAX_SEND_BYTES", 20)
+    monkeypatch.setattr(log_client_mod, "SEND_TARGET_BYTES", 20)
     schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
     table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
     names = ["worker-01", "worker-02", "refused-a", "refused-b", "worker-05"]
@@ -1161,6 +1161,22 @@ def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refuse
 
     assert sent == [["worker-01", "worker-02"], ["worker-05"]]
     assert table.flush() is FlushResult.DROPPED
+
+
+def test_table_halves_a_request_that_encodes_above_the_request_bound(monkeypatch):
+    sent = []
+    # A bytes value counts 8 bytes in the queue, so the four rows are one request by their estimated size.
+    # They encode to about 260 bytes, and two of them to about 130.
+    monkeypatch.setattr(log_client_mod, "MAX_REQUEST_BYTES", 150)
+    schema = Schema(columns=(Column(name="payload", type=stats_pb2.COLUMN_TYPE_BYTES, nullable=False),))
+    table = log_client_mod.Table(
+        namespace="iris.blob", schema=schema, flusher=lambda _namespace, batch: sent.append(batch.num_rows)
+    )
+    table.write([SimpleNamespace(payload=bytes(60)) for _ in range(4)])
+    table.close()
+
+    assert sent == [2, 2]
+    assert table.flush() is FlushResult.SUCCEEDED
 
 
 def test_schema_from_proto_consistency():

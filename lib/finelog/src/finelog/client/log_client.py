@@ -83,10 +83,12 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 # Bounds of one WriteRows request. The server refuses a body above 160 MiB or 1,000,000 rows, and the rows of
-# a refused request are lost. A queued row counts one byte for each character of its strings, and a
-# character can take four bytes on the wire, so a request of 32 MiB by that count stays near 128 MiB.
-MAX_SEND_BYTES = 32 * 1024 * 1024
-MAX_SEND_ROWS = 500_000
+# a refused request are lost.
+MAX_REQUEST_BYTES = 128 * 1024 * 1024
+MAX_REQUEST_ROWS = 500_000
+# Queued rows are grouped into requests by their estimated size, which counts one byte for each character of
+# a string and 8 bytes for any other value. A group that encodes above MAX_REQUEST_BYTES is halved.
+SEND_TARGET_BYTES = 32 * 1024 * 1024
 
 _FINELOG_ZSTD_LEVEL = 1
 _SEND_COMPRESSION = ZstdCompression(level=_FINELOG_ZSTD_LEVEL)
@@ -489,18 +491,26 @@ class Table:
         """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent, dropped)``.
 
         Builds each request's RecordBatch in one pass on the bg thread, amortizing Arrow construction across
-        the rows rather than per-row at write time. Items past ``MAX_SEND_BYTES`` or ``MAX_SEND_ROWS`` go
-        out in order in further requests. A request that fails for a retryable reason leaves it and the
+        the rows rather than per-row at write time. Items past ``SEND_TARGET_BYTES`` or ``MAX_REQUEST_ROWS``
+        go out in order in further requests. A request that fails for a retryable reason leaves it and the
         later items unsent; a request that the server refuses is dropped, and the later requests still go
         out.
         """
         sent_seq = 0
         dropped = 0
-        for start, end in _send_ranges(items):
+        # The item ranges still to send, the next one last.
+        ranges = _send_ranges(items)[::-1]
+        while ranges:
+            start, end = ranges.pop()
             chunk = items[start:end]
             try:
                 self._ensure_registered()
                 batch = _rows_to_record_batch([item.payload for item in chunk], self._arrow_schema, self._schema)
+                if batch.nbytes > MAX_REQUEST_BYTES and len(chunk) > 1:
+                    # The estimate counted too little for these rows, as it does for bytes, list and map values.
+                    middle = (start + end) // 2
+                    ranges += [(middle, end), (start, middle)]
+                    continue
                 self._flusher(self._namespace, batch)
             except Exception as exc:
                 namespace_missing = self._registrar is not None and (
@@ -778,7 +788,9 @@ class LogClient:
         the flush thread; past either bound the oldest rows are dropped. A
         producer that writes bursts larger than the defaults raises them. A
         buffer larger than one request goes out in several requests, and the
-        server acknowledges about one request each second for a table. Every
+        server acknowledges about one request each second for a table.
+        ``Table.close`` waits about 10 seconds for the queue, so such a producer
+        calls ``Table.flush`` with its own timeout before it closes. Every
         handle of a namespace must ask for the same bounds.
         """
         if namespace == LOG_NAMESPACE:
@@ -997,13 +1009,13 @@ class LogClient:
 
 
 def _send_ranges(items: list[_PendingItem]) -> list[tuple[int, int]]:
-    """The index ranges of ``items`` that each go out in one request."""
+    """The index ranges of ``items`` that each go out in one request, by the estimated size of the items."""
     ranges = []
     start = 0
     size = 0
     for index, item in enumerate(items):
-        # An item larger than the byte bound goes out alone.
-        if index > start and (size + item.size_bytes > MAX_SEND_BYTES or index - start == MAX_SEND_ROWS):
+        # An item larger than the byte target goes out alone.
+        if index > start and (size + item.size_bytes > SEND_TARGET_BYTES or index - start == MAX_REQUEST_ROWS):
             ranges.append((start, index))
             start, size = index, 0
         size += item.size_bytes
