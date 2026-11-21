@@ -7,6 +7,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from taskcompendium.identity import GIT_REVISION_PATTERN
 from taskcompendium.models import FunctionDefinition, ProviderRequirement
 
 BROWSECOMP_ACTION_INTERFACE = "browsecomp-plus-bm25:v1"
@@ -18,10 +19,10 @@ class BrowseCompState(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    code_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    corpus_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    index_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    code_revision: str = Field(pattern=GIT_REVISION_PATTERN)
+    corpus_revision: str = Field(pattern=GIT_REVISION_PATTERN)
+    index_revision: str = Field(pattern=GIT_REVISION_PATTERN)
+    tokenizer_revision: str = Field(pattern=GIT_REVISION_PATTERN)
     top_k: int = Field(gt=0)
     snippet_max_tokens: int = Field(gt=0)
     include_get_document: bool

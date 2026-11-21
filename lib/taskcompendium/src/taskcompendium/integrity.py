@@ -8,6 +8,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from taskcompendium.identity import SHA256_PATTERN
+
 
 class SharedDependencyState(StrEnum):
     AGENT_MUTABLE = "agent_mutable"
@@ -20,7 +22,7 @@ class DeliveredVerifierFile(BaseModel):
 
     name: str = Field(min_length=1)
     mode: int
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sha256: str = Field(pattern=SHA256_PATTERN)
 
 
 class MultiSweDeliveryContract(BaseModel):
@@ -38,7 +40,7 @@ class MultiSweDeliveryContract(BaseModel):
     id: Literal["multi-swe-delivery"] = "multi-swe-delivery"
     dependency_state: SharedDependencyState
     agent_user: str | None = None
-    archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive_sha256: str = Field(pattern=SHA256_PATTERN)
     undeclared_deadline: bool = False
     known_open_gaps: tuple[str, ...] = (
         "Agent-installed build tools and imports in the shared image environment",
