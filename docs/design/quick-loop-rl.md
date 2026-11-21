@@ -18,13 +18,13 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.10` initialized all four learners, verified the initial weights on all eight vLLM receivers, evaluated the 100-task panel, and scored the first 512 training trajectories. The first training executable failed requesting 41.05 GiB before an optimizer update. | Reduce the training memory peak on the existing mesh. Verify two updates, post-update receiver bytes and generation, and fresh-process recovery before the matched runs. |
+| 40-H100 learner smoke | Run `2026.11.20.10` initialized all four learners, verified the initial weights on all eight vLLM receivers, and scored the first 512 training trajectories. It failed on the first optimizer call. Iris accepted `2026.11.20.11` with FP32 Adam moments in pinned host memory during gradients. | Verify two updates, post-update receiver bytes and generation, and fresh-process recovery before the matched runs. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
-[Quick-loop branch status][learner-status] · [H100 layout retry coordinator][iris-smoke-layout] ·
+[Quick-loop branch status][learner-status] · [H100 optimizer retry coordinator][iris-smoke-optimizer] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
 [Snowball qualification report][snowball-status] ·
 [Historical quick-loop timing][timing]
@@ -330,6 +330,18 @@ completed. Measure the training executable and its live buffers before
 retrying the same batch geometry and objective.
 [GPU child][iris-smoke-layout-child] · [Verified training failure][h100-train-failure]
 
+Iris accepted `2026.11.20.11` on source `ebee07b144`. The learner keeps
+the FP32 Adam moments in pinned host memory while the gradient executable
+runs. After gradients finish, it restores those buffers to the GPU and
+applies the same AdamW update in a separate executable. The initializer,
+workload, serving engine and topology match `2026.11.20.10`. The optimizer
+placement is the only recipe change. The clean source passed 17 tests,
+including exact learner restore and continuation with one or two CPU
+processes. An abstract CPU compile of the isolated 67B Adam executable
+accounts for 46.51 GiB per device after aliasing. The live smoke measures
+CUDA memory at both phases and checks the two updates end to end.
+[Optimizer retry coordinator][iris-smoke-optimizer] · [Frozen source and audit tools][h100-optimizer-handoff]
+
 The prior handoffs preserve the `2026.11.20.9` and `2026.11.20.8` source,
 along with the held serving comparison. The restored serving plans reproduce
 the original artifact roots with a repository-local Git tree abbreviation.
@@ -362,9 +374,10 @@ the original artifact roots with a repository-local Git tree abbreviation.
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
 
-Both 25-update recipes passed offline preflight on `0ecb355467` with the
-regional task selection pinned. The normalized launch plans and artifact
-fingerprints match the previous preflight.
+Both 25-update recipes passed offline preflight on `ebee07b144` with the
+regional task selection pinned. The Megatron recipe matches the previous
+preflight. The Levanter recipe adds the same pinned-host optimizer placement
+as the smoke.
 After the smoke passes its receipt and weight-change audits, submit the
 Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
 Use the same regional route and publication verification for both. The
@@ -389,7 +402,7 @@ and consumed loss tokens separately. Filtering can change the workload each
 learner sees.
 Measure training and publication wall time from the initial evaluation
 result to the acknowledgement of version 25. Report allocation wall time
-separately. [Matched-run auditor and tests][h100-layout-handoff]
+separately. [Matched-run auditor and tests][h100-optimizer-handoff]
 
 The frozen evaluator writes per-dataset rows beneath `exports/dumped_evals`
 with ordinal UIDs assigned after prompt-length filtering. Verify that no
@@ -1013,12 +1026,14 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-retry-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.9-coordinator-151d77eb%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.9-aa8d6bc47005
 [iris-smoke-layout]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.10-coordinator-c66407b6
 [iris-smoke-layout-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.10-coordinator-c66407b6%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.10-a954f7d0dae3
+[iris-smoke-optimizer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.11-coordinator-3ba28fae
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
 [h100-retry-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.9%2Fh100-learner-retry.tar.zst
 [h100-layout-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.9%2Fobserved-failure.json
 [h100-layout-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.10%2Fh100-parameter-layout-retry.tar.zst
 [h100-train-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.10%2Fobserved-failure.json
+[h100-optimizer-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.11%2Fh100-pinned-optimizer-retry.tar.zst
 [frozen-validation-panel]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04%2Fvalidation.parquet
 [frozen-receiver-numbering]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/weight_sync/expert_block/schedule.py#L117-L118
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
