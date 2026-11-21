@@ -267,10 +267,10 @@ class ArtifactStep(Generic[T]):
         config: dict | None = None,
         read_only: bool = False,
     ) -> "ArtifactStep[T]":
-        """Register pre-existing data at ``source`` as a managed ``name@version`` handle.
+        """Reference pre-existing data at ``source`` as a ``name@version`` handle.
 
         The data is neither moved nor recomputed: a consumer that depends on the returned handle
-        resolves to ``source``. Running it writes a provenance record at the canonical
+        resolves to ``source``. By default, execution writes a provenance record at the canonical
         ``{prefix}/{name}/{version}`` (with ``source`` recorded). ``kind`` selects the handle's
         ``artifact_type`` for consumer routing (:class:`Artifact` by default), so a raw checkpoint
         path becomes a typed handle: ``ArtifactStep.adopt(name, version, "gs://…", kind=LevanterCheckpoint)``.
