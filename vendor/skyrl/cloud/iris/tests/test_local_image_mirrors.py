@@ -5,7 +5,6 @@ import shutil
 import pytest
 from rigging.filesystem.cluster_config import BucketSpec, StoreType
 from rigging.filesystem import transfer
-from rigging.fsutil import verified_copy
 from shellbox.image import ImageCache, RegistryImage
 
 from marinskyrl.local_images import LocalImageMirror, cached_mirror_image
@@ -33,7 +32,6 @@ def mirror(tmp_path, monkeypatch):
         json.dumps({"manifests": [{"digest": manifest, "annotations": {"org.opencontainers.image.ref.name": "image"}}]})
     )
     (layout / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
-    (layout / verified_copy.COMPLETION_MANIFEST).write_text('{"completed":true}')
     settings = LocalImageMirror(image="registry.fixture/private/image@" + manifest, uri="s3://mirror-bucket/oci")
     monkeypatch.setattr(
         local_images,
@@ -47,7 +45,6 @@ def mirror(tmp_path, monkeypatch):
 
     # The external S3 filesystem is local; transfer and cryptographic verification stay real.
     monkeypatch.setattr(transfer, "filesystem_for", mirror_filesystem)
-    monkeypatch.setattr(verified_copy, "filesystem_for", mirror_filesystem)
 
     def registry_unavailable(*args):
         pytest.fail("The registry is unavailable; the pinned OCI mirror must serve the image")
