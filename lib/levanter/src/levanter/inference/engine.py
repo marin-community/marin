@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Sequence
+from typing import Callable, Literal, Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
@@ -100,11 +100,16 @@ class InferenceEngineConfig:
 
     # Prefill buffer sizing
     max_prefill_size: Optional[int] = None
-    """Maximum number of tokens packed into the prefill buffer before a flush.
+    """Maximum tokens packed into a prefill batch. Defaults to the page table's sequence limit."""
 
-    If None, inferred at construction time from `tokenizer.model_max_length` when available; otherwise
-    falls back to the page table's `max_len_per_seq` or 4096 as a final default.
+    prefill_bucket_sizes: tuple[int, ...] = ()
+    """Optional, increasing prefill buffer sizes below max_prefill_size.
+
+    Each packed batch uses the smallest fitting size. Include sizes divisible by the model's
+    token mesh size. The largest prefill always uses max_prefill_size.
     """
+    prefix_cache: Literal["disabled", "last_prompt"] = "disabled"
+    """Reuse matching full pages of the previous prompt for single-sequence Snowball serving."""
 
     # Decode loop knobs
     max_tokens_per_round: int | None = None
@@ -120,6 +125,19 @@ class InferenceEngineConfig:
 
         if self.max_queued_tokens < self.max_seqs_in_prefill:
             raise ValueError("max_queued_tokens must be >= max_seqs_in_prefill")
+
+        if any(size <= 0 for size in self.prefill_bucket_sizes) or self.prefill_bucket_sizes != tuple(
+            sorted(set(self.prefill_bucket_sizes))
+        ):
+            raise ValueError("prefill_bucket_sizes must be positive and strictly increasing")
+        if (
+            self.prefill_bucket_sizes
+            and self.max_prefill_size is not None
+            and self.prefill_bucket_sizes[-1] >= self.max_prefill_size
+        ):
+            raise ValueError("prefill_bucket_sizes must be below max_prefill_size")
+        if self.prefix_cache == "last_prompt" and self.max_seqs != 1:
+            raise ValueError("The last-prompt cache requires max_seqs=1")
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -384,6 +402,7 @@ class PrefillWork(eqx.Module):
     prompt_tokens: ht.i32[NamedArray, "seq position"]  # type: ignore[name-defined]
     prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     seq_params: SeqDecodingParams
+    cached_pages: NamedArray | None = None
 
 
 def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
@@ -562,12 +581,20 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
 
         def assign(gs: GenState) -> GenState:
             decode_state, _ = gs.decode_state.reserve_slot(slot)
+            pages = None
+            if work.cached_pages is not None:
+                pages = work.cached_pages["seq", i]
+                table = decode_state.page_table
+                refs = table.page_ref_counts.at["page", pages].add(1, mode="drop")
+                decode_state = dataclasses.replace(
+                    decode_state, page_table=dataclasses.replace(table, page_ref_counts=refs)
+                )
             decode_state = decode_state.assign_seq(
                 local_slot_id=slot,
                 tokens=work.prompt_tokens["seq", i],
                 seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
-                kv_pages=None,
-                page_indices=None,
+                kv_pages=pages,
+                page_indices=pages,
                 seq_params=_seq_params_from_work(work, i),
             )
             return dataclasses.replace(gs, decode_state=decode_state)
@@ -884,6 +911,13 @@ def score_token_sequence_logprobs(
     return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
 
 
+@dataclass(frozen=True)
+class _CachedPrompt:
+    model: LmHeadModel
+    tokens: np.ndarray
+    pages: np.ndarray
+
+
 class InferenceEngine:
     """Encapsulates batch inference: prefill + decode + output extraction.
 
@@ -920,7 +954,10 @@ class InferenceEngine:
         # Impute max_prefill_size if not set
         if config.max_prefill_size is None:
             config = dataclasses.replace(config, max_prefill_size=decode_state.page_table.max_len_per_seq)
+        if config.prefix_cache == "last_prompt" and not isinstance(model, SnowballLMHeadModel):
+            raise ValueError("The last-prompt cache requires Snowball")
         self.config = config
+        self._cached_prompt: _CachedPrompt | None = None
         # Track free local sequence slots as explicit ids (smallest id first to match allocator expectations).
         # Respect any pre-populated allocations in the provided PageTable.
         sequences = decode_state.sequences
@@ -979,7 +1016,11 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+        self.gen_state = eqx.filter_jit(GenState.reset, donate="all")(self.gen_state)
+        self._cached_prompt = None
+        self._clear_requests()
+
+    def _clear_requests(self) -> None:
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
@@ -1000,7 +1041,7 @@ class InferenceEngine:
         prefill_work = self._prefill_prompts(batch)
         if prefill_work is None:
             return None
-        new_state = _run_prefill(
+        new_state, outputs = _run_prefill(
             self.gen_state,
             self.model,
             self.sampler,
@@ -1009,8 +1050,12 @@ class InferenceEngine:
             capture_routes=replay is not None,
         )
 
-        # _run_prefill returns (GenState, _DecodeOutputs)
-        self.gen_state, outputs = new_state
+        self.gen_state = new_state
+        if self.config.prefix_cache == "last_prompt":
+            tokens = np.asarray(batch[0].prompt_tokens, dtype=np.int32)
+            count = len(tokens) // self.config.page_size
+            pages = np.array(jax.device_get(new_state.decode_state.sequences.page_indices.array[0, :count]))
+            self._cached_prompt = _CachedPrompt(self.model, tokens, pages)
         return outputs
 
     def _prefill_prompts(
@@ -1033,6 +1078,11 @@ class InferenceEngine:
         clone_targets = np.full((max_slots,), INVALID, dtype=np.int32)
         prompt_tokens = np.full((max_slots, max_seq_len), INVALID, dtype=np.int32)
         prompt_lengths = np.zeros((max_slots,), dtype=np.int32)
+        prefix_pages = (
+            np.full((max_slots, decode_state.page_table.pages_per_seq), INVALID, dtype=np.int32)
+            if self.config.prefix_cache == "last_prompt"
+            else None
+        )
 
         stop_tokens_template = decode_state.stop_tokens
         max_num_tokens = np.zeros((max_slots,), dtype=np.int32)
@@ -1070,9 +1120,20 @@ class InferenceEngine:
             slot_id = int(requested_slot)
 
             this_tokens = np.asarray(seq_tokens, dtype=np.int32)
-            queue_tokens[offset : offset + len(seq_tokens)] = this_tokens
-            queue_slot_ids[offset : offset + len(seq_tokens)] = slot_id
-            queue_pos_ids[offset : offset + len(seq_tokens)] = np.arange(len(seq_tokens), dtype=np.int32)
+            reused = 0
+            previous = self._cached_prompt
+            if prefix_pages is not None and previous is not None:
+                limit = min(len(this_tokens) - 1, len(previous.tokens))
+                mismatches = np.flatnonzero(this_tokens[:limit] != previous.tokens[:limit])
+                identical = int(mismatches[0]) if mismatches.size else limit
+                page_count = identical // self.config.page_size
+                prefix_pages[total_new, :page_count] = previous.pages[:page_count]
+                reused = page_count * self.config.page_size
+                logger.info("Reused %d prompt tokens", reused)
+            end = offset + len(seq_tokens) - reused
+            queue_tokens[offset:end] = this_tokens[reused:]
+            queue_slot_ids[offset:end] = slot_id
+            queue_pos_ids[offset:end] = np.arange(reused, len(seq_tokens), dtype=np.int32)
 
             prefill_idx = total_new
             if prefill_idx >= max_slots:
@@ -1101,7 +1162,7 @@ class InferenceEngine:
             self.local_map[slot_id] = (rid, 0)
             self.sequences.setdefault(rid, {})[0] = slot_id
 
-            offset += len(seq_tokens)
+            offset = end
             num_primary += 1
             total_new += 1
 
@@ -1138,10 +1199,11 @@ class InferenceEngine:
         if offset == 0:
             return None
 
+        bucket_size = next((size for size in self.config.prefill_bucket_sizes if size >= offset), max_prefill_size)
         prefill_queue = TokenQueue(
-            queued_tokens=hax.named(jnp.asarray(queue_tokens, dtype=jnp.int32), axis="position"),
-            queued_slot_ids=hax.named(jnp.asarray(queue_slot_ids, dtype=jnp.int32), axis="position"),
-            queued_pos_ids=hax.named(jnp.asarray(queue_pos_ids, dtype=jnp.int32), axis="position"),
+            queued_tokens=hax.named(jnp.asarray(queue_tokens[:bucket_size], dtype=jnp.int32), axis="position"),
+            queued_slot_ids=hax.named(jnp.asarray(queue_slot_ids[:bucket_size], dtype=jnp.int32), axis="position"),
+            queued_pos_ids=hax.named(jnp.asarray(queue_pos_ids[:bucket_size], dtype=jnp.int32), axis="position"),
             num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
         )
 
@@ -1152,6 +1214,7 @@ class InferenceEngine:
             clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
             prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
             prompt_lengths=hax.named(jnp.asarray(prompt_lengths, dtype=jnp.int32), axis="seq"),
+            cached_pages=None if prefix_pages is None else hax.named(jnp.asarray(prefix_pages), ("seq", "page")),
             seq_params=SeqDecodingParams(
                 max_num_tokens=jnp.asarray(max_num_tokens, dtype=jnp.int32),
                 stop_tokens=(
@@ -1226,9 +1289,16 @@ class InferenceEngine:
                 "Decompose your request into smaller batches or increase max_seqs when building the service."
             )
 
-        # for now, reset the engine state between each batch - the engine cannot be called with
-        # parallel batches.
-        self.reset()
+        if self.config.prefix_cache == "last_prompt" and (len(requests) != 1 or replay is not None):
+            raise ValueError("The last-prompt cache requires one request without route capture")
+
+        previous = self._cached_prompt
+        if previous is None or previous.model is not self.model:
+            self.reset()
+        else:
+            decode_state = eqx.filter_jit(DecodeState.reset)(self.gen_state.decode_state)
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            self._clear_requests()
 
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]

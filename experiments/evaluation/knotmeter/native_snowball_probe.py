@@ -36,10 +36,8 @@ SERIES = Path(__file__).with_name("snowball-v01-tpu-64k.yaml")
 PROFILE_PROMPT_LENGTHS = (512, 51_870)
 
 
-def _profile_decode(engine: InferenceEngine, prompt_tokens: list[int], output: Path) -> None:
-    """Capture one warmed decode round for a synthetic long prefix."""
-    max_output_tokens = 2 * engine.config.max_rounds + 1
-    request = Request(
+def _request(prompt_tokens: list[int], max_output_tokens: int) -> Request:
+    return Request(
         prompt_tokens=prompt_tokens,
         request_id=0,
         n_generations=1,
@@ -48,6 +46,11 @@ def _profile_decode(engine: InferenceEngine, prompt_tokens: list[int], output: P
             max_num_tokens=jnp.asarray(len(prompt_tokens) + max_output_tokens, dtype=jnp.int32),
         ),
     )
+
+
+def _profile_decode(engine: InferenceEngine, prompt_tokens: list[int], output: Path) -> None:
+    """Capture one warmed decode round for a synthetic long prefix."""
+    request = _request(prompt_tokens, 2 * engine.config.max_rounds + 1)
     options = jax.profiler.ProfileOptions()
     options.host_tracer_level = 1
     options.python_tracer_level = 0
@@ -76,6 +79,8 @@ def main() -> None:
     parser.add_argument("--workload", required=True)
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled"), default="scan")
+    parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
+    parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -99,6 +104,8 @@ def main() -> None:
         max_seqs_in_prefill=1,
         max_queued_tokens=32,
         max_tokens_per_round=4,  # Pad the one active decode token to the four-way expert mesh.
+        prefill_bucket_sizes=tuple(args.prefill_buckets),
+        prefix_cache=args.prefix_cache,
     )
     service = dataclasses.replace(service, max_pages=service.max_pages_per_seq)
     config = InferenceServerConfig(trainer=trainer, model_name=series["model"], service=service)
@@ -149,6 +156,8 @@ def main() -> None:
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,
             "decode_layers": args.decode_layers,
+            "prefill_buckets": service.prefill_bucket_sizes,
+            "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,
             "command": command,
         }
@@ -172,6 +181,22 @@ def main() -> None:
                 if response.json()["usage"]["completion_tokens"] < 1:
                     raise RuntimeError("Native preflight generated no tokens")
                 evidence["cold_completion_seconds"] = time.monotonic() - started
+                if service.prefill_bucket_sizes:
+                    context = server.inference_context
+                    filler = tokenizer.encode(" example", add_special_tokens=False)[0]
+                    alternate = tokenizer.encode(" test", add_special_tokens=False)[0]
+                    with (
+                        context.model_lock,
+                        trainer.use_device_mesh(),
+                        hax.axis_mapping(trainer.compute_axis_mapping),
+                    ):
+                        for index, previous_bucket in enumerate(service.prefill_bucket_sizes):
+                            prompt = [filler] * (previous_bucket + 1)
+                            # Alternate the first token so warmup exercises the full buffer.
+                            prompt[0] = alternate if index % 2 else filler
+                            context.engine.generate([_request(prompt, 1)])
+                        context.engine.reset()
+                    evidence["bucket_warmup_seconds"] = time.monotonic() - started - evidence["cold_completion_seconds"]
                 probe_path.write_text(json.dumps(evidence, indent=2))
                 try:
                     run_logged(

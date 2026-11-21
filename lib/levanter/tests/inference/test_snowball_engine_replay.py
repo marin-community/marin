@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import logging
 
 import equinox as eqx
 import haliax as hax
@@ -48,7 +49,7 @@ def serving_model():
         yield SnowballLMHeadModel.init(hax.Axis("vocab", 23), config, key=jax.random.key(41))
 
 
-def _engine(model, max_rounds):
+def _engine(model, max_rounds, *, prefill_bucket_sizes=()):
     return InferenceEngine.from_model_with_config(
         model,
         None,
@@ -60,6 +61,7 @@ def _engine(model, max_rounds):
             max_queued_tokens=2,
             max_seqs_in_prefill=2,
             max_prefill_size=8,
+            prefill_bucket_sizes=prefill_bucket_sizes,
             max_rounds=max_rounds,
             compute_dtype=jnp.float32,
         ),
@@ -83,6 +85,13 @@ def _requests():
     ]
 
 
+def test_prefill_buckets_preserve_snowball_generation(serving_model):
+    requests = _requests()
+    full = _engine(serving_model, 3).generate(requests)
+    bucketed = _engine(serving_model, 3, prefill_bucket_sizes=(4, 6)).generate(requests)
+    assert bucketed == full
+
+
 def test_unrolled_decode_preserves_snowball_generation(serving_model):
     requests = _requests()
     scanned = _engine(serving_model, 3).generate(requests)
@@ -90,6 +99,38 @@ def test_unrolled_decode_preserves_snowball_generation(serving_model):
         serving_model, _config=dataclasses.replace(serving_model.config, inference_decode_implementation="unrolled")
     )
     assert _engine(model, 3).generate(requests) == scanned
+
+
+def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, caplog):
+    config = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=4,
+        max_seqs=1,
+        page_size=2,
+        max_queued_tokens=2,
+        max_seqs_in_prefill=1,
+        max_prefill_size=8,
+        prefill_bucket_sizes=(4,),
+        compute_dtype=jnp.float32,
+    )
+    fresh = InferenceEngine.from_model_with_config(serving_model, None, config)
+    cached = InferenceEngine.from_model_with_config(
+        serving_model, None, dataclasses.replace(config, prefix_cache="last_prompt")
+    )
+    params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(7))
+    initial = Request([1, 2, 3, 4, 5], 0, params, 1)
+    next_turn = Request([1, 2, 3, 4, 6], 1, params, 1)
+    cached.generate([initial])
+    expected = fresh.generate([next_turn])
+    with caplog.at_level(logging.INFO):
+        assert cached.generate([next_turn]) == expected
+    assert "Reused 4 prompt tokens" in caplog.text
+
+    caplog.clear()
+    cached.reset()
+    with caplog.at_level(logging.INFO):
+        assert cached.generate([next_turn]) == expected
+    assert "Reused" not in caplog.text
 
 
 @eqx.filter_jit

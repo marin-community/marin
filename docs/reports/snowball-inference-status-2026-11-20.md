@@ -2,10 +2,10 @@
 
 The bounded Snowball inference-to-learner path now reproduces sampled policy
 logprobs bit-for-bit on four TPUv4 devices. The production engine retains its
-device-side decode loop; 32-token chunks measured 3.54× faster than one-token
-chunks on the long-request fixture and 1.79× on the mixed-request fixture.
-Full-size checkpoint qualification and external rollout/learner integration
-remain open.
+device-side decode loop. On TPUv4, 32-token chunks measured 3.54× faster than
+one-token chunks on the long-request fixture and 1.79× on the mixed-request
+fixture. The full 67B checkpoint now runs AgentX on v5p-8. Full-model learner
+replay parity and external rollout/learner integration remain open.
 
 This publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -32,6 +32,7 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | [Native, compact sliding-window reads](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v7) | 3 | 1,602 | 8.78 | 10.50 |
 | [Native prototype, stacked KV and fused prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v8) | 4 | 1,917 | 9.13 | 12.10 |
 | [Native prototype, unrolled decode and small KV updates](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v9) | 8 | 2,905 | 16.14 | 26.85 |
+| [Native prototype, prompt-page reuse and fused full-context attention](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v10) | 12 | 4,133 | 21.83 | 31.46 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -57,8 +58,8 @@ took 1.04 seconds on the synthetic long prefill. The bounded tiles took about
 The serving fixes cover tiled attention, streamed usage, graceful shutdown,
 vectorized KV writes, and projection of sampled rows. [`2dd5eafffc`](https://github.com/marin-community/marin/commit/2dd5eafffc)
 
-Full-model learner replay parity remains open. Native active decode and
-reusable prefix cache support remain the main gaps exposed by the comparison.
+Full-model learner replay parity remains open. Native active decode is the
+largest gap in the comparison.
 
 The short-window kernel now discards fully masked tiles while preserving the
 softmax tile boundaries. It matched the untrimmed kernel bit for bit in the
@@ -86,6 +87,13 @@ small-batch scatter path. Together these changes raised active decode from 12.10
 to 26.85 tokens/s/user. The 594-output-token turn completed in 30.81 seconds
 with an 8.13-second time to first token. The full 67B checkpoint completed the
 diagnostic on the same v5p-8 configuration. [Unrolled decode job](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v9)
+
+An opt-in single-sequence cache reuses whole matching pages from the previous
+prompt. With this cache, prefill buckets, and fused full-context attention, the
+594-output-token turn took 24.13 seconds with a 4.73-second time to first token.
+Three later turns reused 47,488 to 50,560 prompt tokens. Their server-side
+prefill and extraction took 0.29 to 0.46 seconds. Warming the buckets took 118
+seconds before the AgentX measurement. [Prefix reuse job](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v10)
 
 ### Reproduce the native diagnostic
 
