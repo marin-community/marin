@@ -23,6 +23,7 @@ from daytona_api_client_async import (
 )
 
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.inventory import inventory_sandboxes
 from shellbox.backends.daytona.snapshot import list_snapshots
 
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -176,11 +177,6 @@ def max_concurrency(region: RegionCapacity, profile: SandboxProfile, *, headroom
     )
 
 
-async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
-    """Read every sandbox in the authenticated account across all pages."""
-    return [sandbox async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT_SECONDS)]
-
-
 async def _fetch_usage_overview(client: AsyncDaytona, organization_id: str) -> OrganizationUsageOverview:
     api = OrganizationsApi(client._api_client)
     return await api.get_organization_usage_overview(organization_id, _request_timeout=REQUEST_TIMEOUT_SECONDS)
@@ -211,7 +207,7 @@ async def _organization_id(client: AsyncDaytona, sandboxes: list[AsyncSandbox]) 
 
 async def account_usage_from_client(client: AsyncDaytona) -> AccountUsage:
     """Read one account's quota, usage and sandbox inventory through an SDK client."""
-    sandboxes = await _inventory_sandboxes(client)
+    sandboxes = await inventory_sandboxes(client)
     organization_id = await _organization_id(client, sandboxes)
     overview = await _fetch_usage_overview(client, organization_id)
     state_counts: dict[str, int] = {}

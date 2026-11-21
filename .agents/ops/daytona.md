@@ -71,6 +71,47 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Purge idle sandboxes
+
+`shellbox-daytona-stale` lists every sandbox page in the selected accounts.
+It uses the freshest valid activity or update timestamp. Sandboxes without a
+timezone-aware timestamp are skipped. Sandboxes in `destroying` or `destroyed`
+are also skipped. Other states use the same idle threshold, which defaults to
+60 minutes. Cleanup is account-wide and includes sandboxes created outside
+Shellbox. The command does not change snapshots.
+
+Load the dedicated account keys and select the configured target:
+
+```bash
+set +x
+set -a
+source /path/to/secrets.env
+set +a
+export DAYTONA_TARGET="<the configured target>"
+# If the secrets file names the eval key DAYTONA_API_KEY, map it explicitly:
+# export DAYTONA_EVAL_API_KEY="$DAYTONA_API_KEY"
+
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-stale \
+  --all --dry-run --threshold 60
+
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-stale \
+  --all --delete --threshold 60 --ledger /tmp/daytona-stale-deletions.jsonl
+```
+
+`--all` reads `DAYTONA_EVAL_API_KEY`, `DAYTONA_RL_API_KEY` and
+`DAYTONA_DATA_API_KEY`. Use `--api-key-env DAYTONA_RL_API_KEY` to select one account.
+Deletion rechecks activity by exact ID, then waits for provider confirmation.
+Requests are sequential with a one-second pause between sandboxes per account.
+The ledger appends and flushes candidate requests and outcomes, including
+skips on recheck and errors. Errors produce a nonzero exit status; the
+remaining IDs and accounts still run.
+Activity can change between the final check and deletion; use the command
+when that brief race is acceptable for the selected workload. The idle rule
+uses provider timestamps. Whether Daytona updates activity timestamps while
+long, silent commands run has not been verified. Until that behavior is
+confirmed, set `--threshold` above the longest command timeout for those
+workloads.
+
 ## Pi HTTP idle timeout
 
 Pi's HTTP idle timeout is separate from Harbor task and agent deadlines and
