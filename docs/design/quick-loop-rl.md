@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 8:10 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 8:36 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -694,8 +694,12 @@ The next attention candidate skips padding-only query tiles and bounds the
 scan to visible KV pages while preserving the accumulation order. The
 candidate passed 26 focused checks on JAX 0.11.0 CPU. For the qualification
 shape, the page-loop count falls from 119,808 to 14,456 per prefill and from
-40.9 million to 11.8 million across four responses. Those counts describe
-attention work. GPU latency and peak memory still need measurement.
+40.9 million to 11.8 million across four responses. The one-host H100
+diagnostic combines this candidate with the scorer controls. It reached
+decode with the same 59.95 GiB compiled prefill memory estimate and a warm
+median of 25.1 aggregate tokens/s over the first 96 warm decode iterations.
+The same-checkpoint frame digest comparison and replay gate are pending.
+[Scorer attribution run][iris-native-67b-profiles]
 
 The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
 the 524K-parameter fixture on one four-chip TPUv4 host. Each run used
@@ -992,6 +996,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-67b-cap90]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-cap90
 [iris-native-67b-tiled]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-tiled
 [iris-native-67b-prealloc]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-prealloc
+[iris-native-67b-profiles]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-profiles
 [native-67b-prealloc-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-67b-inventory%2F2026.11.21.1%2Foutputs.tar.zst
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
