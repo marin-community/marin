@@ -55,11 +55,12 @@ monitored process group only: a detached session
 can survive it. A timeout of zero or less returns `TIMED_OUT` without sending
 anything; a NaN or infinite one raises `ValueError`. The controller's exec deadline is the timeout plus 30 seconds and
 the client's RPC deadline adds 60 more; admission refusals and their retries spend neither, and stdin upload, output
-capture and cleanup have their own budgets. An image without a coreutils `timeout` keeps the earlier behaviour: the RPC
+capture and cleanup have their own budgets. In an image without a coreutils `timeout`, the command runs unwrapped and the client's RPC
 deadline is the timeout itself. When this client's RPC deadline expires, the guest state is unknown, so the machine
 closes, and later calls raise `MachineTerminated` naming the command and the deadline that closed it. A deadline that
-an upstream service reports is an unknown outcome, like any other lost reply. A command without a timeout keeps the
-earlier decoding, so a Kubernetes exec stream that the controller cuts at its own deadline still reads as exit 124.
+an upstream service reports is an unknown outcome, like any other lost reply. A command without a timeout runs unwrapped
+and returns the exec's exit status, so a Kubernetes exec stream that the controller cuts at its own deadline reads as
+exit 124.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,

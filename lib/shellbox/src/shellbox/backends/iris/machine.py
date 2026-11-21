@@ -518,7 +518,7 @@ class IrisMachine:
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
         # The guest bounds a command that has a timeout and keeps the machine, as Docker and Daytona do. Without a
-        # coreutils ``timeout`` the exec's RPC deadline is the timeout itself, and it closes the machine as before.
+        # coreutils ``timeout`` the exec's RPC deadline is the timeout itself, and expiry closes the machine.
         timer = () if command.timeout is None else await self._timer()
         redirects = (
             f"< {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
