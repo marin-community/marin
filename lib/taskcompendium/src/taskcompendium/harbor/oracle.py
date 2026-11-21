@@ -15,6 +15,9 @@ from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import ControlSubmission, OracleCommand
 from taskcompendium.runtime.resources import has_oracle_solution, resource_bytes
 
+REPLY_ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON})
+"""Answer types the grader reads from the submitted reply, deliverable through an answer file."""
+
 ORACLE_COMMAND_FILE = "oracle-command.json"
 
 
@@ -54,8 +57,8 @@ class OracleCommandBinding(BaseModel):
     def require_task(self, task: TaskSpec) -> None:
         if not has_oracle_solution(task):
             raise ValueError("An original OracleCommand requires preserved source solution resources")
-        if task.answer_type != AnswerType.TEXT or task.final_tools:
-            raise ValueError("This OracleCommand delivery requires a text answer without final tool calls")
+        if task.answer_type not in REPLY_ANSWER_TYPES or task.final_tools:
+            raise ValueError("This OracleCommand delivery requires a reply-graded answer without final tool calls")
         if self.task_sha256 != task_spec_sha256(task):
             raise ValueError("OracleCommand belongs to another TaskSpec")
         if self.resources_sha256 != oracle_resource_identity(task):

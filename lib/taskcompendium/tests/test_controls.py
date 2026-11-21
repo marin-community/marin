@@ -27,15 +27,24 @@ from taskcompendium.convert.answers import (
     json_schema_task,
     numeric_answer_task,
 )
+from taskcompendium.harbor.oracle import OracleCommandBinding, write_oracle_command
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
+    ConversationInput,
     DockerBuildContext,
     EnvironmentRequirements,
+    FileReward,
+    JsonValueAnswer,
     NoGrader,
+    PlainText,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     Source,
     TaskSpec,
+    TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, Reply, WorkspaceFiles
@@ -351,3 +360,70 @@ async def test_original_oracle_creates_declared_answer_parent_and_preserves_cwd_
     assert result.exit_code == exit_code
     assert result.stdout == b"original-command\n"
     assert await read_oracle_answer(machine, answer_file, cwd="/", timeout=10, output_limit_bytes=1024) == b"[]\n"
+
+
+def test_the_oracle_command_binding_delivers_number_and_json_replies(tmp_path):
+    """A reply-graded machine task's answer file becomes the final assistant message.
+
+    Text, number and json answers all grade the reply the answer file carries, so the
+    declared command binding accepts each of them; a workspace-graded answer still
+    refuses, because its submission is the collected workspace rather than a reply.
+    """
+
+    def reply_task(answer_type: AnswerType) -> TaskSpec:
+        requirements = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=AGENT_IMAGE,
+            working_directory="/app",
+        )
+        return TaskSpec(
+            id="graded-reply",
+            source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            context=ConversationInput(events=(TextMessage(role="user", content="Answer."),)),
+            answer_type=answer_type,
+            answer_format=JsonValueAnswer() if answer_type is AnswerType.JSON else PlainText(),
+            environment_requirements=requirements,
+            grader=ScriptGrader(
+                argv=("cat", "/app/answer.txt"),
+                environment=requirements,
+                answer_path="/app/answer.txt",
+                reward=FileReward(files=(RewardFile(path="/app/reward.txt", format=RewardFileFormat.NUMBER),)),
+            ),
+            resources=ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"true\n"),)),
+        )
+
+    def golden(task: TaskSpec) -> OracleCommand:
+        return OracleCommand(command="bash /solution/solve.sh", answer_file="/solution/answer.txt")
+
+    for answer_type in (AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON):
+        directory = tmp_path / answer_type.value
+        directory.mkdir()
+        assert write_oracle_command(
+            reply_task(answer_type), {"machine": "fixture"}, golden, directory, source_revision="a" * 40
+        )
+        binding = OracleCommandBinding.model_validate_json((directory / "oracle-command.json").read_text())
+        assert binding.submission.answer_file == "/solution/answer.txt"
+        binding.require_task(reply_task(answer_type))
+
+    workspace_requirements = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=AGENT_IMAGE,
+        working_directory="/app",
+    )
+    workspace = TaskSpec(
+        id="graded-workspace",
+        source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Answer."),)),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        environment_requirements=workspace_requirements,
+        grader=ScriptGrader(
+            argv=("cat", "/app/state.txt"),
+            environment=workspace_requirements,
+            answer_path=None,
+            reward=FileReward(files=(RewardFile(path="/app/reward.txt", format=RewardFileFormat.NUMBER),)),
+        ),
+        resources=ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"true\n"),)),
+    )
+    with pytest.raises(ValueError, match="requires a reply-graded answer"):
+        binding.require_task(workspace)
