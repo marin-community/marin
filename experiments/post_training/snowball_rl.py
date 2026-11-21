@@ -268,6 +268,9 @@ _LEARNING_MEDIUM = _snowball(
 )
 
 
+# KV all-gather supports packed sliding windows with Grug's five KV heads.
+_TRAIN_LONG_MEGATRON_KWARGS = {"cp_comm_type": "all_gather"}
+
 _TRAIN_LONG = _snowball(
     revision="2026.11.21.2",
     held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -282,15 +285,14 @@ _TRAIN_LONG = _snowball(
             RecipePatch(
                 trainer=sections.Trainer(
                     use_sample_packing=True,
-                    # KV all-gather supports sliding windows with Grug's five KV heads.
                     policy=sections.Policy(
                         megatron_config=sections.PolicyMegatronConfig(
-                            transformer_config_kwargs={"cp_comm_type": "all_gather"},
+                            transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
                         ),
                     ),
                     ref=sections.Ref(
                         megatron_config=sections.RefMegatronConfig(
-                            transformer_config_kwargs={"cp_comm_type": "all_gather"},
+                            transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
                         ),
                     ),
                 ),
