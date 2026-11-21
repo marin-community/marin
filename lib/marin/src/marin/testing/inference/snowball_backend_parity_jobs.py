@@ -458,6 +458,7 @@ def tpu_vllm_engine_config() -> VllmEngineConfig:
         max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
         max_num_seqs=BATCH_SIZE,
         startup_timeout_seconds=RUNTIME_TIMEOUT,
+        # Match the GPU parity arm's fresh prefill for each prompt.
         extra_args=("--max-logprobs", str(RETURNED_LOGPROBS), "--no-enable-prefix-caching"),
     )
 
