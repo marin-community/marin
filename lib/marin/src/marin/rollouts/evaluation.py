@@ -4,9 +4,11 @@
 """Execute published TaskSpec evaluation corpora and save raw, resumable FineStore results."""
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
@@ -79,6 +81,69 @@ from verifyit.modes.grade_judge import JudgeConnection
 
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
+# Queued rows wait at most WRITE_BATCH_INTERVAL seconds before committing together; a batch commits
+# sooner once WRITE_BATCH_MAX_ENTRIES entries wait.
+WRITE_BATCH_INTERVAL = 2.0
+WRITE_BATCH_MAX_ENTRIES = 256
+
+
+class BatchedWriter:
+    """Commit evaluation rows in batched FineStore transactions on one worker thread.
+
+    One FineStore commit writes shards and a manifest to object storage and serializes on the store's
+    commit lock, so committing once per attempt on the event loop stalls every in-flight request.
+    Each entry added here (a batch of selection records, an attempt start, or a finished attempt with
+    its sample, rollouts and raw evidence) lands whole in one transaction, and entries commit in the
+    order they were added. A crash loses at most the unflushed entries; resume reruns any attempt
+    without a finished row.
+    """
+
+    def __init__(self, store: DataStore, *, interval: float, max_entries: int) -> None:
+        self._store = store
+        self._interval = interval
+        self._max_entries = max_entries
+        self._pending: list[tuple[dict[str, list[dict]], dict[str, bytes]]] = []
+        self._ready = asyncio.Event()
+        self._stopping = False
+        # One worker keeps commits in submission order even when an awaiting task is cancelled.
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evaluation-writer")
+
+    def add(self, rows: Mapping[str, list[dict]], objects: Mapping[str, bytes] | None = None) -> None:
+        self._pending.append((dict(rows), dict(objects or {})))
+        if len(self._pending) >= self._max_entries:
+            self._ready.set()
+
+    def stop(self) -> None:
+        """Ask ``run`` to commit what remains and return."""
+        self._stopping = True
+        self._ready.set()
+
+    async def run(self) -> None:
+        """Commit pending entries until stopped; on exit or cancellation, commit the remainder."""
+        try:
+            while not self._stopping:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._ready.wait(), self._interval)
+                self._ready.clear()
+                await self._submit()
+        finally:
+            await self._submit()
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=True)
+
+    async def _submit(self) -> None:
+        batch, self._pending = self._pending, []
+        if batch:
+            await asyncio.get_running_loop().run_in_executor(self._executor, self._commit, batch)
+
+    def _commit(self, batch: list[tuple[dict[str, list[dict]], dict[str, bytes]]]) -> None:
+        with self._store.unbounded_transaction() as transaction:
+            for rows, objects in batch:
+                for name, table_rows in rows.items():
+                    transaction.table(name).extend(table_rows)
+                for name, data in objects.items():
+                    transaction.write_object(name, data)
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -274,7 +339,7 @@ async def generation_turn(
 
 
 def _save_attempt(
-    store: DataStore,
+    writer: BatchedWriter,
     attempt: Attempt,
     sample: EvalSample,
     raw: dict,
@@ -295,19 +360,23 @@ def _save_attempt(
             "completion_tokens": completion_tokens,
         }
     )
-    with store.transaction() as transaction:
-        transaction.table(ATTEMPTS_TABLE).add(terminal.model_dump(mode="json"))
-        transaction.table(ARCHIVE_SAMPLES_TABLE).add(sample_to_archive_row(sample, trial_id=trial_id))
-        for record in rollout_records_from_sample(sample, trial_id=trial_id):
-            transaction.table(ARCHIVE_ROLLOUTS_TABLE).add(record.model_dump(mode="json"))
-        transaction.write_object(blob, json.dumps(raw, allow_nan=False).encode())
+    writer.add(
+        {
+            ATTEMPTS_TABLE: [terminal.model_dump(mode="json")],
+            ARCHIVE_SAMPLES_TABLE: [sample_to_archive_row(sample, trial_id=trial_id)],
+            ARCHIVE_ROLLOUTS_TABLE: [
+                record.model_dump(mode="json") for record in rollout_records_from_sample(sample, trial_id=trial_id)
+            ],
+        },
+        {blob: json.dumps(raw, allow_nan=False).encode()},
+    )
 
 
 async def _score_likelihood(
     case: EvaluationCase,
     protocol: EvaluationProtocol,
     scorer: LikelihoodScorer,
-    store: DataStore,
+    writer: BatchedWriter,
     attempt: Attempt,
     timeout: float | None,
     evidence: TaskEvidence,
@@ -393,7 +462,7 @@ async def _score_likelihood(
     usage = [result.usage for result in results]
     known_usage = outcome is Outcome.GRADED and all(value is not None for value in usage)
     _save_attempt(
-        store,
+        writer,
         attempt,
         sample,
         raw,
@@ -412,7 +481,7 @@ async def _score_generation(
     protocol: EvaluationProtocol,
     config: EvaluationRunConfig,
     model: Model,
-    store: DataStore,
+    writer: BatchedWriter,
     attempt: Attempt,
     max_tokens: int,
     *,
@@ -501,7 +570,7 @@ async def _score_generation(
     if retry_turn is not None:
         prompt_tokens = completion_tokens = 0
     _save_attempt(
-        store,
+        writer,
         attempt,
         sample,
         raw,
@@ -621,6 +690,8 @@ async def run_evaluation(
             asyncio.Queue(maxsize=config.concurrency * 2)
         )
         failures = 0
+        writer = BatchedWriter(store, interval=WRITE_BATCH_INTERVAL, max_entries=WRITE_BATCH_MAX_ENTRIES)
+        running_consumers = config.concurrency
 
         async def produce() -> None:
             for root, protocol, manifest in corpora:
@@ -643,15 +714,14 @@ async def run_evaluation(
                 ):
                     records.append(decision.record.model_dump(mode="json"))
                     if len(records) >= 500 or decision.case is not None:
-                        with store.transaction() as transaction:
-                            transaction.table(SELECTIONS_TABLE).extend(records)
+                        writer.add({SELECTIONS_TABLE: records})
                         records = []
                     case = decision.case
                     if case is None:
                         continue
                     _validate_judge(case.task, config.judge)
                     selected += 1
-                    # Cohort decisions are durable before expanding trials, including on resumed runs.
+                    # The writer commits in order, so cohort decisions land no later than their trials' rows.
                     for trial in range(protocol.trials.count):
                         old = latest.get(_attempt_key(dataset_id, case.item.source_row, trial))
                         if (
@@ -675,15 +745,14 @@ async def run_evaluation(
                             )
                         )
                 if records:
-                    with store.transaction() as transaction:
-                        transaction.table(SELECTIONS_TABLE).extend(records)
+                    writer.add({SELECTIONS_TABLE: records})
                 if not selected:
                     raise ValueError(f"No evaluation rows are eligible under this run: {protocol.benchmark}")
             for _ in range(config.concurrency):
                 await queue.put(None)
 
         async def consume() -> None:
-            nonlocal failures
+            nonlocal failures, running_consumers
             while (work := await queue.get()) is not None:
                 case, protocol, selection, trial, retry, retry_turn = work
                 task = case.task
@@ -702,12 +771,11 @@ async def run_evaluation(
                     prompt_tokens=None,
                     completion_tokens=None,
                 )
-                with store.transaction() as transaction:
-                    transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+                writer.add({ATTEMPTS_TABLE: [attempt.model_dump(mode="json")]})
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
-                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout, config.task_evidence
+                        case, protocol, likelihood, writer, attempt, config.limits.attempt_timeout, config.task_evidence
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue
@@ -718,7 +786,7 @@ async def run_evaluation(
                     protocol,
                     config,
                     transport,
-                    store,
+                    writer,
                     attempt,
                     selection.max_tokens,
                     machine_factories=machine_factories,
@@ -726,11 +794,18 @@ async def run_evaluation(
                     retry_turn=retry_turn,
                 )
                 failures += outcome is Outcome.INFRA_ERROR
+            running_consumers -= 1
+            if not running_consumers:
+                writer.stop()
 
-        async with asyncio.TaskGroup() as group:
-            group.create_task(produce())
-            for _ in range(config.concurrency):
-                group.create_task(consume())
+        try:
+            async with asyncio.TaskGroup() as group:
+                group.create_task(writer.run())
+                group.create_task(produce())
+                for _ in range(config.concurrency):
+                    group.create_task(consume())
+        finally:
+            writer.close()
         if failures:
             raise EvaluationInfrastructureError(
                 f"{failures} evaluation attempts failed; their raw evidence is saved for resume"
