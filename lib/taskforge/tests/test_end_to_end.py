@@ -2129,6 +2129,29 @@ def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(p
         TypeAdapter(Accept).validate_json(b'{"band": "in_band", "restore": ""}')
 
 
+# Review 2026-11-21 (follow-up 1): a disk-full error persisting the final review held the run from the initial
+# workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
+async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write, failed = JsonlSink._write, []
+
+    def full_once(sink: JsonlSink, records: Sequence[Record]) -> None:
+        reviewed = any(isinstance(r.event, StageCompleted) and r.event.stage is Stage.REVIEW for r in records)
+        if reviewed and not failed:
+            failed.append(OSError(errno.ENOSPC, "No space left on device"))
+            raise failed[-1]
+        write(sink, records)
+
+    monkeypatch.setattr(JsonlSink, "_write", full_once)
+    monkeypatch.setattr(driver, "EventLog", partial(EventLog, attempts=1))
+    serve(monkeypatch, resources(Envs(), script()))
+    await driver.one(driver_args)
+    workpiece = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert failed and workpiece.terminal is Terminal.HELD
+    assert workpiece.submission is not None and len(workpiece.evidence) == 1
+
+
 # Review 2026-11-21: a refused foreign restore digest published a bug-class hold whose snapshot had neither the
 # submission nor the evidence the refusal was about, because the driver still held its initial workpiece.
 async def test_a_refused_restore_publishes_the_last_workpiece_it_reached(

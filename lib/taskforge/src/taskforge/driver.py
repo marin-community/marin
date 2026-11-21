@@ -14,6 +14,7 @@ import sys
 import traceback
 from collections import Counter
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -129,8 +130,8 @@ async def one(args: argparse.Namespace) -> None:
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
     log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
-    latest = [Workpiece(proposal.header.id, proposal)]
-    wp = latest[0]
+    seen = [Workpiece(proposal.header.id, proposal)]  # the workpiece the last stage visit started from
+    wp = seen[0]
     try:
         async with checkpoints.running():
             source = endpoint_source(
@@ -141,21 +142,22 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("provider.pool", str),
             )
             async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
-                wp = await run_workpiece(proposal, config, resources, log, install=install, reached=latest.append)
+                wp = await run_workpiece(
+                    proposal, config, resources, log, install=install, reached=partial(seen.__setitem__, 0)
+                )
     except* (Superseded, CorruptJournal, PublicationFailed):
         raise  # The writer stopped; it publishes neither a hold nor a final head.
     except* (Hold, Restart, Transient, LogFailure) as error:
         if checkpoints.stopped is not None:
             raise  # A stopped writer records nothing more; the failure beside the stop keeps its identity.
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
+        wp = seen[0].with_(terminal=Terminal.HELD, decisions=(*seen[0].decisions, Incomplete(reasons(error))))
         await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
         if checkpoints.stopped is not None:
             raise
         detail = traceback.format_exc()
-        wp = latest[-1]
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
+        wp = seen[0].with_(terminal=Terminal.HELD, decisions=(*seen[0].decisions, Incomplete((f"bug: {detail}",))))
         await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Taskforge workpiece %s failed", proposal.header.id)
         if len(error.exceptions) == 1:
