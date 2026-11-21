@@ -77,6 +77,8 @@ message runs under the assistant-prefix harness. The `structure-closure` tasks o
 curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
+A task that needs a machine uses `task_machine_by_dataset[task.source.dataset]`, or else
+`task_machine_by_command_semantics` for its command semantics; without either, it fails validation.
 Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
@@ -659,6 +661,9 @@ A model adapter reports `stop_reason="length"` for every response that ends on i
 This includes a response that the server's tool parser reports as tool calls; vLLM's GLM tool parser reports such a response with finish reason `tool_calls`.
 `ChatModel` with a `context_window` also reports `length` for a `tool_calls` response whose prompt and completion tokens fill that window.
 The shell harness does not execute tool calls from a `length` response.
+
+SkyRL's model client replaces a lone surrogate in tool-call arguments with U+FFFD, because the tokenizer cannot
+encode a lone surrogate in the next turn. Response token IDs do not change.
 
 ## Trace modes
 
