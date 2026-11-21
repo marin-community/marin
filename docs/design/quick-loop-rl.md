@@ -184,9 +184,7 @@ it is queued and follow the coordinator if Iris retries the child.
   restore, and the further optimizer update after restore.
 - After acceptance, run the planned 25-update Megatron/vLLM and Levanter/vLLM
   arms with distinct artifact versions and publication verification enabled in
-  both. Before submission, pin the reward margin and the update-time or cost
-  target for promotion with the experiment owner. Hold the initializer,
-  Snowball 100k selection `2026.11.04`, optimizer, 24,576-token request window, 8,192-token
+  both. Hold the initializer, Snowball 100k selection `2026.11.04`, optimizer, 24,576-token request window, 8,192-token
   response cap, grader and fixed 100-task evaluation panel constant. Record
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
@@ -246,6 +244,8 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 
 ## Open decisions
 
+- Set learner promotion criteria for fixed-panel reward and update time or
+  cost before changing the default learner.
 - Choose the full-model native serving topology after measuring the bounded
   path and profiling the pinned checkpoint. The current native parity
   evidence covers one TPUv4 host, and the learner comparison uses H100s.
