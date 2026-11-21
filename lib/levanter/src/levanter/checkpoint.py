@@ -73,36 +73,6 @@ def _current_process_rss_bytes() -> int | None:
     return rss * 1024
 
 
-CheckpointDebugStateProvider = Callable[[], Mapping[str, Any]]
-_DEBUG_CHECKPOINTER_STATE_PROVIDERS: dict[str, CheckpointDebugStateProvider] = {}
-_DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK = threading.Lock()
-
-
-def register_debug_checkpointer_state_provider(name: str, provider: CheckpointDebugStateProvider) -> None:
-    """Register a debug state provider that contributes extra checkpoint diagnostics."""
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        _DEBUG_CHECKPOINTER_STATE_PROVIDERS[name] = provider
-
-
-def unregister_debug_checkpointer_state_provider(name: str) -> None:
-    """Unregister a previously registered checkpoint debug state provider."""
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        _DEBUG_CHECKPOINTER_STATE_PROVIDERS.pop(name, None)
-
-
-def _collect_debug_checkpointer_state() -> dict[str, Any]:
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        providers = list(_DEBUG_CHECKPOINTER_STATE_PROVIDERS.items())
-
-    snapshots: dict[str, Any] = {}
-    for name, provider in providers:
-        try:
-            snapshots[name] = dict(provider())
-        except Exception as exc:
-            snapshots[name] = {"provider_error": f"{type(exc).__name__}: {exc}"}
-    return snapshots
-
-
 def _manager_debug_state(manager: GlobalAsyncCheckpointManager | None) -> dict[str, Any]:
     if manager is None:
         return {}
@@ -244,9 +214,6 @@ class _CheckpointProgressLogger:
         manager_state = _manager_debug_state(self.manager)
         if manager_state:
             state["manager"] = manager_state
-        extra_state = _collect_debug_checkpointer_state()
-        if extra_state:
-            state["providers"] = extra_state
         if rss_bytes is not None:
             self._publish("checkpoint_process_peak_rss_bytes", rss_bytes, event=event, phase=self.phase)
 
