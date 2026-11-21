@@ -106,8 +106,9 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                         role = "judge" if scopes["judge"] else "adversary" if adversary else "author"
                         # The reviewer runs beside the adversaries: its request names it by its own tools.
                         role = "solve_review" if reviewing(event.request) else role
-                        # The confirmation step runs its batch, then its final review, beside nothing else.
-                        tokens["final_review" if scopes["confirm"] else role].update(asdict(event.value.usage))
+                        # The confirmation step's reviewer is its final review; its judge calls stay the judge's.
+                        role = "final_review" if role == "solve_review" and scopes["confirm"] else role
+                        tokens[role].update(asdict(event.value.usage))
                     elif isinstance(event.request, SolverRollout):
                         for conversation in event.value.rollout.conversations:
                             for step in conversation.steps:

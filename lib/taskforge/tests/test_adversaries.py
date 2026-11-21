@@ -557,6 +557,8 @@ LATER_SETTINGS = frozenset(
         "solver.confirmation_k",
         "solve_review.final.system",
         "solve_review.final.user",
+        "solve_review.final.nudge",
+        "author.notes",
     }
 )
 """The entries the default policy gained after this fixture was recorded (n9, n10, n11, then n12); none enters a replay

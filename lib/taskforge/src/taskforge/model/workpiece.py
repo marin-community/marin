@@ -18,7 +18,15 @@ from taskforge.model.content_hash import digest
 from taskforge.model.controls import Control
 from taskforge.model.llm import Message, ToolSchema
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import OMIT_NONE, OMIT_NOTHING, BandOutcome, Decision, Decline, ValidationResult
+from taskforge.model.review import (
+    OMIT_NONE,
+    OMIT_NOTHING,
+    BandOutcome,
+    Decision,
+    Decline,
+    FindingResponse,
+    ValidationResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +75,7 @@ class WorkpieceChanges(TypedDict, total=False):
     terminal: Terminal | None
     fallback: Fallback | None
     accepted_with: BandOutcome | None
+    responses: tuple[FindingResponse, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +90,8 @@ class Workpiece:
     terminal: Terminal | None = None
     fallback: Annotated[Fallback | None, OMIT_NONE] = None
     accepted_with: BandOutcome | None = None
+    responses: Annotated[tuple[FindingResponse, ...], OMIT_NOTHING] = ()
+    """The author's response to every review finding sent back, by originating review (``FindingResponse``)."""
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
         return replace(self, **changes)

@@ -215,17 +215,20 @@ def report(
     evidence: Evidence,
     findings: Sequence[ReviewFinding],
     accounts: Sequence[TrialAccount],
+    earlier: Sequence[ReviewFinding] = (),
 ) -> ToolResult | ReturnRequest[SolveReview]:
     """The review, once its accounts cover every trial that did not pass and a failure blamed on a task defect has a
-    finding that survives its citations and cites that trial; any other finding whose citations fail is dropped with
-    its reason, never trusted and never refused back to the reviewer."""
+    finding that survives its citations and cites that trial: a submitted one, or an ``earlier`` report's whose
+    citations all still check against this evidence. Any submitted finding whose citations fail is dropped with its
+    reason, never trusted and never refused back to the reviewer."""
     accounted = [account.trial for account in accounts]
     trials = {source.name for source in evidence.sources.values()}
     problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
     kept, dropped = checked(evidence, findings)
-    cited = {citation.source for finding in kept for citation in finding.citations}
+    supported = (*kept, *checked(evidence, earlier)[0])  # an earlier claim is rechecked against these trials
+    cited = {citation.source for finding in supported for citation in finding.citations}
     why = "".join(f" ({reason})" for _, reason in dropped)
     problems += [
         f"trial {account.trial} is attributed to a task defect, but no surviving finding cites "
@@ -275,20 +278,25 @@ class FinalReportArgs:
 
 @dataclass(frozen=True, slots=True)
 class FinalReportTool(ValidatedTool[FinalReportArgs]):
-    """The final review's exit: the round review's checks over its new findings, sorted into revise and note."""
+    """The final review's exit: the round review's checks over its new findings, sorted into revise and note. An
+    account may blame a trial on an ``earlier`` report's finding while that finding's quotes still check against the
+    trials (``report``)."""
 
     evidence: Evidence
+    earlier: tuple[ReviewFinding, ...] = ()
     name = "report"
     description = (
         "Finish the review with the NEW findings only (none an earlier report already gave). `revise` lists those "
         "severe enough that the task should go back to its author; `note` lists those the task can be accepted with, "
-        "recorded as notes. Both are empty when the trials show nothing new. " + FINDING_FIELDS
+        "recorded as notes. Both are empty when the trials show nothing new. An account may attribute a trial to a "
+        "defect an earlier report gave without repeating it, while that report's quotes from the trial still occur "
+        "in it. " + FINDING_FIELDS
     )
     args_type = FinalReportArgs
 
     @override
     async def run(self, ctx: Context, args: FinalReportArgs) -> ToolResult | ReturnRequest[SolveReview]:
-        outcome = report(self.evidence, (*args.revise, *args.note), args.accounts)
+        outcome = report(self.evidence, (*args.revise, *args.note), args.accounts, self.earlier)
         if isinstance(outcome, ToolResult):
             return outcome
         kept = outcome.payload.findings

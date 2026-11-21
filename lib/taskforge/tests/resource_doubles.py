@@ -105,7 +105,8 @@ class FakeWeb(WebClient):
 
 
 class CleanReviewer(InferenceClient):
-    """A solve-reviewer that reports no finding and accounts for every trial its opening lists."""
+    """A solve-reviewer that reports no finding and accounts for every trial its opening lists, in the schema of the
+    report tool it is offered: a round review's ``findings``, or a final review's ``revise`` and ``note``."""
 
     def __init__(self) -> None:
         self.requests: list[InferenceRequest] = []
@@ -122,5 +123,7 @@ class CleanReviewer(InferenceClient):
             {"trial": int(trial), "attribution": "solver", "reason": "its own work"}
             for trial in re.findall(r"^trial/(\d+):", opening, re.MULTILINE)
         ]
-        arguments = json.dumps({"findings": [], "accounts": accounts})
+        (exit_tool,) = [tool for tool in request.tools if tool.name == "report"]
+        lists = ("revise", "note") if "revise" in json.dumps(exit_tool.parameters) else ("findings",)
+        arguments = json.dumps({**{name: [] for name in lists}, "accounts": accounts})
         return Completion("", (ToolCall("review", "report", arguments),), FinishReason.TOOL_CALLS)

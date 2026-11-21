@@ -11,6 +11,7 @@ acceptance, or the final review's one ``Revise``, which starts a round as ``Modi
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
@@ -27,9 +28,12 @@ from taskforge.model.review import (
     BandOutcome,
     Budget,
     Decision,
+    Decline,
+    FindingResponse,
     Incomplete,
     Modify,
     Reject,
+    Response,
     Retry,
     Revise,
 )
@@ -82,10 +86,11 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
             ):
                 raise ValueError(f"Cannot restore {restore} at {band}: the fallback is {wp.fallback}")
             confirmed = bool(wp.evidence) and wp.evidence[-1].confirms is not None
-            return wp.with_(
-                terminal=Terminal.ACCEPTED if confirmed or not policy.setting("solver.confirmation_k", int) else None,
+            final = confirmed or not policy.setting("solver.confirmation_k", int)
+            return wp.with_(  # a pending acceptance's placement is its decision's band, published only once final
+                terminal=Terminal.ACCEPTED if final else None,
                 submission=wp.fallback.submission if wp.fallback and restore else wp.submission,
-                accepted_with=None if band is BandOutcome.IN_BAND else band,
+                accepted_with=band if final and band is not BandOutcome.IN_BAND else None,
             )
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
@@ -103,20 +108,44 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                     f"Cannot keep {fallback} as the fallback: it is neither the submission nor the fallback"
                 )
             system = tuple(message for message in wp.session.messages if message.role == "system")
+            notes = decision.notes if isinstance(decision, Revise) else ()
             detail = "\n".join(findings)
             if review:
                 detail += "\n\n" + policy.prompt("author.review").render(findings=finding_lines(review))
+            if notes:  # numbered after the revise findings, so ``declined`` names either kind
+                detail += "\n\n" + policy.prompt("author.notes").render(notes=finding_lines(notes, len(review)))
             kind = "review" if isinstance(decision, Modify) else "the final review"
             prompt = policy.prompt("author.revision").render(kind=kind, detail=detail)
+            sent = (FindingResponse(len(wp.evidence) - 1, f, Response.REQUESTED) for f in (*review, *notes))
             return wp.with_(
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), wp.session.tool_schemas),
                 fallback=kept,
+                responses=(*wp.responses, *sent),
             )
         case Retry():
             return wp
         case Incomplete():
             return wp.with_(terminal=Terminal.HELD)
+
+
+def answered(wp: Workpiece, declined: tuple[Decline, ...], response: Response) -> Workpiece:
+    """``wp`` with each finding still requested of the author answered: declined with its reason, else ``response``."""
+    reasons = {decline.finding: decline.reason for decline in declined}
+    return wp.with_(
+        responses=tuple(
+            (
+                r
+                if r.response is not Response.REQUESTED
+                else (
+                    replace(r, response=Response.DECLINED, reason=reasons[r.finding])
+                    if r.finding in reasons
+                    else replace(r, response=response)
+                )
+            )
+            for r in wp.responses
+        )
+    )
 
 
 def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) -> tuple[Workpiece, Stage | None]:
@@ -127,8 +156,10 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
     """
     match stage, result:
         case Stage.AUTHOR, Submitted(submission, session):
+            wp = answered(wp, submission.declined, Response.REVISED)
             return wp.with_(submission=submission, session=session), Stage.VALIDATE
         case Stage.AUTHOR, Stopped():
+            wp = answered(wp, (), Response.STOPPED)
             stopped = apply_decision(
                 wp.with_(session=result.session), author_stopped(wp, result.summary), config.budget, config.policy
             )

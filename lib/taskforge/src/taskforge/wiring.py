@@ -370,8 +370,9 @@ def build_config(
         agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3)),
         adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
     )
-    for prompt in ("system", "user", "final.system", "final.user"):
-        policy.prompt(f"solve_review.{prompt}")  # a missing prompt fails here, not at a round's first review
+    final = ("solve_review.final.system", "solve_review.final.user", "solve_review.final.nudge", "author.notes")
+    for prompt in ("solve_review.system", "solve_review.user", *final):
+        policy.prompt(prompt)  # a missing prompt fails here, not at a round's first review
     solve_review = Role(
         "solve_review", agentic_harness(policy, "solve_review", profiles.get("solve_review", GLM_5_3)), {}
     )
