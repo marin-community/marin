@@ -59,7 +59,8 @@ class MathEquivalence(StrEnum):
 
 
 # Bound subprocesses across all environment instances in the driver.
-_SYMBOLIC_SLOTS = threading.BoundedSemaphore(8)
+SYMBOLIC_CONCURRENCY = 8
+_SYMBOLIC_SLOTS = threading.BoundedSemaphore(SYMBOLIC_CONCURRENCY)
 
 
 def _library_child(

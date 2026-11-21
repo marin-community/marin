@@ -19,6 +19,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
+from skyrl_gym.envs.nemotron_ultra.math_with_judge import SYMBOLIC_CONCURRENCY
 from transformers import AutoTokenizer
 from skyrl_train.config.utils import model_expert_count
 from collections import defaultdict, deque
@@ -1385,6 +1386,46 @@ class RayPPOTrainer:
                 "generation_workers": buffer.max_concurrent_rollouts,
                 "mini_batch_size": buffer.batch_size,
                 "max_staleness_steps": buffer.max_staleness_steps,
+            },
+            attributes={"role": TRAINER_ROLE, "step": str(self.global_step)},
+        )
+        workers = self.cfg.trajectory_runner.rollout_workers
+        sessions = self.cfg.environment.task_sessions
+        harbor_trials = OmegaConf.select(self.cfg, "terminal_bench_config.harbor.n_concurrent_trials")
+        record_event(
+            "rollout_concurrency_configuration",
+            {
+                "max_in_flight_groups": buffer.max_in_flight,
+                "effective_in_flight_groups": buffer.max_concurrent_rollouts,
+                "lookahead_groups": buffer.max_untrained_groups,
+                "max_staleness_steps": buffer.max_staleness_steps,
+                "batch_policy": buffer.batch_policy.value,
+                "consumed_route_quotas": json.dumps(buffer.consumed_route_quotas, sort_keys=True),
+                "samples_per_group": self.cfg.generator.n_samples_per_prompt,
+                "trajectory_bound_per_worker": (
+                    math.ceil(buffer.max_concurrent_rollouts / workers.num_workers)
+                    * self.cfg.generator.n_samples_per_prompt
+                ),
+                "rollout_workers": workers.num_workers,
+                "worker_cpus": workers.cpus_per_worker,
+                "tasks_per_worker": self.cfg.trajectory_runner.max_concurrent_tasks,
+                "executor_threads_per_worker": workers.executor_threads,
+                "verifier_threads_per_worker": sessions.max_verifier_workers,
+                "worker_progress_timeout_seconds": workers.progress_timeout_seconds,
+                "task_attempt_timeout_seconds": sessions.task_spec.session.attempt_timeout,
+                "harbor_trials": harbor_trials,
+                "harbor_trials_per_worker": None if harbor_trials is None else harbor_trials // workers.num_workers,
+                "genrm_comparisons_per_group": sessions.nemotron_ultra.genrm.max_concurrent_comparisons,
+                "symbolic_math_slots_per_process": SYMBOLIC_CONCURRENCY,
+                "teacher_enabled": self.distillation_plan is not None,
+                "teacher_queued_per_endpoint": self.cfg.trainer.teacher_scoring.max_queued_per_teacher,
+                "teacher_workers_per_endpoint": self.cfg.trainer.teacher_scoring.workers_per_teacher,
+                "max_num_seqs": self.cfg.generator.max_num_seqs,
+                "gpu_memory_utilization": self.cfg.generator.gpu_memory_utilization,
+                "max_num_batched_tokens": self.cfg.generator.max_num_batched_tokens,
+                "inference_dp": self.cfg.generator.inference_engine_data_parallel_size,
+                "inference_tp": self.cfg.generator.inference_engine_tensor_parallel_size,
+                "inference_ep": self.cfg.generator.inference_engine_expert_parallel_size,
             },
             attributes={"role": TRAINER_ROLE, "step": str(self.global_step)},
         )

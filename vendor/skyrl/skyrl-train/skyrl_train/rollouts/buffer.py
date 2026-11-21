@@ -33,6 +33,7 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedR
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
 from math import fsum
 import numpy as np
+from loguru import logger
 from skyrl_gym.verification import VerificationStatus
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -579,6 +580,7 @@ class RolloutBuffer:
         self._dispositions: list[GroupDisposition] = []
         self._stats: collections.defaultdict[int, _SelectionStats] = collections.defaultdict(_SelectionStats)
         self._changed = asyncio.Condition()
+        self._logged_admission_gate: str | None = None
 
     def _lease_batch(self) -> int | None:
         if self._policy_step == 0:
@@ -593,7 +595,7 @@ class RolloutBuffer:
     async def acquire_lease(self) -> RolloutLease:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
-            await self._changed.wait_for(lambda: self._lease_batch() is not None)
+            await self._changed.wait_for(self._lease_available)
             batch_id = self._lease_batch()
             route = None
             if self.config.consumed_route_quotas:
@@ -613,6 +615,26 @@ class RolloutBuffer:
             lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route)
             self._leases[lease.lease_id] = lease
             return lease
+
+    def _lease_available(self) -> bool:
+        batch_id = self._lease_batch()
+        gate = None
+        if batch_id is None:
+            if self._policy_step == 0:
+                gate = "policy_not_published"
+            elif self.config.max_in_flight is not None and len(self._leases) >= self.config.max_in_flight:
+                gate = "max_in_flight"
+            else:
+                gate = "batch_lookahead"
+        if gate != self._logged_admission_gate:
+            logger.bind(admission_gate=gate, policy_step=self._policy_step, leased_groups=len(self._leases)).info(
+                "rollout_admission_gate gate={} policy_step={} leased_groups={}",
+                gate,
+                self._policy_step,
+                len(self._leases),
+            )
+            self._logged_admission_gate = gate
+        return batch_id is not None
 
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""

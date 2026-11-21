@@ -4,9 +4,9 @@ import asyncio
 import math
 import os
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
@@ -350,6 +350,22 @@ class RemoteJudgeSettings:
         return JudgeConnection(self.base_url, os.environ[self.api_key_env])
 
 
+@asynccontextmanager
+async def admission_slot(gate: str, slots: asyncio.Semaphore | None) -> AsyncIterator[None]:
+    """Record a saturated trajectory resource while preserving semaphore ownership."""
+    if slots is None:
+        yield
+        return
+    blocked = slots.locked()
+    started = time.monotonic()
+    if blocked:
+        record_event("rollout_admission_blocked", {"gate": gate})
+    async with slots:
+        if blocked:
+            record_event("rollout_admission_resumed", {"gate": gate, "wait_seconds": time.monotonic() - started})
+        yield
+
+
 class TaskRolloutWorker:
     """Run canonical task rollouts and submit complete groups to the buffer."""
 
@@ -387,9 +403,9 @@ class TaskRolloutWorker:
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
         self.group_graders = group_graders
-        self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
+        self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else None
         self.harbor_task_slots = (
-            nullcontext()
+            None
             if harbor is None
             else asyncio.Semaphore(
                 harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
@@ -545,11 +561,11 @@ class TaskRolloutWorker:
                     ) from error
 
             engine = engines[index]
-            harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
+            harbor_slots = None if harbor is None else self.harbor_task_slots
             retries = 0
             while True:
                 try:
-                    async with harbor_slots, self.task_slots:
+                    async with admission_slot("harbor_trials", harbor_slots), admission_slot("trajectory_tasks", self.task_slots):
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
