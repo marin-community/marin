@@ -164,8 +164,8 @@ def unavailable_reference(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskR
 
 
 # Review 2026-11-21: the role runner prepared the caller's files and the opening before it opened the machine and scope,
-# so a renderer hold created no machine and journalled nothing, and a prompt failure lost the recorded hydration. On n6
-# (d510505b69) both failures journal these rows and close the one machine.
+# so a renderer hold created no machine and journalled nothing, and a prompt failure lost the recorded hydration. Before
+# the role runner (d510505b69) both failures journal these rows and close the one machine.
 @pytest.mark.parametrize(
     ("failure", "rows"),
     [
@@ -194,7 +194,7 @@ async def test_an_author_visit_failing_before_its_first_model_call_journals_and_
 
 
 # Review 2026-11-21: the adversary rendered its opening before entering its visit, so a prompt key error created no
-# machine and journalled nothing. On n6 (40d35b8bcc) it journals these rows and closes the one machine.
+# machine and journalled nothing. Before the role runner (40d35b8bcc) it journals these rows and closes the one machine.
 async def test_an_adversary_visit_failing_before_its_first_model_call_journals_and_closes_its_machine(
     workpiece: Workpiece,
 ) -> None:
