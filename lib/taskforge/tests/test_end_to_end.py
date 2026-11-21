@@ -231,7 +231,7 @@ SETTINGS: Mapping[str, object] = {
     "budget.max_modify_rounds": 1,
     "solver.confirmation_k": 0,
 }
-"""Without the confirmation step (n12), for the tests that count pre-confirmation events; ``CONFIRMING`` runs the
+"""Without the confirmation step, for the tests that count pre-confirmation events; ``CONFIRMING`` runs the
 ordinary accept, partial-validation resume, confirmation-outage recovery and restored-fallback cases at the shipped
 default, and ``test_confirmation.py`` the step itself."""
 

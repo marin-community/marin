@@ -255,7 +255,7 @@ async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred
 async def test_a_judge_call_inside_the_confirmation_is_charged_to_the_judge(
     tmp_path: Path, proposal: TaskProposal
 ) -> None:
-    """Review 2026-11-21 (n12 finding 8): a VerifyIt judge callback under the confirmation scope was reported as
+    """Review 2026-11-21: a VerifyIt judge callback under the confirmation scope was reported as
     final-review usage, though no final reviewer ran; the reviewer's own request there is the final review's."""
     index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
     tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())

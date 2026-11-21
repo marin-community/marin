@@ -550,7 +550,7 @@ async def test_confirmation_usage_is_reported_under_its_own_phase_once(tmp_path:
 async def test_the_first_final_reviewer_request_keeps_its_recorded_identity() -> None:
     """The final review's first request for a fixed task, as ``test_the_first_reviewer_request_keeps_its_recorded_
     identity`` pins the round review's: its prompts, its report tool's schema and the earlier-report rendering."""
-    # Updated knowingly in the n12 review round: the report tool lets an account lean on an earlier finding, and the
+    # Updated knowingly: the report tool lets an account lean on an earlier finding, and the
     # role has its own nudge.
     recorded = "8446ffff2274131fb3417500fa2598bdf2c3805ba13c83e734d1f2078218c990"
     account = {"trial": 1, "attribution": "solver", "reason": "misadded"}
@@ -570,7 +570,8 @@ async def test_the_first_final_reviewer_request_keeps_its_recorded_identity() ->
     )
 
 
-# Review 2026-11-21 (n12 hold): the cases below are the reviewer's reproductions, one test or parameter each.
+# Review 2026-11-21: each case below reproduces one fault in the confirmation step or the final review, one test or
+# parameter each.
 
 BASE = tuple(TrialResult(i, GradeResult(Outcome.GRADED, float(i % 2 == 0))) for i in range(3))
 
@@ -863,7 +864,8 @@ def test_an_omission_both_reviews_name_is_listed_once(proposal: TaskProposal) ->
     assert isinstance(decision, Accept) and decision.missing == (gone,)
 
 
-# Review 2026-11-21 (n12 follow-up 1): the reviewer's reproductions.
+# Review 2026-11-21: each case below reproduces one fault in how the final review carried findings and notes across
+# revisions.
 
 
 async def test_a_fix_attempted_in_a_discarded_revision_is_no_failed_fix_on_the_restored_task(
@@ -959,7 +961,7 @@ def test_a_fault_revision_writes_no_placement() -> None:
     assert adapter.validate_json(adapter.dump_json(placed)) == placed
 
 
-# Review 2026-11-21 (n12 follow-up 2): every submitted version is checked before versions of one finding merge.
+# Review 2026-11-21: every submitted version is checked before versions of one finding merge.
 
 
 def failed_trials(*trials: int) -> Evidence:
@@ -1024,7 +1026,7 @@ async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_
     assert [(r.review, r.response, r.reason) for r in wp.responses] == [(0, Response.DECLINED, "the grader is right")]
 
 
-# Review 2026-11-21 (n12 follow-up 2, inherited): a provider's context refusal of the author's revision was raised
+# Review 2026-11-21: a provider's context refusal of the author's revision was raised
 # past the effect, so a cold resume asked again; when the provider then answered, the restored round's response became
 # a revision and the run bought a second confirmation (16 solves, not 8).
 async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal, tmp_path: Path) -> None:
@@ -1042,7 +1044,7 @@ async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskP
     assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests
 
 
-# Review 2026-11-21 (n12 follow-up 3): one note in two versions, a quote trial 4 keeps and one only trial 6's first
+# Review 2026-11-21: one note in two versions, a quote trial 4 keeps and one only trial 6's first
 # confirmation attempt holds. Merged into one citation set, the note was dropped after a revision that kept trial 4.
 UNITS = "the prompt does not say which units"
 STABLE, SPECIFIC = found(4, FindingKind.AMBIGUOUS_PROMPT, UNITS), found(

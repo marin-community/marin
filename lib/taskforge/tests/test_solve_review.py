@@ -423,7 +423,7 @@ async def test_an_earlier_reviewed_format_root_is_refused_before_claim_and_left_
 ) -> None:
     """A format-6 acceptance, recorded at the base, names no missing evidence although no solve-review ran, and
     resuming a format-6 round would buy a review its history never had; such a root waits for a migration. A format-7
-    acceptance (n11) likewise names no missing confirmation, and its resumed round would buy one (n12)."""
+    acceptance likewise names no missing confirmation, and its resumed round would buy one."""
     destination = plant(driver_args, b"", found)
     before = sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file())
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
