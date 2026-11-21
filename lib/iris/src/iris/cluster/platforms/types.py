@@ -68,6 +68,10 @@ class Labels:
         self.iris_manual = f"iris-{prefix}-manual"
 
 
+def _port_lock_path(port: int) -> Path:
+    return Path(f"/tmp/iris/port_{port}")
+
+
 def find_free_port(start: int = -1) -> int:
     """Find an available port.
 
@@ -81,7 +85,7 @@ def find_free_port(start: int = -1) -> int:
             s.bind(("", 0))
             return s.getsockname()[1]
     for port in range(start, start + 1000):
-        lock = Path(f"/tmp/iris/port_{port}")
+        lock = _port_lock_path(port)
         try:
             os.kill(int(lock.read_text()), 0)
             continue  # port locked by a live process
@@ -102,7 +106,7 @@ def find_free_port(start: int = -1) -> int:
 def reserve_free_port(start: int) -> Iterator[int]:
     """Reserve a port until the caller's resource is closed."""
     port = find_free_port(start)
-    lock = Path(f"/tmp/iris/port_{port}")
+    lock = _port_lock_path(port)
     try:
         yield port
     finally:
