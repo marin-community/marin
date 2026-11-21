@@ -802,12 +802,18 @@ class JsonAnswer(BaseAnswerFormat):
 
     def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         try:
-            value = decode_json_value(unwrap_enclosing_fence(_text_answer(attempt.conversation.events[-1])))
+            content = unwrap_enclosing_fence(_text_answer(attempt.conversation.events[-1]))
+            value = decode_json_value(content)
         except ValueError as error:
             raise SubmissionFailure("JSON submission is malformed") from error
         answer = value.get(ANSWER_FIELD) if isinstance(value, dict) else None
         if answer_type == AnswerType.NUMBER and isinstance(answer, int | float) and not isinstance(answer, bool):
-            return TextSubmission(str(answer))
+            # Preserve the JSON lexeme so binary float rounding cannot change exact numeric grading.
+            literal_value = json.loads(content, parse_int=str, parse_float=str)
+            assert isinstance(literal_value, dict)
+            literal = literal_value[ANSWER_FIELD]
+            assert isinstance(literal, str)
+            return TextSubmission(literal)
         if not isinstance(answer, str) or not answer.strip():
             raise SubmissionFailure("JSON submission requires a nonempty string answer")
         return TextSubmission(answer)

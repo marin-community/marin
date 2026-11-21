@@ -32,7 +32,8 @@ def unwrap_fence(text: str) -> str:
 def unwrap_enclosing_fence(text: str) -> str:
     """Unwrap one code fence only when it encloses the entire text."""
     stripped = text.strip()
-    if _FENCE.fullmatch(stripped) is None:
+    match = _FENCE.match(stripped)
+    if match is None or match.end() != len(stripped):
         return stripped
     return unwrap_fence(stripped)
 

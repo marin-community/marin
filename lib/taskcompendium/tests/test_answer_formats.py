@@ -114,10 +114,29 @@ def test_json_answer_grades_finite_numbers_on_number_tasks(specification, respon
 
 
 @pytest.mark.parametrize(
+    "expected,response,reward",
+    [
+        ("9007199254740993", '{"answer": 9007199254740993.0}', 1.0),
+        ("9007199254740992", '{"answer": 9007199254740993.0}', 0.0),
+        ("1e-400", '{"answer": 1e-400}', 1.0),
+    ],
+)
+def test_json_answer_preserves_numeric_literal_for_exact_grading(specification, expected, response, reward):
+    task = _revised(
+        specification,
+        answer_format=JsonAnswer(),
+        grader=verifyit_package(NumericSpec(expected, tolerance_abs=0.0, tolerance_rel=0.0)).grader,
+    )
+    result = grade_answer(task, _attempt(task, _reply(response)))
+    assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize(
     "response",
     [
         'The answer is below.\n```json\n{"answer": 12}\n```',
         '```json\n{"answer": 12}\n```\nMore text',
+        '```json\n{"answer": 12}\n```\n```json\n{"answer": 13}\n```',
         '{"answer": true}',
         '{"answer": NaN}',
         '{"answer": 1e400}',
@@ -230,6 +249,7 @@ def test_answer_call_name_collision_cannot_change_source_tool(specification):
         '{"value":NaN}',
         '{"value":1e400}',
         '{"value":',
+        '```json\n{"value": 16, "nested": [true, null]}\n```\n```json\n{"value": 17}\n```',
     ],
 )
 def test_json_value_rejects_ambiguous_and_nonfinite_submissions(specification, content):
