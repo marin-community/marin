@@ -115,9 +115,9 @@ identity.
 
 ## License
 
-First-party Marin / Open Athena data: synthetic tasks written by forge's agentic author, released under
-the [OpenMDW License Agreement, version 1.1](LICENSE) for training and evaluation. The repository itself
-stays private until an explicit release.
+First-party Marin / Open Athena data: synthetic tasks written by forge's agentic author, released
+under the OpenMDW License Agreement, version 1.1 (OpenMDW-1.1); the full text is in LICENSE. Valid
+for training and evaluation. The repository itself stays private until an explicit release.
 
 ## Contents
 
