@@ -206,3 +206,23 @@ async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, numbe
     before = Path(sink.path).read_bytes()
     await sink.write(loaded[-1:])
     assert Path(sink.path).read_bytes() == before
+
+
+HELD_JOURNAL = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
+COLD_READER = """
+import gzip, sys
+from taskforge.stages import STAGES, StageFn, author, review, validate
+import taskforge.harness.events
+from taskforge.effects.log import decode
+assert all(map(callable, (author, review, validate))) and set(STAGES.values()) == {author, review, validate}
+print(len(decode(gzip.decompress(open(sys.argv[1], "rb").read()))))
+"""
+
+
+async def test_a_cold_reader_importing_the_stage_package_decodes_every_row_of_a_journal() -> None:
+    """A fresh process that imports only the stage package knows every event kind a held journal records."""
+    result = subprocess.run(
+        [sys.executable, "-c", COLD_READER, str(HELD_JOURNAL)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["57"]
