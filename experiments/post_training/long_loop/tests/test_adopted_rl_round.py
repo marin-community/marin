@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import dataclasses
 import hashlib
 import json
@@ -103,6 +104,21 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
     (data / "train.parquet").write_bytes(b"changed after adoption")
     with pytest.raises(ValueError, match="Round data changed"):
         terminal.build_config(context)
+
+
+@pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
+def test_round_preserves_disabled_route_quotas(local_round, tmp_path):
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {}
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
+    assert buffer["consumed_route_quotas"] == {}
+    assert buffer["batch_policy"] == "full_batch"
 
 
 @pytest.mark.parametrize("profile", ["one-rack", "three-rack"])

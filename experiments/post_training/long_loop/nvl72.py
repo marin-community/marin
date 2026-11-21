@@ -340,7 +340,11 @@ def build_run(
                 ckpt_interval=checkpoint_interval,
                 callbacks=tuple(callbacks),
                 rollout_buffer=sections.RolloutBuffer(
-                    consumed_route_quotas={"agentic": groups // 2, "nonagentic": groups // 2},
+                    consumed_route_quotas=(
+                        {"agentic": groups // 2, "nonagentic": groups // 2}
+                        if recipe.trainer.rollout_buffer.consumed_route_quotas
+                        else {}
+                    ),
                     max_in_flight=SMOKE_BATCH_GROUPS if smoke else recipe.trainer.rollout_buffer.max_in_flight,
                 ),
                 micro_forward_batch_size_per_gpu=profile.role_plan.micro_train_batch_size_per_gpu,
