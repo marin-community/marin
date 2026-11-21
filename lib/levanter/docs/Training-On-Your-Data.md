@@ -465,3 +465,32 @@ checkpoint dtype. Use `checkpoint_subpath: model/policy` to export the policy fr
 With `use_cpu: true`, the exporter restores the selected subtree on CPU. Host memory must hold the
 restored weights as well as the export buffers.
 Pin an explicit tokenizer with `tokenizer: model_name_or_path@revision`.
+
+### Auditing a trained export
+
+`levanter.compat.hf_export_audit` compares an indexed safetensors export with the
+actual FP32 training masters. It checks saved values against exact per-tensor
+casts, rather than requiring trained weights to equal the initial checkpoint.
+For explicitly frozen tensors, it also checks the master hash against a pinned
+source receipt.
+
+Before training, call `audit_source_checkpoint` with a complete mapping of tensor
+names to `TensorSpec(shape, dtype)` and the expected hashes of the source metadata
+files. This validates index/header coverage and records finite source values in
+bounded reads, including their lossless FP32 hashes. Pin the resulting receipt's
+SHA256 in the launch configuration.
+
+After saving the native checkpoint and HF export, call `audit_trained_export` on
+every rank in the same order. Pass the actual `TrainerState`, the pinned source
+receipt and metadata hashes, the complete expected exported layout, explicit
+`frozen_keys`, and the metadata filenames to compare. JSON metadata compares by
+value; other files compare by bytes. An optional `config_validator` supplies
+model-specific config rules. `allow_embedded_chat_template=True` accepts only an
+added tokenizer-config template that exactly matches the separately compared
+`chat_template.jinja`.
+
+Only the export writer reads tensor payloads; all ranks replicate one master at
+a time. Saved bytes are compared in 64 MiB chunks. The audit requires FP32 masters
+and supports FP32, BF16 and FP16 saved tensors. It writes
+`trained-precision-audit.json` only after every comparison succeeds. It does not
+save or delete checkpoints, or change the export's precision policy.
