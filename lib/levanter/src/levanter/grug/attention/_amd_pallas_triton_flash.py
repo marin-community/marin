@@ -38,15 +38,12 @@ import equinox as eqx
 import jax
 from jax import lax
 from jax import numpy as jnp
-from jax import shard_map
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plgpu
-from jax.sharding import PartitionSpec as P
-from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
-from levanter.sharding import partition_spec_of, partitioned_dims
+from levanter.grug.attention._per_shard_kernel import run_self_attention_per_shard
 
 # Finite stand-in for -inf: a fully masked tile keeps the running max finite, and the next unmasked tile's
 # rescale factor exp2(m_old - m_new) then zeroes whatever the masked tile accumulated.
@@ -445,29 +442,4 @@ def pallas_triton_flash_attention(
     batch, seq_len = q.shape[:2]
     lower = _key_lower_bounds(mask, batch=batch, seq_len=seq_len)
     run = functools.partial(_flash, block_sizes=block_sizes, interpret=interpret)
-
-    mesh = get_abstract_mesh()
-    if mesh is None or mesh.empty:
-        return run(q, k, v, lower)
-    q_dims = partitioned_dims(q, mesh)
-    if q_dims[1] or q_dims[3]:
-        raise ValueError(f"gpu_pallas_triton_flash needs unsharded sequence and head_dim, got {partition_spec_of(q)}")
-    for name, x in (("k", k), ("v", v)):
-        if partitioned_dims(x, mesh) != q_dims:
-            raise ValueError(
-                f"gpu_pallas_triton_flash needs {name} sharded like q, got q={partition_spec_of(q)} "
-                f"{name}={partition_spec_of(x)}"
-            )
-    # pallas_call rejects operands whose type names any Explicit mesh axis, even one of size 1, and Grug's meshes keep
-    # length-1 axes in every spec, so only skip shard_map when q's spec names no axis at all.
-    if not any(q_dims) and not any(jax.typeof(q).sharding.spec):
-        return run(q, k, v, lower)
-    q_spec = tuple(partition_spec_of(q))
-    q_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
-    lower = reshard(lower, P(q_spec[0], None))
-
-    @shard_map(mesh=mesh, out_specs=q_spec, check_vma=False)
-    def _local(q_local, k_local, v_local, lower_local):
-        return run(q_local, k_local, v_local, lower_local)
-
-    return _local(q, k, v, lower)
+    return run_self_attention_per_shard("gpu_pallas_triton_flash", run, q, k, v, lower)
