@@ -3,18 +3,7 @@
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
-from rolloutengine.models import (
-    BUDGET_STOP_REASON,
-    LENGTH_STOP_REASON,
-    MAX_TURNS_STOP_REASON,
-    TOTAL_TURN_TIMEOUT_STOP_REASON,
-    ConversationRecord,
-    GradedRollout,
-    ModelTurn,
-    RolloutFailure,
-    TaskRolloutSpec,
-)
-from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION, HARBOR_MODEL_LIMIT
+from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, RolloutFailure, TaskRolloutSpec
 from skyrl_gym.task_records import FOLDED_GRADE_HARNESSES, StepReward, fold_grades
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import NoGrader
@@ -22,20 +11,6 @@ from verifyit.reasoning_markup import ReasoningViolation
 
 REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
 REASONING_VIOLATION_TOKEN_METADATA_KEY = "reasoning_violation_token"
-TRAJECTORY_CAP_DIAGNOSTIC = "trajectory_cap"
-TRAJECTORY_CAP_STOPS = frozenset(
-    {BUDGET_STOP_REASON, LENGTH_STOP_REASON, MAX_TURNS_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON}
-)
-TRAJECTORY_CAP_ERRORS = frozenset(
-    {
-        "AgentTimeoutError",
-        "ModelTimeoutError",
-        "TrialAttemptTimeoutError",
-        "TurnCapExhaustedError",
-        "GenerationBudgetExceededError",
-        "ContextLengthExceededError",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -167,40 +142,3 @@ def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
         for step in rollout.steps
     )
     return replace(rollout, grade=grade, steps=steps)
-
-
-def reject_capped_rollout(rollout: TrainingRollout) -> TrainingRollout:
-    """Keep capped trajectories as reward-zero failures even if a verifier scored them."""
-    limit = rollout.grade.diagnostics.get(HARBOR_MODEL_LIMIT)
-    if rollout.stop_reason in TRAJECTORY_CAP_STOPS:
-        limit = rollout.stop_reason
-    error = rollout.grade.diagnostics.get(HARBOR_EXCEPTION)
-    if rollout.failure is not None and rollout.failure.exception_type in TRAJECTORY_CAP_ERRORS:
-        error = rollout.failure.exception_type
-    if error in TRAJECTORY_CAP_ERRORS:
-        limit = error
-    if limit is None:
-        return rollout
-    grade = GradeResult(
-        Outcome.SUBMISSION_FAILURE,
-        0.0,
-        "Trajectory budget exhausted",
-        passed=False,
-        diagnostics={**rollout.grade.diagnostics, TRAJECTORY_CAP_DIAGNOSTIC: limit},
-    )
-    steps = tuple(
-        replace(
-            step,
-            transition=replace(
-                step.transition,
-                reward=None,
-                token_rewards=None,
-                token_credit=None,
-                reward_components={},
-                grade=None,
-                task_grade=None,
-            ),
-        )
-        for step in rollout.steps
-    )
-    return replace(rollout, grade=grade, steps=steps, metrics={**rollout.metrics, "trajectory_capped": 1.0})

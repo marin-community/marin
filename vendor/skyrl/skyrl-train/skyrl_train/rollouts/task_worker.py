@@ -83,7 +83,6 @@ from skyrl_train.rollouts.task_projections import (
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
-    reject_capped_rollout,
     reject_malformed_reasoning,
     training_rollout,
 )
@@ -670,7 +669,7 @@ class TaskRolloutWorker:
                     self.projection.tokenizer,
                     harbor_tasks=[harbor is not None for harbor in harbor_settings],
                 )
-        return [reject_capped_rollout(rollout) for rollout in rollouts]
+        return rollouts
 
     async def run(self, input_batch: TaskRequestBatch) -> TrajectoryBatch:
         with self._active_request():

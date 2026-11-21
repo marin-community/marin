@@ -1,18 +1,14 @@
 import asyncio
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from loguru import logger
 from omegaconf import OmegaConf
-from rolloutengine.models import ModelTurn, RolloutFailure
-from taskcompendium.grading_result import GradeResult, Outcome
 
 from skyrl_train.config.utils import get_default_config
 
 from skyrl_train.rollouts.buffer import BatchPolicy, RolloutBuffer, RolloutBufferConfig
 from skyrl_train.rollouts.task_worker import HarborSlots, admission_slot
-from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition, reject_capped_rollout
 from skyrl_train.telemetry import process_telemetry
 from skyrl_train.trainer import RayPPOTrainer
 
@@ -62,38 +58,6 @@ async def test_harbor_slot_grant_cancelled_before_resume_returns_capacity():
     async with slots.admit(2):
         entered.append(2)
     assert entered == [2]
-
-
-@pytest.mark.parametrize(
-    "stop_reason,failure,diagnostics",
-    [
-        ("length", None, {}),
-        ("total_turn_timeout", None, {}),
-        ("error", RolloutFailure("AgentTimeoutError"), {}),
-        ("stop", None, {"harbor_exception_type": "AgentTimeoutError"}),
-        ("stop", None, {"harbor_model_limit": "length"}),
-    ],
-)
-def test_capped_trajectory_rejects_positive_verifier_and_turn_rewards(stop_reason, failure, diagnostics):
-    turn = ModelTurn(
-        prompt_token_ids=(1,), response_token_ids=(2,), logprobs=(-0.1,),
-        message={"role": "assistant", "content": "answer"}, stop_reason="stop",
-    )
-    grade = GradeResult(Outcome.GRADED, 1.0, passed=True, diagnostics=diagnostics)
-    rollout = TrainingRollout(
-        task_id="capped", messages=(), prompt_token_ids=(1,), response_token_ids=(2,),
-        loss_mask=(1,), logprobs=(-0.1,), grade=grade, stop_reason=stop_reason, failure=failure,
-        steps=(TrainingStep(turn, TrainingTransition(
-            done=True, reward=1.0, token_rewards=(1.0,), token_credit=(1.0,), grade=grade,
-        ), 0, ()),),
-    )
-    rejected = reject_capped_rollout(rollout)
-    assert (rejected.grade.status, rejected.grade.reward, rejected.grade.passed) == (Outcome.SUBMISSION_FAILURE, 0.0, False)
-    assert rejected.steps[0].transition.reward is None
-    assert rejected.steps[0].transition.token_rewards is None
-    assert rejected.steps[0].transition.token_credit is None
-    completed = replace(rollout, stop_reason="stop", failure=None, grade=GradeResult(Outcome.GRADED, 1.0, passed=True))
-    assert reject_capped_rollout(completed).grade.reward == 1.0
 
 
 @pytest.mark.asyncio

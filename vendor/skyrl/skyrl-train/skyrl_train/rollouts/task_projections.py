@@ -17,7 +17,6 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_gym.task_records import grade_skipped, skipped_grade
 from rolloutengine.models import RolloutContractError
 from skyrl_train.rollouts.training_record import (
-    TRAJECTORY_CAP_DIAGNOSTIC,
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
     conversation_steps,
@@ -631,17 +630,9 @@ def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
     ) + rollout.steps
     if not steps:
         return [rollout]
-    if (
-        REASONING_VIOLATIONS_DIAGNOSTIC in rollout.grade.diagnostics
-        or TRAJECTORY_CAP_DIAGNOSTIC in rollout.grade.diagnostics
-    ):
+    if REASONING_VIOLATIONS_DIAGNOSTIC in rollout.grade.diagnostics:
         steps = tuple(
-            replace(
-                step,
-                transition=replace(
-                    step.transition, reward=None, token_rewards=None, token_credit=None, reward_components={}
-                ),
-            )
+            replace(step, transition=replace(step.transition, reward=None, token_rewards=None, reward_components={}))
             for step in steps
         )
     outputs = []
