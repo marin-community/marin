@@ -350,20 +350,13 @@ class EventLog:
     ) -> None:
         self._sink = sink
         self._sleep = sleep
-        self._replayable = replayable
+        self._replayable, self._replaces = replayable, replaces
         self._records = list(replay_from)
         self._pending: list[Record] = []
-        self._index: dict[Key, object] = {}
-        self._replaced: set[Key] = set()
-        for record in replay_from:  # in order: an invalidation drops the one result it names, until one is recorded
-            if isinstance(event := record.event, Invalidated):
-                self._index.pop((event_digest(event.request), event.fingerprints), None)
-            elif isinstance(event, Resolved) and cached(event.fingerprints):
-                key = (event_digest(event.request), event.fingerprints)
-                if replaces(event):
-                    self._replaced.add(key)
-                elif replayable(event):
-                    self._index[key] = event.value
+        self._latest: dict[Key, Resolved[object]] = {}
+        """Each cached key's latest recorded resolution, unless an ``Invalidated`` row names it after that."""
+        for record in replay_from:
+            self._fold(record.event)
         self._owners = Owners(replay_from)
         self._attempts = attempts
         self._lock = asyncio.Lock()
@@ -391,8 +384,7 @@ class EventLog:
         record = Record(len(self._records) + 1, time.time(), event, opened, attempt, answers)
         self._owners.add(record)
         self._records.append(record)
-        if isinstance(event, Resolved) and cached(event.fingerprints) and self._replayable(event):
-            self._index[event_digest(event.request), event.fingerprints] = event.value
+        self._fold(event)
         if self._sink is not None:
             self._pending.append(record)
         return record
@@ -419,16 +411,26 @@ class EventLog:
                     await self._sleep(min(2**attempt, 30))
             raise LogFailure("Persistence requires at least one attempt")
 
+    def _fold(self, event: Event[object]) -> None:
+        """The one cache update, for history and live rows alike: per full key, the latest resolution replaces any
+        earlier one, and an ``Invalidated`` row retires the resolution before it."""
+        if isinstance(event, Invalidated):
+            self._latest.pop((event_digest(event.request), event.fingerprints), None)
+        elif isinstance(event, Resolved) and cached(event.fingerprints):
+            self._latest[event_digest(event.request), event.fingerprints] = event
+
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
-        """The cached result to replay for ``event``."""
-        return cast(T | Missing, self._index.get((event_digest(event), fingerprints), Missing()))
+        """The cached result to replay for ``event``: its key's current resolution, unless this launch replaces it."""
+        latest = self._latest.get((event_digest(event), fingerprints))
+        if latest is None or not self._replayable(latest) or self._replaces(latest):
+            return Missing()
+        return cast(T, latest.value)
 
     def invalidate(self, event: Event[object], fingerprints: tuple[Fingerprint, ...]) -> Record | None:
-        """As ``event`` executes, the ``Invalidated`` row for a recorded result this launch ``replaces``, if any."""
-        if (key := (event_digest(event), fingerprints)) not in self._replaced:
-            return None
-        self._replaced.discard(key)
-        return self.append(Invalidated(event, fingerprints))
+        """As ``event`` executes, the ``Invalidated`` row for its key's current resolution when this launch replaces
+        it: one row per replaced result."""
+        latest = self._latest.get((event_digest(event), fingerprints))
+        return None if latest is None or not self._replaces(latest) else self.append(Invalidated(event, fingerprints))
 
     def attempt(self, sequence: int) -> Attempt:
         return self._owners.attempts[sequence]
