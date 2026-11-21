@@ -2053,7 +2053,7 @@ class ConfirmationOutage(SolverEngine):
         return await super().run_task(spec, model, run_id=run_id)
 
 
-async def test_a_confirmation_outage_parks_and_the_next_launch_buys_only_its_unfinished_slot(
+async def test_a_confirmation_outage_parks_and_the_next_launch_buys_only_what_it_left_unbought(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A decision-model outage in the confirmation batch parks the root (exit 75); the next launch, unasked, replays
