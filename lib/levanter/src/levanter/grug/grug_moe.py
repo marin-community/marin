@@ -22,7 +22,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
-from haliax.jax_utils import named_call
+from haliax.jax_utils import is_amd_instinct, named_call
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
@@ -72,6 +72,7 @@ from levanter.grug.sharding import (
     keep_reduced,
     replicate_keeping_reduced,
 )
+from levanter.kernels.pallas.radix_select import radix_select
 from levanter.utils.activation import ActivationFunctionEnum
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
@@ -212,11 +213,20 @@ def qb_beta_topk_shard(
     num_experts_per_token: int,
     num_experts: int,
 ) -> tuple[Float[Array, "E"], Int[Array, ""]]:
-    """Per-shard QB threshold over valid tokens plus the valid count that weights it."""
+    """Return per-expert QB thresholds and the shard's valid-token count.
+
+    Each threshold is the ``logical_count``-th largest valid score. AMD Instinct GPUs select it with an exact radix
+    select (:func:`radix_select`) instead of ``lax.top_k``, which they lower to a full sort of every row. At a
+    signed-zero tie the two may return different zero bit patterns.
+    """
     valid_count = jnp.sum(valid_local, dtype=jnp.int32)
-    topk_values, _ = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
+    scores = jnp.where(valid_local[None, :], s_local.T, -jnp.inf)
     logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
-    beta = jnp.take(topk_values, logical_count - 1, axis=1)
+    if is_amd_instinct():
+        beta = radix_select(scores, logical_count)
+    else:
+        topk_values, _ = jax.lax.top_k(scores, physical_count)
+        beta = jnp.take(topk_values, logical_count - 1, axis=1)
     return jnp.where(valid_count > 0, beta, 0), valid_count
 
 

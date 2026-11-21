@@ -13,12 +13,15 @@ from typing import override
 
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
+from lib.taskforge.tests.resources.iris_fakes import LocalController, local_iris_machine
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
     Command,
+    CommandOutcomeUnknown,
     ExecSetupFailed,
     ExitReason,
+    GuestPathError,
     Machine,
     MachineCancelled,
     MachineOutputLimitExceeded,
@@ -168,6 +171,7 @@ async def test_environment_writes_binary_files_and_fingerprints_command_history(
         (MachineResourceExhausted("ShellSim terminated: cpu_exhausted"), Hold),
         (TimeoutError("busy"), Transient),
         (MachineUnavailable("Controller is shutting down"), Transient),
+        (CommandOutcomeUnknown("reply lost"), Restart),
     ],
 )
 async def test_shellbox_failure_preserves_unresolved_history(
@@ -197,7 +201,7 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
     "failure",
     [
         SimulationError("No such file or directory: /workspace/output"),
-        FileNotFoundError(2, "No such file", str(OUTPUT)),
+        GuestPathError(errno.ENOENT, "No such file", str(OUTPUT)),
     ],
 )
 async def test_missing_file_is_tool_feedback_without_retry(operation: str, failure: Exception) -> None:
@@ -271,8 +275,8 @@ async def test_machine_startup_expected_failure_is_transient(
     "failure",
     [
         SimulationError("Is a directory: /app"),
-        IsADirectoryError(errno.EISDIR, "Is a directory", "/workspace/app"),
-        IsADirectoryError(errno.EISDIR, "Is a directory", "/tmp/download/file"),
+        GuestPathError(errno.EISDIR, "Is a directory", "/workspace/app"),
+        GuestPathError(errno.EISDIR, "Is a directory", "/tmp/download/file"),
     ],
 )
 async def test_directory_read_names_requested_path_without_retry(failure: Exception) -> None:
@@ -342,7 +346,7 @@ def test_contained_timeout_preserves_the_command(script: str, timeout: str, code
     assert (result.returncode, result.stdout) == (code, stdout)
 
 
-@pytest.mark.parametrize("code", [errno.ENOTDIR, errno.EACCES, errno.ENOENT])
+@pytest.mark.parametrize("code", [errno.ENOTDIR, errno.EACCES, errno.ENOENT, errno.ELOOP])
 @pytest.mark.parametrize("simulated", [False, True])
 async def test_write_backend_path_failures_are_normalized(code: int, simulated: bool) -> None:
     expected = type(OSError(code, os.strerror(code)))
@@ -350,9 +354,49 @@ async def test_write_backend_path_failures_are_normalized(code: int, simulated: 
     # Iris raises errno-typed errors against its remote path; ShellSim raises "<strerror>: <path>" text.
     remote = "/remote/workspace/output"
     machine.failure = (
-        SimulationError(f"{os.strerror(code)}: {remote}") if simulated else OSError(code, os.strerror(code), remote)
+        SimulationError(f"{os.strerror(code)}: {remote}")
+        if simulated
+        else GuestPathError(code, os.strerror(code), remote)
     )
     env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(expected) as caught:
         await env.write(OUTPUT, b"data")
     assert caught.value.filename == str(OUTPUT)
+
+
+# Review 2026-11-20: a lost Iris reply after the exec ran made the handler run the command again and succeed.
+@pytest.mark.parametrize("lost", ["reply", "capture"])
+async def test_command_with_a_lost_outcome_runs_once_and_restarts_the_stage(tmp_path: Path, lost: str) -> None:
+    counter = tmp_path / "counter"
+    command = f"echo ran >> {counter}"
+
+    def lose_reply(script: str) -> bool:
+        return command in script if lost == "reply" else script.startswith("wc -c") and script.endswith("-out")
+
+    env = ShellboxEnv(local_iris_machine(tmp_path, LocalController(lose_reply)), "image", AsyncExitStack())
+    events: list[Event[None]] = []
+    with pytest.raises(Restart, match="outcome unknown"):
+        await run_command(RunCommand(command, 5), env, notify=events.append)
+    assert counter.read_text() == "ran\n"
+    assert not events
+
+
+async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    def full_disk(self: Path, data: bytes) -> int:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(self))
+
+    machine = MemoryMachine()
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
+    monkeypatch.setattr(Path, "write_bytes", full_disk)
+    with pytest.raises(Hold, match="No space left on device") as caught:
+        await write_file(WriteFile(OUTPUT, b"data"), env, notify=Notes())
+    assert not isinstance(caught.value, OSError) and machine.calls == 0
+
+
+async def test_failing_guest_transfer_helper_is_not_a_path_failure(tmp_path: Path) -> None:
+    (tmp_path / "present.txt").write_text("present")
+    controller = LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; ")
+    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", AsyncExitStack())
+    with pytest.raises(RuntimeError, match="wc: not found") as caught:
+        await read_file(ReadFile(PurePosixPath(tmp_path / "present.txt")), env, notify=Notes())
+    assert not isinstance(caught.value, OSError)
