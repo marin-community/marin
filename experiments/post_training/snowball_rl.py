@@ -407,8 +407,8 @@ _TOOLS_PATCH = RecipePatch(
     ),
     trainer=sections.Trainer(
         policy=sections.Policy(
-            # A full-window trajectory needs the GPU memory for the policy update, and Snowball's five KV
-            # heads rule out context parallelism, so the optimizer state stays on the CPU.
+            # A full-window trajectory needs the GPU memory for the policy update, so the optimizer state stays
+            # on the CPU.
             megatron_config=sections.PolicyMegatronConfig(
                 optimizer_config_kwargs=sections.OptimizerConfigKwargs(
                     optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
