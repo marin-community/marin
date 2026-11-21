@@ -34,7 +34,7 @@ from daytona import (
 from rigging.task_errors import RetryDisposition
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.daytona.errors import daytona_error_identity
+from shellbox.backends.daytona.errors import DAYTONA_DELETE_OPERATION, daytona_error_identity
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
     daytona_image,
@@ -160,7 +160,7 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
                 except DaytonaNotFoundError:
                     return
                 except DaytonaError as error:
-                    failure = daytona_error_identity(error, operation="delete")
+                    failure = daytona_error_identity(error, operation=DAYTONA_DELETE_OPERATION)
                     if failure.retry_disposition is not RetryDisposition.TRANSIENT:
                         raise
                     logger.warning(

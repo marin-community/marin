@@ -22,6 +22,7 @@ from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import StepReward
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
+from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped, AgentInferenceBackend
 from skyrl_train.rollouts.agent_trace import recorded_completion
 
@@ -33,7 +34,7 @@ def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
     if result.exception_info is not None:
         info = result.exception_info
         error_identity = ErrorIdentity(**info.model_dump(include=set(ErrorIdentity.model_fields))).model_copy(
-            update={"diagnostics": {**info.diagnostics, "timed_out": info.exception_type == AGENT_TIMEOUT_ERROR}}
+            update={"diagnostics": {**info.diagnostics, TIMED_OUT_DIAGNOSTIC: info.exception_type == AGENT_TIMEOUT_ERROR}}
         )
     verifier = result.verifier_result
     if verifier is None or verifier.rewards is None or reward_key not in verifier.rewards:

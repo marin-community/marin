@@ -12,10 +12,15 @@ if find_spec("harbor_config") is not None:
     from harbor_config.errors import HARBOR_ERROR_CATEGORIES as _harbor_categories
 
 
+TASK_MACHINE_ERROR = "TaskMachineError"
+TEMPLATE_ERROR = "TemplateError"
+TIMED_OUT_DIAGNOSTIC = "timed_out"
+
+
 SKYRL_ERROR_CATEGORIES = MappingProxyType(
     {
-        "TaskMachineError": ErrorCategory.INFRASTRUCTURE,
-        "TemplateError": ErrorCategory.INFRASTRUCTURE,
+        TASK_MACHINE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TEMPLATE_ERROR: ErrorCategory.INFRASTRUCTURE,
     }
 )
 

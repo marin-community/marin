@@ -26,7 +26,6 @@ class ProviderFailure(RuntimeError):
     [
         (503, RetryDisposition.TRANSIENT),
         (HTTPStatus.UNAUTHORIZED, RetryDisposition.PERMANENT),
-        (401, RetryDisposition.PERMANENT),
         (409, RetryDisposition.UNKNOWN),
     ],
 )

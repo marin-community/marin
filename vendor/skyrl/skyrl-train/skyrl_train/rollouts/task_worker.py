@@ -87,7 +87,7 @@ from skyrl_train.rollouts.training_record import (
 )
 from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_failure
 from skyrl_train.error_treatment import ErrorTreatment
-from skyrl_train.task_errors import ERROR_CATEGORIES
+from skyrl_train.task_errors import ERROR_CATEGORIES, TASK_MACHINE_ERROR, TEMPLATE_ERROR, TIMED_OUT_DIAGNOSTIC
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -276,7 +276,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         raise error
     failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
     exception_type = type(error).__name__
-    diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
+    diagnostics = {"operation": interruption.operation.value, TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
         provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
         failure = failure.model_copy(update={
@@ -293,10 +293,10 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             RolloutOperation.GRADE: "VerifierTimeoutError",
         }.get(interruption.operation, "AgentTimeoutError")
     elif isinstance(error, TemplateError):
-        exception_type = "TemplateError"
+        exception_type = TEMPLATE_ERROR
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
-        exception_type = "TaskMachineError"
+        exception_type = TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"

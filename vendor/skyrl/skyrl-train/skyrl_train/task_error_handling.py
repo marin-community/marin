@@ -35,7 +35,7 @@ class ErrorHandlingConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ErrorHandlingConfig":
-        """Validate the schema-derived mapping at the terminal-bench boundary."""
+        """Read a schema-validated mapping at the terminal-bench boundary."""
         defaults = DEFAULT_ERROR_HANDLING_CONFIG
         return cls(
             enable_error_classification=bool(
