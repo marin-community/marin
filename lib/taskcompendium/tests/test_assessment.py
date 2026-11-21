@@ -77,7 +77,7 @@ def curated_source(context, root, rows):
         ),
         mode=SourceProcessingMode.FULL,
         canonical_source="fixture",
-        declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+        declared_task_format=TaskFormat.TASKSPEC,
     )
     return output
 

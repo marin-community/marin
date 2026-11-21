@@ -40,7 +40,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 family="engineering-exam",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark"),
                 count=515,
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=EvalDataset(
                 recipe=CurationRecipe(

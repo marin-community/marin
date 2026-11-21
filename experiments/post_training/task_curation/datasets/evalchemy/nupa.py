@@ -59,7 +59,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     family="numeric-representation",
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
                     count=rows,
-                    task_format=TaskFormat.NATIVE_TASKSPEC,
+                    task_format=TaskFormat.TASKSPEC,
                 ),
                 config=EvalDataset(
                     recipe=CurationRecipe(

@@ -71,7 +71,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "language:bash"),
                 count=1498,
                 notes="Semantic output comparison against an oracle command run in the same sandbox.",
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-nl2bash",

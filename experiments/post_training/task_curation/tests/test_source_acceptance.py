@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
+from finestore.rl.curation import OversightEvidence, OversightLevel
 from finestore.rl.status_taxonomy import DataRestriction, SourceStatus
 
 from experiments.post_training.task_curation import sources as source_catalog
@@ -18,7 +18,6 @@ from experiments.post_training.task_curation.source import (
     SourceOrigin,
     TaskFormat,
 )
-from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
@@ -58,11 +57,7 @@ def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -
 
 @pytest.mark.parametrize(
     "task_format, source_id, error",
-    [
-        (TaskFormat.MARINSKYRL, "Marin:a-new-blend", "not grandfathered"),
-        (None, "Marin:agentic", "declares no task format"),
-        (TaskFormat.NATIVE_TASKSPEC, "Marin:agentic-native", "declares no task directory"),
-    ],
+    [(None, "Marin:agentic", "declares no task format")],
 )
 def test_unaccepted_agentic_formats_are_rejected(task_format, source_id, error):
     with pytest.raises(ValueError, match=error):
@@ -81,13 +76,13 @@ def test_every_catalog_declaration_resolves_to_exactly_one_task_format():
 
 def test_pipeline_less_pointers_are_rejected():
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
-        _ = _agentic(TaskFormat.TASKCOMPENDIUM).declaration
+        _ = _agentic(TaskFormat.TASKSPEC).declaration
 
 
 @pytest.mark.parametrize("missing", ["count", "basis", "oversight", "verification"])
 def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monkeypatch, missing):
     info = replace(
-        _agentic(TaskFormat.TASKCOMPENDIUM).info,
+        _agentic(TaskFormat.TASKSPEC).info,
         within_source_dedup=number_source(Path("unused")).info.within_source_dedup,
         daytona_snapshot_count=1,
         daytona_machine_slots=1,
@@ -126,65 +121,6 @@ def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(m
     assert source.declaration.status == "Available"
     assert source.declaration.daytona_exemption
     assert source.declaration.daytona_safety is None
-
-
-@pytest.mark.data_integration
-def test_verified_retained_legacy_subset_inherits_admission_but_not_daytona_exemption(monkeypatch):
-    source = next(
-        source
-        for source in all_sources().values()
-        if source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES and source.info.inherited_admission is not None
-    )
-    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source.info.id: source})
-    assert runnable_sources()[source.name] is source
-    assert source.admission_blockers == ()
-    assert source.declaration.daytona_exemption is None
-    assert source.declaration.daytona_safety is not None
-    assert source.declaration.status == "Available"
-
-
-@pytest.mark.parametrize("missing", ["verified_pin", "private_receipt", "fresh_actor"])
-@pytest.mark.data_integration
-def test_retained_legacy_admission_cannot_bypass_pin_privacy_or_fresh_actor_gates(monkeypatch, missing):
-    source = next(
-        source
-        for source in all_sources().values()
-        if source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES and source.info.inherited_admission is not None
-    )
-    if missing == "verified_pin":
-        revision = "f" * 40
-        release = DatasetRelease(
-            repo=source.dataset.name,
-            revision=revision,
-            url=f"https://huggingface.co/datasets/{source.dataset.name}/tree/{revision}",
-        )
-        source = replace(
-            source, config=replace(source.config, release=release), info=replace(source.info, current_release=release)
-        )
-    elif missing == "private_receipt":
-        source = replace(source, info=replace(source.info, lexical_contamination=None))
-    else:
-        source = replace(source, info=replace(source.info, actor_census_input=None))
-    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source.info.id: source})
-    assert source.admission_blockers
-    assert source.name not in runnable_sources()
-
-
-def test_grandfathered_execution_exemption_does_not_bypass_grader_census(tmp_path):
-    source = number_source(tmp_path / "input")
-    source_id = sorted(GRANDFATHERED_MARINSKYRL_SOURCES)[0]
-    source = replace(
-        source,
-        info=replace(
-            source.info,
-            id=source_id,
-            origin=SourceOrigin.NEMOTRON,
-            upstream_dataset=source_id.partition(":")[2],
-            task_format=TaskFormat.MARINSKYRL,
-        ),
-    )
-    assert source.is_grandfathered_blend
-    assert any("census" in reason for reason in source.admission_blockers)
 
 
 @pytest.mark.data_integration

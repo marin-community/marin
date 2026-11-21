@@ -37,7 +37,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.NEMOTRON,
                 family="function-calling",
                 tags=("eval", "agentic", "single-turn", "license:cc-by-4.0"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 notes="Exact function and JSON argument matching; alternative valid calls receive zero.",
             ),
             config=CurationRecipe(

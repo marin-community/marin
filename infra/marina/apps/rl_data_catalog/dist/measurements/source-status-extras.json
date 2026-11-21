@@ -1258,7 +1258,12 @@
     }
   ],
   "stages": {
-    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued"
+    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "Lexical remediation queued",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "Lexical remediation queued",
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "Lexical remediation queued",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "Lexical remediation queued",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "Lexical remediation queued"
   },
   "remediation_queue": [
     {
@@ -1279,6 +1284,131 @@
           "evidence": {
             "kind": "check-output",
             "message": "Decontamination measurement and private-release admission receipt are missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_lean",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_rdkit",
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_lean",
+      "display_name": "nemotron_ultra_rlvr1 \u00b7 ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_lean",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_rdkit",
+      "display_name": "nemotron_ultra_rlvr2 \u00b7 ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
             "uri": null,
             "sha256": null,
             "expected": null

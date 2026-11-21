@@ -31,7 +31,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     import_retained,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 
 class OracleFilteredReleaseReceipt(BaseModel):
@@ -172,7 +172,6 @@ def bind_oracle_filtered_release(
         inherited_admission=None,
         dataset=config.dataset,
         count=evidence.admitted_count,
-        task_format=TaskFormat.TASKCOMPENDIUM,
         oracle_filtration=evidence,
         within_source_dedup=receipt.output_dedup,
         lexical_contamination=None,

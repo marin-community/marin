@@ -973,22 +973,33 @@ class WithinSourceDedupEvidence(CatalogRecord):
 
 
 class TaskFormat(StrEnum):
-    """The ingested task layout of a source's pinned payload.
+    """The structural shape of a source's served payload row.
 
-    Only task-directory layouts are accepted for agentic sources: a task is a
-    directory with ``task.toml``, its environment and its verifier, in either
-    TaskCompendium's or Harbor's variant. ``MARINSKYRL`` marks a Marin-internal
-    blend whose rows are not task directories; it is accepted only for the
-    grandfathered sources listed in the producer's ``GRANDFATHERED_MARINSKYRL_SOURCES``.
-    ``NATIVE_TASKSPEC`` marks a source whose payload is TaskSpec rows produced
-    directly by its own recipe or evaluation-harness pipeline, never packaged as
-    task directories; it is accepted only for non-agentic sources.
+    Exactly one shape applies to a row, decidable from the row alone:
+    ``HARBOR`` is a Harbor task package row (the native package contract:
+    ``task.toml`` + ``instruction.md`` + ``tests/test.sh``, a ``harbor`` tag,
+    a self-verifying grader and a declared environment), ``TASKSPEC`` is a
+    TaskSpec row with no task package, and ``MARINSKYRL`` is a MarinSkyRL blend
+    record. A source whose rows span several shapes is split into one source per
+    shape. The historical provenance labels below parse onto their shape; they
+    are aliases of the same values, never separate formats.
     """
 
-    TASKCOMPENDIUM = "taskcompendium"
     HARBOR = "harbor"
+    TASKSPEC = "taskspec"
     MARINSKYRL = "marinskyrl"
-    NATIVE_TASKSPEC = "native_taskspec"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "TaskFormat | None":
+        """Map the archived provenance-era labels onto their payload shape.
+
+        Historical receipts and declarations record ``taskcompendium`` and
+        ``native_taskspec``; both describe TaskSpec rows. The labels are not
+        values of this enum and never re-enter declarations.
+        """
+        if value in ("taskcompendium", "native_taskspec"):
+            return cls.TASKSPEC
+        return None
 
 
 class SourceDeclaration(CatalogRecord):
@@ -1007,13 +1018,11 @@ class SourceDeclaration(CatalogRecord):
     dataset_revision: str | None
     url: str | None
     task_format: TaskFormat | None = None
-    """The task layout the source's served payload is currently in.
+    """The structural shape of the source's served payload rows.
 
-    Every catalog declaration resolves to exactly one value: task-directory
-    sources carry their declared ``TaskCompendium``/``Harbor`` layout,
-    grandfathered blends carry ``MarinSkyRL``, and recipe- or harness-served
-    sources carry ``NATIVE_TASKSPEC``. An undeclared value never enters the
-    catalog.
+    Every catalog declaration resolves to exactly one shape: a Harbor task
+    package row, a TaskSpec row with no task package, or a MarinSkyRL blend
+    record. An undeclared value never enters the catalog.
     """
     type: str
     turns: str

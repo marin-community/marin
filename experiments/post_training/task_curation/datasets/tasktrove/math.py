@@ -277,7 +277,7 @@ SOURCES = (
                 reviewed=24,
                 admitted=3941,
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -319,7 +319,7 @@ SOURCES = (
                 reviewed=24,
                 admitted=42621,
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -359,7 +359,7 @@ SOURCES = (
                 reviewed=24,
                 admitted=57424,
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -405,7 +405,7 @@ SOURCES = (
                 reviewed=24,
                 admitted=2221,
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -443,7 +443,7 @@ SOURCES = (
                 reviewed=24,
                 admitted=110604,
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
 )

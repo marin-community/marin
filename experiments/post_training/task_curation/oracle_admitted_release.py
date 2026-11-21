@@ -7,7 +7,6 @@ import argparse
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import (
@@ -71,7 +70,7 @@ class OracleAdmittedReleaseReceipt(BaseModel):
 
     source_id: str
     intended_use: SourceUse
-    task_format: Literal[TaskFormat.HARBOR, TaskFormat.TASKCOMPENDIUM]
+    task_format: TaskFormat
     original_pipeline: PipelineReference
     original_info: SourceInfo
     filtration: OracleFiltrationEvidence
@@ -311,7 +310,7 @@ class OracleAdmittedReleaseInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_id: str
-    task_format: Literal[TaskFormat.HARBOR, TaskFormat.TASKCOMPENDIUM]
+    task_format: TaskFormat
     filtration: OracleFiltrationEvidence
     execution_release: DatasetRelease | None
     qualification: ContentEvidenceReference

@@ -264,7 +264,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     tags=("agentic", "language:python"),
                     count=10000,
                     notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
+                    task_format=TaskFormat.TASKSPEC,
                 )
             ),
             config=CurationRecipe(
@@ -293,7 +293,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     tags=("agentic",),
                     count=10000,
                     notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
+                    task_format=TaskFormat.TASKSPEC,
                 )
             ),
             config=CurationRecipe(

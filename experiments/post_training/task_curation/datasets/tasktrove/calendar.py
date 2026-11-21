@@ -208,7 +208,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     )
     return [
         RlDataSource(
-            info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
+            info=replace(info, task_format=TaskFormat.TASKSPEC),
             pipeline=process_rows,
             config=CurationRecipe(
                 name=name,

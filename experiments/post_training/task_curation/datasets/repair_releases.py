@@ -68,7 +68,7 @@ def _repair_cohort(
             family=family,
             tags=tags,
             count=expected_rows,
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
             notes=notes,
         ),
     )

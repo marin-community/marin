@@ -82,7 +82,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="NeMo terminal pivot intake",
                 family="terminal-action",
                 tags=("license:cc-by-4.0",),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 notes=(
                     "Frozen next-action replies with the native string-only NeMo scorer. "
                     "No terminal environment is executed. The 0.9 keystroke-similarity reward can reject valid "

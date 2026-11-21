@@ -231,7 +231,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
                     "(vacuous pass) at conversion."
                 ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-ifeval",
@@ -256,7 +256,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=(),
                 count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured",

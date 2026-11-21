@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from evalrecords.records import PromptFormat
-from finestore.rl.curation import CurationCatalog, WithinSourceDedupEvidence
+from finestore.rl.curation import CurationCatalog, TaskFormat, WithinSourceDedupEvidence
 from fray.local_backend import LocalClient
 from shellbox.machine import PackageSpec
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
@@ -100,6 +100,7 @@ def test_publication_compiles_selected_fewshots_and_deduplicates_exact_contracts
                 str(source_root),
                 str(output),
                 protocol_name=dataset.protocol_name,
+                declared_task_format=TaskFormat.TASKSPEC,
             )
     finally:
         client.shutdown()
@@ -194,7 +195,15 @@ def test_generation_selection_preserves_context_derived_or_explicit_budget(tmp_p
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-            publish_evaluation_corpus(recipe, protocol, dataset.item_builder, context, str(inputs), root)
+            publish_evaluation_corpus(
+                recipe,
+                protocol,
+                dataset.item_builder,
+                context,
+                str(inputs),
+                root,
+                declared_task_format=TaskFormat.TASKSPEC,
+            )
     finally:
         client.shutdown()
     (decision,) = select_cases(

@@ -39,7 +39,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 family="judged-answer",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
                 count=50,
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=EvalDataset(
                 CurationRecipe(

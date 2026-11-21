@@ -5,6 +5,7 @@
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import TaskFormat
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -40,7 +41,13 @@ def test_publication_compiles_staged_fewshots_and_drops_duplicate_rows(tmp_path)
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
             manifest = publish_evaluation_corpus(
-                recipe, protocol, dataset.item_builder, context, str(source_root), str(output)
+                recipe,
+                protocol,
+                dataset.item_builder,
+                context,
+                str(source_root),
+                str(output),
+                declared_task_format=TaskFormat.TASKSPEC,
             )
     finally:
         client.shutdown()

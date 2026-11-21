@@ -273,7 +273,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Original-root TaskSpec with late /home delivery and upstream host report parsing",
                 family="swe-repo",
                 tags=("license:cc0-1.0",),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 notes=(
                     "Original source images and captured /home grading archives are pinned. "
                     "Original root actor and host-side multi-swe-bench1.1.2 report checks retained. "

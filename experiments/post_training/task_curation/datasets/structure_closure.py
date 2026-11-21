@@ -59,7 +59,7 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                 origin=SourceOrigin.OPENATHENA,
                 family="structural",
                 tags=("rlvr", "single-turn", "structural-closure", "assistant-prefill"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 count=rows,
                 notes=(
                     "Text assistant prefills; validation is a reused development panel. Declared cohort is the "

@@ -161,7 +161,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "solution/solve.sh oracle. Grader mode and instruction text unchanged from the "
                     "canonical conversion; task labels carry the original task ID and oracle digest."
                 ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles-qa",

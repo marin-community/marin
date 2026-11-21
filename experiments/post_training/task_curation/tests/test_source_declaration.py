@@ -60,9 +60,9 @@ def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
 
 def test_task_format_resolves_once_and_rejects_unknown_values(tmp_path):
     source = number_source(tmp_path / "input")
-    source = replace(source, info=replace(source.info, task_format=TaskFormat.NATIVE_TASKSPEC))
+    source = replace(source, info=replace(source.info, task_format=TaskFormat.TASKSPEC))
     declaration = QualifiedSourceDeclaration.model_validate_json(source.declaration.model_dump_json())
-    assert declaration.task_format is TaskFormat.NATIVE_TASKSPEC
+    assert declaration.task_format is TaskFormat.TASKSPEC
     with pytest.raises(ValidationError):
         QualifiedSourceDeclaration.model_validate({**declaration.model_dump(), "task_format": "spreadsheet"})
 

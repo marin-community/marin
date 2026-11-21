@@ -5,6 +5,7 @@
 
 import json
 
+from finestore.rl.curation import TaskFormat
 from fray.local_backend import LocalClient
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
@@ -52,7 +53,15 @@ def test_publication_compiles_middle_truncated_variants_smallest_first(tmp_path)
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-            publish_evaluation_corpus(recipe, protocol, dataset.item_builder, context, str(source_root), str(output))
+            publish_evaluation_corpus(
+                recipe,
+                protocol,
+                dataset.item_builder,
+                context,
+                str(source_root),
+                str(output),
+                declared_task_format=TaskFormat.TASKSPEC,
+            )
     finally:
         client.shutdown()
     cases = {case.task.source.row.rsplit(":", 1)[1]: case for case in evaluation_cases(str(output))}

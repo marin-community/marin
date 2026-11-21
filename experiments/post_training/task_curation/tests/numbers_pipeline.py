@@ -127,7 +127,7 @@ def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConf
             daytona_execution_failures=0,
             daytona_count_basis="Fixture ingestion performs arithmetic locally and creates no actor.",
             lexical_contamination=decontamination_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, 1),
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=NumbersConfig(name, path),
         pipeline=numbers_pipeline,

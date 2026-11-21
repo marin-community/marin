@@ -102,6 +102,7 @@ def _tasktrove_qa_release(
             upstream_url=TASKTROVE_UPSTREAM_URL,
             family=family,
             tags=tags,
+            task_format=TaskFormat.TASKSPEC,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
             recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
@@ -174,6 +175,7 @@ def _puzzles_qa_release() -> RlDataSource[PrebuiltCohort]:
             upstream_url=TASKTROVE_UPSTREAM_URL,
             family="math-answer",
             tags=("rlvr", "single-turn", "qa-format-repair", "campaign-release", "converted"),
+            task_format=TaskFormat.TASKSPEC,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
             recipe_qa_history=PUZZLES_QA_RECIPE_QA,
             notes=PUZZLES_QA_NOTES,
@@ -209,7 +211,7 @@ def sources() -> list[RlDataSource]:
                 build_path="Forge / Campaign Release",
                 family="synthetic-cross-domain",
                 tags=("rlvr", "agentic", "synthetic", "campaign-release"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 oracle_validation=OracleValidation.SKIPPED,
                 recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="Forge re-validation campaign 2026-11-13",
@@ -258,7 +260,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
                 tags=("agentic", "single-turn", "language:python", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
@@ -317,7 +319,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
                 tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
@@ -376,7 +378,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="terminal-agent",
                 tags=("agentic", "license:cc-by-4.0", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=7,
                 daytona_count_basis=(
                     "production snapshot_identity with Harbor's machine_spec over the lowered task specs "
@@ -429,7 +431,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="terminal-agent",
                 tags=("agentic", "language:bash", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -483,7 +485,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
                 tags=("agentic", "language:python", "campaign-release", "converted", "single-turn"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 oracle_validation=OracleValidation.SKIPPED,
                 recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
@@ -532,7 +534,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
                 tags=("agentic", "single-turn", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 oracle_validation=OracleValidation.SKIPPED,
                 recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
@@ -582,7 +584,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=2,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 2 distinct agent identities. "
@@ -634,7 +636,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -686,7 +688,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -740,7 +742,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -791,7 +793,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -842,7 +844,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -894,7 +896,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -946,7 +948,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -998,7 +1000,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
@@ -1051,7 +1053,7 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
                 tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "

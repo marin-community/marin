@@ -246,19 +246,19 @@ def test_shared_native_oracles_cannot_replace_missing_integrity_contracts(admitt
 
 def test_canonical_filtered_pin_uses_the_fresh_output_version_and_consumer(admitted_release):
     source, native = admitted_release
-    receipt = native.model_copy(update={"task_format": TaskFormat.TASKCOMPENDIUM})
+    receipt = native.model_copy(update={"task_format": TaskFormat.TASKSPEC})
     bound = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
 
     assert bound.pipeline is import_taskcompendium_prebuilt
     assert bound.version == receipt.actor.input.converter_version == "2026.11.14.2-final-private"
-    assert bound.info.task_format is TaskFormat.TASKCOMPENDIUM
+    assert bound.info.task_format is TaskFormat.TASKSPEC
     assert bound.declaration.task_count == 1
 
 
 def test_answer_graded_release_does_not_claim_workspace_controls(admitted_release):
     source, native = admitted_release
     record = native.model_dump(mode="json")
-    record["task_format"] = TaskFormat.TASKCOMPENDIUM
+    record["task_format"] = TaskFormat.TASKSPEC
     record["filtration"]["exclusion_counts"] = {"oracle_failed": 1}
     receipt = OracleAdmittedReleaseReceipt.model_validate(record)
 

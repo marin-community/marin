@@ -333,7 +333,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "curriculum_medium": PythonTestsSource(
@@ -356,7 +356,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "e2egit": PythonTestsSource(
@@ -379,7 +379,7 @@ SOURCES = {
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles overlap with the large cut."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "e2egit_large": PythonTestsSource(
@@ -401,7 +401,7 @@ SOURCES = {
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles repeated katas."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "multifile": PythonTestsSource(
@@ -423,7 +423,7 @@ SOURCES = {
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                 "submissions failed every task. Kept with the kata tag."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "pymethods": PythonTestsSource(
@@ -445,7 +445,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "pymethods_large": PythonTestsSource(
@@ -467,7 +467,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "unitsyn": PythonTestsSource(
@@ -489,7 +489,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
                 "passed all 10 sampled oracles and rejected all 10 empty submissions."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "unitsyn_large": PythonTestsSource(
@@ -511,7 +511,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     "stack_pytest": PythonTestsSource(
@@ -533,7 +533,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
 }

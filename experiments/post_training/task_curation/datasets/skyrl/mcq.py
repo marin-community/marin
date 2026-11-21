@@ -95,7 +95,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.GPQA,
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="gpqa",
@@ -116,6 +116,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
                 id="Nemotron:openscience",
+                task_format=TaskFormat.TASKSPEC,
                 upstream_dataset="openscience",
                 upstream_name="openscience",
                 subset=None,

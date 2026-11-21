@@ -102,7 +102,7 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
             family="long-context",
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
             count=MRCR_SOURCE_POPULATION,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(
@@ -160,7 +160,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 family="long-context",
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
                 count=1150,
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=EvalDataset(
                 CurationRecipe(

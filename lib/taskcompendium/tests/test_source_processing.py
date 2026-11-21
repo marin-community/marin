@@ -205,7 +205,7 @@ def test_shared_admission_requires_integrity_but_quick_keeps_measurement(tmp_pat
             str(tmp_path / "quick"),
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.TASKCOMPENDIUM,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
     quick_rows = parquet_rows(Path(quick.manifest_path).parent / "normalize")
     assert len(quick_rows) == 1 and quick_rows[0]["task_json"] is not None
@@ -253,7 +253,7 @@ def run_pipeline(
             config,
             mode=config.mode,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
             **options,
         )
     return cast(SourcePipelineResult, result)
@@ -482,7 +482,7 @@ def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
             config,
             mode=config.mode,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
         # The procedure leaves the caller's pool entered and usable.
         from_list_result = context.execute(Dataset.from_list([1]).count()).results
@@ -866,7 +866,7 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
                 config,
                 mode=config.mode,
                 canonical_source="catalog-selection",
-                declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+                declared_task_format=TaskFormat.TASKSPEC,
             )
     report = read_json(tmp_path / "output/telemetry.json")
     assert report["source"] == "catalog-selection"
@@ -1099,7 +1099,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             str(tmp_path / "quick"),
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
             parquet_shard_bytes=1,
             source_overrides=overrides,
         )
@@ -1111,7 +1111,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             calibrated_config(recipe, source, pipeline_config(mode, reviewer), overrides),
             mode=mode,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
             parquet_shard_bytes=1,
             source_overrides=overrides,
         )

@@ -66,7 +66,7 @@ def instruction_source(
             family="instruction-following",
             tags=("eval", "source:evalchemy", "benchmark", "single-turn", "instruction-following"),
             count=population,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

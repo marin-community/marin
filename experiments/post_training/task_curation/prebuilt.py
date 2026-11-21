@@ -231,7 +231,7 @@ class PrebuiltImport:
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Read the pinned lowered cohort into admitted corpus views."""
     return prebuilt_artifact(
-        source, options, import_cohort, task_format=TaskFormat.TASKCOMPENDIUM, encoding=PrebuiltEncoding.LOWERED
+        source, options, import_cohort, task_format=TaskFormat.TASKSPEC, encoding=PrebuiltEncoding.LOWERED
     )
 
 
@@ -252,7 +252,7 @@ def import_taskcompendium_prebuilt(
         source,
         options,
         import_taskcompendium_cohort,
-        task_format=TaskFormat.TASKCOMPENDIUM,
+        task_format=TaskFormat.TASKSPEC,
         encoding=PrebuiltEncoding.CANONICAL,
     )
 

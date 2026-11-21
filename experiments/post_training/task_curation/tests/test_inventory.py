@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.curation import TaskFormat
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from taskcompendium.convert.answers import source_evidence
@@ -616,6 +617,7 @@ def eval_lite_recipe(tmp_path: Path, benchmark: str = "mmlu") -> EvalLiteRecipe:
                 context,
                 str(tmp_path / "questions"),
                 str(corpus),
+                declared_task_format=TaskFormat.TASKSPEC,
             )
     finally:
         client.shutdown()

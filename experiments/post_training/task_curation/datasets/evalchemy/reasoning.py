@@ -49,7 +49,7 @@ def choice_dataset(
             family="generated-choice",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),
             count=rows,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

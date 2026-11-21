@@ -36,7 +36,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     import_retained,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 
@@ -328,7 +328,6 @@ def _retained_population(
         inherited_admission=inherited_admission,
         dataset=config.dataset,
         count=plan.retained_count,
-        task_format=TaskFormat.TASKCOMPENDIUM,
         within_source_dedup=receipt.retained_dedup,
         lexical_contamination=release_lexical_evidence(publication),
         grading_environment=receipt.grading.evidence,

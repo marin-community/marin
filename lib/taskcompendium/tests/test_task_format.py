@@ -80,6 +80,7 @@ def harbor_task() -> TaskSpec:
 
 
 def taskcompendium_task() -> TaskSpec:
+    """A TaskSpec row carrying a task.toml verifier document but no Harbor package."""
     return base_task(
         grader=ScriptGrader(
             argv=("true",),
@@ -92,6 +93,7 @@ def taskcompendium_task() -> TaskSpec:
 
 
 def native_task() -> TaskSpec:
+    """A TaskSpec row with no verifier resources at all."""
     return base_task(
         grader=ScriptGrader(
             argv=("true",),
@@ -125,20 +127,26 @@ def carrier_row(task: TaskSpec) -> dict:
     "row,expected",
     [
         (FormatRow(raw=carrier_row(harbor_task()), task=harbor_task()), TaskFormat.HARBOR),
-        (FormatRow(raw=carrier_row(taskcompendium_task()), task=taskcompendium_task()), TaskFormat.TASKCOMPENDIUM),
+        (FormatRow(raw=carrier_row(taskcompendium_task()), task=taskcompendium_task()), TaskFormat.TASKSPEC),
         (FormatRow(raw=blend_record(), task=None), TaskFormat.MARINSKYRL),
         (FormatRow(raw=agent_blend_record(), task=None), TaskFormat.MARINSKYRL),
-        (FormatRow(raw={"record": "answer-row"}, task=native_task()), TaskFormat.NATIVE_TASKSPEC),
+        (FormatRow(raw={"record": "answer-row"}, task=native_task()), TaskFormat.TASKSPEC),
         # The carrier is transport: a frozen cohort row whose task has no task directory
         # is a native TaskSpec row, whatever encoding stores it.
         (
             FormatRow(raw={"lowered_task_spec": {"task": native_task().model_dump_json(), "runtime": {}}}),
-            TaskFormat.NATIVE_TASKSPEC,
+            TaskFormat.TASKSPEC,
         ),
     ],
 )
 def test_one_fixture_row_per_format_detects_exactly_that_format(row: FormatRow, expected: TaskFormat):
     assert detect_task_format(row) is expected
+
+
+def test_historical_labels_parse_onto_their_shape():
+    assert TaskFormat("taskcompendium") is TaskFormat.TASKSPEC
+    assert TaskFormat("native_taskspec") is TaskFormat.TASKSPEC
+    assert [format_.value for format_ in TaskFormat] == ["harbor", "taskspec", "marinskyrl"]
 
 
 def test_ambiguous_row_raises_instead_of_guessing():
@@ -185,16 +193,16 @@ def _run_conversion(rows: Dataset, declared: TaskFormat, tmp_path: Path):
 
 def test_conversion_rejects_a_source_whose_rows_span_task_formats(tmp_path: Path):
     with pytest.raises(MixedTaskFormatSourceError) as raised:
-        _run_conversion(_conversion_rows(native_task(), harbor_task()), TaskFormat.NATIVE_TASKSPEC, tmp_path)
+        _run_conversion(_conversion_rows(native_task(), harbor_task()), TaskFormat.TASKSPEC, tmp_path)
     message = str(raised.value)
-    assert "native_taskspec=1" in message and "harbor=1" in message
+    assert "taskspec=1" in message and "harbor=1" in message
     assert "split the source into one source per task format" in message
 
 
 def test_conversion_rejects_a_declared_format_that_differs_from_the_detected_payload(tmp_path: Path):
     with pytest.raises(TaskFormatMismatchError) as raised:
         _run_conversion(_conversion_rows(native_task()), TaskFormat.HARBOR, tmp_path)
-    assert "harbor" in str(raised.value) and "native_taskspec" in str(raised.value)
+    assert "harbor" in str(raised.value) and "taskspec" in str(raised.value)
 
 
 def test_conversion_accepts_rows_whose_detected_format_matches_the_declaration(tmp_path: Path):
@@ -204,5 +212,5 @@ def test_conversion_accepts_rows_whose_detected_format_matches_the_declaration(t
             "context": ConversationInput(events=(TextMessage(role="user", content="A different task."),)),
         }
     )
-    result = _run_conversion(_conversion_rows(native_task(), variant), TaskFormat.NATIVE_TASKSPEC, tmp_path)
+    result = _run_conversion(_conversion_rows(native_task(), variant), TaskFormat.TASKSPEC, tmp_path)
     assert result.converted_rows == 2

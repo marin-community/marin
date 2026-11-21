@@ -115,7 +115,7 @@ def test_recipe_free_conversion_persists_caller_identity_and_execution_counters(
                     Dataset.from_list([row]).map(partial(convert_raw_row, convert=convert_answer, context=conversion)),
                     context,
                     str(output),
-                    declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+                    declared_task_format=TaskFormat.TASKSPEC,
                     telemetry=phase,
                 )
     (record,) = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
@@ -183,7 +183,7 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
             str(tmp_path / "whole"),
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
         split = run_source_pipeline(
             recipe,
@@ -193,7 +193,7 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
             parquet_shard_bytes=1,
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
     whole, split = cast(ConversionResult, whole), cast(ConversionResult, split)
     whole_files = list(Path(whole.normalized_path).glob("*.parquet"))
@@ -254,7 +254,7 @@ def test_prepared_jsonl_matches_native_tasks_locators_and_rejections(tmp_path: P
             source_overrides=overrides,
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
         prepared = run_source_pipeline(
             replace(recipe, source=replace(recipe.source, prepared_component="left")),
@@ -265,7 +265,7 @@ def test_prepared_jsonl_matches_native_tasks_locators_and_rejections(tmp_path: P
             parquet_shard_bytes=1,
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
     native, prepared = cast(ConversionResult, native), cast(ConversionResult, prepared)
     native_rows = {
@@ -323,7 +323,7 @@ def test_prepared_conversion_subdivides_a_row_group_without_changing_records(tmp
                 str(tmp_path / "native"),
                 mode=SourceProcessingMode.QUICK,
                 canonical_source=recipe.name,
-                declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+                declared_task_format=TaskFormat.TASKSPEC,
             ),
         )
         prepared = cast(
@@ -335,7 +335,7 @@ def test_prepared_conversion_subdivides_a_row_group_without_changing_records(tmp
                 str(tmp_path / "prepared"),
                 mode=SourceProcessingMode.QUICK,
                 canonical_source=recipe.name,
-                declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+                declared_task_format=TaskFormat.TASKSPEC,
             ),
         )
     native_rows = {
@@ -379,7 +379,7 @@ def test_conversion_drops_duplicate_tasks_and_retains_rejections_without_review_
             str(tmp_path / "output"),
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
     result = cast(ConversionResult, result)
     records = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
@@ -437,7 +437,7 @@ def test_conversion_rejects_split_workspace_grading_and_retains_assessment(tmp_p
             Dataset.from_list([converted]),
             context,
             str(tmp_path / "output"),
-            declared_task_format=TaskFormat.NATIVE_TASKSPEC,
+            declared_task_format=TaskFormat.TASKSPEC,
         )
     (record,) = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
     assert record["task_json"] is None

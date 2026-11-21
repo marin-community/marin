@@ -329,7 +329,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         *(
             RlDataSource(
                 pipeline=process_rows,
-                info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
+                info=replace(info, task_format=TaskFormat.TASKSPEC),
                 config=CurationRecipe(
                     name=name,
                     source=tasktrove_source(config),
@@ -359,7 +359,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
                     "and subsample hard: 617k rows is a third of the corpus."
                 ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",

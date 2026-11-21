@@ -385,7 +385,7 @@ SOURCES = (
             origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -409,7 +409,7 @@ SOURCES = (
             origin=SourceOrigin.DI_ZHANG_FDU,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -427,6 +427,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="ASDiv:asdiv",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="asdiv",
             upstream_name="asdiv",
             subset=None,
@@ -450,6 +451,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="BytedTsinghua-SIA:dapo_math",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="dapo_math",
             upstream_name="dapo_math",
             subset=None,
@@ -473,6 +475,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="agentica-org:deepscaler",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="deepscaler",
             upstream_name="deepscaler",
             subset=None,
@@ -496,6 +499,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="OpenAI:gsm8k",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="gsm8k",
             upstream_name="gsm8k",
             subset=None,
@@ -526,7 +530,7 @@ SOURCES = (
             origin=SourceOrigin.PAFITIS,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -550,6 +554,7 @@ SOURCES = (
             origin=SourceOrigin.PAFITIS,
             family="math-answer",
             tags=("rlvr", "single-turn", "private", "remediated", "gym/aime"),
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -566,6 +571,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="EleutherAI:hendrycks_math",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="hendrycks_math",
             upstream_name="hendrycks_math",
             subset=None,
@@ -593,7 +599,7 @@ SOURCES = (
             origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     MathSource(
@@ -610,6 +616,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="AI-MO:numina_math",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="numina_math",
             upstream_name="numina_math",
             subset=None,
@@ -633,6 +640,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="AllenAI:rlvr_math",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="rlvr_math",
             upstream_name="rlvr_math",
             subset=None,
@@ -654,6 +662,7 @@ SOURCES = (
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             id="ChilleD:svamp",
+            task_format=TaskFormat.TASKSPEC,
             upstream_dataset="svamp",
             upstream_name="svamp",
             subset=None,

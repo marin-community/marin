@@ -211,7 +211,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 count=count,
                 family="terminal",
                 build_path="Pristine SIF filesystem preserved as pinned OCI image; original-root verifier delivery",
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 tags=("license:apache-2.0", "facet"),
                 notes="Original native task and verifier contents; pending current-pin controls and admission.",
             ),

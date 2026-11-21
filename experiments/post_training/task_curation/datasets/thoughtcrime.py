@@ -55,7 +55,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("eval", "tool-calling", "reasoning-markup", "pi", "bixbench", "bfcl"),
                 count=328,
                 notes="One prefix per benchmark task; prefixes stop at pi's first compaction and 12,288 prompt tokens.",
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="thoughtcrime",

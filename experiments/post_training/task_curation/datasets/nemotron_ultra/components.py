@@ -1451,7 +1451,7 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
     return RlDataSource(
         pipeline=process_rows,
-        info=replace(BLENDS[blend][path], task_format=TaskFormat.MARINSKYRL),
+        info=replace(BLENDS[blend][path], task_format=TaskFormat.TASKSPEC),
         config=CurationRecipe(
             name=pipeline_name(blend, path),
             source=HfSource(
@@ -1485,7 +1485,7 @@ def repaired_tau_source(blend: str) -> RlDataSource[PrebuiltCohort]:
             BLENDS[blend][TAU_PIVOT_COMPONENT],
             count=cohort.expected_rows,
             dataset=cohort.dataset,
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
             notes=TAU_REPAIR_NOTE,
         ),
     )

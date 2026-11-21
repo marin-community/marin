@@ -68,7 +68,7 @@ def math_dataset(
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math"),
             count=rows,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             recipe,
@@ -117,7 +117,7 @@ def olympiad_source(protocol: OlympiadProtocol) -> RlDataSource[EvalDataset]:
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math", "legacy-subset"),
             count=30,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

@@ -48,7 +48,7 @@ def python_source(
             family="python-code",
             tags=("eval", "source:evalchemy", "benchmark", "code", "single-turn"),
             count=rows,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             recipe=CurationRecipe(

@@ -80,7 +80,7 @@ def choice_source(
                 "task:" + original_task_name(template),
             ),
             count=population,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             recipe=recipe,

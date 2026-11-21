@@ -6,6 +6,7 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import TaskFormat
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
@@ -49,7 +50,13 @@ def test_publication_compiles_mmlu_pro_variants_from_staged_fewshots(tmp_path, a
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
             manifest = publish_evaluation_corpus(
-                recipe, protocol, dataset.item_builder, context, str(source_root), str(output)
+                recipe,
+                protocol,
+                dataset.item_builder,
+                context,
+                str(source_root),
+                str(output),
+                declared_task_format=TaskFormat.TASKSPEC,
             )
     finally:
         client.shutdown()

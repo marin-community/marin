@@ -50,7 +50,7 @@ def bind_source(source: RlDataSource) -> RlDataSource:
         current_release=DatasetRelease(repo=config.repo, revision=config.revision, url=config.dataset.url),
         dataset=config.dataset,
         count=config.expected_rows,
-        task_format=TaskFormat.TASKCOMPENDIUM,
+        task_format=TaskFormat.TASKSPEC,
         oracle_validation=OracleValidation.SKIPPED,
         notes=(
             "Private repair candidate; full-population oracle filtration and negative controls remain pending. "

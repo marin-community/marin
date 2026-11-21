@@ -128,7 +128,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Original-root TaskSpec with grading-time verifier delivery",
                 family="terminal",
                 tags=("license:cc-by-4.0", "recursive-task-synthesis"),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 notes=(
                     "984 source-validated packages retain original root actors, instructions, builds and solutions. "
                     "The original verifier is host-delivered at grading time and its reward copied for numeric parsing. "

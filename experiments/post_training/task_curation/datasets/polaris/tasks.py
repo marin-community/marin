@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+from finestore.rl.curation import TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -64,6 +65,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="POLARIS training intake",
                 family="math-answer",
                 tags=("rlvr", "single-turn", "license:apache-2.0"),
+                task_format=TaskFormat.TASKSPEC,
                 notes=f"Original deterministic DeepScaleR reward {SCORER_REVISION}; LLM fallback disabled.",
             ),
             config=CurationRecipe(

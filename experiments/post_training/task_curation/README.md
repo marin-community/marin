@@ -24,20 +24,19 @@ multi-turn and similar) on a source. A late-stage ingestion step derives them fr
 the final TaskSpecs and QA records, and a contradicting declaration fails
 ingestion. Declarations carry only license, family and upstream provenance tags.
 
-Every source declares its task layout through [TaskFormat](../../../lib/finestore/src/finestore/rl/curation.py):
-`TASKCOMPENDIUM` or `HARBOR` task directories for agentic sources, the
-grandfathered `MARINSKYRL` blend rows, or `NATIVE_TASKSPEC` for non-agentic
-sources whose recipe or evaluation-harness pipeline converts raw rows straight to
-TaskSpecs. Task format is required ingestion metadata: every source registration
-states exactly one value at construction, the conversion census classifies every
-converted row with the typed detector
+Every source declares the structural shape of its served payload rows through
+[TaskFormat](../../../lib/finestore/src/finestore/rl/curation.py): `HARBOR` for
+rows that retain the original Harbor task package, `TASKSPEC` for TaskSpec rows
+with no task package, and `MARINSKYRL` for MarinSkyRL blend records. The values
+describe payload shape only. Task format is required ingestion metadata: every
+source registration states exactly one shape at construction, the conversion
+census classifies every converted row with the typed detector
 ([task_format.py](../../../lib/taskcompendium/src/taskcompendium/pipeline/task_format.py)),
-and the declared format must equal the detected format for every row. A source
-whose rows span several formats fails with a typed error naming the formats and
-counts and must be split into one source per task format. A catalog declaration
-without exactly one declared value fails at construction, and the Atlas Format
-column projects the value from the frozen declaration. A published private-release
-binding overwrites the construction-time value with the release's declared format.
+and the declared shape must equal the detected shape for every row. A source
+whose rows span several shapes fails with a typed error naming the shapes and
+counts and must be split into one source per shape. A catalog declaration
+without exactly one declared shape fails at construction, and the Atlas Format
+column projects the shape from the frozen declaration.
 
 ## Pinned registry receipts
 

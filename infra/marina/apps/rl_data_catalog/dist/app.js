@@ -3,7 +3,7 @@ const number = new Intl.NumberFormat('en-US');
 const resultLabels = {GOOD: 'Good', SOME_ISSUES: 'Some issues', BAD: 'Bad', UNKNOWN: 'Unknown', none: 'Not assessed'};
 const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNKNOWN: 'unknown', none: 'unassessed'};
 const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
-const formatLabels = {taskcompendium: 'TaskCompendium', harbor: 'Harbor', marinskyrl: 'MarinSkyRL', native_taskspec: 'Native TaskSpec'};
+const formatLabels = {harbor: 'Harbor', taskspec: 'TaskSpec', marinskyrl: 'MarinSkyRL'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['method', 'Method'], ['format', 'Format'], ['quality', 'Quality'], ['result', 'Result'],

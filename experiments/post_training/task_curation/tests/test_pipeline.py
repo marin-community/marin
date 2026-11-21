@@ -148,7 +148,7 @@ def source_step(recipe: CurationRecipe, options: PipelineOptions, receipt_root: 
             upstream_name=recipe.name,
             build_path="test",
             origin=SourceOrigin.MARIN,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=recipe,
         pipeline=process_rows,

@@ -120,7 +120,7 @@ def catalog(monkeypatch, tmp_path):
                         upstream_name=name,
                         build_path="test",
                         origin=SourceOrigin.MARIN,
-                        task_format=TaskFormat.NATIVE_TASKSPEC,
+                        task_format=TaskFormat.TASKSPEC,
                         license_receipt=fixture_license(
                             f"Marin:{name}", pipeline.dataset.name, pipeline.dataset.revision
                         ),

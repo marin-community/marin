@@ -128,6 +128,7 @@ def publish_dataset_corpus(
         options.runtime.context,
         run.source_input,
         run.output_path,
+        declared_task_format=options.declared_task_format,
         source_overrides=input_file_overrides(options.inputs.files),
         curation_identity=curation_identity,
         protocol_name=protocol_name,

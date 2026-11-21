@@ -323,7 +323,7 @@ def source(config: PreparationConfig) -> RlDataSource[ResearchDataset]:
             build_path="Grounded offline research intake",
             family="offline-search",
             tags=("license:mit", "corpus-license:odc-by"),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=ResearchDataset(config),
         pipeline=curate,

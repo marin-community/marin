@@ -375,7 +375,7 @@ SOURCES = (
                 "ships under tests/, which the agent never sees. Kept as rubric-only (tag no-"
                 "reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -397,7 +397,7 @@ SOURCES = (
                 "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -441,7 +441,7 @@ SOURCES = (
                 reviewed=10,
                 admitted=44939,
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -463,7 +463,7 @@ SOURCES = (
                 "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -485,7 +485,7 @@ SOURCES = (
                 "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -507,7 +507,7 @@ SOURCES = (
                 "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
                 "fall to the dedup step. Kept as rubric-only (tag no-reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -529,7 +529,7 @@ SOURCES = (
                 "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
     JudgedSource(
@@ -551,7 +551,7 @@ SOURCES = (
                 "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
                 "as rubric-only (tag no-reference)."
             ),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     ),
 )
@@ -564,7 +564,7 @@ def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=None if source.name in MECHANICALLY_RETIRED_JUDGE_SOURCES else process_rows,
             info=replace(
                 source.info,
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 notes=(
                     source.info.notes + JUDGE_QUALIFICATION_PENDING
                     if source.name in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES

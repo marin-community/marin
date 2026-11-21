@@ -439,13 +439,8 @@ def main() -> None:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--workers", type=int, required=True)
     args = parser.parse_args()
-    sources = cached_sources()
     selected = sorted(
-        (
-            source_id
-            for source_id in {canonical_source_id(value) for value in json.loads(args.ids.read_text())}
-            if not sources[source_id].is_grandfathered_blend
-        ),
+        (canonical_source_id(value) for value in json.loads(args.ids.read_text())),
         key=original_source_id,
     )
     args.output.mkdir(parents=True, exist_ok=True)

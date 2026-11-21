@@ -8,6 +8,7 @@ from collections.abc import Iterator, Mapping
 from functools import partial
 
 import pyarrow as pa
+from finestore.rl.curation import TaskFormat
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -95,6 +96,7 @@ def publish_evaluation_corpus(
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
     curation_identity: str | None = None,
     protocol_name: str | None = None,
+    declared_task_format: TaskFormat | None = None,
 ) -> EvaluationManifest:
     """Convert all selected rows and publish a manifest only after population and sidecar checks pass.
 
@@ -120,6 +122,8 @@ def publish_evaluation_corpus(
         )
     ):
         raise FileExistsError(f"Incomplete evaluation output requires a new artifact version: {output_path}")
+    if declared_task_format is None:
+        raise ValueError(f"Evaluation corpus {recipe.name} declares no task format for its conversion census")
     result = run_source_pipeline(
         recipe,
         context,
@@ -127,6 +131,7 @@ def publish_evaluation_corpus(
         output_path,
         mode=SourceProcessingMode.QUICK,
         canonical_source=recipe.name,
+        declared_task_format=declared_task_format,
         source_overrides=source_overrides,
     )
     assert isinstance(result, ConversionResult)

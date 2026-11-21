@@ -23,5 +23,5 @@ def source_info(folder: str) -> SourceInfo:
         count=TASK_COUNTS[folder],
         family="terminal",
         build_path="Pinned native base image with checksum-verified grouped public inputs",
-        task_format=TaskFormat.TASKCOMPENDIUM,
+        task_format=TaskFormat.TASKSPEC,
     )

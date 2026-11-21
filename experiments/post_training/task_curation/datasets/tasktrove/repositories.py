@@ -171,7 +171,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "4096 MB RAM and 10240 MB storage. Raw archive identities are not this count."
                 ),
                 daytona_execution_failures=13562,
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
         ),
         repository_source(
@@ -203,7 +203,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "pinned release per-task build-context inventory from the conversion ledger, "
                     "resources defaulted; production-named recount runs with the conversion program"
                 ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
         ),
     ]

@@ -97,8 +97,7 @@ from experiments.post_training.task_curation.remediation_binding import (
     retained_lineage,
 )
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
-from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
-from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
@@ -294,38 +293,25 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source_id, source in selected.items()
     }
-    for source in registered.values():
-        if source.info.task_format is None:
-            raise ValueError(
-                f"Source {source.info.id} declares no task format; "
-                "every source registration states exactly one TaskFormat value"
-            )
+    undeclared = sorted(source.info.id for source in registered.values() if source.info.task_format is None)
+    if undeclared:
+        raise ValueError(
+            "Sources declare no task format; every source registration states exactly one TaskFormat value: "
+            + ", ".join(undeclared)
+        )
     return registered
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:
-    """Reject an agentic source whose payload is not an accepted task format.
+    """Reject a source whose registration states no task format.
 
-    New agentic sources must ingest TaskCompendium or Harbor task directories.
-    MarinSkyRL's internal blend format is accepted only for the frozen
-    grandfather list, so a new internal-format source fails selection.
+    Every registration states exactly one shape; the conversion census verifies
+    the declared shape against every row's detected shape.
     """
-    if "agentic" not in source.info.tags:
-        return
-    task_format = source.info.task_format
-    if task_format is None:
+    if source.info.task_format is None:
         raise ValueError(
-            f"Agentic source {source.info.id} declares no task format; "
-            "declare TaskFormat.TASKCOMPENDIUM or TaskFormat.HARBOR"
-        )
-    if task_format is TaskFormat.NATIVE_TASKSPEC:
-        raise ValueError(
-            f"Agentic source {source.info.id} declares no task directory: "
-            "agentic sources ingest TaskCompendium or Harbor task directories"
-        )
-    if task_format is TaskFormat.MARINSKYRL and source.info.id not in GRANDFATHERED_MARINSKYRL_SOURCES:
-        raise ValueError(
-            f"Agentic source {source.info.id} ingests MarinSkyRL's internal format and is not grandfathered"
+            f"Source {source.info.id} declares no task format; "
+            "every source registration states exactly one TaskFormat value"
         )
 
 

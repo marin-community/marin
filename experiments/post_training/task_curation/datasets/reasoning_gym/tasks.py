@@ -358,6 +358,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.REASONING_GYM,
                 family="reasoning-gym",
                 tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="reasoning_gym_generated",
@@ -390,7 +391,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=(),
                 count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-reasoning-gym",

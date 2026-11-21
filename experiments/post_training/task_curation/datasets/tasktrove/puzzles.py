@@ -98,7 +98,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "task's original solution/solve.sh oracle; private pin "
                     "open-athena/tasktrove-puzzles-taskcompendium-20261114."
                 ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles",

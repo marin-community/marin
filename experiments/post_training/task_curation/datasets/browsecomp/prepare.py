@@ -212,7 +212,7 @@ def source(actor_image: str, receipt: LicenseReceipt) -> RlDataSource[BrowseComp
             build_path="BrowseComp-Plus offline BM25",
             family="offline-search",
             tags=("benchmark", "license:mit"),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
             license_receipt=receipt.model_copy(update={"source_id": SOURCE_ID}),
         ),
         config=BrowseCompDataset(

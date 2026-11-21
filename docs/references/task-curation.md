@@ -1794,35 +1794,26 @@ The relocation does not authorize a production publication or a new conversion.
 New declarations must match their generated identities. Do not add aliases to
 bypass that contract without an explicitly approved identity migration.
 
-Every runnable agentic source declares its ingested `task_format`. New agentic
-sources must ingest TaskCompendium or Harbor task directories; selection rejects
-an agentic source that declares no format, and rejects MarinSkyRL's internal
-blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
-frozen list of Nemotron Ultra components admitted before the requirement. A new
-internal-format source therefore fails at selection instead of shipping.
-Non-agentic sources whose payload is TaskSpec rows produced directly by their own
-recipe or evaluation-harness pipeline declare `TaskFormat.NATIVE_TASKSPEC`; they
-never package task directories. Every catalog declaration resolves to exactly one
-`TaskFormat` value at construction: a source entering the catalog without a
-declared format fails, and the Atlas Format column projects that value from the
-frozen declaration. A source whose payload moves into a published private release
-adopts the release's declared format (`TaskFormat.HARBOR` or
-`TaskFormat.TASKCOMPENDIUM`) through its release binding, which overwrites the
-construction-time value.
+Every source declares the structural shape of its served payload rows through
+`TaskFormat` (in `finestore.rl.curation`): `HARBOR` for rows that retain the
+original Harbor task package (the package contract validates `task.toml`,
+`instruction.md`, `tests/test.sh`, a `harbor` tag, a self-verifying grader and a
+declared environment), `TASKSPEC` for TaskSpec rows with no task package, and
+`MARINSKYRL` for MarinSkyRL blend records. The values describe payload shape
+only — they never record where a source came from. The historical provenance-era
+labels `taskcompendium` and `native_taskspec` parse onto their shape through the
+enum's missing-value rule and never re-enter declarations.
 
 Task format is required ingestion metadata. Every source registration states
-exactly one `TaskFormat` value at construction; a registered source without one
-fails the population build, with no default and no inference from pipeline kind.
-The conversion census classifies every converted row with the typed detector
+exactly one shape at construction; a registered source without one fails the
+population build, with no default and no inference from pipeline kind. The
+conversion census classifies every converted row with the typed detector
 (`taskcompendium.pipeline.task_format.detect_task_format`), which reuses the
-existing validators per format: the native-Harbor package contract, the
-TaskCompendium task-directory documents and published cohort carriers, the
-MarinSkyRL blend-record schema, and TaskSpec rows with no task directory. A row
-matching no predicate, or more than one, is a typed error, never a guess. The
-declared format must equal the detected format for every row. A source whose rows
-span several formats fails with `MixedTaskFormatSourceError`, naming the formats
-and their row counts and directing the author to split the source into one source
-per task format.
+existing validators per shape. A row matching no predicate, or more than one, is
+a typed error, never a guess. The declared shape must equal the detected shape
+for every row. A source whose rows span several shapes fails with
+`MixedTaskFormatSourceError`, naming the shapes and their row counts and
+directing the author to split the source into one source per shape.
 `independent_qc` records quality checks performed outside curation. Quality Result
 is computed from recorded SAMPLE/FULL issue counts and remains separate from
 mechanical exclusions and spec fidelity. Daytona is a required measured enum:

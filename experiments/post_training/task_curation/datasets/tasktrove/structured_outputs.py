@@ -131,7 +131,7 @@ def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
                     "Inventory: the grounding judge model is unspecified. Pin the judge contract and "
                     "complete grounding-verifier QA before admission."
                 ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured_outputs",

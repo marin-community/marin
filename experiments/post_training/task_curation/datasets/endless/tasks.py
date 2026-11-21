@@ -235,7 +235,7 @@ def sources(images: ContentEvidenceReference, census: ContentEvidenceReference) 
                 subset=folder,
                 count=count,
                 family="terminal",
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 build_path="Original pristine SIF image, original root actor and private native verifier delivery",
             ),
             config=CurationRecipe(

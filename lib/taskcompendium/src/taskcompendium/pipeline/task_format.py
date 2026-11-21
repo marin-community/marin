@@ -17,7 +17,6 @@ REQUEST_FIELD = "responses_create_params"
 AGENT_REF_FIELD = "agent_ref"
 TASK_SPEC_FIELD = "task_spec"
 LOWERED_TASK_SPEC_FIELD = "lowered_task_spec"
-TASK_TOML = "task.toml"
 
 
 class TaskFormatError(ValueError):
@@ -106,13 +105,9 @@ def _is_blend_record(record: dict[str, Any]) -> bool:
     return isinstance(agent, dict) and isinstance(agent.get("name"), str)
 
 
-def _has_task_directory(task: TaskSpec) -> bool:
-    return any(resource.path == TASK_TOML for resource in task.resources.verifier)
-
-
 def _is_harbor_row(row: FormatRow) -> bool:
     task = _parsed_task(row)
-    if task is None or not _has_task_directory(task):
+    if task is None:
         return False
     try:
         validate_native_package(task)
@@ -121,36 +116,23 @@ def _is_harbor_row(row: FormatRow) -> bool:
     return True
 
 
-def _is_taskcompendium_row(row: FormatRow) -> bool:
-    """A TaskCompendium payload: the directory variant of the task layout."""
-    if _is_harbor_row(row):
-        return False
-    task = _parsed_task(row)
-    return task is not None and _has_task_directory(task)
-
-
-def _is_native_row(row: FormatRow) -> bool:
-    """A TaskSpec payload with no task directory and no blend-record provenance."""
-    task = _parsed_task(row)
-    if task is None or _has_task_directory(task):
-        return False
-    return not _is_blend_record(row.raw)
+def _is_taskspec_row(row: FormatRow) -> bool:
+    """A TaskSpec row that is not a Harbor package."""
+    return _parsed_task(row) is not None and not _is_harbor_row(row)
 
 
 def _is_marinskyrl_row(row: FormatRow) -> bool:
     return _is_blend_record(row.raw)
 
 
-# One predicate per format. Their surfaces are disjoint by construction: the blend
-# record splits the raw-record level, and inside a TaskSpec the three layout
-# predicates partition {harbor contract, task.toml without it, no task.toml}. The
-# carrier keys are transport and never a format signal. detect() still counts every
-# match, so a row matching none of them or several of them raises instead of guessing.
+# One predicate per shape. The surfaces are disjoint by construction: the blend
+# record splits the raw-record level, and a parseable TaskSpec is exactly one of
+# {Harbor package, plain TaskSpec}. detect() still counts every match, so a row
+# matching none of them or several of them raises instead of guessing.
 PREDICATES: tuple[tuple[TaskFormat, Any], ...] = (
     (TaskFormat.MARINSKYRL, _is_marinskyrl_row),
     (TaskFormat.HARBOR, _is_harbor_row),
-    (TaskFormat.TASKCOMPENDIUM, _is_taskcompendium_row),
-    (TaskFormat.NATIVE_TASKSPEC, _is_native_row),
+    (TaskFormat.TASKSPEC, _is_taskspec_row),
 )
 
 

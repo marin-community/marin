@@ -85,7 +85,7 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
                 upstream_dataset="static",
                 upstream_name="static",
                 build_path="test",
-                task_format=TaskFormat.TASKCOMPENDIUM,
+                task_format=TaskFormat.TASKSPEC,
                 daytona_snapshot_count=0,
                 daytona_machine_slots=0,
                 daytona_execution_failures=0,
@@ -399,7 +399,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
             origin=SourceOrigin.MARIN,
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             tags=("agentic",),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
             daytona_snapshot_count=11,
             daytona_machine_slots=11,
             daytona_unsafe_reasons=(DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,),
@@ -495,7 +495,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
                 level=OversightLevel.SAMPLE, verification="Fixture rubric grading is checked locally."
             ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     )
     source = with_admission_census(source)
@@ -626,7 +626,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
                 level=OversightLevel.FULL, verification="Fixture grader behavior is checked locally."
             ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
-            task_format=TaskFormat.TASKCOMPENDIUM,
+            task_format=TaskFormat.TASKSPEC,
         ),
     )
     source = with_admission_census(source)

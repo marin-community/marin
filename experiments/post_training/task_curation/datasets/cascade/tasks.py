@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+from finestore.rl.curation import TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
@@ -75,6 +76,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Cascade-2 training intake",
                 family="mixed",
                 tags=("license:odc-by",),
+                task_format=TaskFormat.TASKSPEC,
                 notes=(
                     f"Original NeMo terminal graders {SCORER_REVISION}; "
                     "unsupported components retain typed rejections."

@@ -29,7 +29,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -184,6 +184,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
                 id="Nemotron:nemotron_if",
+                task_format=TaskFormat.TASKSPEC,
                 upstream_dataset="nemotron_if",
                 upstream_name="nemotron_if",
                 subset=None,
@@ -213,6 +214,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
                 id="AllenAI:rlvr_ifeval",
+                task_format=TaskFormat.TASKSPEC,
                 upstream_dataset="rlvr_ifeval",
                 upstream_name="rlvr_ifeval",
                 subset=None,

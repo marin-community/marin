@@ -64,10 +64,6 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.exclusion_registry import manual_exclusion_claims
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
-from experiments.post_training.task_curation.source_policy import (
-    GRANDFATHERED_DAYTONA_EXEMPTION,
-    GRANDFATHERED_MARINSKYRL_SOURCES,
-)
 from infra.marina.apps.rl_data_catalog.server.admission import (
     population_admission_blocker,
     require_lexical_qualification,
@@ -225,11 +221,12 @@ class SourceInfo:
     """Identity rule and payload source behind ``daytona_snapshot_count``."""
 
     task_format: TaskFormat | None = None
-    """The ingested task layout of this source's pinned payload.
+    """The structural shape of this source's served payload rows.
 
-    Required for every runnable agentic source. ``MARINSKYRL`` is accepted only for
-    the sources in ``GRANDFATHERED_MARINSKYRL_SOURCES``; a new agentic source must
-    ingest TaskCompendium or Harbor task directories.
+    Required for every registered source: a Harbor task package row, a TaskSpec
+    row with no task package, or a MarinSkyRL blend record. Every catalog
+    declaration resolves to exactly one shape and the conversion census verifies
+    the declaration against every row's detected shape.
     """
 
     daytona_execution_failures: int | None = None
@@ -367,14 +364,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
         )
 
     @property
-    def is_grandfathered_blend(self) -> bool:
-        return self.info.task_format is TaskFormat.MARINSKYRL and self.info.id in GRANDFATHERED_MARINSKYRL_SOURCES
-
-    @property
     def catalog_declaration(self) -> SourceDeclaration | None:
         """Hold metadata pending while QUICK produces the actor census."""
         filtered_to_zero = self.info.oracle_filtration is not None and self.info.oracle_filtration.admitted_count == 0
-        if not self.is_grandfathered_blend and not self.has_actor_census and not filtered_to_zero:
+        if not self.has_actor_census and not filtered_to_zero:
             return None
         if self.info.task_format is None:
             raise ValueError(
@@ -398,7 +391,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
     def admission_blockers(self) -> tuple[str, ...]:
         """Evidence missing before a source can enter admitted selection."""
         info = self.info
-        inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
         if self.approved_consumer_status is not None:
             assert info.consumer_decision is not None
@@ -423,8 +415,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
             info.grading_environment,
         ):
             blockers.append(blocker)
-        if self.is_grandfathered_blend:
-            return tuple(blockers)
         try:
             require_lexical_qualification(
                 info.lexical_contamination,
@@ -436,16 +426,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             blockers.append(str(error))
         if not self.has_actor_census:
             blockers.append("actor census evidence is missing")
-        elif inherited_legacy_admission:
-            actor = info.actor_census_input
-            if (
-                actor is None
-                or dataset is None
-                or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
-                != (dataset.name, dataset.revision, self.version)
-            ):
-                blockers.append("actor census does not cover the current retained release")
-        if not inherited_legacy_admission and (
+        if (
             info.oversight is None
             or info.oversight.level is OversightLevel.NONE
             or not info.oversight.verification.strip()
@@ -453,9 +434,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             blockers.append("evidence-derived oversight with verification is missing")
         if "agentic" not in info.tags:
             return tuple(blockers)
-        if info.task_format is None or (
-            info.task_format is TaskFormat.MARINSKYRL and info.id not in GRANDFATHERED_MARINSKYRL_SOURCES
-        ):
+        if info.task_format is None:
             blockers.append("accepted agentic task format is missing")
         if info.daytona_snapshot_count is None or not (info.daytona_count_basis or "").strip():
             blockers.append("production snapshot identity measurement is missing")
@@ -476,7 +455,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
         messages once the status page is serving.
         """
         info = self.info
-        inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         claims: list[ExclusionClaim] = []
         dataset = self.dataset
         if ban := source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt):
@@ -528,8 +506,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
                     evidence=ExclusionEvidence(kind=ExclusionEvidenceKind.CHECK_OUTPUT, message=blocker),
                 )
             )
-        if self.is_grandfathered_blend:
-            return tuple(claims)
         try:
             require_lexical_qualification(
                 info.lexical_contamination,
@@ -555,26 +531,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                     ),
                 )
             )
-        elif inherited_legacy_admission:
-            actor = info.actor_census_input
-            if (
-                actor is None
-                or dataset is None
-                or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
-                != (dataset.name, dataset.revision, self.version)
-            ):
-                claims.append(
-                    ExclusionClaim(
-                        reason=ExclusionReason.ACTOR_CENSUS_STALE,
-                        evidence=ExclusionEvidence(
-                            kind=ExclusionEvidenceKind.CHECK_OUTPUT,
-                            message="actor census does not cover the current retained release",
-                            expected=f"census for ({dataset.name if dataset else None}, "
-                            f"{dataset.revision if dataset else None}, {self.version})",
-                        ),
-                    )
-                )
-        if not inherited_legacy_admission and (
+        if (
             info.oversight is None
             or info.oversight.level is OversightLevel.NONE
             or not info.oversight.verification.strip()
@@ -591,16 +548,14 @@ class RlDataSource[ConfigT: CatalogConfig]:
             )
         if "agentic" not in info.tags:
             return tuple(claims)
-        if info.task_format is None or (
-            info.task_format is TaskFormat.MARINSKYRL and info.id not in GRANDFATHERED_MARINSKYRL_SOURCES
-        ):
+        if info.task_format is None:
             claims.append(
                 ExclusionClaim(
                     reason=ExclusionReason.AGENTIC_TASK_FORMAT_MISSING,
                     evidence=ExclusionEvidence(
                         kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
                         message="accepted agentic task format is missing",
-                        expected="TaskFormat.TASKCOMPENDIUM or TaskFormat.HARBOR declaration",
+                        expected="a declared TaskFormat shape",
                     ),
                 )
             )
@@ -715,9 +670,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
         if dedup is None:
             raise ValueError(f"Source {info.id} requires a complete within-source deduplication census")
         tags = info.tags
-        if self.is_grandfathered_blend or (
-            info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0
-        ):
+        if info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0:
             safety = None
         else:
             if (
@@ -794,7 +747,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
             license_receipt=info.license_receipt,
             independent_qc=info.independent_qc,
             daytona_safety=safety,
-            daytona_exemption=GRANDFATHERED_DAYTONA_EXEMPTION if self.is_grandfathered_blend else None,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
             oracle_validation=info.oracle_validation,

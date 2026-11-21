@@ -46,7 +46,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
             count=rows,
-            task_format=TaskFormat.NATIVE_TASKSPEC,
+            task_format=TaskFormat.TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

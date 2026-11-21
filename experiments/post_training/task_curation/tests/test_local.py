@@ -58,7 +58,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
                 upstream_name=name,
                 build_path="test",
                 origin=SourceOrigin.MARIN,
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=pipeline,
         )

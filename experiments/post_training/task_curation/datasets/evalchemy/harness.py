@@ -146,7 +146,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 family="likelihood-continuation",
                 tags=("eval", "source:evalchemy", "benchmark"),
                 count=5153,
-                task_format=TaskFormat.NATIVE_TASKSPEC,
+                task_format=TaskFormat.TASKSPEC,
             ),
             config=EvalDataset(
                 recipe=CurationRecipe(
@@ -267,7 +267,7 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
                     family="short-answer",
                     tags=("eval", "source:evalchemy", "benchmark", "family:short-answer", "task:" + profile),
                     count=population,
-                    task_format=TaskFormat.NATIVE_TASKSPEC,
+                    task_format=TaskFormat.TASKSPEC,
                 ),
                 config=EvalDataset(
                     recipe=CurationRecipe(

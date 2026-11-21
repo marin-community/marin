@@ -72,14 +72,13 @@
 
   <section id="formats" aria-labelledby="formats-title">
     <h2 id="formats-title">Task formats</h2>
-    <p>The Format column shows the task layout each source's served payload is currently in, derived from the source's frozen declaration and receipts; no value is entered by hand. Every source resolves to exactly one value.</p>
+    <p>The Format column shows the structural shape of each source's served payload rows, detected from the rows themselves; no value is entered by hand. Every source's rows resolve to exactly one shape, and a source whose rows span several shapes fails ingestion until it is split.</p>
     <dl>
-      <dt><span class="chip">TaskCompendium</span></dt><dd>The source's tasks are TaskCompendium task directories: each task is a directory with <code>task.toml</code>, its environment and its verifier, in TaskCompendium's variant.</dd>
-      <dt><span class="chip">Harbor</span></dt><dd>The source's tasks are Harbor task directories: the same directory layout in Harbor's variant.</dd>
-      <dt><span class="chip">MarinSkyRL</span></dt><dd>A small frozen set of Marin-internal blend sources whose payload rows predate the task-directory format. New sources cannot use this layout.</dd>
-      <dt><span class="chip">Native TaskSpec</span></dt><dd>The source's payload is TaskSpec rows produced directly by its own recipe or evaluation-harness pipeline, never packaged as task directories. These are non-agentic sources: single-turn benchmarks and evaluation-harness tasks.</dd>
+      <dt><span class="chip">Harbor</span></dt><dd>The source's rows are Harbor task packages: each row's TaskSpec retains the original Harbor package files (<code>task.toml</code>, <code>instruction.md</code>, <code>tests/test.sh</code>), its self-verifying grader and its declared environment.</dd>
+      <dt><span class="chip">TaskSpec</span></dt><dd>The source's rows are TaskSpec rows with no task package: the task's environment, verifier and grading contract live in the TaskSpec's typed fields.</dd>
+      <dt><span class="chip">MarinSkyRL</span></dt><dd>The source's payload is MarinSkyRL blend records: raw rows with a request conversation and a blend component identity, not TaskSpec rows.</dd>
     </dl>
-    <p>Agentic sources always ingest TaskCompendium or Harbor task directories. Task format is required at ingestion: the conversion census detects every row's payload structure and a source whose declared format differs, or whose rows span several formats, fails until the author splits or corrects it. A source whose payload moves into a published private release adopts that release's layout; the column always reflects the current pin.</p>
+    <p>The shape is detected from every row at ingestion and must equal the source's declaration; a mismatching or ambiguous row fails the conversion census. No format label records where a source came from.</p>
   </section>
 
   <section id="workflows" aria-labelledby="flow-title">
