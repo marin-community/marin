@@ -31,7 +31,7 @@ from verifyit.spec import EmptyOutputPolicy, JudgeSpec
 from experiments.post_training.task_curation.datasets.openresearcher.assets import DATASET, DATASET_REVISION
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import CONTRACT_SHA256
 
-VERSION = "2026.11.20.1"
+VERSION = "2026.11.21.1"
 SOURCE_ID = "OpenResearcher:OpenResearcher-Dataset"
 GRADER_ROOT = Path(__file__).parent.parent / "browsecomp"
 RESEARCH_INSTRUCTION = """Answer the question using the offline search and get_document tools.

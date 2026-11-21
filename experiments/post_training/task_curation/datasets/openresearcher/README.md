@@ -94,20 +94,19 @@ The versioned `openresearcher-bm25:v1` provider exposes `search` and
 pins the implementation, corpus, tokenizer and index manifest. The gold
 answer belongs only in private verifier resources.
 
-The RL run owns a regional Iris CPU service with the complete pinned BM25 index.
-The actor uses the thin grader image and declares `network_access: service_only`.
-Its external network stays disabled. Shellbox carries tool calls over its private
-process channel to the service. `get_document` transfers complete JSON in bounded
-frames to a temporary actor file and reads it with `Machine.download`, preserving
-documents above the stdout capture limit. Failed producers, transfers and malformed
-JSON abort the call. The index never occupies the actor disk. See
-[runtime support in PR #11851](https://github.com/marin-community/marin/pull/11851).
-Against a sandbox using the pinned thin actor image, verify production-provider calls
-for a normal document and pinned corpus document `7385` (18,388,915 UTF-8 bytes).
-Check the complete returned text against the corpus. The grounding JSON-line
-replay described above tests a separate transport path.
+The declared actor image contains `/opt/openresearcher/state.json` and the
+complete pinned BM25 index at `/opt/openresearcher/index/bm25`. The image-local
+provider reads both paths with external network access disabled. The grader uses the smaller runtime base;
+that base contains the Python dependencies and tool code. Keep the actor bound
+to the full-index image when preparing tasks for the image-local provider.
 
-Before `prepare`, record service and actor QA in the intake report. Its evidence must
+In a real sandbox, require the parsed `state.json` to equal the TaskSpec's
+`environment_requirements.tool_providers.retrieval.initial_state`,
+then call `search` and `get_document` through the image-local provider. Verify
+the complete returned document text against the pinned corpus. The grounding
+JSON-line replay described above tests a separate transport path.
+
+Before `prepare`, record image-local provider QA in the intake report. Its evidence must
 bind the actor image digest, service runtime, the complete index-file manifest and the two
 production-provider probes above. `prepare` creates the source's QUICK artifact
 after grounding and this QA. Its [`PreparationConfig`](prepare.py) binds the stage,
@@ -126,7 +125,7 @@ Construct `state` with [`OpenResearcherState`](../../../../../lib/taskcompendium
 using the verified index manifest SHA and the implementation/tokenizer revisions
 in [`runtime.py`](runtime.py). The fixed corpus revision, top-five search,
 512-token snippets and `get_document` setting must match the physically tested
-service's health state.
+actor image's state file.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.datasets.openresearcher.prepare \
