@@ -258,9 +258,7 @@ class ReportArgs:
 class ReportTool(ValidatedTool[ReportArgs]):
     evidence: Evidence
     name = "report"
-    description = (
-        "Finish the review. `findings` is empty when the trials show no task defect. " + FINDING_FIELDS
-    )
+    description = "Finish the review. `findings` is empty when the trials show no task defect. " + FINDING_FIELDS
     args_type = ReportArgs
 
     @override

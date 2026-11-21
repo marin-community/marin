@@ -37,9 +37,9 @@ from taskforge.model.controls import Control
 from taskforge.model.llm import Role
 from taskforge.model.proposal import render
 from taskforge.model.review import (
+    Accept,
     AdversaryFinding,
     AdversaryResult,
-    Accept,
     AdversaryStatus,
     Cause,
     Continuation,
@@ -537,8 +537,6 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
             raise held
         trials = (*base, *added)
         pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
-        previous = earlier_reports(workpiece)
-        review = await solve_review(
-            ctx, config, resources, workpiece.proposal, submission, pairs, "solve_review.final", FinalReportTool, previous
-        )
+        final = ("solve_review.final", FinalReportTool, earlier_reports(workpiece))
+        review = await solve_review(ctx, config, resources, workpiece.proposal, submission, pairs, *final)
     return Validated(ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index))

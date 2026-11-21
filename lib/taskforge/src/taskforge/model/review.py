@@ -130,7 +130,8 @@ class ReviewEnd(StrEnum):
 class SolveReview:
     """One solve-review of the evidence index whose digest is ``evidence``. ``findings`` passed their citation checks
     and ``dropped`` did not, each beside why; ``missing`` is the evidence it went without (its own report, or complete
-    transcripts). A final review sorts its surviving findings: ``findings`` send the task back, ``notes`` ship with it."""
+    transcripts). A final review sorts its surviving findings: ``findings`` send the task back, ``notes`` ship with it.
+    """
 
     evidence: str
     end: ReviewEnd
