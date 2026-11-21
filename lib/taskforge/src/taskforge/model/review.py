@@ -150,6 +150,26 @@ class Decline:
     reason: Text
 
 
+class Response(StrEnum):
+    """What became of a finding a review sent to the author: still ``requested`` until the author's visit ends."""
+
+    REQUESTED = "requested"
+    REVISED = "revised"
+    DECLINED = "declined"
+    STOPPED = "stopped"
+
+
+@dataclass(frozen=True, slots=True)
+class FindingResponse:
+    """The author's ``response`` to ``finding`` of the solve-review of evidence record ``review``, and a decline's
+    ``reason``: kept on the workpiece, so it outlives the submission that declined it, a restore and later rounds."""
+
+    review: int
+    finding: ReviewFinding
+    response: Response
+    reason: Annotated[str, OMIT_EMPTY] = ""
+
+
 class RejectKind(StrEnum):
     TASK = "task"
     BUDGET = "budget"
@@ -197,12 +217,14 @@ class Modify:
 @dataclass(frozen=True, slots=True)
 class Revise:
     """The final review's one revision, outside the shared modification budget: ``findings`` is the band line of every
-    trial of the confirmed submission, ``review`` the final review's revise findings. It keeps no fallback."""
+    trial of the confirmed submission, or its faults (``placement`` None), ``review`` the final review's revise
+    findings and ``notes`` its notes, which the author sees as optional. It keeps no fallback."""
 
     findings: tuple[str, ...]
-    placement: BandOutcome
+    placement: BandOutcome | None
     review: tuple[ReviewFinding, ...]
     kind: Literal["revise"] = "revise"
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
 
 
 @dataclass(frozen=True, slots=True)

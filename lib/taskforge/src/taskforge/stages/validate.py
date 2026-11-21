@@ -10,6 +10,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
+from functools import partial
 from pathlib import PurePosixPath
 from typing import cast
 
@@ -63,7 +64,7 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
-from taskforge.stages.rules import actionable, assess, missing, shipped
+from taskforge.stages.rules import actionable, assess, earlier_findings, missing, shipped
 from taskforge.stages.solve_review import earlier_reports, solve_review
 from taskforge.stages.summary import task_manifest
 
@@ -175,6 +176,23 @@ async def settled[T](work: Awaitable[T], holds: list[BaseException]) -> T | None
     except* Hold as held:
         holds.append(held)
     return None
+
+
+async def raise_holds(
+    ctx: Context,
+    what: str,
+    holds: list[BaseException],
+    trials: Sequence[TrialResult] | None,
+    max_missing: int,
+    beside: Sequence[BaseException] = (),
+) -> None:
+    """Once a wave's work has settled into ``holds``: drain its grade observers into them too, then raise every hold
+    at once, with what else stops the wave (``beside``) and the batch's own refusal, so an outage defers only a wave
+    whose every other disposition is settled evidence."""
+    await settled(ctx.check(), holds)
+    if holds:
+        holds += [*beside, *([held] if (held := refusal(trials or (), max_missing)) else [])]
+        raise BaseExceptionGroup(f"{what} holds", holds)
 
 
 def kept[T](task: asyncio.Task[T | None]) -> T:
@@ -492,12 +510,9 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                 for i, name in enumerate(roster)
             ]
             review = start(reviewed(ctx, workpiece, config, resources, solver, controls, rollouts, holds))
-        await settled(ctx.check(), holds)  # the grade observers settle with the wave
-        if holds:  # an outage defers only a wave whose every other disposition is settled evidence
-            failed = [a for a in map(asyncio.Task.result, adversary) if a and a.status is AdversaryStatus.FAILED]
-            holds += [Hold(f"{a.name}: {'; '.join(a.reasons)}") for a in failed]
-            holds += [held] if (held := refusal(solver.result() or (), config.budget.max_missing_trials)) else []
-            raise BaseExceptionGroup("Validation holds", holds)
+        failed = [a for a in map(asyncio.Task.result, adversary) if a and a.status is AdversaryStatus.FAILED]
+        beside = [Hold(f"{a.name}: {'; '.join(a.reasons)}") for a in failed]
+        await raise_holds(ctx, "Validation", holds, solver.result(), config.budget.max_missing_trials, beside)
         controls_done, adversaries_done = tuple(map(kept, controls)), tuple(map(kept, adversary))
         result = ValidationResult(submission.digest, kept(solver), controls_done, adversaries_done)
         return Validated(replace(result, review=review.result()))
@@ -507,7 +522,8 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
     """The confirmation step of the pending acceptance: the round it ships (``shipped``, a restore's included) keeps its
     scored trials, read from the journal, never bought again; the existing batch adds slots past every index that
     round used, up to ``solver.k + solver.confirmation_k`` under a fresh attempt, so no validation slot's identity
-    changes; then the final review reads all of them. Controls and adversaries are not run again.
+    changes; then the final review reads all of them. Controls and adversaries are not run again. The batch and its
+    grade observers settle as validation's do (``raise_holds``), so an outage beside another hold is not a pure one.
     """
     accepted, submission = workpiece.decisions[-1], workpiece.submission
     assert isinstance(accepted, Accept) and submission is not None, "confirmation follows an acceptance"
@@ -519,7 +535,8 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
         ctx.observe(Resolved, grader_infra_unavailable)
         recorded = {t.trial: ctx.recorded(SolverRollout(spec, t.trial, index)) for t in base}
         rollouts = {trial: rollout for trial, rollout in recorded.items() if rollout is not None}
-        added = await solver_batch(
+        holds: list[BaseException] = []
+        batch = solver_batch(
             ctx,
             spec,
             "confirmation",
@@ -532,11 +549,14 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
             max_missing=max_missing,
             rollouts=rollouts,
         )
-        await ctx.check()
+        added = await settled(batch, holds)
+        await raise_holds(ctx, "Confirmation", holds, added, max_missing)
+        assert added is not None, "only a hold leaves no result, and a hold raised"
         if held := refusal(added, max_missing):
             raise held
         trials = (*base, *added)
         pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
-        final = ("solve_review.final", FinalReportTool, earlier_reports(workpiece))
+        earlier = tuple(f for result in workpiece.evidence if result.review for f in earlier_findings(result.review))
+        final = ("solve_review.final", partial(FinalReportTool, earlier=earlier), earlier_reports(workpiece))
         review = await solve_review(ctx, config, resources, workpiece.proposal, submission, pairs, *final)
     return Validated(ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index))

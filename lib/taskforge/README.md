@@ -223,7 +223,8 @@ then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by r
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
 their scopes. The confirmation step reports apart, once: its solver slots as `role=confirmation` and its final
-review as `role=final_review`, never also under `solver` or `solve_review`. Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
+review as `role=final_review`, never also under `solver` or `solve_review`; a judge call during it is
+`role=judge`. An interrupted solver attempt's partial usage is not reported (no journalled result holds it). Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
 `--since-hours` includes workpieces active in that window and filters metric events by time;
 acceptance windows are clipped to it, with rates divided by the clipped duration. Acceptance
 uses the terminal decision timestamp, not file upload time. Empty roots and unreadable artifacts
@@ -303,16 +304,29 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   round is the one the acceptance chose (a restored fallback's included), and its scored trials and
   transcripts are read from the journal, never bought again; the new slots number past that round's
   indices under their own attempt, through the same solver batch, concurrency, heartbeat and
-  `budget.max_missing_trials` allowance (a refused slot beyond it holds). Controls and adversaries do not
-  run again. The final review (`solve_review.final.*` prompts) uses the same reviewer, evidence index,
-  citation checks and replay identity, is shown every earlier report with each finding's fate (declined
-  with the author's reason, revised, a note, or not acted on), and sorts its new findings into `revise`
-  and `note`. As in live Forge, the placement over every scored trial re-tags the acceptance in any band;
-  `note` findings are the acceptance's notes; `revise` findings buy one revision outside the shared
-  modification budget, validated as any round. That revision keeps no fallback: its placement is final,
-  its round findings are notes, and a fault or an author stop abandons the task (`Confirmation revision
-  failed`). Its acceptance is confirmed again, and then any `revise` finding is a note. Missing
-  confirmation evidence (`confirmation_trials`, `transcripts`, `solve_review`) is named, never a hold.
+  `budget.max_missing_trials` allowance (a refused slot beyond it holds). The batch and its grade observers
+  settle as validation's do, so an outage beside another hold is a manual hold, and only a pure
+  decision-model outage parks for automatic relaunch. Controls and adversaries do not run again. The
+  confirmation record is assessed as a validation round first: an invalid task or a grader fault in the new
+  trials is the author's to repair and an exhausted trial budget rejects, never a denominator entry. Only
+  valid scores and generation limits are placed: a generation limit is an unsolved trial, and any other
+  slot without a score is named (`confirmation_trials`) and excluded. The final review
+  (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
+  checks and replay identity, is shown every earlier report with what became of each finding (the
+  author's response recorded against the review that gave it: revised, declined with its reason, stopped,
+  a note, or not acted on), and sorts its new findings into `revise` and `note`. An account may blame a
+  trial on an earlier finding without repeating it while that finding's quotes still occur in the trial.
+  As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
+  `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
+  finding (or one an earlier review gave that the author said was fixed) or a fault buys one revision
+  outside the shared modification budget, validated as any round; the final review's notes go to the
+  author beside it as optional. A finding repeated from an earlier report buys nothing and is kept once.
+  That revision keeps no fallback: a clean revision is accepted at its placement whatever the band and
+  confirmed again, its round findings are notes, and a fault or an author stop abandons the task
+  (`Confirmation revision failed`, naming the unresolved finding). After it any `revise` finding is a note,
+  and the acceptance keeps the earlier notes, the revision's optional ones and the new ones, each once.
+  `accepted_with` is published only on a final acceptance. Missing confirmation evidence
+  (`confirmation_trials`, `transcripts`, `solve_review`) is named once, never a hold.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

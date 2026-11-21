@@ -21,6 +21,7 @@ from taskcompendium.runtime.resources import resource_bytes, resource_inventory,
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, Tool
 from taskforge.harness.role import Fresh, Visit, sitting
 from taskforge.harness.tools.evidence import (
@@ -42,10 +43,9 @@ from taskforge.model.review import (
     Accept,
     EvidenceKind,
     MissingEvidence,
-    Modify,
+    Response,
     ReviewEnd,
     ReviewFinding,
-    Revise,
     SolveReview,
     TrialResult,
 )
@@ -186,12 +186,12 @@ def reviewing(request: InferenceRequest) -> bool:
     return {tool.name for tool in request.tools} >= {ListTool.name, ReadTool.name, SearchTool.name}
 
 
-def finding_lines(findings: Sequence[ReviewFinding]) -> str:
-    """Numbered findings with their quoted evidence, for the author."""
+def finding_lines(findings: Sequence[ReviewFinding], start: int = 0) -> str:
+    """Findings numbered from ``start`` with their quoted evidence, for the author."""
     return "\n".join(
         f"{number}. [{f.kind}] {f.description}\n   Edit: {f.edit}\n"
         + "\n".join(f"   Evidence {c.source} #{c.start}..{c.end}: {c.quote}" for c in f.citations)
-        for number, f in enumerate(findings)
+        for number, f in enumerate(findings, start)
     )
 
 
@@ -232,9 +232,12 @@ async def solve_review(
         )
         + f"\n\nEvidence version: {index.version}",  # outside the template, so no overlay can drop it
     )
+    role = config.solve_review  # each kind of review is nudged toward its own report's fields
+    if isinstance(role.harness, AgenticHarness):
+        role = replace(role, harness=replace(role.harness, nudge=policy.prompt(f"{prompts}.nudge").template))
     async with sitting(
         ctx,
-        config.solve_review,
+        role,
         Visit(prompts, prompts, None, tools=evidence_tools(index, report)),
         resources,
     ) as session:
@@ -250,8 +253,6 @@ async def solve_review(
 def earlier_reports(workpiece: Workpiece) -> str:
     """Every solve-review of ``workpiece``, oldest first, each finding with what became of it, for the final review."""
     current = workpiece.submission.digest if workpiece.submission else None
-    kept = (workpiece.submission, workpiece.fallback.submission if workpiece.fallback else None)
-    declined = {d.finding: d.reason for submission in kept if submission for d in submission.declined}
     blocks = []
     for index, result in enumerate(workpiece.evidence):
         if (review := result.review) is None:
@@ -263,20 +264,28 @@ def earlier_reports(workpiece: Workpiece) -> str:
             blocks.append(f"{head} no report ({'; '.join(m.detail for m in review.missing)})")
             continue
         lines = [
-            f"- [{f.kind}] {f.description} Edit: {f.edit} Outcome: {fate(workpiece, f, declined)}."
+            f"- [{f.kind}] {f.description} Edit: {f.edit} Outcome: {fate(workpiece, index, f, f in review.notes)}."
             for f in (*review.findings, *review.notes)
         ]
         blocks.append("\n".join((head, *lines)) if lines else f"{head} no findings.")
     return "\n\n".join(blocks) or "No earlier solve-review reports."
 
 
-def fate(workpiece: Workpiece, finding: ReviewFinding, declined: Mapping[ReviewFinding, str]) -> str:
-    """What the decisions did with ``finding``: declined by the author with its reason, sent to the author, recorded
-    as a note, or neither."""
-    if finding in declined:
-        return f"the author declined it: {declined[finding]}"
-    if any(isinstance(d, Modify | Revise) and finding in d.review for d in workpiece.decisions):
-        return "given to the author, who revised the task"
+FATES = {
+    Response.REQUESTED: "given to the author, who has not answered yet",
+    Response.REVISED: "given to the author, who revised the task",
+    Response.DECLINED: "the author declined it: {reason}",
+    Response.STOPPED: "given to the author, who stopped without resubmitting",
+}
+
+
+def fate(workpiece: Workpiece, index: int, finding: ReviewFinding, note: bool) -> str:
+    """What became of ``finding`` of the review of evidence record ``index``: the author's response recorded against
+    that review (a final review's ``note`` was sent as optional), else a note on an acceptance, else nothing."""
+    response = next((r for r in reversed(workpiece.responses) if (r.review, r.finding) == (index, finding)), None)
+    if response is not None:
+        sent = FATES[response.response].format(reason=response.reason)
+        return sent.replace("given to the author", "given to the author as an optional note") if note else sent
     if any(isinstance(d, Accept) and finding in d.notes for d in workpiece.decisions):
         return "recorded as a note on the acceptance"
     return "not acted on"

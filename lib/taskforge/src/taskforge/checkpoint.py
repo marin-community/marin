@@ -35,7 +35,9 @@ from taskforge.model.workpiece import WORKPIECE, Workpiece
 JOURNAL_FORMAT = 8
 """Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
 terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
-round would buy a confirmation its recorded history lacks.
+round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
+finding (``responses``) and a final revision's optional notes; both default empty, and a fault revision has no
+placement, so format-8 rows written before them still decode.
 Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
 names nothing although no review ran, and a resumed format-6 round would buy a review its recorded history lacks.
 Format 6 records an `effect.invalidated` row naming the refused slot result an operator-authorised replacement
