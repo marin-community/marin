@@ -20,7 +20,17 @@ from taskforge.model.review import VALIDATION_RESULT
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
+from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
+
+# The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
+# wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
+AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v1.json"
+
+
+def author_reference() -> str:
+    """The pinned reference in the compact form the system prompt embeds."""
+    return json.dumps(json.loads(AUTHOR_REFERENCE.read_text()), sort_keys=True, separators=(",", ":"))
 
 
 def task_schema(decision_model: bool) -> dict[str, Any]:
@@ -39,12 +49,14 @@ def task_schema(decision_model: bool) -> dict[str, Any]:
 
 
 def system_prompt(policy: Policy) -> str:
-    """Render the author reference from the current task and control schemas."""
+    """Render the author's system prompt around the pinned task and control reference."""
     decision_model = bool(policy.setting("decision_model.model", str))
-    reference = json.dumps(
-        {"TaskSpec": task_schema(decision_model), "Control": CONTROL.json_schema()},
-        sort_keys=True,
-        separators=(",", ":"),
+    reference = (
+        json.dumps(
+            {"TaskSpec": task_schema(True), "Control": CONTROL.json_schema()}, sort_keys=True, separators=(",", ":")
+        )
+        if decision_model
+        else author_reference()
     )
     environments = tuple(
         environment.model_dump(mode="json", include={"docker_image", "command_semantics"})
