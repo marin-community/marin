@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 9:31 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 10:01 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -17,11 +17,11 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks were still scheduling-gated at 9:31 p.m. The last detailed diagnostic showed a shortfall of one GPU and one InfiniBand allocation. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. All five tasks were scheduling-gated at 10:01 p.m. Kueue reported a shortfall of nine GPUs and nine InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. Eight binary frames covered 128 tokens, and the second rollout used the exact first published weight fingerprint. | Connect the native backend to the rollout service and exercise publication across process boundaries. |
-| Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. A bounded CPU model/tool/model probe now passes. | Validate tool turns through the deployed adapter, multi-rank weight installation, full checkpoint and production context, then run the matched serving comparison. |
-| Typed binary protocol | Separate Snowball serving and learner processes exchanged four protobuf and binary tensor frames and replayed all 64 sampled targets on the CPU fixture. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the native service boundary. Migrate the learner pipe after learner acceptance. |
+| Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. A separate CPU proof restored and installed both optimizer updates in a serving subprocess, with fresh KV for each version. | Connect the native backend and publication to the deployed rollout service. |
+| Native inventory backend | A local SkyRL trajectory and learner path now carries actual native tool-turn replay through the isolated JAX worker. The candidate expert-sharded layout passed a bounded eight-device CPU loop. | Register native serving with the deployed controller and qualify multi-rank installation and the pinned full checkpoint at production context. |
+| Typed binary protocol | Separate Snowball serving and learner processes exchanged protobuf and binary tensor frames through two updates. Native SkyRL trajectory rows carry those frame bytes. The existing learner pipe uses a binary pickle envelope, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the deployed native service boundary. Migrate the learner envelope after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
 [First TPUv4 attempt][iris-native] · [TPUv4 queue and cache proof][iris-native-install] ·
@@ -164,10 +164,22 @@ stale policy identities, truncated frames and restart after publication.
 A local process-boundary proof at `9fc0fd8afd` sent four generated frames
 through a Unix socket with one unacknowledged frame at a time. A separate
 learner validated frame integrity and policy identity, rebuilt the graded
-batch, and reproduced its scores on a second pass. The 64 sampled raw
-rollout scores agreed with the learner to `4.29e-6` on four CPU devices.
-The fixture uses one policy version. Cross-process installation and service
-integration remain open.
+batch, and reproduced its scores on a second pass. The follow-up at
+`9809cafecf` published two optimizer updates. The separate serving process
+restored each TensorStore checkpoint, verified the actual weight digest and
+acknowledged only after replacing its KV state. It generated 64 targets at
+each of versions 0, 1 and 2. The largest raw score difference was
+`4.29e-6`. A wrong digest and stale identities were rejected. After the
+failed install, the active policy reproduced its earlier frames
+byte-for-byte. Both proofs ran on one and four CPU devices. Deployed
+service integration and distributed publication remain open.
+
+At the pinned model's 26 layers and four selected experts, a synthetic
+24,576-token frame occupied 13,650,628 bytes. A four-answer group of those
+frames occupies about 52 MiB. In a five-repeat local codec probe, median
+encode and decode took 17.8 ms and 8.1 ms per frame. Choose a byte budget at
+the service boundary that admits this geometry. Measure frame lifetimes and
+RAM across concurrent production requests before increasing concurrency.
 
 ## Implementation and acceptance
 
@@ -282,8 +294,8 @@ scoring modes. Each run decoded eight binary frames and verified the
 full-vocabulary profile and fused forward diagnostic on four TPUv4 chips.
 The three installed weight digests were distinct, the second group
 used step 1, and the 128 sampled scores matched within `4.29e-6`. This
-qualifies fresh local KV state across updates. Multi-rank publication and
-serving installation across process boundaries remain open.
+qualifies fresh local KV state across updates. The separate CPU publication
+proof covers the process boundary, and multi-rank publication remains open.
 [TPUv4 queue and cache proof][iris-native-install]
 
 The integrated proof archive is
@@ -319,6 +331,42 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 
 ### 3. Qualify native serving for the inventory recipe
 
+The regional HF export index lists 39 shards and 134.16 GB of tensor
+bytes. Its config has 26 layers, 20 query heads, five KV heads, 256
+experts and four selected experts per token. On eight devices the head
+counts select tensor parallelism of one. A JAX trace of the full model
+shape confirmed that the default layout shards each expert weight on its
+hidden dimension. The explicit expert-parallel layout assigns 32 whole
+experts per device. It estimates 18.3 GiB of BF16 parameter storage per
+device and 1.52 GiB of replicated KV per full-context slot at 24,576
+tokens. Eight full slots therefore need about 12.2 GiB for one cache and
+24.4 GiB while two caches overlap during an install. These figures
+exclude live activations, compile scratch and overlapping weights. The
+trace used checkpoint metadata and abstract arrays.
+
+The loader at `59398f200f` accepts
+`LevanterEngineConfig(expert_parallel_size=8)`. A local HF export/load
+round trip exercised the serving loader and verified identical BF16
+expert bytes on the eight-device mesh. A small model with 20 query heads,
+five KV heads and four selected experts out of 16 completed two paged
+rollout and fused learner updates across eight CPU devices. The largest
+raw score difference was `1.55e-5` within the original relative and
+absolute tolerances. The current explicit layout needs the replay batch
+and serving slot dimensions aligned to the combined token-sharding width.
+Four configured slots failed that shape check. Eight slots and two groups
+of four passed.
+
+Use an eight-H100 expert-sharded host as the first candidate for a
+same-hardware comparison. Start with the minimum aligned serving slots
+and measure actual HBM while loading, generating and installing weights.
+The current prefill scheduler admits whole prompts. Size its token pack
+for the longest accepted prompt in the first full-context smoke and
+measure prefill memory and latency on that shape.
+The current BF16 paged attention selects the reference implementation on
+CUDA and the TPU path also falls back for BF16. Benchmark that path at the
+current context and compare with a qualified faster kernel before
+concluding that native serving improves time per rollout group.
+
 - Connect the native backend to the RolloutEngine operations used by the
   recipe. Use SkyRL's exact-token chat continuation helper to retain the
   first assistant turn's served tokens and append only the rendered boundary
@@ -328,14 +376,21 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
   and four CPU devices, learner replay matched both turns' raw scores and
   gave every added tool or boundary token zero objective gradient. Both
   frames used the same acknowledged installed policy.
-- Use the exact prompt IDs from SkyRL's chat model client as native
-  `Request.prompt_tokens`. Pass a binary replay frame or reference through
-  the model client and turn record to learner batch assembly. Retain both
-  turns' sampled IDs and raw scores and cover the full causal prefix with
-  routes indexed by predictor position. Reject a continuation when its
-  served prefix or policy identity disagrees. Qualify this through the
-  deployed adapter, then exercise tool and infrastructure failure masks
-  and a restart at the publication boundary. [Exact chat continuation][chat-continuation]
+- The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
+  prompt IDs from SkyRL's chat client and binds the returned binary frame to
+  the controller's expected policy identity. The turn records carry those
+  frames to trainer rank batches. The follow-up at `732ff5cdca` exercised
+  the standard SkyRL task worker with a local tool provider and preserved
+  the frame bytes through assembly. The handoff at `470c0a0034` validates
+  admitted sequences, positions, masks and per-layer routes in the isolated
+  JAX worker. It scores and updates with the same captured choices, and
+  keeps raw old-policy scores separate from sampler probabilities. The
+  real worker replay test passed on one and four CPU devices with
+  JAX/JAXLIB 0.11.0.
+- Have the deployed controller supply the native transport and an
+  installer-verified policy identity for each admitted rollout window.
+  Exercise tool and infrastructure failure masks and a restart across
+  that deployment boundary. [Exact chat continuation][chat-continuation]
 - Load the pinned 67B checkpoint on the intended serving hardware. Qualify
   real context and batch sizes, expert sharding, precision, peak memory,
   compile time and sustained serving. Measure serve/score drift under the
@@ -367,7 +422,7 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
   consumers.
 
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
-[iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a1029950e470
+[iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a4f09610f02b
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
 [timing]: https://github.com/marin-community/marin/issues/11190
 [launch]: ../references/rl-launching.md
