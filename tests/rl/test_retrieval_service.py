@@ -25,6 +25,13 @@ from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
+from marin.rl.retrieval_backend import RetrievalServer, retrieval_handler
+from marin.rl.retrieval_service import (
+    RetrievalServiceConfig,
+    RetrievalServiceLaunch,
+    retrieval_service,
+    run_retrieval_service,
+)
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
@@ -37,14 +44,6 @@ from shellbox.process_session import SubprocessSession
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, CommandSemantics, EnvironmentRequirements, NoGrader, ProviderRequirement
 from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, OpenResearcherState
-
-from marin.rl.retrieval_backend import RetrievalServer, retrieval_handler
-from marin.rl.retrieval_service import (
-    RetrievalServiceConfig,
-    RetrievalServiceLaunch,
-    retrieval_service,
-    run_retrieval_service,
-)
 
 
 class FixtureIndex:

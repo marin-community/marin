@@ -1,5 +1,6 @@
 # @package environment.task_sessions
 local: null # Explicitly enable with {} on Linux hosts with working bubblewrap.
+local_service: null # Bind a ready run-owned CPU LOCAL service on other worker architectures.
 max_verifier_workers: 32 # verifier threads in each rollout worker
 remote_judge: null # Set base_url and api_key_env to grade judge tasks on the rollout host.
 retrieval_service: null # Per-run BM25 endpoint bound after the service becomes ready.

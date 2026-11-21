@@ -13,7 +13,6 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from marinskyrl.local_images import LocalMachineSettings, local_machine_factory
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -21,8 +20,8 @@ from rolloutengine.harness.shell import ToolContext
 from rolloutengine.machines import task_machine
 from rolloutengine.models import MachineRuntimeSpec
 from rolloutengine.validation import validate_spec
-from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.machine import Backend, Command, NetworkPolicy
+from shellbox.backends.iris.local_images import LocalMachineSettings, local_machine_factory
+from shellbox.machine import Backend, Command, MachineFactory, NetworkPolicy
 from skyrl_gym.rollout_specs import TOOL_PROVIDERS, rollout_spec
 from taskcompendium.models import TaskSpec
 
@@ -50,12 +49,13 @@ class PythonProbe(BaseModel):
     state_persisted: bool
 
 
-async def qualify(rows: list[PythonQualificationInput], factory: LocalMachineFactory) -> tuple[PythonProbe, ...]:
+async def qualify(
+    rows: list[PythonQualificationInput], factory: MachineFactory, *, host_network_namespace: str
+) -> tuple[PythonProbe, ...]:
     config_path = Path("vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml")
     config = yaml.safe_load(config_path.read_text())["task_spec"]
     runtime = MachineRuntimeSpec.model_validate({**config["required_actor"], "backend": Backend.LOCAL})
     assert runtime.backend == Backend.LOCAL and runtime.network is NetworkPolicy.DENY
-    host_network = os.readlink("/proc/self/ns/net")
     results = []
     for row in rows:
         encoded = row.task_spec
@@ -110,7 +110,7 @@ async def qualify(rows: list[PythonQualificationInput], factory: LocalMachineFac
                 if network.exit_code != 0:
                     raise ValueError("Cannot verify the LOCAL tool network namespace")
                 isolation = json.loads(network.stdout)
-                if isolation["namespace"] == host_network or isolation["routes"]:
+                if isolation["namespace"] == host_network_namespace or isolation["routes"]:
                     raise ValueError("LOCAL Python tool does not have a private network-denied namespace")
                 results.append(
                     PythonProbe(
@@ -151,7 +151,9 @@ def main() -> None:
         if args.local_backend_config is not None
         else LocalMachineSettings()
     )
-    results = asyncio.run(qualify(rows, local_machine_factory(settings)))
+    results = asyncio.run(
+        qualify(rows, local_machine_factory(settings), host_network_namespace=os.readlink("/proc/self/ns/net"))
+    )
     receipt = {
         "inputs": args.inputs,
         "inputs_sha256": args.inputs_sha256,

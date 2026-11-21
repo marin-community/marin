@@ -6,7 +6,18 @@ from enum import StrEnum
 from pathlib import Path
 
 from loguru import logger
-from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import (
+    Backend,
+    ClosableMachineFactory,
+    Command,
+    ExecutionRequirements,
+    Machine,
+    MachineFactory,
+    MachineSpec,
+    ProcessMachine,
+    ProcessSession,
+    Result,
+)
 
 _PASSTHROUGH_ERRORS = (TypeError, ValueError, AttributeError, LookupError, AssertionError)
 
@@ -17,6 +28,7 @@ class MachineOperation(StrEnum):
     UPLOAD = "upload"
     DOWNLOAD = "download"
     CLOSE = "close"
+    OPEN_PROCESS = "open_process"
 
 
 class TaskMachineError(RuntimeError):
@@ -82,6 +94,18 @@ class _OwnedMachine:
         await asyncio.shield(self.begin_close())
 
 
+class _OwnedProcessMachine(_OwnedMachine):
+    machine: ProcessMachine
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        try:
+            return await self.machine.open_process(command)
+        except _PASSTHROUGH_ERRORS:
+            raise
+        except Exception as error:
+            raise TaskMachineError("Task-machine process creation failed", MachineOperation.OPEN_PROCESS) from error
+
+
 @dataclass
 class OwnedMachineFactory:
     """Track provider creations and machines across rollout cancellation."""
@@ -115,7 +139,7 @@ class OwnedMachineFactory:
                 raise
             except Exception as error:
                 raise TaskMachineError("Task-machine creation failed", MachineOperation.CREATE) from error
-            owned = _OwnedMachine(machine, self)
+            owned = _OwnedProcessMachine(machine, self) if isinstance(machine, ProcessMachine) else _OwnedMachine(machine, self)
             self.machines.add(owned)
             if self.closing:
                 await owned.close()
@@ -144,5 +168,11 @@ class OwnedMachineFactory:
                 provider=self.identifier, open_creations=len(self.creating), open_machines=len(self.machines)
             ).error("Task-machine shutdown deadline expired")
             failures.append(TimeoutError(f"Task-machine shutdown deadline expired for provider {self.identifier}"))
+        if isinstance(self.factory, ClosableMachineFactory):
+            try:
+                async with asyncio.timeout(max(0, deadline - asyncio.get_running_loop().time())):
+                    await self.factory.close()
+            except Exception as error:
+                failures.append(error)
         if failures:
             raise ExceptionGroup("Task-machine cleanup failed", failures)

@@ -44,12 +44,11 @@ def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[s
     return resolved
 
 
-def bound_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> MachineSpec:
-    """Bind package requirements and omit advisory local memory before feature checks."""
+def bound_machine_spec(requirements: EnvironmentRequirements, spec: MachineSpec) -> MachineSpec:
+    """Bind package requirements while preserving the selected machine allocation."""
     return replace(
         spec,
         source=requirements.package_spec if requirements.package_spec is not None else spec.source,
-        memory_mb=None if factory.backend == Backend.LOCAL else spec.memory_mb,
     )
 
 
@@ -60,7 +59,7 @@ def validate_machine_spec(requirements: EnvironmentRequirements, factory: Machin
         raise UnsupportedMachineSpec(
             f"Task requires the {requirements.required_backend.value} backend, selected {factory.backend.value}"
         )
-    factory.check_environment(requirements, bound_machine_spec(requirements, factory, spec))
+    factory.check_environment(requirements, bound_machine_spec(requirements, spec))
 
 
 def prepare_machine_spec(
@@ -74,7 +73,7 @@ def prepare_machine_spec(
     Lock preparation performs I/O. Async callers run it off-thread under their startup deadline.
     Resource installation, setup commands, machine creation and cleanup remain with the caller.
     """
-    spec = bound_machine_spec(requirements, factory, spec)
+    spec = bound_machine_spec(requirements, spec)
     validate_machine_spec(requirements, factory, spec)
     required_variables = resolve_env_vars(requirements.environment_variables, host_environment)
     variables: Mapping[str, str] = {}

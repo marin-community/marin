@@ -110,6 +110,25 @@ def test_admin_can_use_elevated_profile(service, profile):
     assert resp.job_id == "/admin/job"
 
 
+@pytest.mark.parametrize("parent_profile", [DEFAULT, PRIVILEGED])
+def test_task_launches_privileged_child_only_with_matching_parent_profile(service, parent_profile):
+    parent = "/alice/rl-run"
+    child = parent + "/local-machines"
+    _as("admin", "alice", service.launch_job, _launch(parent, parent_profile), None)
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="task", job_id=parent))
+    try:
+        if parent_profile == DEFAULT:
+            with pytest.raises(ConnectError) as error:
+                service.launch_job(_launch(child, PRIVILEGED), None)
+            assert error.value.code == Code.PERMISSION_DENIED
+            return
+        response = service.launch_job(_launch(child, PRIVILEGED), None)
+        stored = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None)
+        assert stored.request.container_profile == PRIVILEGED
+    finally:
+        _verified_identity.reset(reset)
+
+
 @pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, SANDBOX, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
 def test_non_admin_can_use_unprivileged_profile(service, profile):
     """RESTRICTED/DEFAULT/SANDBOX/UNSPECIFIED need no authorization.

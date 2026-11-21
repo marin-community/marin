@@ -270,6 +270,13 @@ class MachineFactory(Protocol):
     async def create(self, spec: MachineSpec) -> Machine: ...
 
 
+@runtime_checkable
+class ClosableMachineFactory(MachineFactory, Protocol):
+    """A factory with resources to release after its machines finish."""
+
+    async def close(self) -> None: ...
+
+
 class ProcessSession(Protocol):
     """A foreground process with persistent binary stdin and stdout.
 
