@@ -40,16 +40,13 @@ class MeshConfig:
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
 
     def __post_init__(self):
-        # Keep concrete defaults in serialized recipes without treating them as caller overrides.
+        # Preserve concrete defaults in serialized recipes; explicit maps retain only caller entries.
         axes, dcn_axes = self.axes, self.dcn_axes
+        default_axes, default_dcn_axes = _axis_specs_with_defaults(axes or {}, dcn_axes or {})
         if axes is None:
-            object.__setattr__(
-                self, "axes", {k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in (dcn_axes or {})}
-            )
+            object.__setattr__(self, "axes", default_axes)
         if dcn_axes is None:
-            object.__setattr__(
-                self, "dcn_axes", {k: v for k, v in DEFAULT_DCN_AXIS_SPEC.items() if k not in (axes or {})}
-            )
+            object.__setattr__(self, "dcn_axes", default_dcn_axes)
 
     @cached_property
     def resolved_compute_mapping(self) -> ResourceMapping:
@@ -96,9 +93,7 @@ class MeshConfig:
 
         assert self.axes is not None and self.dcn_axes is not None
 
-        # An explicit network placement replaces that axis's default placement.
-        axes = {**{k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in self.dcn_axes}, **self.axes}
-        dcn_axes = {**{k: v for k, v in DEFAULT_DCN_AXIS_SPEC.items() if k not in self.axes}, **self.dcn_axes}
+        axes, dcn_axes = _axis_specs_with_defaults(self.axes, self.dcn_axes)
 
         # If the user added another absorber (-1), drop the default absorber so exactly one remains.
         if sum(1 for v in axes.values() if v == -1) > 1 and "data" in axes and "data" not in self.axes:
@@ -142,6 +137,16 @@ class MeshConfig:
             raise ValueError(f"ICI product {known_ici} must equal devices_per_slice {per_slice}.")
 
         return axes, dcn_axes
+
+
+def _axis_specs_with_defaults(
+    axes: Mapping[str, int], dcn_axes: Mapping[str, int]
+) -> tuple[Dict[str, int], Dict[str, int]]:
+    # An explicit network placement replaces that axis's default placement.
+    return (
+        {**{k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in dcn_axes}, **axes},
+        {**{k: v for k, v in DEFAULT_DCN_AXIS_SPEC.items() if k not in axes}, **dcn_axes},
+    )
 
 
 def create_mesh_from_axis_specs(
