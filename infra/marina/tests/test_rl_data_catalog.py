@@ -4020,12 +4020,44 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
     assert projected["sample_pin_stale"] is True
 
 
+def test_qc_inventory_keeps_its_selected_load_during_a_refresh(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "inventory-refresh")
+    publish_sample(root, "inventory-refresh")
+    load_catalog(CurationCatalog(root), catalog_query)
+    catalog_query(
+        "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
+        "to_jsonb(s)||jsonb_build_object('id','Marin:unreviewed','assessment_key',NULL))).* "
+        "FROM atlas_sources s WHERE id='Marin:math'",
+        {},
+    )
+    catalog_query(
+        "INSERT INTO atlas_loads SELECT (jsonb_populate_record(NULL::atlas_loads, "
+        "to_jsonb(l)||jsonb_build_object('load_id','next-load','snapshot_id','next'))).* "
+        "FROM atlas_loads l JOIN atlas_current c USING(load_id) WHERE c.name='latest'",
+        {},
+    )
+    switched = False
+
+    def select_new_load(connection, _cursor, statement, _parameters, _context, _many):
+        nonlocal switched
+        if not switched and "atlas_review_current" in statement:
+            switched = True
+            connection.execute(text("UPDATE atlas_current SET load_id='next-load' WHERE name='latest'"))
+
+    event.listen(catalog_database, "before_cursor_execute", select_new_load)
+    try:
+        with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+            inventory = client.get("/qc/inventory").json()
+        assert switched
+        assert {row["source_id"] for row in inventory["panels"]} == {"Marin:math", "Marin:unreviewed"}
+    finally:
+        event.remove(catalog_database, "before_cursor_execute", select_new_load)
+
+
 @pytest.mark.parametrize("shared_batch", [False, True, "chunked"])
-@pytest.mark.parametrize("inventory_batch", [1, 16])
 def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
-    catalog_database, catalog_query, tmp_path, shared_batch, inventory_batch, monkeypatch
+    catalog_database, catalog_query, tmp_path, shared_batch
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.server.reviews.QC_INVENTORY_BATCH", inventory_batch)
     root = str(tmp_path / "sample-browse")
     publish_sample(root, "sample-browse")
     load_catalog(CurationCatalog(root), catalog_query)

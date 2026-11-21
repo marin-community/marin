@@ -3,9 +3,7 @@
 
 """Catalog-wide counts and definitions for typed content-review findings."""
 
-import json
 from collections import defaultdict
-from itertools import batched
 from typing import Any
 
 from fastapi import FastAPI
@@ -13,8 +11,6 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from .source_identity import canonical_source_id
-
-QC_INVENTORY_BATCH = 16
 
 DEFECT_DESCRIPTIONS = {
     "missing_context": "Information needed to solve or judge the task is absent from the supplied evidence.",
@@ -30,28 +26,31 @@ def register_review_routes(api: FastAPI, engine: Engine) -> None:
     @api.get("/qc/inventory")
     def inventory() -> dict[str, Any]:
         with engine.connect() as connection:
+            load_id = connection.execute(
+                text("SELECT load_id FROM atlas_current WHERE name='latest'")
+            ).scalar_one_or_none()
+            if load_id is None:
+                return {"panels": [], "rollouts": []}
             ids = (
                 connection.execute(
-                    text(
-                        "SELECT s.id FROM atlas_sources s JOIN atlas_current c USING(load_id) "
-                        "WHERE c.name='latest' ORDER BY s.id"
-                    )
+                    text("SELECT id FROM atlas_sources WHERE load_id=:load_id ORDER BY id"),
+                    {"load_id": load_id},
                 )
                 .scalars()
                 .all()
             )
             panels = []
-            for source_ids in batched(ids, QC_INVENTORY_BATCH):
+            for source_id in ids:
                 # Correlated counts use each pipeline's composite indexes instead of
-                # scanning retained review history for every source batch.
+                # scanning retained history. A scalar source key bounds each statement
+                # even when the selected inventory contains several large FULL panels.
                 panels.extend(
                     connection.execute(
                         text(
                             """
                     WITH current_sources AS (
-                        SELECT s.load_id,s.id FROM atlas_sources s JOIN atlas_current c USING(load_id)
-                        WHERE c.name='latest'
-                          AND s.id IN (SELECT value FROM jsonb_array_elements_text(CAST(:source_ids AS JSONB)))
+                        SELECT s.load_id,s.id FROM atlas_sources s
+                        WHERE s.load_id=:load_id AND s.id=:source_id
                     )
                     SELECT s.id AS source_id,r.pipeline_key,a.scope,r.receipt,
                         COALESCE(p.task_count,0) AS task_count,raw.raw_count,
@@ -85,7 +84,7 @@ def register_review_routes(api: FastAPI, engine: Engine) -> None:
                     ORDER BY s.id
                 """
                         ),
-                        {"source_ids": json.dumps(source_ids)},
+                        {"load_id": load_id, "source_id": source_id},
                     )
                     .mappings()
                     .all()
@@ -99,11 +98,11 @@ def register_review_routes(api: FastAPI, engine: Engine) -> None:
                     (SELECT COUNT(*) FROM atlas_rollout_attempts a
                         WHERE a.measurement_id=r.measurement_id) AS attempt_count
                 FROM atlas_rollout_sets r JOIN atlas_difficulty d USING(measurement_id)
-                JOIN atlas_sources s ON s.id=d.source_id
-                JOIN atlas_current selected ON selected.load_id=s.load_id AND selected.name='latest'
+                JOIN atlas_sources s ON s.id=d.source_id AND s.load_id=:load_id
                 ORDER BY r.measurement_id
             """
-                    )
+                    ),
+                    {"load_id": load_id},
                 )
                 .mappings()
                 .all()
