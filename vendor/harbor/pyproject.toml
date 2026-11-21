@@ -39,7 +39,7 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
 sotopia = ["harbor[archive]", "numpy", "scipy", "scikit-learn"]

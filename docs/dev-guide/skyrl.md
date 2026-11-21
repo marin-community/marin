@@ -97,7 +97,8 @@ Add a new persisted exception name to its producer's category map. Put a name
 used by several producers in the shared map once. Per-name training overrides
 belong in `ErrorHandlingConfig`.
 
-Passthrough treatment prevents retrying a result with usable verifier output.
+SkyRL retains passthrough terminal results with usable verifier output. Native
+Harbor may retry when environment teardown is unconfirmed.
 
 ## Run records
 

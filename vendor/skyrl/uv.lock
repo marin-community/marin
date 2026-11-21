@@ -2065,7 +2065,6 @@ requires-dist = [
     { name = "marin-finestore", marker = "extra == 'archive'", editable = "../../lib/finestore" },
     { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "marin-shellbox", editable = "../../lib/shellbox" },
-    { name = "marin-shellbox", marker = "extra == 'runtime'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["daytona"], marker = "extra == 'daytona'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["qemu"], marker = "extra == 'qemu'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["shellsim"], marker = "extra == 'shellsim'", editable = "../../lib/shellbox" },

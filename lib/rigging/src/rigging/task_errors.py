@@ -23,21 +23,36 @@ class ErrorCategory(StrEnum):
     UNKNOWN = "unknown"  # Requires the consumer's configured fallback.
 
 
+API_CONNECTION_ERROR = "APIConnectionError"
+API_TIMEOUT_ERROR = "APITimeoutError"
+AGENT_SETUP_TIMEOUT_ERROR = "AgentSetupTimeoutError"
+AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
+CONTEXT_LENGTH_EXCEEDED_ERROR = "ContextLengthExceededError"
+ENVIRONMENT_START_TIMEOUT_ERROR = "EnvironmentStartTimeoutError"
+INTERNAL_SERVER_ERROR = "InternalServerError"
+REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
+REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
+TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
+VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
+VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
+VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
+
+
 SHARED_ERROR_CATEGORIES = MappingProxyType(
     {
-        "APIConnectionError": ErrorCategory.INFRASTRUCTURE,
-        "APITimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "AgentSetupTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "AgentTimeoutError": ErrorCategory.AGENT,
-        "ContextLengthExceededError": ErrorCategory.AGENT,
-        "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "InternalServerError": ErrorCategory.INFRASTRUCTURE,
-        "RewardFileEmptyError": ErrorCategory.INFRASTRUCTURE,
-        "RewardFileNotFoundError": ErrorCategory.INFRASTRUCTURE,
-        "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "VerifierOutputParseError": ErrorCategory.INFRASTRUCTURE,
-        "VerifierRuntimeError": ErrorCategory.INFRASTRUCTURE,
-        "VerifierTimeoutError": ErrorCategory.UNKNOWN,
+        API_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        API_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        AGENT_SETUP_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        AGENT_TIMEOUT_ERROR: ErrorCategory.AGENT,
+        CONTEXT_LENGTH_EXCEEDED_ERROR: ErrorCategory.AGENT,
+        ENVIRONMENT_START_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        INTERNAL_SERVER_ERROR: ErrorCategory.INFRASTRUCTURE,
+        REWARD_FILE_EMPTY_ERROR: ErrorCategory.INFRASTRUCTURE,
+        REWARD_FILE_NOT_FOUND_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TRIAL_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_OUTPUT_PARSE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_RUNTIME_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_TIMEOUT_ERROR: ErrorCategory.UNKNOWN,
     }
 )
 
@@ -67,11 +82,11 @@ def known_error_types(*, categories: Mapping[str, ErrorCategory]) -> frozenset[s
 
 DEFAULT_RETRY_EXCLUSIONS = frozenset(
     {
-        "AgentTimeoutError",
-        "VerifierTimeoutError",
-        "RewardFileNotFoundError",
-        "RewardFileEmptyError",
-        "VerifierOutputParseError",
+        AGENT_TIMEOUT_ERROR,
+        VERIFIER_TIMEOUT_ERROR,
+        REWARD_FILE_NOT_FOUND_ERROR,
+        REWARD_FILE_EMPTY_ERROR,
+        VERIFIER_OUTPUT_PARSE_ERROR,
     }
 )
 
