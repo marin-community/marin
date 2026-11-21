@@ -26,6 +26,8 @@ from taskcompendium.convert.script_grader import grade_script, script_package, s
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
+    CohortOrder,
+    CohortPolicy,
     EvaluationItem,
     EvaluationProtocol,
     Metrics,
@@ -256,6 +258,8 @@ def source(language: Language) -> RlDataSource[EvaluationCorpusRecipe]:
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
                 expected_population=POPULATION,
+                # A --limit run takes a fixed uniform sample, mixing AtCoder and LeetCode problems.
+                cohort=CohortPolicy(order=CohortOrder.SHUFFLED),
             ),
             item_builder=multi_lcb_item,
             protocol_name="official",
