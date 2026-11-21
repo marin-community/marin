@@ -76,14 +76,14 @@ from harbor.utils.artifact_writer import ArtifactUploadTimeoutError, get_artifac
 from harbor.utils.logger import logger
 from harbor.utils.pass_at_k import compute_pass_at_k_by_evals
 from harbor.utils.path_compat import safe_rmtree
-from rigging.task_errors import is_resume_retryable
+from harbor_config.errors import is_resume_retryable
 
 CANCELLED_ERROR_TYPE = "CancelledError"
 
 # Exception types whose on-disk trial result should be RE-RUN on a fresh
 # `harbor jobs resume` (a brand-new invocation of the whole job), rather than
 # kept as a terminal error result. The canonical set lives in the shared
-# `rigging.task_errors` taxonomy so downstream consumers (e.g. MarinSkyRL)
+# `harbor_config.errors` taxonomy so downstream consumers (e.g. MarinSkyRL)
 # inherit the same exception identifiers; this is the resume-level (whole-job
 # re-invocation) retry decision ONLY and is deliberately DISTINCT from the
 # in-trial retry classification in `harbor/environments/daytona/utils.py`

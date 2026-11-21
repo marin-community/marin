@@ -17,7 +17,7 @@ from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
 from harbor.models.trial.config import TaskConfig
-from rigging.task_errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory
 from skyrl_train.inline_harbor_client import CONTROL_MESSAGE_LIMIT
 
 
@@ -54,7 +54,7 @@ def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) ->
         raise ValueError("Harbor validation returned missing, duplicate, or unexpected tasks")
     scores = []
     for trial in result.trial_results:
-        if trial.exception_info is not None and error_category(trial.exception_info.exception_type) not in {
+        if trial.exception_info is not None and trial.exception_info.category not in {
             ErrorCategory.AGENT,
             ErrorCategory.PASSTHROUGH,
         }:

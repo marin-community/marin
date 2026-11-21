@@ -31,7 +31,7 @@ from skyrl_train.trajectory_runners.harbor.truncation_penalty import apply_trunc
 from skyrl_train.trajectory_runners.types import RESPONSE_SPAN_TAGS_KEY, TrajectoryRequestBatch
 from skyrl_train.metric_names import IDENTITY_AWARE_REWARD_METRIC_PREFIX
 from skyrl_train.error_treatment import ErrorTreatment
-from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_exception_type
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_failure
 from skyrl_train.utils.pbs_shaping import compute_pbs_token_shaping
 from skyrl_train.utils.span_tagger import tag_generated_tokens
 from skyrl_train.utils.reward_shaping import (
@@ -90,7 +90,7 @@ class HarborTaskSettings:
             return None
         if self.retry.include_exceptions and name not in self.retry.include_exceptions:
             return None
-        if classify_exception_type(name, self.error_handling) is ErrorTreatment.PASSTHROUGH:
+        if classify_failure(failure, self.error_handling) is ErrorTreatment.PASSTHROUGH:
             return None
         return min(self.retry.min_wait_sec * self.retry.wait_multiplier**retries, self.retry.max_wait_sec)
 

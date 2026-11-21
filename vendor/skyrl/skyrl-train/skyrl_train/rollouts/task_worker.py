@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rigging.task_errors import RetryDisposition, exception_identity
+from rigging.task_errors import RetryDisposition, error_category, exception_identity
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -86,6 +86,7 @@ from skyrl_train.rollouts.training_record import (
     rollout_with_verifier_failure,
 )
 from skyrl_train.task_error_handling import ErrorHandlingConfig
+from skyrl_train.task_errors import ERROR_CATEGORIES
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -277,7 +278,7 @@ def _failed_rollout(
         error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
     ):
         raise error
-    failure = exception_identity(error, operation=interruption.operation.value)
+    failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
     exception_type = type(error).__name__
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
@@ -349,6 +350,7 @@ def _failed_rollout(
         failure=failure.model_copy(
             update={
                 "exception_type": exception_type,
+                "category": error_category(exception_type, categories=ERROR_CATEGORIES),
                 "diagnostics": diagnostics,
                 "cause_type": failure.cause_type
                 or (failure.exception_type if exception_type != failure.exception_type else None),

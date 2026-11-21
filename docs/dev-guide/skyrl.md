@@ -81,21 +81,27 @@ The pinned Ray release has no Intel macOS wheel.
 
 ## Task errors
 
-[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py) owns the
-shared exception categories and `RetrySettings` type.
-Import these directly.
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py)
+owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
+Each framework owns its remaining categories: Shellbox owns machine and Daytona
+errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
+SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
+is installed. Composition rejects names assigned by more than one owner.
+
 SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
 infrastructure failures are excluded, agent failures receive zero reward, and
 passthrough failures retain available verifier output. Unknown names use the
 configured fallback and emit an error log.
 
-Add each new persisted exception name to `rigging.task_errors`. SkyRL applies
-per-name training overrides through `ErrorHandlingConfig`.
+Add a new persisted exception name to its producer's category map. Put a name
+used by several producers in the shared map once. Per-name training overrides
+belong in `ErrorHandlingConfig`.
 
-The shared `ErrorIdentity` records the task error name, provider cause, operation,
+The shared `ErrorIdentity` records the task error name, category, provider cause, operation,
 provider status, and retry disposition. Native Harbor exception records extend
 this identity with message and traceback details. TaskCompendium grades preserve
-the identity when a trial supplies one.
+the identity when a trial supplies one. Consumers use its stored category and
+disposition without loading the producer framework.
 
 Passthrough treatment prevents retrying a result with usable verifier output.
 
