@@ -1,12 +1,4 @@
-"""Contract tests for the shared Harbor error taxonomy.
-
-These pin the composed ``harbor_config.errors`` categories that downstream consumers
-(MarinSkyRL's rollout adapter) rely on instead of duplicating Harbor exception
-names. The taxonomy must (a) classify ``ContextManagementInfrastructureError``
-as infrastructure, (b) cover every exception Harbor can persist as a trial
-outcome so contract drift fails loudly, and (c) keep resume-retryability
-distinct from the RL treatment category.
-"""
+"""Check Harbor's category map, resume policy, and persisted exception identity."""
 
 import inspect
 

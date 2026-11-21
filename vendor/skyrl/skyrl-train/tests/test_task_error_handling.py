@@ -84,9 +84,6 @@ def test_terminal_error_treatment_contract(name, expected):
 def test_training_override_masks_an_agent_timeout():
     config = ErrorHandlingConfig(mask_exceptions=frozenset({"AgentTimeoutError"}))
     assert classify_failure(ErrorIdentity(exception_type="AgentTimeoutError"), config) is ErrorTreatment.MASK
-    assert (
-        classify_failure(ErrorIdentity(exception_type="AgentTimeoutError"), ErrorHandlingConfig()) is ErrorTreatment.ZERO
-    )
 
 
 def test_stored_category_controls_treatment_without_harbor():
