@@ -4,7 +4,6 @@
 import asyncio
 import json
 import threading
-import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,7 +15,13 @@ from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
-from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity, run_evaluation
+from marin.rollouts.evaluation import (
+    EvaluationInfrastructureError,
+    EvaluationRunConfig,
+    ModelIdentity,
+    grading_limits,
+    run_evaluation,
+)
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood
@@ -53,6 +58,7 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    Source,
     TaskSpec,
     TextMessage,
 )
@@ -579,7 +585,6 @@ def convert_judged_row(row, _context):
         label_scan="whole",
         label_case="upper",
         completion_policy=JudgeCompletionPolicy.CONTENT,
-        request_timeout=row.data.get("judge_budget", 120.0),
         transport_budget=row.data.get("judge_budget", 180.0),
     )
     task = answer_task(row, prompt=row.data["prompt"], spec=judge, evidence=row.data)
@@ -614,9 +619,7 @@ def judge_endpoint(monkeypatch, request):
                 "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "A"}}],
             }
             status = 200
-            if request.param == "slow":
-                time.sleep(0.3)
-            elif len(requests) == 1:
+            if len(requests) == 1:
                 if request.param == "http-503":
                     body = {"error": {"message": "fixture unavailable"}}
                     status = 503
@@ -769,31 +772,13 @@ async def test_driver_unmapped_judge_model_is_rejected_before_generation(
     assert model_requests == judge_requests == []
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("judge_endpoint", ["slow"], indirect=True)
-async def test_driver_grading_deadline_covers_the_judge_budget(tmp_path, run_config, judge_endpoint):
-    corpus = publish_policy_corpus(
-        tmp_path, [{"prompt": "slow judge", "judge_budget": 3.0}], converter=convert_judged_row
-    )
-    judge_requests, connection, _ = judge_endpoint
-    limits = run_config.limits.model_copy(update={"verifier_timeout": 0.1})
-    config = run_config.model_copy(
-        update={
-            "limits": limits,
-            "judge": JudgeIdentity(
-                deployment="fixture", models={"run-default": "revision"}, default_model="run-default"
-            ),
-        }
-    )
-
-    async def model(_request):
-        return ModelTurn({"role": "assistant", "content": "2"}, (), (), None, "stop", usage=TokenUsage(10, 1))
-
-    output = str(tmp_path / "results")
-    await run_evaluation((corpus,), output, config, model, machine_factories={}, judge_connection=connection)
-    samples = [sample_from_archive_row(row) for row in ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE)]
-    assert [sample.grading.score for sample in samples] == [1.0]
-    assert len(judge_requests) == 1
+@pytest.mark.parametrize("judge_budget,deadlines", [(1200.0, (1230.0, 2430.0)), (180.0, (600.0, 1800.0))])
+def test_grading_deadline_covers_the_judge_budget(run_config, judge_budget, deadlines):
+    source = Source(dataset="fixture", revision="a" * 40, row="rows.jsonl:0", importer_revision="1")
+    task = convert_judged_row(RawRow("judged", source, {"prompt": "p", "judge_budget": judge_budget}), None)
+    limits = run_config.limits.model_copy(update={"verifier_timeout": 600, "attempt_timeout": 1800})
+    extended = grading_limits(limits, task)
+    assert (extended.verifier_timeout, extended.attempt_timeout) == deadlines
 
 
 @dataclass
