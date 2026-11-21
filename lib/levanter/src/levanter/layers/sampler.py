@@ -92,6 +92,23 @@ class Sampler(eqx.Module):
 
         return tokens, log_prob_tokens
 
+    def sample_positions(
+        self,
+        logits: NamedArray,
+        temperatures: NamedArray,
+        *,
+        top_ps: NamedArray,
+        key: PRNGKeyArray,
+    ) -> tuple[NamedArray, NamedArray]:
+        """Sample positions with independent keys and skip vocabulary sorting when every cutoff is one."""
+        sample = hax.vmap(self, "position")
+        # Choose before vmap so JAX can skip the entire sort at runtime.
+        return jax.lax.cond(
+            hax.all(top_ps >= 1.0).scalar(),
+            lambda: sample(logits, temperatures, key=key),
+            lambda: sample(logits, temperatures, top_ps=top_ps, key=key),
+        )
+
     def _apply_top_p(
         self,
         scaled_logits: NamedArray,

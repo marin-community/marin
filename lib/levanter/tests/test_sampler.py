@@ -49,6 +49,20 @@ def test_sampler_top_p_does_not_overshoot_exact_threshold():
     assert jnp.isneginf(masked_logits.array[1:]).all()
 
 
+@pytest.mark.parametrize("cutoffs", [(1.0, 1.0), (1.0, 0.5)])
+def test_sampling_positions_preserves_token_draws_and_logprobs(cutoffs):
+    position, vocab = hax.Axis("position", 2), hax.Axis("vocab", 4)
+    logits = hax.named(jnp.array([[0.5, 1.0, 0.0, -1.0], [6.0, 5.0, 1.0, -1.0]]), (position, vocab))
+    temperatures = hax.named(jnp.array([0.0, 1.0]), position)
+    top_ps = hax.named(jnp.asarray(cutoffs), position)
+    keys = jax.random.split(jax.random.key(17), position.size)
+    sampler = Sampler(vocab)
+    expected = jax.jit(hax.vmap(sampler, position))(logits, temperatures, top_ps=top_ps, key=keys)
+    actual = jax.jit(sampler.sample_positions)(logits, temperatures, top_ps=top_ps, key=keys)
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array.array, expected_array.array)
+
+
 @pytest.mark.parametrize("temperature", [0.5, 1.0, 2.0])
 def test_full_distribution_sampling_keeps_tail_probabilities(temperature):
     batch, vocab = hax.Axis("batch", 2), hax.Axis("vocab", 4)
