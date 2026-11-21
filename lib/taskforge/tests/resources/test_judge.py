@@ -211,7 +211,7 @@ ANSWER = replace(
 )
 
 
-# Review 2026-11-21 (n12 follow-up 3): a context refusal recorded inside the shared inference resource cached the
+# Review 2026-11-21: a context refusal recorded inside the shared inference resource cached the
 # judge's refusal, so after the provider recovered the same grade made no call and raised again.
 @pytest.mark.parametrize("injected", [True, False], ids=["injected client", "provider"])
 async def test_a_judge_context_refusal_is_asked_again_once_the_provider_recovers(injected: bool) -> None:
