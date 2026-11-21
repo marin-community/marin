@@ -2790,7 +2790,7 @@ async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes
 # Control: a four-file hydration that fails on the caller's own destination stays the caller's defect, a bug hold with
 # the guest's error text and no journalled outcome, and a resume on the same sandbox shape fails the same way.
 @pytest.mark.parametrize("code", [errno.EISDIR, errno.EACCES], ids=errno.errorcode.get)
-async def test_hydration_failure_on_a_caller_path_is_recorded_and_replays(
+async def test_hydration_failure_on_a_caller_path_stays_the_callers_and_repeats(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
     blocked = {"reference/1.txt" if code == errno.EISDIR else "locked/1.txt": code}
