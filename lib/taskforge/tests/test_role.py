@@ -89,7 +89,7 @@ class Loud(ValidatedTool[NoArgs]):
 
 
 async def test_a_machine_less_session_gets_every_reply_clipped_and_never_a_spill() -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): the loop's own unknown-tool diagnostic spilled a reply to a file a
+    """Review 2026-11-21: the loop's own unknown-tool diagnostic spilled a reply to a file a
     machine-less reviewer could never read. Every reply, tool output and loop diagnostic alike, is clipped instead."""
     log = EventLog()
     ctx = Context(log=log)
@@ -123,7 +123,7 @@ class FourArguments(Harness):
 
 @pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
 async def test_an_injected_four_argument_harness_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
-    """Review 2026-11-21 (n11 follow-up 2, P2): the role runner passed ``spill=`` to every harness, so one written
+    """Review 2026-11-21: the role runner passed ``spill=`` to every harness, so one written
     against the four-argument protocol raised before it ran, after a machine-backed visit had taken its sandbox. The
     runner configures only its own harness per visit."""
     ctx = Context(log=EventLog())
@@ -151,7 +151,7 @@ class Constructed(AgenticHarness):
 
 @pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
 async def test_an_injected_stock_harness_subclass_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
-    """Review 2026-11-21 (n11 follow-up 3): configuring every ``AgenticHarness`` per visit rebuilt an injected subclass
+    """Review 2026-11-21: configuring every ``AgenticHarness`` per visit rebuilt an injected subclass
     through ``dataclasses.replace``, which called its own constructor with the stock fields and raised. Only the exact
     stock class is configured."""
     ctx = Context(log=EventLog())

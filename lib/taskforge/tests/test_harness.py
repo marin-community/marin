@@ -331,7 +331,7 @@ async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session
     assert client.requests[2].conversation[-1].content.startswith("Grading this candidate failed and produced no grade")
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 5): a live grade showed "cut": 3.0, "level": 4.0 and the same grade
+# Review 2026-11-21: a live grade showed "cut": 3.0, "level": 4.0 and the same grade
 # reloaded from the journal showed 3 and 4, so the author's next request changed and a cold resume paid for a recorded
 # turn. The grade tool renders the numbers one way either side of a resume.
 @pytest.mark.parametrize("level", [4.0, 4, 3.5])

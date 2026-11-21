@@ -159,7 +159,7 @@ async def test_stalls_inside_a_tool_call_are_waited_out_as_an_outage() -> None:
 
 
 # Review 2026-11-21: a role header and a close, eight times, kept a call alive past a 3 s availability window.
-# Follow-up 1: a tool-call frame with only an index or empty arguments counted as generated text.
+# A tool-call frame with only an index or empty arguments also counted as generated text.
 @pytest.mark.parametrize(
     "envelope",
     [
@@ -178,7 +178,7 @@ async def test_a_stream_cut_before_generating_does_not_renew_the_availability_wi
     assert (time.now, len(provider.bodies)) == (3, 3)
 
 
-# Review 2026-11-21 follow-up 1: one generated character then EOF, repeated, renewed the window until 65 POSTs.
+# Review 2026-11-21: one generated character then EOF, repeated, renewed the window until 65 POSTs.
 async def test_a_call_renews_its_availability_window_once() -> None:
     cut = unavailable(AttemptOutcome.INCOMPLETE_STREAM, chunk(content="1"))
     provider = ScriptedProvider((cut,) * 64 + (segment("answer"),))
@@ -315,7 +315,7 @@ async def test_a_solver_request_the_server_rejects_holds_its_slot_at_once_with_i
     assert f"HTTP 400: {reason}" in (result.grade.error or "") and len(provider.bodies) == 1
 
 
-# Review 2026-11-21 (follow-up 1): a refusal on turn two recorded an empty rollout, dropping the paid first step.
+# Review 2026-11-21: a refusal on turn two recorded an empty rollout, dropping the paid first step.
 async def test_a_later_turn_refusal_keeps_the_paid_rollout_prefix_and_its_usage() -> None:
     shell = ToolCall("c1", "shell", json.dumps({"command": "echo hi"}))
     provider = ScriptedProvider(
@@ -335,7 +335,7 @@ async def test_a_later_turn_refusal_keeps_the_paid_rollout_prefix_and_its_usage(
     assert step.turn.metadata["usage"]["prompt_tokens"] == 10 and step.turn.metadata["usage"]["completion_tokens"] == 5
 
 
-# Review 2026-11-21 (follow-up 1): a model whose stop text was "held" and whose answer graded 1.0 was a missing slot.
+# Review 2026-11-21: a model whose stop text was "held" and whose answer graded 1.0 was a missing slot.
 def test_no_model_output_reads_as_a_recorded_refusal() -> None:
     answered = GradedRollout(Rollout("arithmetic:0:0", (), "held"), GradeResult(Outcome.GRADED, 1.0))
     assert trial_cause(answered, SPEC.task) is None
@@ -411,7 +411,7 @@ def test_inconsistent_provider_deadlines_are_rejected(overlay: dict[str, float],
         provider_policy(load_policy(DEFAULTS).overlaid(overlay))
 
 
-# Review 2026-11-21 (n12 follow-up 3): a 200 stream whose finish reason was the harness's internal `context_exceeded`
+# Review 2026-11-21: a 200 stream whose finish reason was the harness's internal `context_exceeded`
 # made the author stop on a context limit and the solver grade its content. It is refused as an unknown reason is.
 @pytest.mark.parametrize("reason", ["context_exceeded", "no_such_reason"])
 async def test_a_served_internal_refusal_marker_fails_as_an_unknown_finish_reason(
@@ -456,7 +456,7 @@ def raw(reason: str) -> Segment:
     return replace(segment("12"), finish_reason=cast(FinishReason, reason))
 
 
-# Review 2026-11-21 (n12 follow-up 4): the guard compared by identity, so a raw "context_exceeded" string passed live
+# Review 2026-11-21: the guard compared by identity, so a raw "context_exceeded" string passed live
 # while its journal row decodes to the marker member and a cold replay stopped on a context limit.
 async def test_an_injected_provider_cannot_report_the_raw_marker_string() -> None:
     with pytest.raises(ValueError, match="'context_exceeded' is not a valid FinishReason"):

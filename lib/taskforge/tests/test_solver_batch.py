@@ -136,7 +136,7 @@ async def test_new_slots_number_past_every_occupied_one_and_fill_the_eligible_ta
     )
 
 
-# Review 2026-11-21 (Romain): lowering concurrency on resume must keep completed shards.
+# Review 2026-11-21: lowering concurrency on resume must keep completed shards.
 async def test_a_resumed_batch_executes_only_its_unfinished_slot_under_other_scheduling() -> None:
     gate = asyncio.Event()
     first = Slots(gates={2: gate})
@@ -252,7 +252,7 @@ async def test_a_held_slot_survives_a_sibling_restart_and_replays_without_runnin
     assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
 
 
-# Review 2026-11-21 (N12 finding 2): generation reaching its limit before the first response is a completed, failed
+# Review 2026-11-21: generation reaching its limit before the first response is a completed, failed
 # trial whose grade is UNAVAILABLE. The replay rule took it for unavailable grading and ran the slot again whenever a
 # sibling restarted or a held root resumed, and the reviewer was left a grade-only stub without the transcript.
 PROMPT = ({"role": "system", "content": "solve"}, {"role": "user", "content": "what is 6 + 6?"})
@@ -299,7 +299,7 @@ async def test_a_generation_limited_slot_replays_with_its_transcript_beside_an_i
     assert not cold.executed and kept(rebuilt_log, 0).conversations[0].messages == PROMPT
 
 
-# Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded; when its grader failed for
+# Review 2026-11-21: an answer cut at its length limit is still graded; when its grader failed for
 # infrastructure (here the host judge's incomplete completion), the exemption above replayed the failure forever.
 @pytest.mark.parametrize("resume", [False, True])
 async def test_a_length_stopped_answer_whose_grader_failed_is_graded_again(resume: bool) -> None:
@@ -419,7 +419,7 @@ def waits() -> RolloutInterrupted:
     return error
 
 
-# Review 2026-11-21 (n10 finding 2): a refusal beside a slot waiting for the decision model was dropped, the child
+# Review 2026-11-21: a refusal beside a slot waiting for the decision model was dropped, the child
 # deferred, and the next launch bought the refused slot again. Holds beyond the allowance outrank the outage; within it
 # the outage defers alone and the recorded refusal replays.
 @pytest.mark.parametrize("allowance", [0, 1])
@@ -442,7 +442,7 @@ async def test_a_refusal_beside_a_decision_model_outage_is_settled_before_the_ba
     assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
 
 
-# Review 2026-11-21 (n10 follow-up 2, finding 3): an operator retried a refused slot, the replacement met a decision-
+# Review 2026-11-21: an operator retried a refused slot, the replacement met a decision-
 # model outage, and the healthy automatic resume replayed the superseded refusal, asking for a second approval. The
 # replacement's start supersedes the refusal it replaces: it resumes, while a refusal it never reached still replays.
 async def test_an_authorised_replacement_cut_short_by_an_outage_resumes_and_never_replays_its_refusal() -> None:

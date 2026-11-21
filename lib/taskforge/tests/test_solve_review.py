@@ -423,7 +423,7 @@ async def test_an_earlier_reviewed_format_root_is_refused_before_claim_and_left_
 ) -> None:
     """A format-6 acceptance, recorded at the base, names no missing evidence although no solve-review ran, and
     resuming a format-6 round would buy a review its history never had; such a root waits for a migration. A format-7
-    acceptance (n11) likewise names no missing confirmation, and its resumed round would buy one (n12)."""
+    acceptance likewise names no missing confirmation, and its resumed round would buy one."""
     destination = plant(driver_args, b"", found)
     before = sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file())
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
@@ -445,7 +445,7 @@ def lowered() -> TaskRolloutSpec:
 
 
 async def test_a_cold_reload_of_the_journal_replays_the_review_with_zero_calls(tmp_path: Path) -> None:
-    """Review 2026-11-21 (n11 P1): a reloaded grade came back with its detail keys sorted, which changed the rendered
+    """Review 2026-11-21: a reloaded grade came back with its detail keys sorted, which changed the rendered
     evidence and its version, so a default-policy resume paid the reviewer again."""
     grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2, "b": 3}, "cut": 3.0})  # reloads as 3
     rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
@@ -481,7 +481,7 @@ def parallel(first: str, second: str) -> GradedRollout:
 
 
 def test_a_tool_reply_keeps_the_call_it_answers() -> None:
-    """Review 2026-11-21 (n11): two parallel calls whose replies swapped ids rendered identically."""
+    """Review 2026-11-21: two parallel calls whose replies swapped ids rendered identically."""
     one, other = (evidence(SUBMISSION, ((TRIALS[1][0], parallel(*ids)),), OUTPUT_CHARS) for ids in ("ab", "ba"))
     assert one.version != other.version
     assert "tool (reply to a):\nPASS" in one.sources["trial/1"].parts[2]
@@ -500,7 +500,7 @@ async def test_two_parallel_evidence_reads_replay_cold_with_zero_calls(tmp_path:
 
 
 async def test_an_opening_without_the_version_slot_still_misses_on_changed_evidence() -> None:
-    """Review 2026-11-21 (n11 P1): a legal user prompt without ``{version}`` replayed a stale review after a solver's
+    """Review 2026-11-21: a legal user prompt without ``{version}`` replayed a stale review after a solver's
     answer changed from 9 to 8; the evidence version is part of the request whatever the template renders."""
     overlay = {"solve_review.user": "{task}\n{proposal}\n{evidence}"}
     log = EventLog()
@@ -518,7 +518,7 @@ def with_resources(**groups: tuple[tuple[str, bytes], ...]) -> Submission:
 
 
 def test_every_source_has_its_own_address_and_the_bytes_it_was_built_from() -> None:
-    """Review 2026-11-21 (n11 P1): a worker and a verifier file both named ``same.txt`` collapsed to one source, a
+    """Review 2026-11-21: a worker and a verifier file both named ``same.txt`` collapsed to one source, a
     resource named ``prompt.md`` replaced the task prompt, one named like a trial raised, and distinct non-UTF-8 bytes
     decoded to one text and one version."""
 
@@ -544,7 +544,7 @@ def test_an_account_must_name_a_trial_of_the_review() -> None:
 
 
 async def test_a_page_is_bounded_with_its_headers_and_trailer_and_always_advances() -> None:
-    """Review 2026-11-21 (n11 P1): parts of 178 and 900 characters made a 1,143-character page under a 400-character
+    """Review 2026-11-21: parts of 178 and 900 characters made a 1,143-character page under a 400-character
     cap, continuing at offset -12."""
     parts = ("a" * 178, "b" * 900, "c" * 3)
     index = Evidence({"s": Source("s", "s", parts)}, frozenset(), OUTPUT_CHARS)
@@ -567,7 +567,7 @@ async def test_no_reply_to_the_machine_less_reviewer_spills_to_a_file() -> None:
 
 
 async def test_a_failure_attributed_to_a_defect_needs_a_finding_that_survives_its_citations() -> None:
-    """Review 2026-11-21 (n11 P1): an account blaming a grader defect beside no finding shipped as a clean review."""
+    """Review 2026-11-21: an account blaming a grader defect beside no finding shipped as a clean review."""
     defect = {**ACCOUNT, "attribution": "defect", "reason": "the grader rejects 12"}
     forged = finding(cite("trial/1", 2, 2, "I answer 12."))
     reviewer = FakeInference((report(accounts=(defect,)), report(forged, accounts=(defect,)), report()))
@@ -596,7 +596,7 @@ async def test_a_decline_needs_a_reason_beyond_whitespace() -> None:
 
 
 async def test_an_interrupted_recording_is_reviewed_by_its_prefix_and_named_incomplete() -> None:
-    """Review 2026-11-21 (n11 P2): two interrupted recordings of two and three messages were skipped as missing."""
+    """Review 2026-11-21: two interrupted recordings of two and three messages were skipped as missing."""
     cut = RolloutFailure("OutputBudgetExhausted", {"z": 1, "a": 2})
 
     def interrupted(index: int, *replies: str) -> tuple[TrialResult, GradedRollout]:
@@ -637,7 +637,7 @@ def reviewed_round(proposal: TaskProposal, setup: TaskforgeConfig) -> Workpiece:
 
 
 def test_a_restore_carries_the_review_of_the_round_it_restores(proposal: TaskProposal) -> None:
-    """Review 2026-11-21 (n11 P1): a same-digest revision with other author notes faulted with finding B; the restored
+    """Review 2026-11-21: a same-digest revision with other author notes faulted with finding B; the restored
     round-0 submission shipped with B, and a variation with the revision's missing transcripts."""
     setup = config()
     wp = reviewed_round(proposal, setup)
@@ -665,7 +665,7 @@ def test_a_clean_same_digest_revision_is_the_occurrence_that_ships(proposal: Tas
 
 
 def test_an_author_stopping_restores_the_stored_fallback(proposal: TaskProposal) -> None:
-    """Review 2026-11-21 (n11 P1): the author hit its context limit in a review revision and the task was abandoned
+    """Review 2026-11-21: the author hit its context limit in a review revision and the task was abandoned
     with a valid fallback. Owner's ruling (2026-11-13): an author stopping reverts to the fallback."""
     setup = settings_config(**{"budget.max_modify_rounds": 2})
     wp = reviewed_round(proposal, setup)
@@ -675,12 +675,12 @@ def test_an_author_stopping_restores_the_stored_fallback(proposal: TaskProposal)
     assert after is None and stopped.terminal is Terminal.ACCEPTED and stopped.submission == SUBMISSION
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and decision.notes == (FOUND,)
     assert any("author stopped" in reason for reason in decision.reasons)
-    # Review 2026-11-21 (n11 follow-up 1): the stop, not an exhausted budget, is why the notes are notes.
+    # Review 2026-11-21: the stop, not an exhausted budget, is why the notes are notes.
     assert setup.budget.max_modify_rounds > wp.round and not any("no revision round" in r for r in decision.reasons)
 
 
 def test_a_stored_fallback_leaves_the_remaining_rounds_for_review(proposal: TaskProposal) -> None:
-    """Review 2026-11-21 (n11 P1): with three rounds, a fresh finding in round 1 was accepted as "no revision round
+    """Review 2026-11-21: with three rounds, a fresh finding in round 1 was accepted as "no revision round
     left"; only the shared round count ends review revisions."""
     setup = settings_config(**{"budget.max_modify_rounds": 3})
     wp = reviewed_round(proposal, setup)
@@ -707,7 +707,7 @@ async def test_a_cold_driver_resume_buys_no_second_review(
     driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): through the default driver, engine rewards 1 and 0 reloaded as 1.0 and
+    """Review 2026-11-21: through the default driver, engine rewards 1 and 0 reloaded as 1.0 and
     0.0 in the trial summaries, and task labels written z then a reloaded a then z in the manifest, so a cold resume
     paid the reviewer again. Everything the reviewer sees is rendered canonically."""
     envs = Envs()
@@ -746,7 +746,7 @@ async def test_a_cold_driver_resume_buys_no_second_review(
 
 
 async def test_the_earlier_template_with_its_version_slot_still_renders() -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): the user prompt checked in before the unconditional version suffix
+    """Review 2026-11-21: the user prompt checked in before the unconditional version suffix
     names ``{version}``; used as an overlay it raised KeyError. It renders, and the suffix is still appended."""
     overlay = {"solve_review.user": EARLIER_USER}
     reviewer = FakeInference((report(),))
@@ -757,7 +757,7 @@ async def test_the_earlier_template_with_its_version_slot_still_renders() -> Non
 
 
 def test_a_file_s_mode_and_build_inputs_are_evidence() -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): making verifier ``check.sh`` executable changed the submission digest
+    """Review 2026-11-21: making verifier ``check.sh`` executable changed the submission digest
     but not the evidence, so the old report was reused; an equal-length Dockerfile edit was invisible too. Each file
     the task carries is shown with the signature the task review signs, build inputs included."""
     script = inline_resource("check.sh", b"exit 0\n")
@@ -802,7 +802,7 @@ async def listing(index: Evidence) -> list[str]:
 
 
 async def test_every_listed_address_is_recoverable_at_the_smallest_cap() -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P2): at cap 240 a 187-character resource address was cut to 119 characters
+    """Review 2026-11-21: at cap 240 a 187-character resource address was cut to 119 characters
     and the listing's continuation reported zero sources left. A summary longer than a page continues within itself."""
     path = "/".join(["deeply-nested-directory"] * 7) + "/check.sh"
     index = evidence(with_resources(verifier=((path, b"exit 0\n"),)), TRIALS, 2 * PAGE_ROOM)
@@ -813,7 +813,7 @@ async def test_every_listed_address_is_recoverable_at_the_smallest_cap() -> None
 
 
 def test_a_cap_too_small_for_an_evidence_page_is_refused_when_wired() -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P2): caps under 240 failed only after paid work, even when no trial left
+    """Review 2026-11-21: caps under 240 failed only after paid work, even when no trial left
     any evidence. The configuration is refused before a run starts, naming the key; zero trials still skip."""
     with pytest.raises(ValueError, match=r"tools\.output_chars 239 .* at least 240"):
         build_config(load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": 239}), {})
@@ -822,7 +822,7 @@ def test_a_cap_too_small_for_an_evidence_page_is_refused_when_wired() -> None:
 
 
 async def test_a_defect_account_needs_a_surviving_finding_that_cites_its_trial() -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): a report blaming failed trial 1 on a defect passed beside a finding
+    """Review 2026-11-21: a report blaming failed trial 1 on a defect passed beside a finding
     that cited only successful trial 0. As in live Forge, a surviving finding must cite the blamed trial; a task-file
     citation may support it beside the trial's."""
     defect = {**ACCOUNT, "attribution": "defect", "reason": "the prompt reads two ways"}
@@ -876,7 +876,7 @@ marin-forge-passes ``rules.py`` (``placed`` then ``with_solve_review``), with a 
 def test_review_decisions_match_live_forge(
     proposal: TaskProposal, in_band: bool, finding: bool, used: bool, left: bool, stored: bool, kind: str, reason: str
 ) -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): every combination decides as live Forge does. A stored fallback was
+    """Review 2026-11-21: every combination decides as live Forge does. A stored fallback was
     placed in band; a used band-only round is an earlier too-easy round with no review finding to revise."""
     setup = config()
     reward = 0.0 if in_band else 1.0
@@ -905,7 +905,7 @@ def test_review_decisions_match_live_forge(
 def test_a_clean_changed_band_after_a_reviewed_round_ships_and_a_defect_round_leaves_the_band_round(
     proposal: TaskProposal,
 ) -> None:
-    """Review 2026-11-21 (n11 follow-up 1, P1): with two rounds, an in-band task revised for a defect came back clean
+    """Review 2026-11-21: with two rounds, an in-band task revised for a defect came back clean
     and too easy and bought another round; live ships it at its new placement. Conversely a too-easy round with a
     defect spent the band-only allowance, so the clean too-easy revision was accepted instead of revised for its band."""
     setup = settings_config(**{"budget.max_modify_rounds": 2})
@@ -963,7 +963,7 @@ def reloaded(records: Sequence[Record]) -> tuple[Submission, GradedRollout]:
 
 @pytest.mark.parametrize("variant", ["plain", "recorded"])
 async def test_evidence_is_the_same_before_and_after_a_journal_round_trip(variant: str, tmp_path: Path) -> None:
-    """Review 2026-11-21 (n11 follow-up 2, P1): for a task and trial before and after a JSONL round trip, every source
+    """Review 2026-11-21: for a task and trial before and after a JSONL round trip, every source
     and the version are identical."""
     submission = recorded_task() if variant == "recorded" else SUBMISSION
     grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2.0}})
@@ -979,7 +979,7 @@ async def test_evidence_is_the_same_before_and_after_a_journal_round_trip(varian
 
 
 async def test_a_second_process_replays_the_review_of_a_recorded_task_with_zero_calls(tmp_path: Path) -> None:
-    """Review 2026-11-21 (n11 follow-up 2, P1): across two processes, a historical tool call in ``task/prompt.md``
+    """Review 2026-11-21: across two processes, a historical tool call in ``task/prompt.md``
     rendered ``lookup({'z': 3.0, 'a': 5})`` fresh and ``lookup({'a': 5, 'z': 3})`` after the reload, and the second
     process paid the reviewer again. The verifier file's declared mtime is the same in both, as on any machine."""
     probe = [sys.executable, "-m", "lib.taskforge.tests.review_replay_probe"]
@@ -1002,7 +1002,7 @@ def exhausted_round(review: SolveReview, reason: str = SPENT) -> ValidationResul
 
 @pytest.mark.parametrize("ending", ["author stop", "same-digest fault"])
 def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: str) -> None:
-    """Review 2026-11-21 (n11 follow-up 2, P2): restoring round 0, whose adversary ran out of search budget and which
+    """Review 2026-11-21: restoring round 0, whose adversary ran out of search budget and which
     placed over two of three slots, dropped both notes on an author stop, and a same-digest faulted revision reported
     its own adversary reason instead. The acceptance describes the round that ships, and names the fault apart."""
     setup = settings_config(**{"budget.max_missing_trials": 1})
@@ -1052,7 +1052,7 @@ def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: 
 def test_a_revision_request_carries_live_forge_s_band_line(
     proposal: TaskProposal, rewards: tuple[float, float], finding: bool, line: str
 ) -> None:
-    """Review 2026-11-21 (n11 follow-up 2): when findings turned an acceptance into a repair, the author was sent only
+    """Review 2026-11-21: when findings turned an acceptance into a repair, the author was sent only
     the number of proposed edits; live Forge sends the measured solve rate and what the placement asks for."""
     setup = config()
     solver = tuple(TrialResult(index, GradeResult(Outcome.GRADED, reward)) for index, reward in enumerate(rewards))
@@ -1064,7 +1064,7 @@ def test_a_revision_request_carries_live_forge_s_band_line(
 
 
 def test_a_restore_for_an_unaccepted_placement_labels_it_a_placement(proposal: TaskProposal) -> None:
-    """Review 2026-11-21 (n11 follow-up 3): with ``band.accept_too_easy`` false, a clean too-easy revision restores the
+    """Review 2026-11-21: with ``band.accept_too_easy`` false, a clean too-easy revision restores the
     reviewed version, as it should, but its placement instruction was labelled ``Revision fault:``. Only an actual
     fault carries that label."""
     setup = settings_config(**{"band.accept_too_easy": False, "budget.max_modify_rounds": 2})
@@ -1105,7 +1105,7 @@ async def test_a_held_format_7_root_resumes_only_its_unfinished_turns(
     reword: Callable[[], None],
     reworded: bool,
 ) -> None:
-    """Review 2026-11-21 (n11 follow-up 3, P1): a format-7 root this driver held after three author calls re-bought
+    """Review 2026-11-21: a format-7 root this driver held after three author calls re-bought
     them on resume once main reworded ``JsonAnswer`` (five calls where the earlier reader made two). With the pinned
     author reference only the unfinished turns reach inference: the author's submit and the never-run review,
     whatever the installed library's descriptions say between the hold and the resume."""
