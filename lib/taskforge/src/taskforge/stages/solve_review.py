@@ -17,8 +17,7 @@ from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import TaskResource, format_conversation
-from taskcompendium.pipeline.review import resource_inventory, resource_signature
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import resource_bytes, resource_inventory, resource_signature
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
