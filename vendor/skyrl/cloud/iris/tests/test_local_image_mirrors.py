@@ -8,7 +8,7 @@ import rigging.filesystem.cluster_config as cluster_config
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from rigging.filesystem import transfer
-from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
+from rigging.fsutil.verified_copy import verified_copy_prefix
 from shellbox.image import ImageCache, RegistryImage
 
 from marinskyrl.local_images import LocalImageMirror, LocalMachineSettings, cached_mirror_image, local_machine_factory
@@ -18,7 +18,7 @@ import shellbox.image as image_runtime
 
 @pytest.fixture
 def mirror(tmp_path, monkeypatch):
-    layout = tmp_path / "mirror"
+    layout = tmp_path / "source"
     blobs = layout / "blobs" / "sha256"
     blobs.mkdir(parents=True)
 
@@ -36,8 +36,10 @@ def mirror(tmp_path, monkeypatch):
         json.dumps({"manifests": [{"digest": manifest, "annotations": {"org.opencontainers.image.ref.name": "image"}}]})
     )
     (layout / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
-    # Real regional producers append this marker; accepting their prefix regresses without it.
-    (layout / COMPLETION_MANIFEST).write_text('{"completed":true}')
+    # Exercise the documented producer, including its reserved completion marker.
+    produced = tmp_path / "mirror"
+    verified_copy_prefix(str(layout), str(produced), workers=1)
+    layout = produced
     settings = LocalImageMirror(image="registry.fixture/private/image@" + manifest, uri="s3://mirror-bucket/oci")
     monkeypatch.setattr(
         cluster_config,
