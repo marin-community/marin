@@ -129,7 +129,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
         submit = config.author.tools["submit"]
         assert isinstance(submit, SubmitTool)
         tools = {"submit": RevisedSubmitTool(submit, sent)}
-    visit = Visit("author", f"author/{workpiece.round}", machine, Billing.AUTHOR, workspace, tools)
+    visit = Visit("author", f"author/{workpiece.round}", machine, workspace, tools, bills=Billing.AUTHOR)
     async with sitting(ctx, config.author, visit, resources) as session:
         if workpiece.session is not None:
             return await session(workpiece.session)

@@ -370,9 +370,8 @@ async def run_adversary(
             if (shown := observation(event.value, spec.task)) is not None:
                 graded[digest(event.request.candidate)] = shown
 
-    visit = Visit(
-        f"adversary:{name}", owner, machine, Billing.ADVERSARY, files, {"report": ReportTool(spec.task, graded)}
-    )
+    tools = {"report": ReportTool(spec.task, graded)}
+    visit = Visit(f"adversary:{name}", owner, machine, files, tools, bills=Billing.ADVERSARY)
     async with sitting(ctx, config.adversary, visit, resources) as session:
         ctx.observe(Resolved, remember)
         brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts

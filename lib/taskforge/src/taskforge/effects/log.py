@@ -57,7 +57,8 @@ class Opened:
 
 class Billing(StrEnum):
     """The role a physical cached resolution is charged to: the innermost scope that declares one when it resolved.
-    ``SOLVER`` and ``CONFIRMATION`` are the validation and confirmation stages' own work outside their visits."""
+    ``SOLVER`` and ``CONFIRMATION`` are the validation and confirmation stages' own work outside their visits;
+    ``UNATTRIBUTED`` is a visit that names no role, and the report's bucket for rows from before format 10."""
 
     AUTHOR = "author"
     SOLVER = "solver"
@@ -66,6 +67,7 @@ class Billing(StrEnum):
     JUDGE = "judge"
     CONFIRMATION = "confirmation"
     FINAL_REVIEW = "final_review"
+    UNATTRIBUTED = "unattributed"
 
 
 @dataclass(frozen=True, slots=True)

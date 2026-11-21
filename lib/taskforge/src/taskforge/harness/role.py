@@ -76,16 +76,16 @@ def no_files() -> Files:
 
 @dataclass(frozen=True, slots=True)
 class Visit:
-    """One sitting of a role: its scope, its sandbox owner and machine (``None``: no machine), the role its paid calls
-    bill, the files hydrated before its first model call, prepared inside the visit, and tools bound to this visit
-    alone."""
+    """One sitting of a role: its scope, its sandbox owner and machine (``None``: no machine), the files hydrated
+    before its first model call, prepared inside the visit, tools bound to this visit alone, and the role its paid
+    calls bill; a visit that names none bills them as unattributed, never to an enclosing stage."""
 
     scope: str
     owner: str
     machine: EnvironmentRequirements | None
-    bills: Billing
     files: Callable[[], Files] = no_files
     tools: Mapping[str, Tool[object]] = field(default_factory=dict)
+    bills: Billing = field(default=Billing.UNATTRIBUTED, kw_only=True)
 
 
 def opened(opening: Opening, tools: Mapping[str, Tool[object]]) -> Conversation:
