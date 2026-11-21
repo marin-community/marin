@@ -267,3 +267,124 @@ def apps_grade(python: Sequence[str], evaluator: Path, problem: dict) -> list:
 def test_patched_apps_evaluator_grades_fixture(name: str):
     problem = APPS_PROBLEMS[name]
     assert apps_grade((sys.executable,), APPS_EVALUATOR, problem) == problem["grade"]
+
+
+LIVECODEBENCH = ScorerClosure(shipped(SKYRL, "livecodebench.py"), ("numpy", "pandas"))
+
+LIVECODEBENCH_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import livecodebench
+tests = json.loads(livecodebench.normalize_lcb_ground_truth(json.loads(sys.argv[2])))
+print(json.dumps(livecodebench.compute_score(sys.stdin.read(), tests)[1]))
+"""
+
+STDIN_ADD = [
+    {"input": "1 2\n", "output": "3\n", "testtype": "stdin"},
+    {"input": "40 2\n", "output": "42\n", "testtype": "stdin"},
+]
+FUNCTIONAL_ADD = [
+    {"input": [1, 2], "output": 3, "testtype": "functional", "fn_name": "add"},
+    {"input": [40, 2], "output": 42, "testtype": "functional", "fn_name": "add"},
+]
+FUNCTIONAL_RANGE = [
+    {"input": [3], "output": [0, 1, 2], "testtype": "functional", "fn_name": "first"},
+    {"input": [1], "output": [0], "testtype": "functional", "fn_name": "first"},
+]
+
+READS_EXPECTED_OUTPUT = """import sys
+
+frame = sys._getframe()
+while frame is not None and "gt_out" not in frame.f_locals:
+    frame = frame.f_back
+print(frame.f_locals["gt_out"] if frame is not None else "", end="")"""
+"""Finds the evaluator's local holding the expected output of the running test and prints it."""
+
+READS_TEST_CASES = """import sys
+
+data = sys.stdin.read()
+frame = sys._getframe()
+while frame is not None:
+    for value in frame.f_locals.values():
+        if isinstance(value, dict) and "outputs" in value and data in value.get("inputs", ()):
+            print(value["outputs"][value["inputs"].index(data)], end="")
+            sys.exit()
+    frame = frame.f_back"""
+"""Finds any local dict of test cases on the stack and prints the output stored for its own input."""
+
+REPORTS_ITS_VERDICT = """import gc, os
+from multiprocessing.connection import Connection
+
+for item in gc.get_objects():
+    if isinstance(item, Connection) and item.writable:
+        item.send(([True], {}))
+        os._exit(0)"""
+"""Sends a passing verdict over the verifier child's pipe and exits before any comparison."""
+
+EQUAL_TO_EVERYTHING = """class _Any:
+    def __eq__(self, other):
+        return True
+
+class Solution:
+    def add(self, a, b):
+        return _Any()"""
+
+INT_EQUAL_TO_EVERYTHING = """class _Int(int):
+    def __eq__(self, other):
+        return True
+
+class Solution:
+    def add(self, a, b):
+        return _Int(0)"""
+
+
+def livecodebench_reward(tmp_path: Path, cases: list[dict], program: str) -> float:
+    LIVECODEBENCH.skip_if_unavailable()
+    tests = LIVECODEBENCH.stage(tmp_path)
+    result = subprocess.run(
+        (sys.executable, "-I", "-c", LIVECODEBENCH_CHECK, str(tests), json.dumps(cases)),
+        input=f"```python\n{program}\n```",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+@pytest.mark.parametrize(
+    ("cases", "program", "reward"),
+    [
+        (STDIN_ADD, "a, b = map(int, input().split())\nprint(a + b)", 1.0),
+        (STDIN_ADD, READS_EXPECTED_OUTPUT, 0.0),
+        (STDIN_ADD, READS_TEST_CASES, 0.0),
+        (STDIN_ADD, REPORTS_ITS_VERDICT, 0.0),
+        (FUNCTIONAL_ADD, "class Solution:\n    def add(self, a, b):\n        return a + b", 1.0),
+        (FUNCTIONAL_ADD, EQUAL_TO_EVERYTHING, 0.0),
+        (FUNCTIONAL_ADD, INT_EQUAL_TO_EVERYTHING, 0.0),
+    ],
+    ids=[
+        "stdin_solves",
+        "stdin_reads_expected_output",
+        "stdin_reads_test_cases",
+        "stdin_reports_its_verdict",
+        "call_solves",
+        "call_returns_object_equal_to_everything",
+        "call_returns_int_equal_to_everything",
+    ],
+)
+def test_livecodebench_program_cannot_read_expected_outputs_or_decide_comparisons(
+    cases: list[dict], program: str, reward: float, tmp_path: Path
+):
+    assert livecodebench_reward(tmp_path, cases, program) == reward
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "def first(n):\n    return tuple(range(n))",
+        "import numpy as np\n\ndef first(n):\n    return list(np.arange(n))",
+    ],
+    ids=["tuple_for_list", "list_of_numpy_integers"],
+)
+def test_livecodebench_return_value_compares_as_the_value_the_program_returned(program: str, tmp_path: Path):
+    assert livecodebench_reward(tmp_path, FUNCTIONAL_RANGE, program) == 1.0
