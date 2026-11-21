@@ -131,11 +131,12 @@ class Context:
         ``Restart``."""
         owner = _Scope()
         chain = (*self._chain.get(), owner)
-        entered = self._publish(self._log.append(ScopeEntered(name), opened=opens), chain)
+        entered = self._log.append(ScopeEntered(name), opened=opens)
         owner.attempt = None if opens is None else self._log.attempt(entered.sequence)
         token = self._chain.set(chain)
         failed = True
         try:
+            self._publish(entered, chain)  # its observers start in this scope's context
             yield
             await _join(owner.take)
             if (attempt := owner.attempt) is not None:

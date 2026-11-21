@@ -301,3 +301,22 @@ async def test_an_observer_run_started_while_another_starts_reports_its_hold() -
         await ctx.drain()
     finally:
         loop.set_task_factory(None)
+
+
+# Review 2026-11-20: a scope-entry observer ran in the parent's context, so its Note bypassed the child's observers.
+async def test_a_note_from_a_scope_entry_observer_reaches_the_entered_scope_observers() -> None:
+    ctx = Context(log=EventLog())
+    seen: list[str] = []
+
+    async def entered(event: ScopeEntered) -> None:
+        if event.name == "child":
+            ctx.notify(Note("entered"))
+
+    async def noted(event: Note) -> None:
+        seen.append(event.msg)
+
+    ctx.observe(ScopeEntered, entered)
+    async with ctx.scope("child"):
+        ctx.observe(Note, noted)
+    await ctx.drain()
+    assert seen == ["entered"]
