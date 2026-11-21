@@ -1,15 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the NuminaMath-LEAN auto-informalization duplicate and split manifest.
+"""Generate the NuminaMath-LEAN auto-informalization duplicate and split manifest.
+
+This command reads the pinned source parquet, identifies removable exact duplicates, groups strong
+Lean/text near matches into the same train or evaluation split, and writes the manifest consumed by
+``autoinformalization.py``. It does not create TaskSpecs or grade model responses.
 
 Exact copies share a source UUID or both normalized statements. Strong near-matches require at least
 ``NEAR_THRESHOLD`` Jaccard similarity in both informal and formal five-token n-grams. Exact copies
 keep one preferred row; near-match variants remain, but their connected component stays in one split.
+Identical normalized Lean statements stay in one split even when the human references differ.
+Rows sharing a UUID with a passing Numina proof task and their entire connected components stay in
+training, because proof prompts expose the human problem alongside the Lean statement.
 
 Run against the pinned NuminaMath parquet::
 
-    uv run python -m experiments.post_training.task_curation.datasets.lean.deduplicate \
+    uv run python -m experiments.post_training.task_curation.datasets.lean.autoinformalization_manifest \
         train-00000-of-00001.parquet
 """
 
@@ -23,7 +30,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-from experiments.post_training.task_curation.datasets.lean.similarity import (
+from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import (
     jaccard,
     ngrams,
     normalized_text,
@@ -31,6 +38,7 @@ from experiments.post_training.task_curation.datasets.lean.similarity import (
     statement_key,
     statement_ngrams,
 )
+from experiments.post_training.task_curation.datasets.lean.numina import PASSING_PROOFS
 
 NEAR_THRESHOLD = 0.9
 RARE_NGRAMS = 8
@@ -38,6 +46,7 @@ MAX_NGRAM_FREQUENCY = 128
 EVAL_MODULUS = 20
 SPLIT_SALT = "numina-autoinformalization-v1"
 GROUND_TRUTH_RANK = {"complete": 0, "with_sorry": 1, "statement": 2}
+PROOF_TRAIN_UUIDS = frozenset(key.split(":", 1)[0] for key in PASSING_PROOFS)
 
 
 class Components:
@@ -166,11 +175,17 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
     clusters = Components(len(selected))
     for edge in (*exact, *near):
         clusters.join(edge["left"], edge["right"])
+    for indices in grouped(formal_keys):
+        for right in indices[1:]:
+            if clusters.find(indices[0]) != clusters.find(right):
+                near.append({"left": indices[0], "right": right, "rule": "same_formal_statement"})
+                clusters.join(indices[0], right)
     members: dict[int, list[int]] = defaultdict(list)
     for index in range(len(selected)):
         members[clusters.find(index)].append(index)
 
     records: list[dict[str, Any]] = []
+    proof_train_rows = {row_keys[index] for index, row in enumerate(selected) if row["uuid"] in PROOF_TRAIN_UUIDS}
     for indices in members.values():
         if len(indices) == 1:
             continue
@@ -185,7 +200,11 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
         records.append(
             {
                 "id": cluster_id,
-                "split": split_for(min(row_keys[index] for index in kept)),
+                "split": (
+                    "train"
+                    if any(row_keys[index] in proof_train_rows for index in indices)
+                    else split_for(min(row_keys[index] for index in kept))
+                ),
                 "kept": [row_keys[index] for index in kept],
                 "removed": [
                     {
@@ -204,7 +223,11 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
         for key in (*record["kept"], *(item["row"] for item in record["removed"]))
     }
     removed = {item["row"] for record in records for item in record["removed"]}
-    split_counts = Counter(clustered.get(key, split_for(key)) for key in row_keys if key not in removed)
+    split_counts = Counter(
+        clustered.get(key, "train" if key in proof_train_rows else split_for(key))
+        for key in row_keys
+        if key not in removed
+    )
     return {
         "input": dict(input_record or {}),
         "settings": {

@@ -12,17 +12,21 @@ from taskcompendium.models import TextMessage, verifyit_spec
 from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation.datasets.lean import proofs
-from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
-from experiments.post_training.task_curation.datasets.lean.deduplicate import build_manifest
-from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
-from experiments.post_training.task_curation.datasets.lean.informalization import (
+from experiments.post_training.task_curation.datasets.lean import (
+    autoinformalization,
+    autoinformalization_manifest,
+    proofs,
+)
+from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
     assigned_split,
     human_statement,
 )
-from experiments.post_training.task_curation.datasets.lean.informalization import (
+from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
     sources as informalization_sources,
 )
+from experiments.post_training.task_curation.datasets.lean.autoinformalization_manifest import build_manifest
+from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
+from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
     GraderFailure,
@@ -345,8 +349,9 @@ def test_only_rows_with_a_human_statement_and_proof_are_selected():
     assert not is_human_proof_row(numina_row(ground_truth_type="statement"), None)
 
 
-def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path):
+def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monkeypatch):
     row = numina_row(ground_truth_type="statement")
+    monkeypatch.setattr(autoinformalization, "ACCEPTED_ROWS", frozenset({autoinformalization.row_key(row)}))
     pipeline = INFORMALIZATION[assigned_split(row)]
     task = converted_task(pipeline, row, inputs=prime_inputs(tmp_path))
     prompt = task.context.events[0]
@@ -363,6 +368,16 @@ def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path):
     golden = human_statement(task).event
     assert isinstance(golden, TextMessage)
     assert golden.content == row["problem"]
+
+
+def test_auto_informalization_selects_only_rows_with_a_frozen_no_decision(monkeypatch):
+    row = numina_row(ground_truth_type="statement")
+    monkeypatch.setattr(autoinformalization, "ACCEPTED_ROWS", frozenset({autoinformalization.row_key(row)}))
+    pipeline = INFORMALIZATION[assigned_split(row)]
+    assert pipeline.source.select(row, None)
+    changed = {**row, "problem": "Find the value of n + 0."}
+    assert not autoinformalization.is_train_row(changed, None)
+    assert not autoinformalization.is_eval_row(changed, None)
 
 
 def test_auto_informalization_deduplication_removes_exact_copies_and_groups_near_matches():
@@ -398,6 +413,31 @@ def test_human_statement_selection_does_not_require_a_complete_proof():
     row = numina_row(ground_truth_type="statement", formal_ground_truth="")
     assert is_human_statement_row(row, None)
     assert not is_human_proof_row(row, None)
+
+
+def test_identical_formal_inputs_with_different_references_share_a_split():
+    manifest = build_manifest(
+        [
+            numina_row(uuid="first", problem="Show that adding zero does nothing."),
+            numina_row(uuid="second", problem="For every natural n, prove n + 0 = n."),
+        ]
+    )
+    assert manifest["counts"]["kept_rows"] == 2
+    assert len(manifest["clusters"]) == 1
+    assert len(manifest["clusters"][0]["kept"]) == 2
+    assert not manifest["clusters"][0]["removed"]
+
+
+def test_proof_training_overlap_moves_the_whole_cluster_to_train(monkeypatch):
+    monkeypatch.setattr(autoinformalization_manifest, "PROOF_TRAIN_UUIDS", frozenset({"proof", "singleton"}))
+    monkeypatch.setattr(autoinformalization_manifest, "split_for", lambda key: "eval")
+    proof = numina_row(uuid="proof")
+    variant = numina_row(uuid="variant")
+    singleton = numina_row(uuid="singleton", problem="A different problem", formal_statement="theorem t : True := by")
+    manifest = build_manifest([proof, variant, singleton])
+    assert manifest["counts"]["eval"] == 0
+    assert manifest["counts"]["train"] == 2
+    assert all(cluster["split"] == "train" for cluster in manifest["clusters"])
 
 
 OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"

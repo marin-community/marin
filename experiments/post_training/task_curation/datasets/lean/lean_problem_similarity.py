@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stable fingerprints for comparing informal problems and Lean theorem statements."""
+"""Shared comparison primitives for informal problems and Lean theorem statements.
+
+This module normalizes prose and theorem types, creates stable row fingerprints and token n-grams,
+and computes Jaccard similarity. ``autoinformalization_manifest.py`` and ``eval_overlap.py`` share
+these operations so their text and Lean comparisons follow the same rules. It does not decide which
+rows to remove or how to split them.
+"""
 
 import hashlib
 import re

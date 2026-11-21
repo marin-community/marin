@@ -26,6 +26,11 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import (
+    DECLARATION,
+    ngrams,
+    statement_key,
+)
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP_FILE,
     NUMINA_FILE,
@@ -33,7 +38,6 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     is_human_statement_row,
 )
 from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION
-from experiments.post_training.task_curation.datasets.lean.similarity import DECLARATION, ngrams, statement_key
 
 MINIF2F_REVISION = "f0a20e14c1eeccd859d51bb4c2b3ee487889c303"
 PUTNAMBENCH_REVISION = "f423c173cef31a61fc3e69cbe606c8bc31fcb229"
