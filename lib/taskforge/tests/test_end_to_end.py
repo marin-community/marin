@@ -30,7 +30,7 @@ from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solve
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
+from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
@@ -826,7 +826,10 @@ TOKEN_INTERVAL = 10.0
 
 class Fleet(Provider):
     """A solver fleet on a virtual clock. While it is up, requests get ``acts`` in order; ``lose`` takes every worker
-    away, after which each request is refused with a 503 and ``/health`` reports the pool empty."""
+    away, after which each request is refused with a 503 and ``/health`` reports the pool empty.
+
+    As the rollout engine's observer, it sets ``served`` once a trial is graded, so a sibling act that advances the
+    clock cannot move the healthy trial's grading deadline while its grader still runs."""
 
     def __init__(self, time: LoopTime, acts: Sequence[Act]) -> None:
         self.time, self.acts, self.alive = time, list(acts), True
@@ -850,8 +853,11 @@ class Fleet(Provider):
         return not self.alive
 
     async def answer(self, _progress: Progress) -> Segment:
-        self.served.set()
         return segment("12")
+
+    async def on_event(self, event: RolloutEvent) -> None:
+        if isinstance(event.payload, Graded) and event.payload.status is Outcome.GRADED:
+            self.served.set()
 
     async def silent(self, seconds: float) -> None:
         for _ in range(int(seconds / TOKEN_INTERVAL)):
@@ -955,9 +961,11 @@ def fleet_resources(policy: Policy, fleet: Fleet) -> Resources:
     model = ModelClient(
         fleet, GLM_5_3, retry_policy(policy, "solver"), role="solver", clock=fleet.time.clock, sleep=fleet.time.sleep
     )
+    engine = rollout_engine({}, command_timeout=None)
+    engine.observer = fleet
     rollouts = replace(
         built.rollouts,
-        engine=rollout_engine({}, command_timeout=None),
+        engine=engine,
         model=partial(solver_turn, model, sampling(policy, GLM_5_3.sampling)),
     )
     return replace(built, envs=Envs(), rollouts=rollouts, grading=GradingResource(CandidateEngine(), "grader"))
