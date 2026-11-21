@@ -63,9 +63,9 @@ checkpoint and returns its HF export. When step zero wins, the result points to 
 model and trained checkpoints stay only if `keep_every` or an outstanding export protects them.
 Detached launches use the trainer’s rolling checkpoint window.
 
-The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
-no separate packing token budget, and the campaign layout splits a 102,400-token request into
-20,480 packed token positions per context rank, with an update at that length still unmeasured.
+The 40-H100 `train-long` preset uses sample packing with two Megatron context ranks. The agentic
+presets use five context ranks. The `train-long-agentic` layout splits a 102,400-token request into
+20,480 packed token positions per rank. A full update at that length is unmeasured.
 
 ### Task selection and native resume
 
