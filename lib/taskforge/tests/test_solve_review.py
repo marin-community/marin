@@ -6,9 +6,10 @@
 import json
 import re
 from argparse import Namespace
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
@@ -16,7 +17,7 @@ from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.fake_resources import resources as stage_resources
 from lib.taskforge.tests.proposal_fakes import sample_proposal
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
-from lib.taskforge.tests.stage_fakes import transcript
+from lib.taskforge.tests.stage_fakes import SolverEngine, transcript
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
     Envs,
@@ -24,6 +25,8 @@ from lib.taskforge.tests.test_end_to_end import (
     config,
     driver_args,  # noqa: F401 (a fixture)
     plant,
+    published,
+    published_workpiece,
     resources,
     script,
     unexpected_runtime,
@@ -36,6 +39,7 @@ from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge import checkpoint, driver
+from taskforge.checkpoint import CheckpointSink
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
@@ -71,8 +75,9 @@ from taskforge.model.review import (
 )
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from taskforge.policy import load_policy
+from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.bundle import Resources
 from taskforge.resources.env import Env, EnvFactory, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, SolverRollout
@@ -84,6 +89,11 @@ CONTROL = Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind
 SUBMISSION = Submission(arithmetic_task(), (CONTROL,), "notes")
 LONG = "".join(f"step {n}: carry the remainder. " for n in range(60))
 OUTPUT_CHARS = 400
+EARLIER_USER = (
+    "Task manifest (resource paths, byte sizes and roles; payloads omitted; read files with read_evidence):\n{task}\n\n"
+    "Proposal the task was built from:\n{proposal}\n\nEvidence version {version}, its sources:\n{evidence}\n"
+)
+"""The user prompt as checked in before the version moved outside the template."""
 
 
 def trial(index: int, reward: float, *replies: str) -> tuple[TrialResult, GradedRollout | None]:
@@ -233,7 +243,7 @@ async def test_a_trial_without_a_transcript_is_a_named_stub_and_none_at_all_skip
     reviewer = FakeInference((report(accounts=(ACCOUNT, {**ACCOUNT, "trial": 2})),))
     review = await reviewed(reviewer, (*TRIALS, (budget, None)))
     opening = reviewer.requests[0].conversation[1].content
-    assert "trial/2: submission_failure reward=0.0 cause=None no transcript (output budget exhausted)" in opening
+    assert "trial/2: submission_failure reward=0 cause=None no transcript (output budget exhausted)" in opening
     assert review.missing == (
         MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [2] have no complete transcript"),
     )
@@ -658,3 +668,64 @@ def test_a_stored_fallback_leaves_the_remaining_rounds_for_review(proposal: Task
         setup,
     )
     assert isinstance(decision, Modify) and decision.review == (fresh,) and after.round == 2
+
+
+class IntegerRewards(SolverEngine):
+    """The engine's own integer rewards, 1 for trial 0 and 0 for trial 1; a reloaded grade holds them as floats."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        graded = await super().run_task(spec, model, run_id=run_id)
+        assert graded.grade.reward is not None
+        return replace(graded, grade=replace(graded.grade, reward=int(graded.grade.reward)))
+
+
+async def test_a_cold_driver_resume_buys_no_second_review(
+    driver_args: Namespace,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): through the default driver, engine rewards 1 and 0 reloaded as 1.0 and
+    0.0 in the trial summaries, and task labels written z then a reloaded a then z in the manifest, so a cold resume
+    paid the reviewer again. Everything the reviewer sees is rendered canonically."""
+    envs = Envs()
+    task = arithmetic_task().model_copy(update={"labels": {"z": "last", "a": "first"}})
+    draft = envs.commands["write-draft"]
+    written = {**draft.writes, PurePosixPath("/workspace/task.json"): task.model_dump_json().encode()}
+    envs.commands["write-draft"] = replace(draft, writes=written)
+    first, again = CleanReviewer(), CleanReviewer()
+    live = resources(envs, script())
+    live = replace(
+        live, rollouts=replace(live.rollouts, engine=IntegerRewards(2)), role_inference={"solve_review": first}
+    )
+    cold = replace(resources(envs, ()), role_inference={"solve_review": again})
+    attempts = iter((live, cold))
+
+    @asynccontextmanager
+    async def fake_runtime(policy: Policy, *_: object) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), next(attempts)
+
+    async def preempted(*_: object) -> None:
+        """Only the periodic checkpoints reach storage, so the second attempt resumes from the reloaded journal."""
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    final = CheckpointSink.finish
+    monkeypatch.setattr(CheckpointSink, "finish", preempted)
+    await driver.one(driver_args)
+    monkeypatch.setattr(CheckpointSink, "finish", final)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published(destination).head.status.terminal is None and len(first.requests) == 1
+    driver_args.work_dir += "-cold"
+    await driver.one(driver_args)
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED and not again.requests
+
+
+async def test_the_earlier_template_with_its_version_slot_still_renders() -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): the user prompt checked in before the unconditional version suffix
+    names ``{version}``; used as an overlay it raised KeyError. It renders, and the suffix is still appended."""
+    overlay = {"solve_review.user": EARLIER_USER}
+    reviewer = FakeInference((report(),))
+    await reviewed(reviewer, settings=overlay)
+    opening = reviewer.requests[0].conversation[1].content
+    version = evidence(SUBMISSION, TRIALS, OUTPUT_CHARS).version
+    assert f"Evidence version {version}, its sources" in opening and opening.endswith(f"Evidence version: {version}")

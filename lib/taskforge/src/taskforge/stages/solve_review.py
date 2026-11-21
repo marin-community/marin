@@ -44,7 +44,7 @@ from taskforge.model.workpiece import Submission
 from taskforge.resources.bundle import Resources
 from taskforge.resources.inference import InferenceRequest
 from taskforge.stages.rules import passed
-from taskforge.stages.summary import task_manifest
+from taskforge.stages.summary import manifest
 
 
 def journal_form(value: object) -> object:
@@ -105,7 +105,7 @@ def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
         ended = f"stop={rollout.rollout.stop_reason}" + (
             f", interrupted: the recorder kept the prefix before {failure.exception_type}" if failure else ""
         )
-    status = "ungraded" if trial.grade is None else f"{trial.grade.status} reward={trial.grade.reward}"
+    status = "ungraded" if trial.grade is None else f"{trial.grade.status} reward={canonical(trial.grade.reward)}"
     summary = (
         f"{TRIAL}{trial.trial}: {status} cause={trial.cause} {ended}; parts={len(parts)} chars={sum(map(len, parts))}"
     )
@@ -126,12 +126,17 @@ def resource_source(name: str, data: bytes) -> Source:
         return Source(name, f"{name}: {about}binary (not UTF-8), not readable as text", ())
 
 
+def task_document(submission: Submission) -> str:
+    """The task manifest the reviewer sees, in the opening and as ``task/task.json`` alike, rendered canonically."""
+    return canonical(manifest(submission.task.model_dump(mode="json")))
+
+
 def task_sources(submission: Submission) -> tuple[Source, ...]:
     """The task's documents under ``task/``, then each resource under ``resource/<group>/``: no file can take another
     file's or a trial's address."""
     task, groups = submission.task, submission.task.resources
     return (
-        text_source(f"{TASK}task.json", task_manifest(task)),
+        text_source(f"{TASK}task.json", task_document(submission)),
         text_source(f"{TASK}prompt.md", format_conversation(task.context.events)),
         text_source(f"{TASK}controls.json", CONTROLS.dump_json(submission.controls, indent=1).decode()),
         *(
@@ -195,9 +200,10 @@ async def solve_review(
     opening = Fresh(
         policy.prompt(f"{prompts}.system").template,
         policy.prompt(f"{prompts}.user").render(
-            task=task_manifest(submission.task),
+            task=task_document(submission),
             proposal=render(proposal),
             evidence=source_listing(index),
+            version=index.version,  # an earlier template's slot
         )
         + f"\n\nEvidence version: {index.version}",  # outside the template, so no overlay can drop it
     )
