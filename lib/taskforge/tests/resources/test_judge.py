@@ -3,6 +3,7 @@
 
 import asyncio
 import gzip
+import pickle
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -12,11 +13,13 @@ import pytest
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
+from pydantic import TypeAdapter, ValidationError
 from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ScriptGrader
+from verifyit.modes.grade_judge import JudgeCompletion, JudgeConnection, JudgeRequest
 from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
 from taskforge.effects.context import Context
@@ -307,6 +310,21 @@ async def test_judge_finishes_recorded_at_n5_replay_their_n5_grades_with_zero_ca
     ]
     assert not client.requests
     assert sum(event.replayed for event in judge_inference(log)) == sum(calls for _, _, calls, _ in expected)
+
+
+# Review 2026-11-21: the callback field made TaskRolloutSpec.model_json_schema() raise PydanticInvalidForJsonSchema.
+def test_a_judged_rollout_spec_has_a_json_schema_and_never_serializes_its_callback() -> None:
+    def judge(request: JudgeRequest) -> JudgeCompletion:
+        return JudgeCompletion("PASS", "stop")
+
+    assert "callback" not in TaskRolloutSpec.model_json_schema()["$defs"]["JudgeConnection"]["properties"]
+    with pytest.raises(ValidationError, match="callable"):
+        TypeAdapter(JudgeConnection).validate_python({"base_url": "", "api_key": "", "callback": "judge"})
+    connection = TypeAdapter(JudgeConnection).validate_python({"base_url": "", "api_key": "", "callback": judge})
+    spec = judged_spec(labels()).model_copy(update={"judge_connection": connection})
+    assert "judge_connection" not in spec.model_dump()
+    assert TaskRolloutSpec.model_validate_json(spec.model_dump_json()).judge_connection is None
+    assert pickle.loads(pickle.dumps(spec)).judge_connection is None
 
 
 @pytest.mark.parametrize("script", [False, True])

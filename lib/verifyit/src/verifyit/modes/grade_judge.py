@@ -36,6 +36,7 @@ from typing import Any, TypeVar, cast
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
+from pydantic.json_schema import SkipJsonSchema
 
 from verifyit.file_ops.read import read_text
 from verifyit.grade import (
@@ -166,7 +167,8 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
-    callback: JudgeCallback | None = field(default=None, kw_only=True, repr=False, compare=False)
+    callback: SkipJsonSchema[JudgeCallback] | None = field(default=None, kw_only=True, repr=False, compare=False)
+    """Runtime-only, like the credentials; validated as a callable but left out of JSON Schema."""
 
 
 _Client = openai.OpenAI | JudgeCallback
