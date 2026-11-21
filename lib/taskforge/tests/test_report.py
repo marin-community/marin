@@ -7,11 +7,12 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
+from lib.taskforge.tests.test_end_to_end import N6_MODIFY_HELD, plant_root
 from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, Rollout, RolloutStep, Transition
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from taskforge.checkpoint import CheckpointSink, read_journal
+from taskforge.checkpoint import HEAD, JOURNAL_FORMAT, CheckpointSink, read_journal
 from taskforge.effects.events import (
     ENVIRONMENT,
     Event,
@@ -155,3 +156,19 @@ async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(
     lines = await report(str(tmp_path), 1)
     assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
     assert "tokens role=author prompt=0 cached=0 completion=0" in lines
+
+
+# Review 2026-11-21: one root in an earlier journal format failed the whole report.
+async def test_a_root_in_another_journal_format_is_named_and_the_report_completes(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    current = CheckpointSink(tmp_path / "work", str(tmp_path / "current"))
+    current.claim(None)
+    await current.finish(Status(terminal=Terminal.HELD), Workpiece("current", proposal, terminal=Terminal.HELD))
+    plant_root(tmp_path / "n6", N6_MODIFY_HELD)
+    lines = await report(str(tmp_path))
+    assert "workpieces=1 since_hours=all" in lines and "terminal=held count=1" in lines
+    unsupported = (
+        f"skipped unsupported_format file://{tmp_path / 'n6' / HEAD} has journal format 3, not {JOURNAL_FORMAT}"
+    )
+    assert unsupported in lines

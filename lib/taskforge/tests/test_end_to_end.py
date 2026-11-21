@@ -765,11 +765,11 @@ FINISHED = {"stage": "review", "round": 1, "terminal": "accepted"}
         ({"format": 3.0}, None, driver.CORRUPT),
         ({"format": 2.0}, None, driver.CORRUPT),
         ({"format": True}, None, driver.CORRUPT),
-        ({"format": 4}, None, driver.NEEDS_MIGRATION),
+        ({"format": checkpoint.JOURNAL_FORMAT + 1}, None, driver.NEEDS_MIGRATION),
         ({"status": FINISHED, "workpiece": None}, None, driver.CORRUPT),
         ({}, MALFORMED_REQUEST, driver.CORRUPT),
     ],
-    ids=["string", "float", "float 2", "bool", "format 4", "finished without workpiece", "resolved without request"],
+    ids=["string", "float", "float 2", "bool", "next format", "finished without workpiece", "resolved without request"],
 )
 async def test_driver_refuses_a_damaged_head_or_history_before_skipping_or_claiming(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: dict[str, object], event: object, code: int
@@ -1922,6 +1922,37 @@ async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert f"journal format {checkpoint.JOURNAL_FORMAT}" in driver.OUTCOMES[driver.NEEDS_MIGRATION][1]
     assert tree(destination) == before
+
+
+N6_MODIFY_HELD = Path(__file__).parent / "fixtures" / "n6-modify-held-root.json.gz"
+
+
+def plant_root(directory: Path, fixture: Path) -> Path:
+    """Write the published root ``fixture`` holds (relative path to text) at ``directory``."""
+    for name, text in json.loads(gzip.decompress(fixture.read_bytes())).items():
+        (directory / name).parent.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(text)
+    return directory
+
+
+# Review 2026-11-21: n7 resumed this n6 head, accepted a fresh empty adversary report and published a round-0 Accept
+# without the author repair, dropping the finding both verifier grades had confirmed and the Modify it caused.
+@pytest.mark.parametrize("resume_held", [True, False])
+async def test_a_format_3_root_needs_migration_before_claim_and_stays_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool
+) -> None:
+    """The fixture is the whole root the n6 driver (d510505b69) published under ``{"adversary.roster":
+    ["adversary"]}``: a finding with an expected reward band that both verifier grades confirmed, Modify, and the
+    author held in round 1 (73 rows). Format 4 changed what an adversary finding means, so no reader resumes it."""
+    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), N6_MODIFY_HELD)
+    assert json.loads((destination / HEAD).read_text())["format"] == 3
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)  # no model, sandbox or verifier is ever built
+    driver_args.resume_held = resume_held
+    with pytest.raises(LogFailure, match=f"has journal format 3, not {checkpoint.JOURNAL_FORMAT}") as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
+    assert tree(destination) == before and not Path(driver_args.work_dir).exists()
 
 
 STATUS = PurePosixPath("/workspace/status.txt")

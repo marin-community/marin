@@ -276,16 +276,17 @@ def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
         build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept", "finder"]}), {})
 
 
-N6_SINGLE_ADVERSARY = Path(__file__).parent / "fixtures" / "n6-single-adversary-held.jsonl.gz"
+SINGLE_ADVERSARY = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
 
 
-async def test_a_single_adversary_policy_resumes_its_journal_from_before_the_briefs(proposal: TaskProposal) -> None:
-    """The fixture is the journal the role-runner revision (before the briefs) published for a driver launch of the
-    ordinary author script under ``{"adversary.roster": ["adversary"]}``, held on the adversary's first model call.
+async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: TaskProposal) -> None:
+    """The fixture is the journal this revision (journal format 4) published for a driver launch of the ordinary author
+    script under ``{"adversary.roster": ["adversary"]}``, held on the adversary's first model call. Regenerate it from
+    that launch when a deliberate change to the prompts, tool schemas, event identities or envelopes invalidates it.
 
-    The legacy name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
+    The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
     grades and the adversary's hydration replay; only the adversary's model turns are new."""
-    recorded = decode(gzip.decompress(N6_SINGLE_ADVERSARY.read_bytes()))
+    recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
     served = [
         r.event.request
         for r in recorded
@@ -307,7 +308,7 @@ async def test_a_single_adversary_policy_resumes_its_journal_from_before_the_bri
     assert adversary.requests[0].conversation[1].content.startswith("Review strategy: adversary\n\n")
     assert [result.name for result in workpiece.evidence[-1].adversary] == ["adversary"]
     was = next(r.event.config_digest for r in recorded if isinstance(r.event, StageCompleted))
-    assert was != digest(policy)  # the briefs are new policy data under every overlay
+    assert was == digest(policy)
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record

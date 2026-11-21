@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 3; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 4; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -32,8 +32,10 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 3
-"""Format 3 links sandbox rows to their environment owners; format 2 replayed them by content, without owners."""
+JOURNAL_FORMAT = 4
+"""Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
+expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
+owners; format 2 replayed them by content, without owners."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""
 HEAD = "journal.json"

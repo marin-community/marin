@@ -121,7 +121,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 3); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 4); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -139,9 +139,12 @@ compare-and-swap when it starts and advances it the same way after each chunk. A
 the same workpiece (a relaunch racing a live driver, a preempted worker's replacement) takes the
 head; the first then fails with `Superseded` at its next checkpoint and publishes nothing more.
 Readers follow only the chunks the head names. A root in any other journal format, including the
-format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`) and format 2 (sandbox rows
-replayed by content, without owners), fails with an error naming the format found and exits 4 with the
-root untouched; such roots are converted once by a separate migration. Before claiming, the reader
+format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
+replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
+defect direction with observed and deserved grades), fails with an error naming both formats and exits 4
+with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 4` and reports the
+rest. Such roots are converted once by a separate migration, or rebuilt. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
 resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
