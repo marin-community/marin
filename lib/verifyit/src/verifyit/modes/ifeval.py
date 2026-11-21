@@ -46,9 +46,16 @@ CLOSERS = "\"'\u201d\u2019)]}>\u00bb\u300d\u300f\uff09"
 SCRIPT_SENTENCE_MARKS = "\u3002\uff0e\uff01\uff1f\uff61\u0964\u0965\u06d4\u061f\u0589\u1362"
 # A run of final marks, captured, and any closers after it; and a run of a script's sentence-final
 # marks and any closers after it. A match starts only at the first mark of a run and never gives
-# marks back, so a long run of marks takes linear time.
-FINAL_MARK_RUN = rf"(?<![{re.escape(SENTENCE_FINAL)}])([{re.escape(SENTENCE_FINAL)}]++)[{re.escape(CLOSERS)}]*+"
-SCRIPT_MARK_RUN = rf"(?<![{SCRIPT_SENTENCE_MARKS}])[{SCRIPT_SENTENCE_MARKS}]++[{re.escape(CLOSERS)}]*+"
+# marks back, so a long run of marks takes linear time. Each run ends at a negative lookahead rather
+# than a possessive quantifier, which the grader interpreter's Python 3.10 does not support.
+FINAL_MARK_RUN = (
+    rf"(?<![{re.escape(SENTENCE_FINAL)}])([{re.escape(SENTENCE_FINAL)}]+)(?![{re.escape(SENTENCE_FINAL)}])"
+    rf"[{re.escape(CLOSERS)}]*(?![{re.escape(CLOSERS)}])"
+)
+SCRIPT_MARK_RUN = (
+    rf"(?<![{SCRIPT_SENTENCE_MARKS}])[{SCRIPT_SENTENCE_MARKS}]+(?![{SCRIPT_SENTENCE_MARKS}])"
+    rf"[{re.escape(CLOSERS)}]*(?![{re.escape(CLOSERS)}])"
+)
 SENTENCE_END = re.compile(rf"{FINAL_MARK_RUN}(?=\s)|{SCRIPT_MARK_RUN}")
 SENTENCE_ENDING_MARKS = tuple(SENTENCE_FINAL + SCRIPT_SENTENCE_MARKS)
 APOSTROPHES = "'\u2019"
