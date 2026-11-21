@@ -260,8 +260,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   they are the acceptance's `notes`. An acceptance names what it went without in `missing`: no review ran
   (`solve_review`), the review ended without a report (`solve_review`), or trials had no transcript
   (`transcripts`; with none at all the review is skipped). Missing evidence never holds a task. The
-  confirmation step's final review is the same reviewer over any trials, shown earlier reports
-  (`prompts/solve_review/final/`).
+  review runs over any set of trials, so a later step can reuse it with its own prompts and report.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

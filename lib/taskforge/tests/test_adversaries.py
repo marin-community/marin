@@ -553,7 +553,6 @@ LATER_SETTINGS = frozenset(
         *(f"decision_model.{name}" for name in ("unavailable_wait", "backoff_initial", "backoff_maximum")),
         "decision_model.retry_interval",
         *(f"solve_review.{name}" for name in ("model", "context_tokens", "system", "user", "nudge")),
-        *(f"solve_review.final.{name}" for name in ("system", "user")),
         "author.review",
     }
 )

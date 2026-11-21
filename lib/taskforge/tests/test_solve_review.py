@@ -67,7 +67,7 @@ from taskforge.resources.env import Env, EnvFactory
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, SolverRollout, solver_rollout
 from taskforge.stages.rules import default_review
-from taskforge.stages.solve_review import FINAL, ROUND, Kind, evidence, solve_review
+from taskforge.stages.solve_review import evidence, solve_review
 from taskforge.wiring import build_config, install
 
 CONTROL = Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind.POSITIVE)
@@ -110,15 +110,11 @@ async def reviewed(
     reviewer: FakeInference,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]] = TRIALS,
     log: EventLog | None = None,
-    kind: Kind = ROUND,
-    earlier: Sequence[SolveReview] = (),
 ) -> SolveReview:
     ctx = Context(log=log or EventLog())
     policy = load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": OUTPUT_CHARS})
     bundle = replace(stage_resources(ctx), envs=NoMachines(), role_inference={"solve_review": reviewer})
-    return await solve_review(
-        ctx, build_config(policy, {}), bundle, sample_proposal(), SUBMISSION, trials, kind, earlier
-    )
+    return await solve_review(ctx, build_config(policy, {}), bundle, sample_proposal(), SUBMISSION, trials)
 
 
 def text(outcome: ToolOutcome) -> str:
@@ -233,18 +229,16 @@ async def test_a_review_without_a_report_is_named_missing_evidence() -> None:
     assert review.end is ReviewEnd.NO_REPORT and review.missing[0].kind is EvidenceKind.SOLVE_REVIEW
 
 
-async def test_the_final_review_is_the_same_reviewer_over_any_trials_shown_earlier_reports() -> None:
-    """Arbitrary trial indices, as a confirmation step's three plus five would be; only the prompts and schema differ."""
-    earlier = SolveReview("v", ReviewEnd.REPORTED, (ReviewFinding(FindingKind.ANSWER_LEAK, "leak", "hide it", ()),))
+async def test_the_entry_point_reviews_any_set_of_trials() -> None:
+    """Arbitrary trial indices, as a confirmation step's three plus five would be."""
     trials = (trial(0, 1.0, "12"), trial(5, 0.0, "I answer 9."), trial(9, 1.0, "12"))
-    revise, note = finding(cite("trial-5", 1, 1, "I answer 9.")), finding(cite("prompt.md", 1, 1, "six plus six"))
-    reviewer = FakeInference((report(revise, accounts=({**ACCOUNT, "trial": 5},), note=[note]),))
-    review = await reviewed(reviewer, trials, kind=FINAL, earlier=(earlier,))
+    reviewer = FakeInference(
+        (report(finding(cite("trial-5", 1, 1, "I answer 9.")), accounts=({**ACCOUNT, "trial": 5},)),)
+    )
+    review = await reviewed(reviewer, trials)
     opening = reviewer.requests[0].conversation[1].content
-    assert "Report 0 (reported): 0. [answer_leak] leak\n   Edit: hide it" in opening
     assert [s.split(":")[0] for s in opening.splitlines() if s.startswith("trial-")] == ["trial-0", "trial-5", "trial-9"]
-    assert "note" in json.dumps(reviewer.requests[0].tools[-1].parameters)
-    assert [f.citations[0].source for f in (*review.findings, *review.notes)] == ["trial-5", "prompt.md"]
+    assert [f.citations[0].source for f in review.findings] == ["trial-5"]
 
 
 def round_with(review: SolveReview | None) -> ValidationResult:

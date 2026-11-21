@@ -127,13 +127,12 @@ class ReviewEnd(StrEnum):
 @dataclass(frozen=True, slots=True)
 class SolveReview:
     """One solve-review of the evidence index whose digest is ``evidence``. ``findings`` passed their citation checks
-    and ``dropped`` did not, each beside why; a final review's ``notes`` are the findings the task may be accepted
-    with, and ``missing`` the evidence it went without (its own report, or complete transcripts)."""
+    and ``dropped`` did not, each beside why; ``missing`` is the evidence it went without (its own report, or complete
+    transcripts)."""
 
     evidence: str
     end: ReviewEnd
     findings: tuple[ReviewFinding, ...] = ()
-    notes: tuple[ReviewFinding, ...] = ()
     dropped: tuple[tuple[ReviewFinding, str], ...] = ()
     accounts: tuple[TrialAccount, ...] = ()
     reasons: tuple[str, ...] = ()

@@ -5,8 +5,8 @@
 
 """The solve-review: a machine-less agent that reads recorded solver trials and reports the task defects they show.
 
-A round's review and the confirmation step's final review are one implementation over any set of trials; only their
-prompts and report schema (``ROUND`` and ``FINAL``) differ, and their decision rules live with the review rules.
+One implementation over any set of trials: a review ``Kind`` names its prompts and its report tool, so a later kind
+(the confirmation step's final review) is a new value, not a new path. Decision rules live with the review rules.
 """
 
 import json
@@ -23,15 +23,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import Returned, Stopped
 from taskforge.harness.role import Fresh, Visit, sitting
-from taskforge.harness.tools.evidence import (
-    FINAL_GUIDE,
-    ROUND_GUIDE,
-    Evidence,
-    FinalReportTool,
-    ReportTool,
-    Source,
-    evidence_tools,
-)
+from taskforge.harness.tools.evidence import Evidence, ReportTool, Source, evidence_tools
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import TaskProposal, render
 from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
@@ -45,10 +37,9 @@ from taskforge.stages.summary import task_manifest
 class Kind:
     prompts: str
     report: type[ReportTool]
-    guide: str
 
 
-ROUND, FINAL = Kind("solve_review", ReportTool, ROUND_GUIDE), Kind("solve_review.final", FinalReportTool, FINAL_GUIDE)
+ROUND = Kind("solve_review", ReportTool)
 
 
 def render_message(message: Mapping[str, object]) -> str:
@@ -133,20 +124,12 @@ def evidence(
 
 
 def finding_lines(findings: Sequence[ReviewFinding]) -> str:
-    """Numbered findings with their quoted evidence, for the author and for a later review."""
+    """Numbered findings with their quoted evidence, for the author."""
     return "\n".join(
         f"{number}. [{f.kind}] {f.description}\n   Edit: {f.edit}\n"
         + "\n".join(f"   Evidence {c.source} #{c.start}..{c.end}: {c.quote}" for c in f.citations)
         for number, f in enumerate(findings)
     )
-
-
-def earlier_lines(earlier: Sequence[SolveReview]) -> str:
-    blocks = [
-        f"Report {index} ({review.end}): " + (finding_lines((*review.findings, *review.notes)) or "no findings")
-        for index, review in enumerate(earlier)
-    ]
-    return "\n\n".join(blocks) or "No earlier reports."
 
 
 async def solve_review(
@@ -157,10 +140,9 @@ async def solve_review(
     submission: Submission,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]],
     kind: Kind = ROUND,
-    earlier: Sequence[SolveReview] = (),
     visit: str = "solve_review",
 ) -> SolveReview:
-    """Review ``trials`` of ``submission``, shown ``earlier`` reports; emits only the reviewer's inference effects.
+    """Review ``trials`` of ``submission``; emits only the reviewer's inference effects.
 
     The opening names the index's version, so changed evidence never replays a recorded review.
     """
@@ -180,13 +162,12 @@ async def solve_review(
             proposal=render(proposal),
             evidence=listing,
             version=index.version,
-            earlier=earlier_lines(earlier),
         ),
     )
     async with sitting(
         ctx,
         config.solve_review,
-        Visit(visit, visit, None, tools=evidence_tools(index, kind.report, kind.guide)),
+        Visit(visit, visit, None, tools=evidence_tools(index, kind.report)),
         resources,
     ) as session:
         outcome = await session(opening)
