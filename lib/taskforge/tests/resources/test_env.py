@@ -144,13 +144,12 @@ async def test_environment_writes_binary_files_and_fingerprints_command_history(
     initial = original.fingerprint()
     path = PurePosixPath("/workspace/binary")
     data = b"\x00\xff\nquoted ' bytes"
-    await original.write(path, data)
+    await write_file(WriteFile(path, data), original, notify=Notes())
     after_write = original.fingerprint()
     assert after_write != initial
-    assert await original.read(path) == data
+    assert await read_file(ReadFile(path), original, notify=Notes()) == data
     assert original.fingerprint() == after_write
-    command = RunCommand(COMMAND, 5)
-    result = await original.run(command.cmd, timeout=command.timeout)
+    result = await run_command(RunCommand(COMMAND, 5), original, notify=Notes())
     assert (result.exit_code, result.stdout, result.stderr) == (7, "hello", "err")
     assert await original.read(OUTPUT) == b"changed"
     assert original.fingerprint() != after_write

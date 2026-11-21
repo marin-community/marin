@@ -141,25 +141,27 @@ async def test_replay_uses_event_and_emit_time_fingerprints_in_any_order(policy:
     ctx = Context(log=log)
     resource = object()
     current = fingerprint
-    executed: list[int] = []
+    executed: list[tuple[int, int | Missing]] = []
 
-    async def execute(event: Number, obj: object) -> int:
+    async def execute(event: Number, obj: object, *, recorded: int | Missing = Missing()) -> int:
         assert obj is resource
-        executed.append(event.value)
-        return event.value * 100
+        executed.append((event.value, recorded))
+        # A re-executed effect keeps its recorded result.
+        return recorded if isinstance(recorded, int) else event.value * 100
 
     ctx.resource(resource, lambda: current)
     ctx.handle(Number, execute, uses=(resource,))
     async with ctx.scope("replay"):
         second = ctx.emit(Number(2))
         current = Fingerprint("fake", "after", policy)
-        assert await second == (20 if policy == ReplayPolicy.CACHE else 200)
+        assert await second == 20
         assert await ctx.emit(Number(1)) == 100
         current = fingerprint
-        assert await ctx.emit(Number(1)) == (10 if policy == ReplayPolicy.CACHE else 100)
+        assert await ctx.emit(Number(1)) == 10
     await ctx.drain()
-    assert executed == ([1] if policy == ReplayPolicy.CACHE else [2, 1, 1])
-    assert [r.event for r in log.records if isinstance(r.event, Resolved)][-1].replayed == (policy == ReplayPolicy.CACHE)
+    cached = policy == ReplayPolicy.CACHE
+    assert executed == ([(1, Missing())] if cached else [(2, 20), (1, Missing()), (1, 10)])
+    assert [r.event for r in log.records if isinstance(r.event, Resolved)][-1].replayed == cached
     assert isinstance(log.lookup(Number(9), (fingerprint,)), Missing)
 
 

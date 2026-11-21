@@ -116,9 +116,13 @@ class Context:
                 raise RuntimeError(f"No executor for {type(event).__qualname__}")
             return cast(T, None)
         value = self._log.lookup(event, fingerprints)
-        replayed = not isinstance(value, Missing) and all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
-        if not replayed:
+        cached = all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
+        replayed = cached and not isinstance(value, Missing)
+        if cached and not replayed:
             value = await handler.fn(event, *handler.uses)
+        elif not cached:
+            # A re-executed effect's executor receives its recording, or Missing, and returns what the caller sees.
+            value = await handler.fn(event, *handler.uses, recorded=value)
         result = cast(T, value)
         self._notify(Resolved(event, fingerprints, result, replayed), chain)
         return result

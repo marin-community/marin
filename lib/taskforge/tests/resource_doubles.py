@@ -40,7 +40,6 @@ class FakeEnv(RecordedEnv):
         if isinstance(scripted, Transient | Restart):
             raise scripted
         self.files.update(scripted.writes)
-        self.record_command(cmd, timeout, scripted.result)
         return scripted.result
 
     @override
@@ -57,7 +56,6 @@ class FakeEnv(RecordedEnv):
     async def write(self, path: PurePosixPath, data: bytes) -> None:
         self.check_open()
         self.files[path] = data
-        self.record_write(path, data)
 
 
 class FakeInference(InferenceClient):

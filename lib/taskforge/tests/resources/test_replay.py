@@ -4,6 +4,7 @@
 from functools import partial
 from pathlib import Path, PurePosixPath
 
+import pytest
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference
 from rolloutengine.models import GradedRollout, Rollout
@@ -12,7 +13,8 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Event, Resolved
+from taskforge.effects.events import Event, Note, Resolved
+from taskforge.effects.issues import Unreproducible
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.controls import Candidate
@@ -83,3 +85,42 @@ async def test_jsonl_round_trips_resource_results_and_binary_payloads(tmp_path: 
     await sink.write(tuple(Record(index, 0.0, event) for index, event in enumerate(events, 1)))
     restored = local_records(sink)
     assert tuple(record.event for record in restored) == events
+
+
+RECORDED = CommandResult(0, "pid 1\n", "", 0.1, False)
+
+
+@pytest.mark.parametrize(
+    "fresh, served, diverged",
+    [
+        (RECORDED, RECORDED, False),
+        (CommandResult(0, "pid 2\n", "", 0.3, False), RECORDED, True),
+        (CommandResult(1, "", "disk full\n", 0.3, False), Unreproducible, False),
+    ],
+    ids=["same output", "different output", "re-execution fails"],
+)
+async def test_a_reexecuted_command_serves_its_recording_and_chains_it(
+    fresh: CommandResult, served: CommandResult | type[Exception], diverged: bool
+) -> None:
+    path = PurePosixPath("/workspace/out")
+    recording = Context(log=(log := EventLog()))
+    original = FakeEnv("image", {"build": FakeCommand(RECORDED, {path: b"built"})})
+    configure(recording, original, FakeInference(()), Ids())
+    await recording.emit(RunCommand("build", 5))
+    await recording.drain()
+
+    replay = Context(log=(replayed := EventLog(replay_from=log.records)))
+    env = FakeEnv("image", {"build": FakeCommand(fresh, {path: b"built"}), "new": FakeCommand(fresh, {})})
+    configure(replay, env, FakeInference(()), Ids())
+    if isinstance(served, type):
+        with pytest.raises(served, match=r"env\.run_command"):
+            await replay.emit(RunCommand("build", 5))
+    else:
+        assert await replay.emit(RunCommand("build", 5)) == served
+        assert env.fingerprint() == original.fingerprint()
+        assert env.files[path] == b"built"
+        # With no recording, the command's own result is the result.
+        assert await replay.emit(RunCommand("new", 5)) == fresh
+    await replay.drain()
+    notes = [record.event.msg for record in replayed.records if isinstance(record.event, Note)]
+    assert len(notes) == diverged

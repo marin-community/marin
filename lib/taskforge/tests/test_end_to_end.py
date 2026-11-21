@@ -3,8 +3,10 @@
 
 import asyncio
 import errno
+import gzip
 import hashlib
 import json
+import logging
 import shutil
 import sys
 from argparse import Namespace
@@ -34,7 +36,7 @@ from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal,
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import Resolved, StageCompleted
+from taskforge.effects.events import Note, Resolved, StageCompleted, event_digest
 from taskforge.effects.issues import Hold, LogFailure, PublicationFailed, Restart, Superseded, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
@@ -1288,3 +1290,173 @@ async def test_root_recorded_with_previous_author_prompt_resumes_through_a_promp
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert [ResolvedTurnGuard.turn(request)[-1].tool_call_id for request in resumed.requests] == ["write", "grade"]
+
+
+STAMP = PurePosixPath("/workspace/stamp.txt")
+
+
+class DriftingEnvs(Envs):
+    """Each machine's ``stamp`` writes the same file but prints its own launch and machine, like a PID.
+
+    ``stamp`` is the given command result instead when one is scripted for the launch.
+    """
+
+    def __init__(self, launch: int, stamp: FakeCommand | None = None) -> None:
+        super().__init__()
+        self.launch, self.stamp = launch, stamp
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        env = await super().create(requirements)
+        drifting = FakeCommand(CommandResult(0, f"pid {self.launch}{len(self.created)}\n", "", 0, False), {STAMP: b"ok"})
+        env.commands = {**env.commands, "stamp": self.stamp or drifting}
+        return env
+
+
+def drifting_script() -> tuple[Completion, ...]:
+    """Run a command with drifting output, read the file it wrote, then continue the ordinary script."""
+    return (
+        call("shell", {"command": "stamp", "timeout": 5}, "stamp"),
+        call("read_file", {"path": str(STAMP)}, "read"),
+        *script()[1:],
+    )
+
+
+class ServedOnce(FakeInference):
+    """Fails any request an earlier launch already served: a replay that misses its recording pays twice."""
+
+    def __init__(self, completions: Sequence[Completion], served: Sequence[InferenceRequest]) -> None:
+        super().__init__(completions)
+        self.served = {event_digest(request) for request in served}
+        self.repeated: list[InferenceRequest] = []
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        if event_digest(request) in self.served:
+            self.repeated.append(request)
+            raise RuntimeError("an already served inference request was sent again")
+        return await super().complete(request)
+
+
+async def held_after_stamp(monkeypatch: pytest.MonkeyPatch, driver_args: Namespace) -> list[InferenceRequest]:
+    """Hold the drifting author on its fourth model call and return the requests it was served."""
+    held = FakeInference((*drifting_script()[:3], Hold("relay unavailable")))
+    first = replace(resources(DriftingEnvs(1), ()), inference=held)
+    serve(monkeypatch, first)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published_workpiece(destination).terminal is Terminal.HELD
+    assert isinstance(first.inference, FakeInference)
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    return first.inference.requests[:-1]  # the last request raised the hold
+
+
+def tool_output(workpiece: Workpiece, call_id: str) -> str:
+    assert workpiece.session is not None
+    (message,) = (message for message in workpiece.session.messages if message.tool_call_id == call_id)
+    return message.content
+
+
+# Review 2026-11-20: a re-executed command's fresh stdout reached the model, so every later request missed its
+# recording and the resume paid for the model calls again.
+async def test_resume_serves_recorded_command_output_and_notes_the_divergence(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    served = await held_after_stamp(monkeypatch, driver_args)
+    resumed = replace(resources(DriftingEnvs(2), ()), inference=ServedOnce(drifting_script()[3:], served))
+    serve(monkeypatch, resumed)
+    with caplog.at_level(logging.INFO):
+        await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert workpiece.terminal is Terminal.ACCEPTED
+    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
+    assert len(resumed.inference.requests) == len(drifting_script()) - 3
+    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
+    assert tool_output(workpiece, "read") == "ok"
+    assert isinstance(resumed.envs, Envs)
+    fresh = resumed.envs.created[0]
+    assert fresh.executed == ["stamp", "write-draft"] and fresh.files[STAMP] == b"ok"
+    notes = [r.event.msg for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
+    assert len(notes) == 1 and notes[0].startswith("Replay of env.run_command diverged")
+    assert "pid" not in notes[0]  # digests, not content
+    assert any(record.levelno == logging.INFO and record.getMessage() == notes[0] for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        FakeCommand(CommandResult(1, "", "disk full\n", 0, False), {}),
+        FakeCommand(CommandResult(0, "pid 21\n", "", 0, False), {}),
+    ],
+    ids=["command fails", "file missing"],
+)
+async def test_resume_holds_when_the_fresh_machine_cannot_rebuild_the_recorded_state(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, stamp: FakeCommand
+) -> None:
+    served = await held_after_stamp(monkeypatch, driver_args)
+    resumed = replace(resources(DriftingEnvs(2, stamp), ()), inference=ServedOnce(drifting_script()[3:], served))
+    serve(monkeypatch, resumed)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert workpiece.terminal is Terminal.HELD
+    assert "Unreproducible" in str(workpiece.decisions[-1]) and "bug:" not in str(workpiece.decisions[-1])
+    assert isinstance(resumed.inference, ServedOnce)
+    assert not resumed.inference.repeated and not resumed.inference.requests
+    assert isinstance(resumed.envs, Envs) and resumed.envs.created[0].executed == ["stamp"]
+
+
+# Review 2026-11-20: resuming a partly validated workpiece must keep its finished solver trials.
+async def test_resume_with_completed_solver_siblings_repeats_no_trial_or_model_call(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = resources(Envs(), script())
+    first = replace(first, rollouts=replace(first.rollouts, engine=SolverEngine(2, restart=1)))
+    resumed = resources(Envs(), ())
+    resumed = replace(
+        resumed,
+        inference=ServedOnce((), ()),
+        rollouts=replace(resumed.rollouts, engine=SolverEngine(1)),
+    )
+    serve(monkeypatch, first, resumed)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published_workpiece(destination).terminal is Terminal.HELD
+    assert isinstance(first.inference, FakeInference) and isinstance(resumed.inference, ServedOnce)
+    resumed.inference.served = {event_digest(request) for request in first.inference.requests}
+    assert isinstance(first.rollouts.engine, SolverEngine)
+    assert sorted(first.rollouts.engine.started)[0].endswith(":0:0")
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    await driver.one(driver_args)
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert not resumed.inference.repeated
+    assert executions(resumed) == (0, 1)
+    assert isinstance(resumed.rollouts.engine, SolverEngine) and resumed.rollouts.engine.started[0].endswith(":1:0")
+
+
+N3_JOURNAL = Path(__file__).parent / "fixtures" / "n3-held-drift.jsonl.gz"
+
+
+async def test_a_journal_written_by_the_n3_dispatch_resumes_without_repeated_model_calls(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    """The fixture is the journal the n3 effect dispatch (e5ec5eba21) published for the held first launch of
+    ``held_after_stamp``. It pins the recorded events and replay keys across the dispatch rewrite. A deliberate change
+    to the author prompts, tool schemas or event identities invalidates it; delete it then rather than regenerate it."""
+    recorded = decode(gzip.decompress(N3_JOURNAL.read_bytes()))
+    await held_after_stamp(monkeypatch, driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert [record.event for record in history(destination)] == [record.event for record in recorded]
+    served = [
+        record.event.request
+        for record in recorded
+        if isinstance(record.event, Resolved) and isinstance(record.event.request, InferenceRequest)
+    ]
+    resumed = replace(resources(DriftingEnvs(2), ()), inference=ServedOnce(drifting_script()[3:], served))
+    log = EventLog(replay_from=recorded, replayable=replayable_grade)
+    workpiece = await run_workpiece(proposal, config(), resumed, log, install=install)
+    assert workpiece.terminal is Terminal.ACCEPTED
+    assert isinstance(resumed.inference, ServedOnce) and len(served) == 3 and not resumed.inference.repeated
+    assert len(resumed.inference.requests) == len(drifting_script()) - 3
+    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
