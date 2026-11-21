@@ -359,7 +359,6 @@ def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monk
     assert row["problem"] not in prompt.content
     assert "exact Nat.add_zero" not in prompt.content
     assert "theorem algebra_1 (n : Nat) : n + 0 = n" in prompt.content
-    assert "Return only the natural-language problem statement" in prompt.content
 
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)

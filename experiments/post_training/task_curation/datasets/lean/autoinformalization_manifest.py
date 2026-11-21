@@ -29,8 +29,11 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import (
+    NGRAM_SIZE,
     jaccard,
     ngrams,
     normalized_text,
@@ -38,7 +41,12 @@ from experiments.post_training.task_curation.datasets.lean.lean_problem_similari
     statement_key,
     statement_ngrams,
 )
-from experiments.post_training.task_curation.datasets.lean.numina import PASSING_PROOFS
+from experiments.post_training.task_curation.datasets.lean.numina import (
+    NUMINA_FILE,
+    NUMINA_REPO,
+    NUMINA_REVISION,
+    PASSING_PROOFS,
+)
 
 NEAR_THRESHOLD = 0.9
 RARE_NGRAMS = 8
@@ -232,7 +240,7 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
         "input": dict(input_record or {}),
         "settings": {
             "near_threshold": NEAR_THRESHOLD,
-            "ngram_size": 5,
+            "ngram_size": NGRAM_SIZE,
             "rare_ngrams": RARE_NGRAMS,
             "max_ngram_frequency": MAX_NGRAM_FREQUENCY,
             "eval_modulus": EVAL_MODULUS,
@@ -254,15 +262,11 @@ def main() -> None:
     parser.add_argument("parquet", type=Path)
     parser.add_argument("--output", type=Path, default=Path(__file__).with_name("numina_autoinformalization_dedup.json"))
     args = parser.parse_args()
-    data = args.parquet.read_bytes()
     manifest = build_manifest(
         pq.read_table(args.parquet).to_pylist(),
         {
-            "url": (
-                "https://huggingface.co/datasets/project-numina/NuminaMath-LEAN/resolve/"
-                "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94/data/train-00000-of-00001.parquet"
-            ),
-            "sha256": hashlib.sha256(data).hexdigest(),
+            "url": f"https://huggingface.co/datasets/{NUMINA_REPO}/resolve/{NUMINA_REVISION}/{NUMINA_FILE}",
+            "sha256": file_sha256(StoragePath(str(args.parquet))),
         },
     )
     args.output.write_text(json.dumps(manifest, indent=1) + "\n")

@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.datasets.lean.proofs import (
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+NUMINA_REPO = "project-numina/NuminaMath-LEAN"
 NUMINA_REVISION = "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94"
 NUMINA_FILE = "data/train-00000-of-00001.parquet"
 PRIME_ENVS_REVISION = "15e4e9d2f7d52d8d725a2668e483cf51a067e5ba"
@@ -252,7 +253,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name="lean-numina-human",
                 source=HfSource(
-                    "project-numina/NuminaMath-LEAN",
+                    NUMINA_REPO,
                     NUMINA_REVISION,
                     (NUMINA_FILE,),
                     SourceFormat.PARQUET,

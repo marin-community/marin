@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.datasets.lean.autoinformalization_m
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key
 from experiments.post_training.task_curation.datasets.lean.numina import (
     NUMINA_FILE,
+    NUMINA_REPO,
     NUMINA_REVISION,
     PRIME_LISTS,
     excluded_by_prime,
@@ -98,6 +99,7 @@ The human reference is also the golden control; a failed control indicates an in
 
 
 def assigned_split(row: dict[str, Any]) -> str | None:
+    """Return the split, or None for invalid inputs and removed duplicates."""
     key = row_key(row)
     if key is None or key in REMOVED_ROWS:
         return None
@@ -195,7 +197,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name=f"lean-numina-auto-informalization-{split}",
                 source=HfSource(
-                    "project-numina/NuminaMath-LEAN",
+                    NUMINA_REPO,
                     NUMINA_REVISION,
                     (NUMINA_FILE,),
                     SourceFormat.PARQUET,

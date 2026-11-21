@@ -5,7 +5,6 @@
 
 import argparse
 import getpass
-import gzip
 import hashlib
 import json
 import math
@@ -20,6 +19,8 @@ from urllib.request import Request, urlopen
 
 import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.pipeline.models import ImportRejection
 
 from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
@@ -28,7 +29,7 @@ from experiments.post_training.task_curation.datasets.lean.autoinformalization i
     formal_source,
 )
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key
-from experiments.post_training.task_curation.datasets.lean.numina import PRIME_LISTS, statement_row_contract
+from experiments.post_training.task_curation.datasets.lean.numina import PRIME_LISTS, prime_list, statement_row_contract
 
 DISCOVERY = re.compile(r"\b(find|determine|calculate|compute|how many|minimum|maximum|evaluate)\b", re.I)
 OUTPUT_TOKENS = 768
@@ -136,13 +137,10 @@ def reviewed_response(result: dict, row: dict) -> ReviewedResponse:
 
 def prepare(args: argparse.Namespace) -> None:
     """Export eligible pairs in deterministic, balanced order across metadata and question signals."""
-    digest = hashlib.sha256(args.parquet.read_bytes()).hexdigest()
+    digest = file_sha256(StoragePath(str(args.parquet)))
     if digest != MANIFEST["input"]["sha256"]:
         raise ValueError("Parquet does not match the pinned manifest")
-    lists = {
-        name: set(json.loads(gzip.decompress((args.prime_lists / f"{name}.json.gz").read_bytes())))
-        for name in PRIME_LISTS
-    }
+    lists = {name: prime_list(StoragePath(str(args.prime_lists / f"{name}.json.gz"))) for name in PRIME_LISTS}
 
     def listed(uuid: str) -> str | None:
         return next((name for name, uuids in lists.items() if uuid in uuids), None)

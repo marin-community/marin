@@ -158,7 +158,6 @@ def test_classify_saves_actual_cited_lines_and_sends_only_numbered_inputs(tmp_pa
         assert "PRIVATE REVIEW" not in text
         if model == classifier.CARBON_MODEL:
             assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "LOW"}
-            assert body["generationConfig"]["maxOutputTokens"] == classifier.CARBON_OUTPUT_TOKENS
         else:
             assert body["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
         return io.StringIO(

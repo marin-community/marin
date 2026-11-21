@@ -53,7 +53,7 @@ def statement_key(declaration: str) -> str | None:
 
 
 def normalized_text(text: str) -> str:
-    """Normalize prose and LaTeX layout without discarding mathematical constants or operators."""
+    """Normalize prose and LaTeX layout while retaining numbers and supported operators."""
     normalized = unicodedata.normalize("NFKC", text).casefold().replace(r"\dfrac", r"\frac")
     return " ".join(TEXT_TOKEN.findall(LATEX_LAYOUT.sub(" ", normalized)))
 
