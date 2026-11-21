@@ -87,14 +87,21 @@ def write_responses(release_root: str, records_root: str, output: Path) -> dict:
 
 
 def archive_responses(output: Path, archive: str) -> str:
-    """Tar the response tree onto object storage and return its sha256."""
+    """Tar the response tree onto object storage and return its sha256.
+
+    Task ids carry a slash, so each response lives one directory deep; the
+    archive preserves that layout, which the calibration's per-task copy
+    expects.
+    """
     digest = hashlib.sha256()
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
-        for directory in sorted(output.iterdir()):
-            digest.update(directory.name.encode())
-            digest.update((directory / RESPONSE_FILENAME).read_bytes())
-            bundle.add(directory, arcname=directory.name)
+        for response in sorted(output.rglob(RESPONSE_FILENAME)):
+            task_dir = response.parent
+            name = task_dir.relative_to(output).as_posix()
+            digest.update(name.encode())
+            digest.update(response.read_bytes())
+            bundle.add(task_dir, arcname=name)
     StoragePath(archive).write_bytes(buffer.getvalue())
     return digest.hexdigest()
 
