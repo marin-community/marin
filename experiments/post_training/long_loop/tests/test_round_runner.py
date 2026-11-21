@@ -368,10 +368,8 @@ def test_round_first_collective_timeout_reaches_native_worker(production_recipe,
 
 
 def test_round_xla_flags_reach_native_worker_once(production_recipe, tmp_path):
-    declared = load_round(ROUND_DIR / "exp5-setup.yaml")
     recipe = _annealed_recipe(production_recipe)
     flag = "--xla_gpu_enable_command_buffer="
-    assert declared.sft.xla_flags == [flag]
     recipe["xla_flags"] = [*recipe["xla_flags"], flag]
     spec = round_sft_spec(_round_spec(recipe, xla_flags=[flag]), "round-test/sft", "2026.11.21.109", recipe)
     step = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))

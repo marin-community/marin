@@ -2,7 +2,7 @@
 # OpenResearcher's 5% share remains reserved; downstream RL is held.
 schema: 1
 name: long-loop-exp5/round5
-version: "2026.11.21.109"
+version: "2026.11.21.113"
 slug: mochi-exp5
 cluster: cw-rno2a
 storage:
@@ -24,11 +24,8 @@ sft:
   warmup_steps: 30
   lr_schedule: constant
   wall_clock_cooldown_fraction: 0.15
-  mp: "p=bf16,c=bf16"
+  mp: "params=float32,compute=bfloat16,output=bfloat16"
   compiler_dumps: true
-  # .108 stalled in the first CUDA graph launch of a compiled train-step variant.
-  xla_flags:
-    - --xla_gpu_enable_command_buffer=
   # Allow cold-start host skew; the native NCCL operation watchdog remains enabled.
   first_collective_call_timeout: 600
   special_token_lr_multiplier: 5.656854249492381

@@ -673,7 +673,22 @@ class Trainer:
 
             with phase(self.journal, "first_step" if is_first_step else "steady_state", step=int(state.step)):
                 scale = iter_data.learning_rate_scale if isinstance(iter_data, TimeLimitedIterator) else 1.0
+                logger.info(
+                    "SFT_STEP rank=%d phase=start step=%d learning_rate_scale=%g budget_deadline=%s",
+                    jax.process_index(),
+                    int(state.step) + 1,
+                    scale,
+                    self.config.training_budget.deadline_epoch_seconds if self.config.training_budget else None,
+                )
                 info = self.train_step(state, example, learning_rate_scale=scale)
+                logger.info(
+                    "SFT_STEP rank=%d phase=completed step=%d learning_rate_scale=%g duration=%g loss=%g",
+                    jax.process_index(),
+                    info.step,
+                    scale,
+                    info.step_duration,
+                    info.loss,
+                )
             state = info.state
 
             if is_first_step:
