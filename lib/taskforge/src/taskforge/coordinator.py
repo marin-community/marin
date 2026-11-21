@@ -10,6 +10,7 @@ again.
 
 import logging
 from collections.abc import Callable
+from types import MappingProxyType
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
@@ -26,8 +27,10 @@ from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
-from taskforge.stages import STAGES
+from taskforge.stages.author import author
 from taskforge.stages.exits import Decided, Validated
+from taskforge.stages.review import review
+from taskforge.stages.validate import validate
 
 
 def reasons(error: BaseException) -> tuple[str, ...]:
@@ -43,6 +46,7 @@ def reasons(error: BaseException) -> tuple[str, ...]:
     return (" <- ".join(details),)
 
 
+STAGES = MappingProxyType({Stage.AUTHOR: author, Stage.VALIDATE: validate, Stage.REVIEW: review})
 STAGE_REPLAY_ATTEMPTS = 3
 """Bound consecutive interrupted reconstructions of one stage visit; effect executors alone own retries."""
 
