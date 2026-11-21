@@ -499,7 +499,7 @@ def _sse_event(payload: str) -> str:
     return f"data: {payload}\n\n"
 
 
-def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Iterator[str]:
+def _chat_completion_events(completion: ChatCompletion, *, include_usage: bool) -> collections.abc.Iterator[str]:
     """Render a finished chat completion as an OpenAI server-sent-event stream.
 
     The engine returns each generation whole, so a choice is delivered as one content chunk
@@ -535,6 +535,16 @@ def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Itera
             if completion.model_extra and "prompt_token_ids" in completion.model_extra:
                 chunk = chunk.model_copy(update={"prompt_token_ids": completion.model_extra["prompt_token_ids"]})
             yield _sse_event(chunk.model_dump_json())
+    if include_usage:
+        chunk = ChatCompletionChunk(
+            id=completion.id,
+            object="chat.completion.chunk",
+            created=completion.created,
+            model=completion.model,
+            choices=[],
+            usage=completion.usage,
+        )
+        yield _sse_event(chunk.model_dump_json())
     yield _sse_event("[DONE]")
 
 
@@ -1015,7 +1025,10 @@ class InferenceServer:
             completion = await _create_chat_completion(inference_context, request)
             if not request.stream:
                 return completion
-            return StreamingResponse(_chat_completion_events(completion), media_type="text/event-stream")
+            include_usage = (request.stream_options or {}).get("include_usage") is True
+            return StreamingResponse(
+                _chat_completion_events(completion, include_usage=include_usage), media_type="text/event-stream"
+            )
 
         @app.post("/v1/completions", response_model=Completion)
         async def create_completion(request: CompletionRequest):

@@ -802,6 +802,28 @@ def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
 
 
+def test_chat_stream_reports_usage_when_requested(exact_token_client):
+    response = exact_token_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt2",
+            "messages": [{"role": "user", "content": "A B"}],
+            "temperature": 0,
+            "max_completion_tokens": 2,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
+    )
+    assert response.status_code == 200, response.text
+    events = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
+    assert events[-1] == "[DONE]"
+    chunks = [json.loads(event) for event in events[:-1]]
+    assert all(chunk.get("usage") is None for chunk in chunks[:-1])
+    assert chunks[-1]["choices"] == []
+    usage = chunks[-1]["usage"]
+    assert (usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) == (2, 2, 4)
+
+
 def test_paused_server_returns_abort_then_resumes_exact_generation(exact_token_server):
     request = {
         "model": "gpt2",
