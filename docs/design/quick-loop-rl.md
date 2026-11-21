@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 11:30 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 11:38 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. Kueue still denied quota for the five-task gang at 11:30 p.m. It reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. Kueue still denied quota for the five-task gang at 11:38 p.m. It reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two fused-scorer optimizer updates passed on four TPUv4 chips at `a5cfd7cbcc` with local cache installation. A separate CPU proof installed optimizer updates in a serving subprocess with fresh KV. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact verification of the installed compute weights. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
@@ -198,9 +198,9 @@ The local `snowball_rl` artifact main at `2a8cbaf1c7` renders two-update
 presets named `levanter-inventory-native` and `levanter-inventory-vllm`.
 Both use four eight-H100 learner hosts and one eight-H100 serving host.
 They share the pinned initializer and tokenizer, the `2026.11.19.1` task
-selection, and a fixed 100-task panel. This pair qualifies the maintained
-inventory launcher. The frozen 25-update learner comparison uses its
-original selection and remains a separate experiment.
+selection, and a fixed 100-task panel. Use this pair to qualify the
+maintained inventory launcher. The frozen 25-update learner comparison
+uses its original selection and remains a separate experiment.
 
 The launcher takes the native serving device count and EP/TP dimensions
 from the role plan. It places immutable snapshots in the launch attempt's
@@ -214,10 +214,10 @@ qualification step.
 Regional TensorStore is the first deployment transport. At 67.078B
 parameters, including about 17 million FP32 routing values, one write and
 one read of the compute weights move about 268 GB of logical data per
-publication. The earlier FP32 transport would move about 537 GB. The
-compute-weight estimate is 6.7 TB over 25 publications before compression,
-initialization and retries. Measure upload, restore, byte verification
-and cache allocation separately on H100.
+publication. The earlier FP32 transport would move about 537 GB. A native
+run with 25 of these publications would move about 6.7 TB before
+compression, initialization and retries. Measure upload, restore, byte
+verification and cache allocation separately on H100.
 
 The serving endpoint at `74414c2cdb` uses the existing bounded Marin
 worker pipe. The host client works without JAX or Torch. It passes exact
@@ -532,16 +532,21 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
 - Run a matched Levanter/vLLM versus Levanter/native comparison. Hold learner,
   task mix, sampling and fixed evaluation panel constant. Record hardware
   and cost, time per admitted group and optimizer update, and fixed-panel
-  reward. Sum `timing/wait_for_generation_buffer` over the same completed
-  updates and divide by the sum of admitted groups from the matching
-  `Rollout batch completed` lines. Compare `timing/step` over that window
-  and report `timing/sync_weights` separately. Use trajectory timings to
-  distinguish generation, tool execution and grading. In the prior FP8
-  comparison, the archived trainer events reproduce 37.0 versus 43.1
-  minutes waiting for groups through update 15. The initial and update-15
-  dumps contain the same 100 task IDs across both arms. FP8 mean decode
-  time fell 13% and time to the same evaluation target rose 5.7 minutes.
-  [Prior timing comparison][timing]
+  reward. Both maintained arms log `timing/rollout_admission_window_seconds`
+  and `rollout/admission_window_groups` for fresh, full batches at zero
+  staleness. The buffer's clock measures from policy lease opening through
+  final group admission. Divide the sum of elapsed seconds by the sum of
+  admitted groups across the same measured updates. Report the trainer's
+  `timing/wait_for_generation_buffer` separately as buffer wait, along
+  with `timing/step` and `timing/sync_weights`. Use trajectory timings
+  to distinguish generation, tool execution and grading.
+
+The prior FP8 comparison reported a 13% reduction in mean decode time
+and 5.7 minutes longer to reach a mean verifier score of 0.2901, the
+BF16 arm's final score. The archived trainer events reproduce 37.0
+minutes of buffer wait for BF16 and 43.1 for FP8 through update 15. The
+initial and update-15 dumps contain the same 100 task IDs across both
+arms. [Prior timing comparison][timing]
 
 ## Open decisions
 
