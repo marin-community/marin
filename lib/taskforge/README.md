@@ -161,8 +161,11 @@ workpieces are resumed only when the launch passes `--resume-held`; use it under
 after an infrastructure outage (sandbox admission, a provider gap longer than
 `provider.unavailable_wait`). Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear.
-Replay reuses recorded model results only while the re-executed commands return the output that
-was recorded; after the first difference, the remaining model calls run again.
+A re-executed command or file operation returns its recorded result, so later model calls replay
+even when output drifts (a PID, a timestamp); each drift is logged at INFO as a
+`Replay of <kind> diverged` note naming digests only. One that fails where its recording
+succeeded, such as a command recorded with exit 0 or a read of a file the fresh machine lacks,
+holds the workpiece as `Unreproducible`.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
 its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
 
