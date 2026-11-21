@@ -38,6 +38,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
+from taskcompendium.decision_model import DecisionModelRequest
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
@@ -97,7 +98,14 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submiss
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.decision_model import DecisionModelHealth
+from taskforge.resources.decision_model import (
+    DecisionModel,
+    DecisionModelHealth,
+    DecisionModelPolicy,
+    DecisionModelRead,
+    DecisionModelReader,
+    read_level,
+)
 from taskforge.resources.env import (
     CommandResult,
     EnvFactory,
@@ -450,6 +458,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
         resume_held=False,
+        probe=False,
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -3228,7 +3237,8 @@ def batch(
     concurrency: int = 1,
 ) -> list[str]:
     """A run over one proposal per ``codes`` entry, decision-model ones unless named ``code``, whose children exit with
-    their codes in turn and then 0; the list collects each child launch, which must carry no --resume-held."""
+    their codes in turn and then 0; the list collects each child launch, starred for a probe, and none carries
+    --resume-held."""
     decision = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
     paths = {name: tmp_path / f"{name}.proposal.json" for name in codes}
     for name, path in paths.items():
@@ -3242,7 +3252,7 @@ def batch(
 
     async def child(args: Namespace) -> int:
         assert not args.resume_held, "only the operator reopens a hold"
-        launches.append(Path(args.proposals).stem.removesuffix(".proposal"))
+        launches.append(Path(args.proposals).stem.removesuffix(".proposal") + "*" * getattr(args, "probe", False))
         return (remaining[args.proposals] or [0]).pop(0)
 
     monkeypatch.setattr(driver, "one", child)
@@ -3299,7 +3309,7 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     capsys: pytest.CaptureFixture[str],
     code: int,
 ) -> None:
-    codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": []}
+    codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": [driver.ANSWERED]}
     launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
     given, health = answering(DecisionModelHealth.UNSUPPORTED)
     monkeypatch.setattr(driver, "decision_model_health", health)
@@ -3307,6 +3317,70 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
         await driver.run(driver_args)
     # a defers, and b and c wait behind it; a probes and fails, so b probes and defers again, then c probes and is
     # answered, which releases b. Health is read before each probe: after a's hold, a's failed probe and b's hold.
-    assert (launches, len(given)) == (["a", "a", "b", "c", "b"], 3)
+    assert (launches, len(given)) == (["a", "a*", "b*", "c*", "b"], 3)
     label = "failed" if code == 1 else driver.OUTCOMES[code][0]
     assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 3): a probe whose grade replayed a cached read exited 0 having made no
+# decision-model call, and released every parked proposal. A probe that proves no fresh answer stays a probe: each
+# parked proposal probes in turn after the interval, and none is released on its evidence.
+async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"a": [driver.DEFERRED, 0], "b": [], "c": []})
+    given, health = answering(DecisionModelHealth.UNSUPPORTED)
+    monkeypatch.setattr(driver, "decision_model_health", health)
+    await driver.run(driver_args)
+    assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 3): after one healthy reading the first released child deferred again,
+# and the rest of the released queue kept starting while the next health read was pending. A fresh outage parks
+# everything not yet started: no decision-model child launches while health is being read.
+async def test_a_fresh_outage_parks_released_work_that_has_not_started(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    codes = {"a": [driver.DEFERRED, driver.DEFERRED], "b": [], "c": [], "d": []}
+    launches, started, seen = batch(driver_args, tmp_path, monkeypatch, proposal, codes), list[str](), list[int]()
+    popen = driver.subprocess.Popen
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: started.append(command[-1]) or popen(command))
+
+    async def health(_policy: Policy) -> DecisionModelHealth:
+        seen.append(len(started))  # admission is synchronous: a launch beside this read happened before it
+        return DecisionModelHealth.HEALTHY
+
+    monkeypatch.setattr(driver, "decision_model_health", health)
+    await driver.run(driver_args)
+    assert (seen, sorted(launches)) == ([1, 2], ["a", "a", "a", "b", "c", "d"])
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 3): what a probe child reports. Only a probe that resolved a decision-
+# model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
+async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[DecisionModelRequest] = []
+
+    class Reader(DecisionModelReader):
+        async def read(self, request: DecisionModelRequest) -> float:
+            reads.append(request)
+            return 1.0
+
+        async def health(self) -> DecisionModelHealth:
+            return DecisionModelHealth.HEALTHY
+
+    async def reading(ctx: Context, *_: object) -> object:
+        policy = DecisionModelPolicy("clef@fixture-1", 1, 10.0, 20.0, 1.0, 1.0, 0.0)
+        ctx.handle(DecisionModelRead, partial(read_level, notify=ctx.notify), DecisionModel(Reader(), policy))
+        request = DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", "12")
+        await ctx.emit(DecisionModelRead(request))
+        raise Hold("a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *(resources(Envs(), ()) for _ in range(3)))
+    codes = []
+    for resume in (False, True, False):  # fresh; replayed on an explicit resume; skipped as held
+        driver_args.probe, driver_args.resume_held = True, resume
+        codes.append(await driver.one(driver_args))
+    assert (codes, len(reads)) == ([driver.ANSWERED, 0, 0], 1)

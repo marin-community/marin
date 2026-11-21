@@ -28,7 +28,7 @@ from rigging.secrets import get_secret, list_secret_names, require_secret
 
 from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
-from taskforge.effects.events import StageCompleted
+from taskforge.effects.events import Resolved, StageCompleted
 from taskforge.effects.issues import (
     CorruptJournal,
     DecisionModelUnavailable,
@@ -48,7 +48,7 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.resources.decision_model import DecisionModelHealth
+from taskforge.resources.decision_model import DecisionModelHealth, DecisionModelRead
 from taskforge.stages.classify import replay_rule
 from taskforge.wiring import clef, endpoint_source, install, runtime
 
@@ -59,8 +59,9 @@ OUTCOMES = {
     CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
 }
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
-DEFERRED = 75
-"""``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL)."""
+DEFERRED, ANSWERED = 75, 10
+"""``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL), and a ``--probe``
+child's for one that resolved a decision-model read in its own process, the only evidence that it answers."""
 
 
 def deferred(wp: Workpiece | None) -> bool:
@@ -189,7 +190,9 @@ async def one(args: argparse.Namespace) -> int:
             status = fold(tuple(record.event for record in log.records))
             matched = wp[0].terminal is not None and (status.round, status.terminal) == (wp[0].round, wp[0].terminal)
             await checkpoints.finish(status if matched else Status(), wp[0])
-    return DEFERRED if deferred(wp[0]) else 0
+    fresh = (r.event for r in log.records[len(previous) :] if isinstance(r.event, Resolved) and not r.event.replayed)
+    answered = args.probe and any(isinstance(event.request, DecisionModelRead) for event in fresh)
+    return DEFERRED if deferred(wp[0]) else ANSWERED if answered else 0
 
 
 async def decision_model_health(policy: Policy) -> DecisionModelHealth:
@@ -252,6 +255,7 @@ async def run(args: argparse.Namespace) -> None:
                 ]
                 if args.resume_held:  # the operator's flag alone: a child enters an outage-only hold by itself
                     command.append("--resume-held")
+                command += ["--probe"] * (path == probe)
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
@@ -268,14 +272,14 @@ async def run(args: argparse.Namespace) -> None:
                 path, _ = active.pop(task)
                 completed += 1
                 code = task.result()
-                if path == probe:  # only a probe that is not deferred again shows the decision model reads
+                if path == probe:  # only a probe's fresh answer shows the decision model reads
                     probe = None
-                    if code == 0:
+                    if code == ANSWERED:
                         ready, parked = ready + parked, []
-                if code == DEFERRED:
+                if code == DEFERRED:  # a fresh outage parks what was released but has not started
                     print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
-                    parked.append(path)
-                elif code != 0:
+                    parked, ready = ([*parked, path], ready) if probe else ([*parked, *ready, path], [])
+                elif code not in (0, ANSWERED):
                     label, action = OUTCOMES.get(code, ("failed", "see its log"))
                     labels[label] += 1
                     print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
@@ -327,6 +331,8 @@ def main() -> None:
             command.add_argument("--buckets", type=int, default=4096)
             command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
+        else:
+            command.add_argument("--probe", action="store_true", help="Exit ANSWERED after a fresh decision-model read")
     args = parser.parse_args()
     if args.command == "report":
         configure_coreweave_s3()
