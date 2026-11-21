@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import json
 
 import pyarrow.parquet as pq
@@ -13,6 +14,7 @@ from taskcompendium.models import (
     NoGrader,
     PackageSpec,
     PlainText,
+    ResourceGroups,
     Source,
     TaskSpec,
     TextMessage,
@@ -39,8 +41,8 @@ GRADER_BASE = EnvironmentRequirements(
 HOSTED = GRADER_BASE.model_copy(update={"docker_image": None, "package_spec": PackageSpec(pypi_packages=())})
 
 
-def _task(identity: str, requirements: EnvironmentRequirements = SHELL_SIMULATOR) -> dict:
-    return TaskSpec(
+def _task(identity: str, requirements: EnvironmentRequirements = SHELL_SIMULATOR, resources: dict | None = None) -> dict:
+    task = TaskSpec(
         id=identity,
         context=ConversationInput(events=(TextMessage(role="user", content="Answer the question."),)),
         environment_requirements=requirements,
@@ -48,7 +50,14 @@ def _task(identity: str, requirements: EnvironmentRequirements = SHELL_SIMULATOR
         answer_format=PlainText(),
         grader=NoGrader(reason="fixture"),
         source=Source(dataset="capability", revision="r", row=identity, importer_revision="1"),
-    ).model_dump(mode="json")
+    )
+    if resources is not None:
+        task = task.model_copy(update={"resources": ResourceGroups.model_validate(resources)})
+    return task.model_dump(mode="json")
+
+
+def _resource(path: str) -> dict:
+    return {"path": path, "source": {"content_base64": base64.b64encode(b"payload").decode()}}
 
 
 def _record(
@@ -60,6 +69,7 @@ def _record(
     revert: bool = False,
     authored: EnvironmentRequirements = SHELL_SIMULATOR,
     hosted: EnvironmentRequirements = SHELL_SIMULATOR,
+    resources: dict | None = None,
 ) -> dict:
     capability = identity.rsplit("/", 1)[0]
     trials = [{"trial": i, "grade": PASS if i < passes else FAIL, "cause": None} for i in range(8)]
@@ -79,7 +89,7 @@ def _record(
             "decisions": decisions,
         },
         "rollout_spec": {
-            "task": _task(identity, hosted),
+            "task": _task(identity, hosted, resources),
             "task_machine": {"cpus": None, "memory_mb": 8192, "storage_mb": None, "gpus": 0},
             "verifier_machine": None,
         },
@@ -146,3 +156,65 @@ def test_a_restored_machine_that_disagrees_with_its_author_is_refused():
     record = _record("d01.a/01", 4, authored=SHELL_SIMULATOR, hosted=HOSTED)
     with pytest.raises(ValueError, match="restored environment_requirements"):
         forge_release.lowered_spec(record)
+
+
+WORKSPACE_RESOURCES = {
+    "worker": [
+        {"path": "data.csv", "source": {"content_base64": "cGF5bG9hZA=="}},
+        {"path": "app/data.csv", "source": {"content_base64": "cGF5bG9hZA=="}},
+    ],
+    "verifier": [{"path": "grade.py", "source": {"content_base64": "cHJpbnQoJ2hpJyk="}}],
+}
+
+
+def test_workspace_resources_root_at_the_declared_working_directory():
+    record = _record("d01.a/01", 4, resources=WORKSPACE_RESOURCES)
+    task = forge_release.lowered_spec(record).task
+    workspace = {resource.path for resource in (*task.resources.worker, *task.resources.all)}
+    # A root install of each rooted path lands the file under /app, where the author declared it.
+    assert workspace == {"app/data.csv", "app/app/data.csv"}
+    # Verifier resources stay authored: the grading machine installs those under /tests.
+    assert [resource.path for resource in task.resources.verifier] == ["grade.py"]
+
+
+def test_workspace_resource_rooting_preserves_each_file_declaration():
+    record = _record("d01.a/01", 4)
+    record["rollout_spec"]["task"]["resources"] = {
+        "worker": [
+            {"path": "run.sh", "source": {"content_base64": "c2g="}, "mode": "0755", "mtime_ns": 17},
+        ]
+    }
+    task = forge_release.lowered_spec(record).task
+    (resource,) = task.resources.worker
+    assert (resource.path, resource.mode, resource.mtime_ns) == ("app/run.sh", "0755", 17)
+
+
+def test_workspace_resources_without_a_working_directory_are_refused():
+    record = _record("d01.a/01", 4)
+    record["rollout_spec"]["task"]["resources"] = {"worker": [_resource("data.csv")]}
+    record["rollout_spec"]["task"]["environment_requirements"]["working_directory"] = None
+    with pytest.raises(ValueError, match="workspace resources require a declared working directory"):
+        forge_release.lowered_spec(record)
+
+
+def test_a_root_working_directory_leaves_workspace_paths_authored():
+    record = _record("d01.a/01", 4)
+    record["rollout_spec"]["task"]["environment_requirements"] = SHELL_SIMULATOR.model_copy(
+        update={"working_directory": "/"}
+    ).model_dump(mode="json")
+    record["rollout_spec"]["task"]["resources"] = {"worker": [_resource("data.csv")]}
+    task = forge_release.lowered_spec(record).task
+    assert [resource.path for resource in task.resources.worker] == ["data.csv"]
+
+
+def test_release_counts_the_workspace_repair_in_its_manifest(tmp_path):
+    records = [
+        _record("d01.a/01", 4, resources=WORKSPACE_RESOURCES),
+        _record("d02.b/01", 3),
+    ]
+    manifest = forge_release.write_release(records, 2, tmp_path, "memory://records")
+    assert manifest["resource_repair"] == {"tasks": 1, "files": 2}
+    rows = pq.read_table(tmp_path / forge_release.LOWERED_FILENAME).to_pylist()
+    tasks = {row["path"]: json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"] for row in rows}
+    assert tasks["d01.a/01"]["resources"]["worker"][0]["path"] == "app/data.csv"
+    assert all(group == [] for group in tasks["d02.b/01"]["resources"].values())

@@ -14,9 +14,12 @@ the workpiece without its author session, and the rollout spec its confirmation 
 This module reads those records and:
 
 1. keeps the *clean* accepts: no notes (defects accepted with the task) and no missing evidence;
-2. selects ``--target`` of them, coverage first: every capability's best task, then every
+2. roots each workspace resource at the task machine's declared working directory (``root_workspace_resources``):
+   the runtime stack installs workspace resources at container root, while the author declared a working
+   directory and wrote instructions that reference the resources relative to it;
+3. selects ``--target`` of them, coverage first: every capability's best task, then every
    capability's second best, and so on, breaking the last partial tier by score;
-3. writes ``lowered-tasks.parquet`` (``path``, ``lowered_task_spec`` envelopes) for the selected
+4. writes ``lowered-tasks.parquet`` (``path``, ``lowered_task_spec`` envelopes) for the selected
    tasks, ``selection.jsonl`` (every candidate with its score and why it was or was not selected)
    and ``manifest.json`` (counts, hashes and the selection rule).
 
@@ -64,7 +67,9 @@ CONTROLS_CREDIT_CAP = 20
 # Every row's provenance names the forge export; the authored spec's own id and source are the author's
 # free text (zero-stripped slots, ids that collide across a capability) and are replaced.
 SOURCE_DATASET = "forge-task-records"
-IMPORTER_VERSION = "2026.11.18.2"
+IMPORTER_VERSION = "2026.11.21.1"
+WORKSPACE_RESOURCE_ROLES = ("all", "worker")
+"""The resource groups a task machine stages in its workspace, at container root."""
 # TaskSpec fields newer than main's TaskCompendium, which rejects unknown keys; omitted while unset.
 UNSET_NEWER_FIELDS = ("integrity_contract",)
 # Copies of ``taskforge.sandbox.images.GRADER_BASE_IMAGE`` and the serialized ``taskforge.spec.draft.LOCAL_CPYTHON``:
@@ -245,13 +250,53 @@ def restored_task(record: Mapping) -> dict:
     return task
 
 
+def rooted_resource_path(working_directory: str, path: str) -> str:
+    """The workspace path that a root install lands at ``working_directory/path``."""
+    if working_directory == "/":
+        return path
+    return f"{working_directory.strip('/')}/{path}"
+
+
+def root_workspace_resources(task: dict) -> tuple[dict, int]:
+    """Root each workspace resource at the task machine's declared working directory.
+
+    The runtime stack installs workspace resources at container root: the rollout
+    machine uploads each file to ``/{path}`` and the shell harness extracts the
+    resource archive at ``/``. Forge authored its workspace tasks against a
+    declared working directory and wrote instructions that reference the resources
+    relative to it, so a root install points every relative reference at the wrong
+    place (the admission audit sampled 33 of 33 tool tasks broken this way; some
+    authors compensated with setup commands that copy the files into the working
+    directory). Rooting each path at the working directory makes a root install
+    land each file exactly where its author declared it. Verifier resources stay
+    authored: the grading machine installs those under ``/tests``.
+
+    Returns the task and how many paths moved.
+    """
+    resources = task.get("resources") or {}
+    groups = [(role, resources.get(role) or []) for role in WORKSPACE_RESOURCE_ROLES]
+    if not any(group for _, group in groups):
+        return task, 0
+    working_directory = (task.get("environment_requirements") or {}).get("working_directory")
+    if working_directory is None:
+        raise ValueError(f"{task['id']}: workspace resources require a declared working directory")
+    rooted: dict = {**resources}
+    moved = 0
+    for role, group in groups:
+        paths = [rooted_resource_path(working_directory, resource["path"]) for resource in group]
+        moved += sum(new != old for new, old in zip(paths, [resource["path"] for resource in group], strict=True))
+        rooted[role] = [{**resource, "path": path} for resource, path in zip(group, paths, strict=True)]
+    return {**task, "resources": rooted}, moved
+
+
 def lowered_spec(record: Mapping) -> LoweredSpec:
     """The confirmed task and its machine shapes, with each machine's authored environment restored."""
     spec = record["rollout_spec"]
     if spec is None:
         raise ValueError(f"{record['id']}: no confirmation rollout spec was recorded")
+    task, _ = root_workspace_resources(restored_task(record))
     return LoweredSpec(
-        TaskSpec.model_validate(restored_task(record)),
+        TaskSpec.model_validate(task),
         machine_shape(spec["task_machine"]),
         machine_shape(spec["verifier_machine"]),
     )
@@ -287,15 +332,28 @@ def selection_rows(selection: Sequence[Candidate]) -> list[dict]:
     ]
 
 
+def workspace_repair_size(record: Mapping) -> int:
+    """How many workspace resource paths the repair moves for one record."""
+    return root_workspace_resources(record["rollout_spec"]["task"])[1]
+
+
 def write_release(records: Sequence[Mapping], target: int, output: Path, records_root: str) -> dict:
     """Write the cohort for the selected tasks and return its manifest."""
     selection = select((task_summary(record) for record in records), target)
     chosen = {item.summary.id for item in selection if item.choice is Choice.SELECTED}
-    lowered = [
-        {"path": record["id"], LOWERED_TASK_SPEC_COLUMN: json.dumps(published_envelope(lowered_spec(record)))}
-        for record in sorted(records, key=lambda r: r["id"])
-        if record["id"] in chosen
-    ]
+    lowered = []
+    repaired_tasks = 0
+    repaired_files = 0
+    for record in sorted(records, key=lambda r: r["id"]):
+        if record["id"] not in chosen:
+            continue
+        lowered.append(
+            {"path": record["id"], LOWERED_TASK_SPEC_COLUMN: json.dumps(published_envelope(lowered_spec(record)))}
+        )
+        moved = workspace_repair_size(record)
+        if moved:
+            repaired_tasks += 1
+            repaired_files += moved
     if len({json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"]["id"] for row in lowered}) != len(lowered):
         raise ValueError("Selected tasks must have distinct task IDs")
     output.mkdir(parents=True, exist_ok=True)
@@ -317,6 +375,7 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
         "verification": {
             kind: sum(s.verification == kind for s in selected) for kind in {s.verification for s in selected}
         },
+        "resource_repair": {"tasks": repaired_tasks, "files": repaired_files},
         "environment": {
             kind: sum(s.environment == kind for s in selected) for kind in {s.environment for s in selected}
         },
