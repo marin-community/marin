@@ -1,0 +1,6 @@
+# Cloudflare Worker serving the public Marin Belay page at marin.community/belay/ (see README.md).
+name = "marin-belay-proxy"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+routes = [{ pattern = "marin.community/belay*", zone_name = "marin.community" }]
