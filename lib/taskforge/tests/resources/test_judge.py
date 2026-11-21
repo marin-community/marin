@@ -4,7 +4,9 @@
 import asyncio
 import gzip
 import pickle
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Coroutine, Mapping, Sequence
+from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -14,6 +16,7 @@ from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
 from pydantic import TypeAdapter, ValidationError
+from rolloutengine import grading
 from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
@@ -192,38 +195,87 @@ def judge_inference(log: EventLog) -> list[Resolved[Any]]:
     ]
 
 
-async def test_a_cancelled_grade_leaves_no_judge_call_running_or_recorded() -> None:
-    entered, cancelled = asyncio.Event(), asyncio.Event()
+# Review 2026-11-21: holding the grading thread before or during submission let a cancelled, drained grade issue or
+# record a judge sample afterwards, and a provider's held async cleanup appended its ScopeExited afterwards.
+@pytest.mark.parametrize("hold", ["submission", "publication", "registration", "provider-cleanup"])
+async def test_a_cancelled_grade_returns_with_its_journal_final_and_its_grading_thread_exited(
+    hold: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    held, release, cleaned, exited = asyncio.Event(), asyncio.Event(), asyncio.Event(), threading.Event()
+    submit, invocation = asyncio.run_coroutine_threadsafe, grading.grade_remote_judge_answer
+    submissions = 0
 
-    class BlockingInference(FakeInference):
+    def submitted(coro: Coroutine[Any, Any, Completion], loop: asyncio.AbstractEventLoop) -> Future[Completion]:
+        # Runs on the grading thread; the second judge sample is the one held.
+        nonlocal submissions
+        submissions += 1
+        if submissions != 2 or hold == "provider-cleanup":
+            return submit(coro, loop)
+        if hold == "registration":
+
+            async def gated() -> Completion:
+                held.set()
+                await release.wait()
+                return await coro
+
+            return submit(gated(), loop)
+        if hold == "submission":
+            loop.call_soon_threadsafe(held.set)
+            submit(release.wait(), loop).result()
+            return submit(coro, loop)
+        future = submit(coro, loop)
+        submit(release.wait(), loop).result()
+        return future
+
+    def graded(*args: Any) -> GradeResult:
+        try:
+            return invocation(*args)
+        finally:
+            exited.set()
+
+    class HeldInference(FakeInference):
         async def complete(self, request: InferenceRequest) -> Completion:
+            if request.sample == 0 or hold not in {"publication", "provider-cleanup"}:
+                return await super().complete(request)
             self.requests.append(request)
-            entered.set()
+            held.set()
+            if hold == "publication":
+                await release.wait()
+                return done("SCORE: 0")
             try:
                 await asyncio.Future()
             finally:
-                cancelled.set()
+                await release.wait()
+                cleaned.set()
             raise AssertionError("unreachable")
 
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", submitted)
+    monkeypatch.setattr(grading, "grade_remote_judge_answer", graded)
+    if hold != "provider-cleanup":
+        cleaned.set()
     log = EventLog()
     ctx = Context(log=log)
-    client = BlockingInference(())
+    client = HeldInference((done("SCORE: 1"), done("SCORE: 0")))
     engine = JudgeEngine(rollout_engine({}, command_timeout=None), ctx, client)
-    # A second criterion would be a second judge sample if the grading thread outlived the cancellation.
     spec = judged_spec(JUDGED["checklist"][0])
     operation = asyncio.create_task(GradingResource(engine, "judge").grade(GradeCandidate(spec, Candidate("Twelve"))))
-    try:
-        await asyncio.wait_for(entered.wait(), 5)
-    finally:
-        operation.cancel()
+    await held.wait()
+    operation.cancel()
+    release.set()
     with pytest.raises(asyncio.CancelledError):
         await operation
-    await asyncio.wait_for(cancelled.wait(), 5)
-    # Joins VerifyIt's grading thread: it ended rather than waiting on, or issuing, another judge sample.
-    await asyncio.wait_for(asyncio.get_running_loop().shutdown_default_executor(), 5)
+    returned = (len(log.records), len(client.requests), exited.is_set())
+    await cleaned.wait()
     await ctx.drain()
-    assert len(client.requests) == 1
-    assert not judge_inference(log)
+    # The sample that completed before the cancellation stays a valid journal entry: a regrade asks only for the next.
+    resumed = FakeInference((done("SCORE: 0"),))
+    [result], _ = await grade_judged((JUDGED["checklist"][0],), resumed, log.records)
+    assert (result.reward, [request.sample for request in resumed.requests]) == (0.5, [1])
+    # Joins every thread, so work the cancelled grade left running has now finished.
+    await asyncio.get_running_loop().shutdown_default_executor()
+    calls = 2 if hold in {"publication", "provider-cleanup"} else 1
+    assert returned == (len(log.records), calls, True)
+    assert [cast(InferenceRequest, event.request).sample for event in judge_inference(log)] == [0]
 
 
 async def test_a_judge_effect_failure_reaches_the_grade_caller_unchanged() -> None:

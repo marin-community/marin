@@ -80,7 +80,16 @@ async def _grade_rollout(
     conversation = chat_conversation(list(messages))
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
-        return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
+        connection = judge_connection(spec)
+        invocation = asyncio.ensure_future(asyncio.to_thread(grade_remote_judge_answer, task, attempt, connection))
+        if connection.callback is None:
+            return await invocation
+        try:
+            return await asyncio.shield(invocation)
+        except asyncio.CancelledError:
+            # A callback's owner stops answering once it cancels the grade; join the invocation rather than outlive it.
+            await asyncio.wait({invocation})
+            raise
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
         return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
     attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
