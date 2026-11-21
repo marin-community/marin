@@ -132,7 +132,7 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch, tmp
     assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)
 
 
-def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
+def test_wandb_tracker_skips_artifacts_larger_than_20_mb_without_raising(tmp_path, caplog):
     class FakeRun:
         def log_artifact(self, *args, **kwargs):
             raise AssertionError("oversized artifacts must not reach W&B")
@@ -142,8 +142,12 @@ def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
     with artifact_path.open("r+b") as artifact_file:
         artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
 
-    with pytest.raises(ValueError, match="20,000,000-byte limit"):
+    with caplog.at_level(logging.WARNING):
         WandbTracker(FakeRun()).log_artifact(artifact_path)
+
+    assert "Skipping W&B artifact" in caplog.text
+    assert "20,000,000-byte limit" in caplog.text
+    assert caplog.text.count("Skipping W&B artifact") == 1
 
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
