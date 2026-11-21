@@ -93,6 +93,12 @@ imports. A healthy baseline makes the failed task run a scored startup error; an
 baseline remains an infrastructure error. The task's original import paths and tests still
 run unchanged, so a candidate named after a standard-library module is graded as submitted.
 
+VerifyIT itself requires Python 3.10 or newer. A `pytest` task may use a Python 3.9 or
+newer subprocess with pytest and pytest-json-report installed in that interpreter.
+Startup errors retain their available traceback and module provenance: editable
+candidate failures score zero, while failures in protected code or with unknown
+provenance remain unscored.
+
 For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
 budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
 request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with
@@ -100,6 +106,11 @@ each request. Reference verdicts record `attempt_count` and `attempts` in `detai
 verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
 and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
 `infra_error`, with the available attempt diagnostics in `detail`.
+
+For each model reply, the judge allows up to three API attempts (one request plus two retries) for transient
+HTTP or connection failures. It stops when that count or the shared 180-second budget, including retry delays,
+is exhausted. Set `transport_attempts` and `transport_budget` (seconds) in the judge spec to change those
+limits. `parse_attempts` limits requests for another reply after a malformed score or label.
 
 The `judge` pairwise rubric ports Arena-Hard's comparison with one baseline answer in `references`.
 It sends the judge two requests, with the baseline as assistant A and then as assistant B. Each

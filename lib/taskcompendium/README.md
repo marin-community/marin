@@ -26,6 +26,58 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Protected shared graders
+
+The native Harbor package adapters in `taskcompendium.harbor` prepare new,
+versioned tasks for grading in the actor's container. `shared_package.harden_shared_swe`
+protects Verifyit pytest graders and source-declared native language runners.
+`shared_source.harden_shared_source` preserves the original Scale-SWE,
+SWE-Lego, or SWE-rebench source scorer behind the same UID boundary. Callers
+supply the original package files and an explicit `SharedDependencyState`.
+These helpers do not import dataset declarations or the Atlas trial executor.
+Harbor runs the declared initialization command before actor access. The source
+adapter authorizes Git access to the declared workspace during that setup,
+because its build layer has already assigned the workspace to the actor UID.
+Use a Harbor build with task schema 1.3 support. Private bootstrap inputs are stored in a
+root-only image directory. Harbor applies the declared actor UID before actor
+commands. A runner that ignores initialization cannot read those inputs as the actor. Different
+private inputs produce different image contexts; generated images must stay private.
+
+Bootstrap saves private verifier files and a trusted test reference in a
+root-owned directory. The actor runs as UID 10001 and cannot read that private
+material. Grading stops actor processes, restores the reference, runs tests as
+UID 10002, and writes the final report as root. Product files and permitted
+dependencies stay mutable. The published integrity contract records dependency
+changes, startup hooks, and known gaps; it does not promise isolation from all
+candidate-produced output or interpreter startup hooks.
+
+Prime source adapters grant dependency writes only to each task Python's
+purelib and platlib directories. The root control interpreter and standard
+library stay read-only to the actor. Bootstrap rejects a control runtime or
+ancestor that the actor can modify.
+
+`shared_reference.harden_shared_swe_reference` compiles a previously captured
+trusted reference into a new package. The reference binds the source package,
+image context, controller, and declared actor environment. Keep source tests,
+patches, and captured references private; publish a new dataset version and
+qualify its original oracle and NoP controls after any adapter change.
+
+Portable package regressions run with the normal affected-test runner.
+`tests/test_shared_pytest.py`, `tests/test_shared_source.py`, and
+`tests/test_shared_native.py` also execute real Linux UID transitions. Run them
+only inside an isolated Linux container as root, with pytest, pytest-json-report,
+pip, setuptools, and each selected native toolchain installed. These suites use
+the `docker` marker and run in the dedicated `shared-grader-unit` CPU workflow.
+Invoke their explicit file paths with `-m docker -o addopts=--import-mode=importlib`
+to run that isolated matrix, and run native
+projects only when their declared tools are installed. `--shared-source-python`
+selects a pytest-capable source interpreter; `--shared-verifyit-source` selects
+a pinned legacy Verifyit source directory for the single-manifest regression.
+The suite uses synthetic patches and tests and includes actor read-denial checks.
+
+RST and Multi-SWE retain a root actor and require a separate Harbor entry point
+for grading-time private delivery. Their adapters are outside this package path.
+
 ## Evaluation corpora
 
 `taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),

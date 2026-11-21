@@ -62,6 +62,7 @@ _ERROR_CATEGORIES: dict[str, ErrorCategory] = {
     "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
     # --- Environment / sandbox infrastructure ---
     "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
+    "EnvironmentSetupError": ErrorCategory.INFRASTRUCTURE,
     "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
     "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
     "RuntimeServiceError": ErrorCategory.INFRASTRUCTURE,
