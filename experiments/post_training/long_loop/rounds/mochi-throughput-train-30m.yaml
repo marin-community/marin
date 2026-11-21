@@ -265,6 +265,7 @@ rl:
             attempt_timeout: 2280
             total_turn_timeout: 1800
             model_turn_timeout: 1800
+            cleanup_timeout: 120
         remote_judge:
           base_url: https://api.together.xyz/v1
           api_key_env: TOGETHER_API_KEY
