@@ -278,7 +278,9 @@ time from the first recorded workload start to native job completion. The window
 same attempt and excludes queue time before the first workload start.
 
 Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, revision and
-replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
+replicate count. A pin can also record the collection cluster. The gate reads controls and held-out candidates
+from that cluster, and ordinary candidates use the preset's cluster. Data-medium shares learning-medium's pin.
+Before submission, the command composes the
 candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
 

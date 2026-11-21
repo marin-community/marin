@@ -864,8 +864,21 @@ def test_python_run_saves_typed_inputs_for_comparison(
         ),
     )
     preset = replace(preset, model=local)
-    preset_table(preset)
-    controls(recorded_runs, preset_name)
+    table = preset_table(preset)
+    if preset_name == "learning-medium":
+        cluster = "cw-rno2a"
+        monkeypatch.setattr(
+            recipe, "artifact_prefix", lambda name: str(tmp_path / "reno" if name == cluster else tmp_path)
+        )
+        layout = replace(preset.recipe.layout, cluster=cluster)
+        preset_table(replace(preset, recipe=replace(preset.recipe, layout=layout)))
+        controls(recorded_runs, preset_name)
+        pin = replace(table.control_pins[preset_name], cluster=cluster)
+        monkeypatch.setattr(
+            snowball_model, "SNOWBALL", replace(table, control_pins={**table.control_pins, preset_name: pin})
+        )
+    else:
+        controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
     settings = (
         (
@@ -964,6 +977,11 @@ def test_python_run_saves_typed_inputs_for_comparison(
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
+    if preset_name == "learning-medium":
+        composed = gate.validate_candidate(preset, recorded, table=snowball_model.SNOWBALL)
+        assert composed["iris"]["target_cluster"] == preset.recipe.layout.cluster
+        held_out = compare(preset_name, "--leave-out", "r0")
+        assert held_out["verdict"] == "pass", held_out
     _json(source / "exports/best_checkpoint.json", {"step": preset.updates})
     [status] = snowball._status(built, preset, stored_only=True)["runs"]
     assert status["best_checkpoint_step"] == preset.updates

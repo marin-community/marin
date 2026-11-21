@@ -139,6 +139,7 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
         return candidate
     defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
+    defaults = _control_defaults(preset, pin, defaults)
     for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
@@ -627,6 +628,14 @@ def _compose_plans(
         return compose_configs(paths)
 
 
+def _control_defaults(preset: presets.Preset, pin: ControlPin, defaults: dict) -> dict:
+    placed = _control_placement(preset, pin)
+    if placed is preset:
+        return defaults
+    (config,) = _compose_plans(placed, (RunInputs(preset_name=placed.name),))
+    return config
+
+
 def _native_json(*command: str, timeout: int = 120):
     try:
         result = subprocess.run(
@@ -826,8 +835,9 @@ def _write_gate(
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
+        control_config = _control_defaults(preset, control_pin, current_config)
         for candidate in controls:
-            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
+            _check_control_config(candidate.config, control_config, candidate.recorded, preset=preset)
         comparisons = _compare(preset, runs, controls, inputs.requirements)
         verdict, effect = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -883,8 +893,15 @@ def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) ->
     return f"{name}-retry{retry}" if retry else name
 
 
+def _control_placement(preset: presets.Preset, pin: ControlPin) -> presets.Preset:
+    layout = preset.recipe.layout
+    if pin.cluster is None or pin.cluster == layout.cluster:
+        return preset
+    return replace(preset, recipe=replace(preset.recipe, layout=replace(layout, cluster=pin.cluster)))
+
+
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(preset, _pinned_control_name(pin, index, table=table), pin.revision)
+    return recipe.run_path(_control_placement(preset, pin), _pinned_control_name(pin, index, table=table), pin.revision)
 
 
 def _gate_artifact(
@@ -1020,6 +1037,7 @@ def command(table: ModelPresets) -> click.Command:
                 raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
             candidate_name = _pinned_control_name(pin, index, table=table)
+            preset = _control_placement(preset, pin)
         name, separator, version = candidate_name.partition("@")
         source = recipe.run_path(preset, name, version if separator else preset.revision)
         namespace = user_owned_name(

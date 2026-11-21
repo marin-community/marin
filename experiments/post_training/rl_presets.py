@@ -518,6 +518,7 @@ class ControlPin:
     revision: str
     replicates: int
     retries: tuple[int, ...] = ()
+    cluster: str | None = None
 
     def __post_init__(self) -> None:
         if self.retries and (len(self.retries) != self.replicates or any(retry < 0 for retry in self.retries)):

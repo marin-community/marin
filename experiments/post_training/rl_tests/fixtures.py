@@ -453,7 +453,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         attempt_id="recorded-attempt",
     ):
         preset = snowball_model.SNOWBALL.by_name[preset_name]
-        root = tmp_path / name / preset.revision
+        root = Path(recipe.run_path(preset, name, preset.revision))
         root.mkdir(parents=True, exist_ok=True)
         inputs = inputs or RunInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs)
