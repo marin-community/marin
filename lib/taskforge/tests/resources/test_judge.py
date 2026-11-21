@@ -57,7 +57,8 @@ def labels(**fields: Any) -> JudgeSpec:
     return JudgeSpec(rubric="labels", references=("12",), label_scores=LABELS, prompt_template=TEMPLATE, **fields)
 
 
-# Each case's judge replies, in order. N5_JUDGED recorded these grades through n5's HTTP transport shim (2fc0e475cf).
+# Each case's judge replies, in order. N5_JUDGED recorded these grades through the judge's earlier HTTP transport
+# shim (2fc0e475cf).
 JUDGED: dict[str, tuple[JudgeSpec, tuple[Completion, ...]]] = {
     "reference-retry": (
         JudgeSpec(references=("12",), exact_gate=False, max_completion_tokens=16, incomplete_retry_tokens=64),
@@ -101,8 +102,9 @@ def tool(text: str) -> Completion:
 
 RETRY = {"max_completion_tokens": 16, "incomplete_retry_tokens": 64}
 NO_TEXT = "judge completion is incomplete or has no text"
-# Review 2026-11-21: n6 read every finish but stop as truncation. Each case's judge replies, and the status, reward,
-# judge calls and error n5 (9eb1a96371) produced from them; N5_FINISHES journals those calls, answering with the name.
+# Review 2026-11-21: the judge callback read every finish but stop as truncation. Each case's judge replies, and the
+# status, reward, judge calls and error the HTTP transport shim (9eb1a96371) produced from them; N5_FINISHES journals
+# those calls, answering with the name.
 FINISHES: dict[str, tuple[JudgeSpec, tuple[Completion, ...], tuple[Outcome, float | None, int, str | None]]] = {
     "reference-tool-call": (
         JudgeSpec(references=("12",), exact_gate=False),
@@ -303,7 +305,7 @@ def judge_provider(provider: ScriptedProvider) -> InferenceClient:
     return GlmInference(ModelClient(provider, GLM_5_3, RetryPolicy(0.1, 0.001, 0.001, 1.0), role="judge"), "judge")
 
 
-# Review 2026-11-21, follow-up 2: a provider that had parsed its segment, swallowed the grade's cancellation in cleanup
+# Review 2026-11-21: a provider that had parsed its segment, swallowed the grade's cancellation in cleanup
 # and returned it after a second cancellation released the caller journalled a late Resolved; a regrade then scored 0.5.
 async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_never_journalled(
     monkeypatch: pytest.MonkeyPatch,
@@ -352,8 +354,8 @@ async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_ne
     assert graded == [(0.0, 2), (0.0, 2)]
 
 
-# Review 2026-11-21, follow-up 1: waiting for the grading thread at the verifier deadline turned a grade timeout
-# into an attempt failure and left the sample running. n5 (9eb1a96371) raised this Restart from this grade.
+# Review 2026-11-21: waiting for the grading thread at the verifier deadline turned a grade timeout
+# into an attempt failure and left the sample running. The HTTP transport shim (9eb1a96371) raised this Restart from this grade.
 async def test_a_verifier_deadline_during_a_judge_sample_is_the_n5_grade_timeout_and_cancels_the_sample(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -435,7 +437,7 @@ async def test_host_judge_records_inference_and_replays_without_provider(rubric:
 
 
 async def test_judge_samples_recorded_through_the_n5_transport_shim_replay_with_zero_calls() -> None:
-    """The fixture is ``grade_judged`` over ``JUDGED``, scripted with each case's replies, as n5 journaled it.
+    """The fixture is ``grade_judged`` over ``JUDGED``, scripted with each case's replies, as the HTTP shim journaled it.
 
     It pins the judge's inference keys (messages, sampling, sample index) across the move from the HTTP shim to
     the callback. A deliberate change to judge prompts or sampling invalidates it; record it afresh then.
@@ -475,7 +477,7 @@ def test_a_judged_rollout_spec_has_a_json_schema_and_never_serializes_its_callba
     def judge(request: JudgeRequest) -> JudgeCompletion:
         return JudgeCompletion("PASS", "stop")
 
-    # Typed ``Any`` like n5's transport, so VerifyIt needs no Pydantic 2 import for the schema to generate.
+    # Typed ``Any`` like the HTTP shim's transport, so VerifyIt needs no Pydantic 2 import for the schema to generate.
     schema = TaskRolloutSpec.model_json_schema()["$defs"]["JudgeConnection"]["properties"]["callback"]
     assert schema == {"default": None, "title": "Callback"}
     with pytest.raises(TypeError, match="Judge callback must be callable, got str"):
