@@ -192,6 +192,22 @@ async def test_an_author_visit_failing_before_its_first_model_call_journals_and_
     assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
 
 
+# Review 2026-11-21: the adversary rendered its opening before entering its visit, so a prompt key error created no
+# machine and journalled nothing. On n6 (40d35b8bcc) it journals these rows and closes the one machine.
+async def test_an_adversary_visit_failing_before_its_first_model_call_journals_and_closes_its_machine(
+    workpiece: Workpiece,
+) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.user": "{name} {absent}"}), {})
+    log = EventLog()
+    ctx = Context(log=log)
+    bundle = resources(ctx)
+    with pytest.raises(KeyError, match="absent"):
+        await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0)
+    await ctx.drain()
+    assert [type(record.event) for record in log.records] == [ScopeEntered, WriteFiles, Resolved, ScopeExited]
+    assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
+
+
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
     harness = RecordingHarness(Restart("machine gone"))
     ctx = Context(log=EventLog())

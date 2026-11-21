@@ -21,7 +21,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
 from taskforge.harness.protocol import Returned, Stopped, StopReason
-from taskforge.harness.role import Answer, Fresh, Visit, sitting
+from taskforge.harness.role import Answer, Files, Fresh, Visit, sitting
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from taskforge.lowering import (
     InvalidTaskSpec,
@@ -224,22 +224,12 @@ async def run_adversary(
         if spec.task_machine is not None
         else requirements(image=config.policy.setting("adversary.image", str) or None, workdir=workdir)
     )
-    shared = (*spec.task.resources.all, *spec.task.resources.worker)
-    files = (
-        *((PurePosixPath("/", file.path), resource_bytes(file)) for file in shared),
-        (PurePosixPath(workdir, "task.json"), spec.task.model_dump_json().encode()),
-    )
-    brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts
-    opening = Fresh(
-        config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
-        config.policy.prompt("adversary.user").render(
-            task=task_manifest(spec.task),
-            proposal=render(workpiece.proposal),
-            name=name,
-            brief=config.policy.prompt(brief).template if brief in config.policy.entries else name,
-            workdir=workdir,
-        ),
-    )
+
+    def files() -> Files:
+        shared = (*spec.task.resources.all, *spec.task.resources.worker)
+        task = (PurePosixPath(workdir, "task.json"), spec.task.model_dump_json().encode())
+        return (*((PurePosixPath("/", file.path), resource_bytes(file)) for file in shared), task)
+
     graded: dict[str, Observation] = {}
 
     async def remember(event: Resolved[object]) -> None:
@@ -248,9 +238,20 @@ async def run_adversary(
             if (shown := observation(event.value, spec.task)) is not None:
                 graded[digest(event.request.candidate)] = shown
 
-    visit = Visit(f"adversary:{name}", owner, machine, lambda: files, {"report": ReportTool(spec.task, graded)})
+    visit = Visit(f"adversary:{name}", owner, machine, files, {"report": ReportTool(spec.task, graded)})
     async with sitting(ctx, config.adversary, visit, resources) as session:
         ctx.observe(Resolved, remember)
+        brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts
+        opening = Fresh(
+            config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
+            config.policy.prompt("adversary.user").render(
+                task=task_manifest(spec.task),
+                proposal=render(workpiece.proposal),
+                name=name,
+                brief=config.policy.prompt(brief).template if brief in config.policy.entries else name,
+                workdir=workdir,
+            ),
+        )
         try:
             outcome = await session(opening)
         except* OutputBudgetExhausted:
