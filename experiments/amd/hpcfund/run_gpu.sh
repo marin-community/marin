@@ -3,7 +3,7 @@
 # partitions include mi3508x (8x MI350X) and mi3008x (8x MI300X). Submit from the repository root;
 # the job cds to $SLURM_SUBMIT_DIR and runs the given script in the existing venv without syncing it:
 #   sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh \
-#       experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
+#       experiments/amd/june_67b_a2b/synthetic_benchmark.py --size full --expert-axis 8
 # Pass --overlap-collectives before the script to add the multi-node collective-overlap XLA flags.
 # README.md in this directory has the venv recipe and known issues.
 cd "$SLURM_SUBMIT_DIR" || exit 1
