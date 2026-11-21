@@ -586,7 +586,7 @@ async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
         ("events.jsonl.parts/000000000001.jsonl", 1, "format 1"),
         ("status.json", 1, "format 1"),
         ("workpiece.json", 1, "format 1"),
-        # The version gate refuses every format but its own: the n3 reader, at format 2, refuses this one's heads.
+        # The version gate refuses every format but its own: the format-2 reader refuses this one's heads.
         (HEAD, checkpoint.JOURNAL_FORMAT - 1, f"format {checkpoint.JOURNAL_FORMAT - 1}"),
         (HEAD, checkpoint.JOURNAL_FORMAT + 1, f"format {checkpoint.JOURNAL_FORMAT + 1}"),
     ],
@@ -1582,7 +1582,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
     return b"".join(lines[:cut])
 
 
-# Review 2026-11-20: the n3 reader claimed a positional journal under the same format number, ignoring its owners.
+# Review 2026-11-20: the format-2 reader claimed a positional journal under the same format number, ignoring its owners.
 @pytest.mark.parametrize(
     "events",
     [
@@ -1595,7 +1595,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
 async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
 ) -> None:
-    """The n3 fixture is the journal the n3 dispatch (e5ec5eba21) published for the held first launch of
+    """``N3_JOURNAL`` is the journal the format-2 dispatch (e5ec5eba21) published for the held first launch of
     ``held_after_stamp``; the positional one is ``N4_JOURNAL``, which an earlier revision published as format 2."""
     destination = plant(driver_args, events, 2)
     before = tree(destination)
@@ -2464,7 +2464,7 @@ def drafting_script() -> tuple[Completion, ...]:
     return (*(call("write_file", {"path": str(p), "content": d.decode()}, p.name) for p, d in drafts), *script()[2:])
 
 
-# Review 2026-11-21 (inherited follow-up): with guest /tmp unwritable, four-file hydration journalled EACCES for
+# Review 2026-11-21: with guest /tmp unwritable, four-file hydration journalled EACCES for
 # Taskforge's own archive as the caller's failure, and every resume on a healthy sandbox held as unreproducible.
 async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
