@@ -13,6 +13,16 @@ from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
 from .model import FrozenMap, NumberMap, OpenMap, Section, SectionMap, thaw, unset_field
 from .sampling import EvalSamplingParams
 
+DEFAULT_RETRY_EXCLUSIONS = frozenset(
+    {
+        "AgentTimeoutError",
+        "VerifierTimeoutError",
+        "RewardFileNotFoundError",
+        "RewardFileEmptyError",
+        "VerifierOutputParseError",
+    }
+)
+
 
 class TeacherModel(Section):
     path: str
@@ -75,9 +85,14 @@ class SequenceRule(Section):
     high: int | float | None = unset_field()
 
 
-class EvaluationSampling(Section):
-    sampling_params: EvalSamplingParams | None = unset_field()
-    n_samples_per_prompt: PositiveInt | None = unset_field()
+EvaluationSchedule = Literal["every_evaluation", "final"]
+
+
+class EvaluationProfile(Section):
+    sampling_params: EvalSamplingParams | None = None
+    n_samples_per_prompt: PositiveInt | None = None
+    data_files: Annotated[tuple[Annotated[str, Field(min_length=1)], ...], Field(min_length=1)] | None = None
+    schedule: EvaluationSchedule = "every_evaluation"
 
 
 class EvaluationMinimum(Section):
@@ -117,7 +132,7 @@ class EvaluationCallback(Section):
     eval_steps: int = unset_field()
     eval_on_train_end: bool = unset_field()
     eval_before_train: bool = unset_field()
-    additional_evaluations: SectionMap[EvaluationSampling] | None = unset_field()
+    additional_evaluations: SectionMap[EvaluationProfile] | None = unset_field()
     metric_groups: Annotated[Mapping[str, tuple[str, ...]], AfterValidator(FrozenMap), PlainSerializer(thaw)] | None = (
         unset_field()
     )
@@ -131,11 +146,18 @@ class ReferenceLikelihoodCallback(Section):
     batch_size: PositiveInt = unset_field()
 
 
+class HarborEvaluationCohort(Section):
+    name: str
+    job: OpenMap
+    reward_key: str
+
+
 class HarborEvaluationCallback(Section):
     type: Literal["harbor_evaluation"]
-    cohorts: tuple[OpenMap, ...]
+    cohorts: tuple[HarborEvaluationCohort, ...]
     timeout: int | float
     minimum_coverage: int | float
+    minimum_native_coverage: int | float
     daytona_api_key_env: str
 
 
@@ -186,7 +208,7 @@ class InferenceStatsCallback(Section):
     sinks: None = unset_field()
 
 
-LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console"]
+LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
 CorrectionRule = Annotated[TokenRule | SequenceRule, Field(discriminator="kind")]
 

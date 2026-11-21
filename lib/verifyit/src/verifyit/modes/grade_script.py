@@ -22,9 +22,9 @@ import os
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
+from verifyit.compat import StrEnum
 from verifyit.execution.command import run_command
 from verifyit.execution.worker import call_bounded
 from verifyit.file_ops.read import read_regular_bytes

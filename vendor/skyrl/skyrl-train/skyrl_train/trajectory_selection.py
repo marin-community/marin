@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from statistics import fmean
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-from marinskyrl.runtime_options import TRAJECTORY_SELECTOR_TYPE_PATH
 from skyrl_train.batch_sampling import filter_trajectory_batch
+from skyrl_train.config.trajectory_selection import BEST_OF_N_LEARNER_ROWS, best_of_n_sample_count, require_best_of_n_samples
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
-
-
-class TrajectorySelectorKind(StrEnum):
-    BEST_OF_N = "best_of_n"
 
 
 @dataclass(frozen=True)
@@ -46,13 +41,12 @@ class BestOfNTrajectorySelector:
     """Retain one reward-maximizing completion from each physical rollout group."""
 
     def __init__(self, n_samples_per_prompt: int) -> None:
-        if n_samples_per_prompt <= 1:
-            raise ValueError("best-of-N selection requires n_samples_per_prompt greater than one")
+        require_best_of_n_samples(n_samples_per_prompt)
         self._n_samples_per_prompt = n_samples_per_prompt
 
     @property
     def optimization_samples_per_prompt(self) -> int:
-        return 1
+        return BEST_OF_N_LEARNER_ROWS
 
     def select(self, trajectory_batch: TrajectoryBatch, uids: list[str]) -> TrajectorySelection:
         row_count = len(trajectory_batch["response_ids"])
@@ -80,21 +74,5 @@ class BestOfNTrajectorySelector:
 
 
 def trajectory_selector_from_config(cfg: DictConfig) -> BestOfNTrajectorySelector | None:
-    selector_type = OmegaConf.select(cfg, TRAJECTORY_SELECTOR_TYPE_PATH, default=None)
-    if selector_type is None:
-        return None
-    try:
-        selector_kind = TrajectorySelectorKind(selector_type)
-    except ValueError as error:
-        raise ValueError(f"unsupported trajectory selector {selector_type!r}") from error
-    if selector_kind is TrajectorySelectorKind.BEST_OF_N:
-        return BestOfNTrajectorySelector(int(cfg.generator.n_samples_per_prompt))
-    raise AssertionError(f"unhandled trajectory selector {selector_kind!r}")
-
-
-def optimization_samples_per_prompt(cfg: DictConfig) -> int:
-    """Return the number of rows per prompt that reach learner workers."""
-    selector = trajectory_selector_from_config(cfg)
-    if selector is None:
-        return int(cfg.generator.n_samples_per_prompt)
-    return selector.optimization_samples_per_prompt
+    samples = best_of_n_sample_count(cfg)
+    return None if samples is None else BestOfNTrajectorySelector(samples)
