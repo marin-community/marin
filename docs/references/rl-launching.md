@@ -468,7 +468,9 @@ tokenizer once. It uses the pinned OpenResearcher image's Python interpreter
 for its packages. Private endpoint registration waits for health to match the
 task provider's complete `initial_state`, including corpus, implementation,
 tokenizer and index-manifest revisions. A cross-region index fails before
-staging starts.
+staging starts. On Kubernetes, the backend binds a kernel-assigned port;
+health checks and private discovery use that bound port. Startup logs identify
+dependency import, index opening, tokenizer loading and HTTP socket binding.
 
 Pass the yielded endpoint as `environment.task_sessions.retrieval_service` in
 the SkyRL worker configuration. Keep that context open for every retrieval caller. Exiting the
