@@ -184,7 +184,9 @@ its last decision is `Incomplete(..., awaits="decision_model")` and its `one` ch
 enters it without the flag, and `run` parks such proposals until the decision model's health route reports healthy,
 or, on a gateway without that route, until a `one --probe` child exits 10 because its own reader's last physical
 outcome in that process was a valid answer. A hold that mixes the outage with any other cause stays manual. Model calls replay from the event log; shell commands are
-re-executed on fresh machines, so a resumed author session takes minutes before new events appear.
+re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
+format-7 root resumes on its unfinished turns alone: the author's system prompt embeds the pinned reference, not
+the installed TaskCompendium's live schema, so a sibling release that rewords a description buys back no recorded call.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
 its initial sandbox definition; each command or file operation it issues references that row, takes the
 next position in the owner's history, and its outcome references the request. A resumed attempt is
