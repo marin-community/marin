@@ -14,7 +14,8 @@ import socket
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -95,6 +96,21 @@ def find_free_port(start: int = -1) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
+
+
+@contextmanager
+def reserve_free_port(start: int) -> Iterator[int]:
+    """Reserve a port until the caller's resource is closed."""
+    port = find_free_port(start)
+    lock = Path(f"/tmp/iris/port_{port}")
+    try:
+        yield port
+    finally:
+        try:
+            if lock.read_text() == str(os.getpid()):
+                lock.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def probe_outbound_ip() -> str:

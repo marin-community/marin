@@ -7,8 +7,13 @@ Covers validation, scheduling, resource tracking, and protocol behavior
 that matters to K8sTaskProvider and CoreWeave controller consumers.
 """
 
+import os
+import sys
+from pathlib import Path
+
 import pytest
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
+from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
 
 
@@ -292,6 +297,32 @@ def test_port_forward_failure_injection(svc: InMemoryK8sService):
     with pytest.raises(KubectlError):
         with svc.port_forward("my-svc", 8080):
             pass
+
+
+def test_cloud_port_forward_releases_port_lock_after_repeated_tunnels(tmp_path: Path, monkeypatch):
+    kubectl = tmp_path / "kubectl"
+    kubectl.write_text(
+        f"#!{sys.executable}\n"
+        "import socket\n"
+        "import sys\n"
+        "port = int(sys.argv[-1].split(':')[0])\n"
+        "with socket.socket() as listener:\n"
+        "    listener.bind(('127.0.0.1', port))\n"
+        "    listener.listen()\n"
+        "    while True:\n"
+        "        connection, _ = listener.accept()\n"
+        "        connection.close()\n"
+    )
+    kubectl.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    svc = CloudK8sService(namespace="test")
+
+    for _ in range(3):
+        with svc.port_forward("my-svc", 8080, timeout=5) as url:
+            port = int(url.rsplit(":", 1)[1])
+            lock = Path(f"/tmp/iris/port_{port}")
+            assert lock.read_text() == str(os.getpid())
+        assert not lock.exists()
 
 
 # ========================================================================
