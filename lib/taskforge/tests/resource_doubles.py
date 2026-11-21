@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 from taskforge.effects.events import Fingerprint, ReplayPolicy
-from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
+from taskforge.effects.issues import Hold, Restart, Transient
 from taskforge.model.llm import Completion
 from taskforge.resources.env import CommandResult, RecordedEnv
 from taskforge.resources.inference import InferenceClient, InferenceRequest
@@ -62,7 +62,7 @@ class FakeEnv(RecordedEnv):
 
 class FakeInference(InferenceClient):
     def __init__(
-        self, completions: Sequence[Completion | Transient | Restart | Hold | ContextExceeded], *, identity: str = "fake"
+        self, completions: Sequence[Completion | Transient | Restart | Hold], *, identity: str = "fake"
     ) -> None:
         self.script = tuple(completions)
         self.requests: list[InferenceRequest] = []
@@ -79,7 +79,7 @@ class FakeInference(InferenceClient):
         if index >= len(self.script):
             raise RuntimeError("Fake inference script exhausted")
         result = self.script[index]
-        if isinstance(result, Transient | Restart | Hold | ContextExceeded):
+        if isinstance(result, Transient | Restart | Hold):
             raise result
         return result
 

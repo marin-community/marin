@@ -24,7 +24,7 @@ from verifyit.spec import NumericSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
-from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Transient
+from taskforge.effects.issues import Hold, OutputBudgetExhausted, Transient
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
@@ -413,7 +413,7 @@ async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overf
         "", call("shell", {"command": "task"}, "1").tool_calls, usage=Usage(prompt_tokens=200000, cached_tokens=199000)
     )
     second = (
-        ContextExceeded("requested 383788 tokens")
+        Completion("requested 383788 tokens", finish_reason=FinishReason.CONTEXT_EXCEEDED)
         if overflow == "provider"
         else Completion(
             "answer" if overflow == "reply" else "",
