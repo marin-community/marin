@@ -3,13 +3,13 @@
 
 """Solver attempts through RolloutEngine, with explicit restart decisions."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from rolloutengine.models import (
     GradedRollout,
     Model,
-    Rollout,
+    RolloutFailure,
     RolloutInterrupted,
     RolloutOperation,
     TaskRolloutSpec,
@@ -45,8 +45,12 @@ SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)
 """The holds that mean only "this slot produced no evidence": the batch records them as the slot's result. This is
 the one place to add a typed model-outage hold. Every other hold (``Unreproducible``, host refusals, anything
 unknown) holds the workpiece."""
-HELD = "held"
-"""The stop reason of a slot whose rollout ended in a slot-local hold; its grade carries the reason."""
+
+
+def refused(result: GradedRollout) -> bool:
+    """A recorded slot-local hold: the engine sets ``failure`` only on an interrupted attempt, which a returned
+    result never is, so no model output can produce it."""
+    return result.rollout.failure is not None
 
 
 class Engine(Protocol):
@@ -92,8 +96,9 @@ class RolloutResource:
         except RolloutInterrupted as error:
             issue = interruption(error)
             if isinstance(issue, SLOT_LOCAL):
-                refused = GradeResult(Outcome.UNAVAILABLE, None, describe_exception(issue))
-                return GradedRollout(Rollout(run_id, (), HELD), refused)
+                grade = GradeResult(Outcome.UNAVAILABLE, None, describe_exception(issue))
+                failure = error.rollout.failure or RolloutFailure(type(issue).__name__)
+                return GradedRollout(replace(error.rollout, failure=failure), grade)  # keeps the paid prefix
             raise issue from error
 
 

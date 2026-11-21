@@ -22,7 +22,7 @@ from taskforge.effects.issues import Hold
 from taskforge.effects.log import Record
 from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
-from taskforge.resources.rollouts import HELD
+from taskforge.resources.rollouts import refused
 
 # One review disposition per cause; solver generation limits are handled as failed trials. GRADER_INFRA
 # has none: the grader_infra_unavailable observer holds validation before review sees such a grade.
@@ -78,7 +78,7 @@ def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | Non
 
 def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
     stop = result.rollout.stop_reason
-    if stop == HELD:
+    if refused(result):
         return Cause.HELD
     if stop == TOTAL_TURN_TIMEOUT_STOP_REASON:
         return Cause.AGENT_TIMEOUT
@@ -97,7 +97,7 @@ async def grader_infra_unavailable(event: Resolved[object]) -> None:
 
 
 def held(event: Resolved[object]) -> bool:
-    return isinstance(event.value, GradedRollout) and event.value.rollout.stop_reason == HELD
+    return isinstance(event.value, GradedRollout) and refused(event.value)
 
 
 def replayable_grade(event: Resolved[object]) -> bool:
