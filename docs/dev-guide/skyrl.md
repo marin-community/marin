@@ -133,7 +133,9 @@ turn. A machine failure during a model command or grading is terminal because
 replaying may duplicate work. SkyRL also keeps passthrough results terminal so
 that retries do not discard usable verifier output. Reward and masking treatment
 remain separate from the infrastructure retry classification. Native Harbor may
-retry a passthrough failure when environment teardown is unconfirmed.
+retry a passthrough failure when environment teardown is unconfirmed. A selected
+native terminal failure with no verifier result can seal as an unscored archive row;
+its partial trajectory remains raw evidence.
 
 ## Run records
 

@@ -703,16 +703,27 @@ async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("selected", [True, False])
+@pytest.mark.parametrize(
+    "selected, budget, permanent",
+    [(True, 3, False), (False, 3, False), (True, 0, False), (True, 3, True)],
+    ids=["selected", "excluded", "budget-exhausted", "permanent"],
+)
 async def test_unconfirmed_teardown_obeys_shared_exception_selection(
-    tmp_path: Path, monkeypatch, selected
+    tmp_path: Path, monkeypatch, selected, budget, permanent
 ) -> None:
+    retried = selected and budget > 0 and not permanent
+
     async def lose_sandbox(trial: FakeTrial) -> None:
-        raise PhaseCancellationError("Trial phase failed while stopping its commands")
+        error = PhaseCancellationError("Trial phase failed while stopping its commands")
+        if permanent:
+            error.__cause__ = PermissionError("teardown permission denied")
+        trial.result.exception_info = ExceptionInfo.from_exception(error)
+        trial.result.finished_at = datetime.now(timezone.utc)
 
     async def time_out_after_teardown(trial: FakeTrial) -> None:
-        trial.result.completion = TrialCompletion(trajectory_present=True)
-        raise AgentTimeoutError("Agent execution timed out")
+        trial.result.completion = TrialCompletion(trajectory_present=False)
+        trial.result.exception_info = ExceptionInfo.from_exception(AgentTimeoutError("Agent execution timed out"))
+        trial.result.finished_at = datetime.now(timezone.utc)
 
     config = _config(tmp_path, "lost", attempt_timeout=None)
     _install_factory(
@@ -725,21 +736,40 @@ async def test_unconfirmed_teardown_obeys_shared_exception_selection(
     queue = TrialQueue(
         n_concurrent=1,
         retry_config=RetrySettings(
-            max_retries=3,
+            max_retries=budget,
             include_exceptions={"PhaseCancellationError"} if selected else {"APIConnectionError"},
             min_wait_sec=0,
             max_wait_sec=0,
         ),
     )
 
-    result = await queue.submit(config)
+    archive_root = str(tmp_path / "archive")
+    archive = open_archive(ArchiveConfig(root=archive_root, dataset="harbor"), trials_dir=config.trials_dir)
+    assert archive is not None
+    try:
+        queue.add_hook(TrialEvent.END, archive.on_trial_end)
+        result = await queue.submit(config)
+        await archive.finalize([result.slimmed()])
+        archive.seal()
+    finally:
+        archive.close()
 
-    assert result.exception_info.exception_type == ("AgentTimeoutError" if selected else "PhaseCancellationError")
+    assert result.exception_info.exception_type == ("AgentTimeoutError" if retried else "PhaseCancellationError")
     persisted = TrialResult.model_validate_json(
         (tmp_path / "trials" / "lost" / "result.json").read_text()
     )
-    assert persisted.trial_relpath == ("lost/attempts/001" if selected else "lost/attempts/000")
-    assert (persisted.completion is not None) == selected
+    assert persisted.trial_relpath == ("lost/attempts/001" if retried else "lost/attempts/000")
+    assert (persisted.completion is not None) == retried
+
+    reader = ReadView(archive_root)
+    assert reader.is_sealed()
+    [row] = reader.scan(ARCHIVE_SAMPLES_TABLE).to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(row)
+    assert sample.grading.score == (0.0 if retried else None)
+    assert sample.trajectory_uri is None
+    assert sample.correct is (False if retried else None)
+    native = reader.read_blob(f"sources/harbor/lost/attempts/{persisted.id}/result.json")
+    assert TrialResult.model_validate_json(native) == persisted
 
 
 @pytest.mark.unit

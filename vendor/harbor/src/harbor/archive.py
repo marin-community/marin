@@ -61,17 +61,30 @@ _JSON_CONTENT_TYPE = "application/json"
 _JOB_SOURCE_NAMES = (JOB_CONFIG_FILENAME, JOB_LOCK_FILENAME, JOB_RESULT_FILENAME)
 
 
-def _attempt_is_complete(reader: ReadView, prefix: str) -> bool:
+def _has_unscored_terminal_failure(result: TrialResult) -> bool:
+    return (
+        result.finished_at is not None
+        and result.exception_info is not None
+        and result.verifier_result is None
+    )
+
+
+def _attempt_is_archivable(reader: ReadView, prefix: str) -> bool:
     metadata = reader.blob_metadata(f"{prefix}/result.json")
-    if metadata is None or not isinstance(metadata.get("trajectory_present"), bool):
+    if metadata is None or "trajectory_present" not in metadata:
         return False
     raw = reader.read_blob(f"{prefix}/result.json")
     if raw is None:
         return False
     result = TrialResult.model_validate_json(raw)
+    if result.completion is None:
+        return (
+            metadata["trajectory_present"] is None
+            and _has_unscored_terminal_failure(result)
+        )
     if (
-        result.completion is None
-        or result.finished_at is None
+        result.finished_at is None
+        or not isinstance(metadata["trajectory_present"], bool)
         or result.completion.trajectory_present != metadata["trajectory_present"]
     ):
         return False
@@ -93,9 +106,11 @@ def _validate_native_result(native: TrialResult, selected: TrialResult) -> None:
         raise ValueError(
             f"Native attempt identity differs for trial {selected.trial_name}, attempt {selected.id}"
         )
-    if native.completion is None or native.finished_at is None:
+    if native.finished_at is None or (
+        native.completion is None and not _has_unscored_terminal_failure(native)
+    ):
         raise ValueError(
-            f"Attempt {selected.id} has no finalized native result after teardown; retry the attempt"
+            f"Attempt {selected.id} has neither a finalized output manifest nor an unscored terminal failure"
         )
 
 
@@ -109,6 +124,8 @@ def _numeric_rewards(result: TrialResult) -> dict[str, float]:
 
 
 def _is_scored(result: TrialResult) -> bool:
+    if result.completion is None:
+        return False
     exception = result.exception_info
     if exception is None:
         return result.verifier_result is not None
@@ -123,7 +140,7 @@ def _is_scored(result: TrialResult) -> bool:
 def _trial_sample(
     result: TrialResult, dataset: str, *, trajectory_uri: str | None
 ) -> EvalSample:
-    """Normalize one finished Harbor trial into an agentic sample."""
+    """Normalize one terminal Harbor trial into an agentic sample."""
     rewards = _numeric_rewards(result)
     reward = rewards.get("reward", 0.0)
     scored = _is_scored(result)
@@ -270,7 +287,7 @@ class TrialArchive:
                 archived = result.id in self._attempt_digests
             if not archived:
                 prefix = f"sources/harbor/{result.trial_name}/attempts/{result.id}"
-                if _attempt_is_complete(previous, prefix):
+                if _attempt_is_archivable(previous, prefix):
                     continue
                 # Resumed results did not emit END in this writer. Their persisted
                 # attempt result retains the payload that the job may have slimmed.
@@ -393,7 +410,7 @@ class TrialArchive:
 
     def _write_result(self, selected: TrialResult, reader: ReadView) -> None:
         prefix = f"sources/harbor/{selected.trial_name}/attempts/{selected.id}"
-        if not _attempt_is_complete(reader, prefix):
+        if not _attempt_is_archivable(reader, prefix):
             raise ValueError(
                 f"Incomplete archived attempt {selected.id} for trial {selected.trial_name}"
             )
@@ -405,10 +422,9 @@ class TrialArchive:
         result = TrialResult.model_validate_json(native)
         _validate_native_result(result, selected)
         trajectory_uri = None
-        assert result.completion is not None
         raw = (
             reader.read_blob(f"{prefix}/trajectory.json")
-            if result.completion.trajectory_present
+            if result.completion is not None and result.completion.trajectory_present
             else None
         )
         if raw is not None:
