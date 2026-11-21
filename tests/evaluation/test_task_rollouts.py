@@ -120,6 +120,10 @@ def published_corpora(tmp_path):
         client.shutdown()
 
 
+def red_turn() -> ModelTurn:
+    return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+
 @pytest.fixture
 def run_config():
     return EvaluationRunConfig(
@@ -169,7 +173,7 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 @pytest.mark.asyncio
 async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, published_corpora, run_config):
     async def model(_request):
-        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+        return red_turn()
 
     output = str(tmp_path / "results")
     await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
@@ -191,7 +195,7 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_and_task
         calls += 1
         if not recovered and calls > 1:
             raise RuntimeError("interrupted transport")
-        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+        return red_turn()
 
     output = str(tmp_path / "results")
     with pytest.raises(ExceptionGroup):
@@ -235,10 +239,6 @@ def simulated_archive_storage() -> Iterator[SimulatedS3]:
             lambda url, **kwargs: (simulated_url_to_fs if url.startswith("s3://") else local_url_to_fs)(url, **kwargs),
         )
         yield fs
-
-
-def red_turn() -> ModelTurn:
-    return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
 
 
 @pytest.mark.asyncio
@@ -1155,7 +1155,7 @@ async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_
 
     async def model(request):
         requests.append(request)
-        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+        return red_turn()
 
     config = run_config.model_copy(
         update={

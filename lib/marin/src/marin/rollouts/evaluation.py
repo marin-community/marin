@@ -81,7 +81,8 @@ from verifyit.modes.grade_judge import JudgeConnection
 
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
-# Rows queued by concurrent attempts commit together at most this often, or sooner once this many entries wait.
+# Queued rows wait at most WRITE_BATCH_INTERVAL seconds before committing together; a batch commits
+# sooner once WRITE_BATCH_MAX_ENTRIES entries wait.
 WRITE_BATCH_INTERVAL = 2.0
 WRITE_BATCH_MAX_ENTRIES = 256
 
