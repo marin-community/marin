@@ -20,6 +20,7 @@ from taskforge.model.workpiece import Terminal
 from taskforge.resources.env import RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import solver_rollout
+from taskforge.stages.solve_review import reviewing
 
 EVENT_GAPS = {RunCommand.kind: "RunCommand", WriteFile.kind: "WriteFile", InferenceRequest.kind: "InferenceRequest"}
 """The request kinds whose wall-clock gaps are reported, with the labels dashboards key on."""
@@ -103,7 +104,8 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                     if isinstance(event.request, InferenceRequest):
                         adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
                         role = "judge" if scopes["judge"] else "adversary" if adversary else "author"
-                        role = "solve_review" if scopes["solve_review"] else role
+                        # The reviewer runs beside the adversaries: its request names it by its own tools.
+                        role = "solve_review" if reviewing(event.request) else role
                         tokens[role].update(asdict(event.value.usage))
                     elif (trial := solver_rollout(event)) is not None:
                         for conversation in trial[1].rollout.conversations:

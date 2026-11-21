@@ -29,7 +29,10 @@ from taskforge.harness.tools.evidence import (
     TASK,
     TRIAL,
     Evidence,
+    ListTool,
+    ReadTool,
     ReportTool,
+    SearchTool,
     Source,
     evidence_tools,
     source_listing,
@@ -39,6 +42,7 @@ from taskforge.model.proposal import TaskProposal, render
 from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
 from taskforge.model.workpiece import Submission
 from taskforge.resources.bundle import Resources
+from taskforge.resources.inference import InferenceRequest
 from taskforge.stages.rules import passed
 from taskforge.stages.summary import task_manifest
 
@@ -167,6 +171,11 @@ def evidence(
         raise ValueError("Two evidence sources share an address")
     unpassed = frozenset(t.trial for t, _ in trials if t.grade is None or t.cause is not None or not passed(t.grade))
     return Evidence({source.name: source for source in sources}, unpassed, output_chars)
+
+
+def reviewing(request: InferenceRequest) -> bool:
+    """Whether ``request`` is the reviewer's: only it is offered the evidence tools."""
+    return {tool.name for tool in request.tools} >= {ListTool.name, ReadTool.name, SearchTool.name}
 
 
 def finding_lines(findings: Sequence[ReviewFinding]) -> str:
