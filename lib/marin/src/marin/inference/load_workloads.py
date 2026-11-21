@@ -18,9 +18,14 @@ ROLLOUT_CONTEXT = (
 )
 
 
-def synthetic_requests(*, seed: int, context_repetitions: int, output_tokens: int, count: int) -> list[LoadRequest]:
-    """Use identical rollout-shaped text across model tokenizers; record actual usage at serving time."""
+def synthetic_requests(
+    *, seed: int, context_repetitions: int, output_tokens: int, count: int, prompt_group_size: int
+) -> list[LoadRequest]:
+    """Build rollout-shaped text, sharing each prompt across the requested group size."""
     rng = random.Random(seed)
+    if prompt_group_size < 1:
+        raise ValueError("Prompt group size must be positive")
+    task_ids = [rng.randrange(1_000_000) for _ in range((count + prompt_group_size - 1) // prompt_group_size)]
     return [
         LoadRequest(
             identity=f"synthetic-{seed}-{index}",
@@ -30,7 +35,7 @@ def synthetic_requests(*, seed: int, context_repetitions: int, output_tokens: in
                     {
                         "role": "user",
                         "content": (
-                            f"Task {rng.randrange(1_000_000)}.\n"
+                            f"Task {task_ids[index // prompt_group_size]}.\n"
                             + ROLLOUT_CONTEXT * context_repetitions
                             + "\nContinue the investigation. State the next tool action and its expected evidence."
                         ),

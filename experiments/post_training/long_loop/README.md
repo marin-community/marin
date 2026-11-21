@@ -997,7 +997,11 @@ The `seqs32` spec changes only sequence capacity. The next queued specs are
 `mochi-decode-seqs32-kv85-batch16384.json` (batched tokens 8192 to 16384). Each
 changes one engine parameter from its predecessor and keeps offered concurrency
 384. All use a 25-minute server-counter window after warm-up, plus retained
-streaming request timings. The loader streams
+streaming request timings. The `seqs32-kv85-shared8` spec then changes prompt
+group size from one to eight, retaining 256 request identities across 32 shared
+prompts. The `seqs32-kv85-shared8-short` spec changes only context repetitions
+from 64 to one. These isolate group prefix reuse and prompt length before another
+sequence-capacity change. The loader streams
 regional weights for startup; throughput excludes loading and request drain.
 
 Submit from the clean, landed long-loop commit:

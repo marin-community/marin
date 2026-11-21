@@ -134,8 +134,18 @@ def test_replay_never_includes_the_answer_being_regenerated():
 
 
 def test_synthetic_workload_reproduces_text_and_varies_seed_without_model_tokens():
-    options = {"context_repetitions": 3, "output_tokens": 256, "count": 4}
+    options = {"context_repetitions": 3, "output_tokens": 256, "count": 4, "prompt_group_size": 1}
     first = synthetic_requests(seed=17, **options)
     assert first == synthetic_requests(seed=17, **options)
     assert first != synthetic_requests(seed=29, **options)
     assert all("messages" in item.body and "prompt_token_ids" not in item.body for item in first)
+
+
+def test_synthetic_prompt_groups_share_context_without_merging_request_identity():
+    requests = synthetic_requests(seed=17, context_repetitions=3, output_tokens=256, count=24, prompt_group_size=8)
+    prompts = [json.dumps(request.body["messages"]) for request in requests]
+
+    assert len({request.identity for request in requests}) == 24
+    assert len(set(prompts)) == 3
+    assert [prompts.count(prompt) for prompt in set(prompts)] == [8, 8, 8]
+    assert len({json.dumps(request.body["messages"]) for request in requests[:8]}) == 1

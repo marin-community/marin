@@ -44,6 +44,7 @@ def workload_requests(workload: dict, seed: int) -> list[LoadRequest]:
             context_repetitions=workload["context_repetitions"],
             output_tokens=workload["output_tokens"],
             count=256,
+            prompt_group_size=workload["prompt_group_size"],
         )
         return [replace(request, body={**request.body, **workload["sampling_params"]}) for request in requests]
     if workload["kind"] != "replay":
@@ -56,7 +57,7 @@ def workload_requests(workload: dict, seed: int) -> list[LoadRequest]:
 
 
 async def qualify(base_url: str, model: str) -> dict:
-    request = synthetic_requests(seed=17, context_repetitions=1, output_tokens=32, count=1)[0]
+    request = synthetic_requests(seed=17, context_repetitions=1, output_tokens=32, count=1, prompt_group_size=1)[0]
     async with httpx.AsyncClient(timeout=300) as client:
         rows = [
             await measure_request(client, base_url, model, request, seed=17 + index)

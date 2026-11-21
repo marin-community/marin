@@ -66,7 +66,8 @@
         "logprobs": true,
         "top_logprobs": 0,
         "skip_special_tokens": false
-      }
+      },
+      "prompt_group_size": 1
     }
   ]
 }
