@@ -332,6 +332,30 @@ async def test_a_named_strategy_prompt_runs_any_roster_name(
     assert client.requests[0].conversation[1].content.startswith(f"Review strategy: {roster[0]}\n\nTask manifest:")
 
 
+N6_POLICY = Path(__file__).parent / "fixtures" / "n6-policy"
+"""n6's (40d35b8bcc) complete default policy directory, which predates ``adversary.max_revisions``."""
+
+
+# Review 2026-11-21: a complete n6 policy directory, loaded on its own rather than overlaid on the defaults, rendered
+# the adversary prompt and spent one inference before raising KeyError('adversary.max_revisions').
+@pytest.mark.parametrize("roster", [["adversary"], ["custom"]])
+async def test_a_complete_policy_without_a_revision_budget_fails_at_wiring_and_its_prompt_overlaid_on_defaults_runs(
+    workpiece: Workpiece, roster: list[str]
+) -> None:
+    historical = load_policy(N6_POLICY).overlaid({"adversary.roster": roster})
+    log, client = EventLog(), FakeInference((call("report", {"findings": []}, "report"),))
+    ctx = Context(log=log)
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    with pytest.raises(KeyError, match=re.escape("adversary.max_revisions")):
+        await validate(ctx, workpiece, build_config(historical, {}), bundle)
+    assert not log.records and not client.requests
+    overlay = {"adversary.user": historical.prompt("adversary.user").template, "adversary.roster": roster}
+    (result,) = (
+        await validate(ctx, workpiece, build_config(load_policy(DEFAULTS_DIR).overlaid(overlay), {}), bundle)
+    ).result.adversary
+    assert result.status is AdversaryStatus.REPORTED and len(client.requests) == 1
+
+
 SINGLE_ADVERSARY = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
 
 
