@@ -4,12 +4,24 @@
 """The publication helper resumes partial runs and refuses foreign content pins."""
 
 import hashlib
+import json
 import pathlib
 import tempfile
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    NoGrader,
+    PlainText,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
 
 from experiments.post_training.task_curation.calibforge_publish import _source_pin_line, publish
 
@@ -143,3 +155,51 @@ def test_publish_creates_a_fresh_repo_without_exist_ok(cards, monkeypatch):
     )
     publish(tasks, new_card, "open-athena/retained-repo", data_restriction="open", evidence_files=())
     assert fake.calls == [False], "a fresh repo must create with exist_ok=False"
+
+
+def _lowered_tasks(path: pathlib.Path) -> pathlib.Path:
+    """A lowered-shape tasks parquet: rollout envelopes with runtime machines."""
+    spec = TaskSpec(
+        id="d01.a/01",
+        context=ConversationInput(events=(TextMessage(role="user", content="Solve it."),)),
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.SHELL_SIMULATOR, working_directory="/app"
+        ),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="fixture"),
+        source=Source(dataset="capability", revision="r", row="d01.a/01", importer_revision="1"),
+    )
+    envelope = json.dumps({"task": spec.model_dump(mode="json"), "runtime": {"task_machine": {"memory_mb": 8192}}})
+    pq.write_table(pa.table({"path": ["d01.a/01"], "lowered_task_spec": [envelope]}), path)
+    return path
+
+
+def test_publish_checks_each_lowered_row_the_loader_would_refuse(cards, monkeypatch):
+    tasks, new_card, _ = cards
+    _lowered_tasks(tasks)
+    fake = FakeApi(None)
+    monkeypatch.setattr("experiments.post_training.task_curation.calibforge_publish.HfApi", lambda: fake)
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.calibforge_publish.hf_hub_download",
+        lambda repo_id, filename, repo_type, revision=None: fake.download(filename),
+    )
+    publish(tasks, new_card, "open-athena/retained-repo", data_restriction="open", evidence_files=())
+    assert set(fake.uploaded) == {"tasks.parquet", "README.md"}
+
+
+def test_publish_refuses_a_lowered_row_without_runtime_machines(cards, monkeypatch):
+    tasks, new_card, _ = cards
+    _lowered_tasks(tasks)
+    table = pq.read_table(tasks).to_pylist()
+    table[0]["lowered_task_spec"] = json.dumps({"task": {"id": "d01.a/01"}})
+    pq.write_table(pa.table({"path": ["d01.a/01"], "lowered_task_spec": [table[0]["lowered_task_spec"]]}), tasks)
+    fake = FakeApi(None)
+    monkeypatch.setattr("experiments.post_training.task_curation.calibforge_publish.HfApi", lambda: fake)
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.calibforge_publish.hf_hub_download",
+        lambda repo_id, filename, repo_type, revision=None: fake.download(filename),
+    )
+    with pytest.raises(ValueError, match="envelope carries no runtime machines"):
+        publish(tasks, new_card, "open-athena/retained-repo", data_restriction="open", evidence_files=())
+    assert fake.calls == [], "the publication must refuse before any upload"

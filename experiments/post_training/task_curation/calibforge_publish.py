@@ -20,6 +20,7 @@ Run it with that login (``HfApi()``/``hf_hub_download`` need no explicit token):
 
 import argparse
 import hashlib
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -29,6 +30,7 @@ from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.task_curation.publication_gate import require_public_data
 
@@ -36,21 +38,31 @@ TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
 
 
-def _require_loader_hash_column(tasks: Path) -> None:
-    """The runtime cohort loader requires each row's task content hash.
+def _require_loader_row_integrity(tasks: Path) -> None:
+    """The cohort loader's per-row integrity, checked before any upload.
 
-    A publication whose rows lack the ``task_sha256`` column, or whose recorded hash
-    differs from the serialized ``task_spec``, would publish a cohort the loader
-    refuses to import. The check runs before any upload (ruling 66).
+    A canonical row records its task_spec digest; a lowered row is the rollout
+    envelope. A publication whose rows the cohort loader would refuse fails here
+    rather than at a reader (ruling 66).
     """
     table = pq.read_table(tasks)
-    if "task_sha256" not in table.column_names:
-        raise ValueError(f"Cohort publication lacks the row-level task_sha256 column the loader requires: {tasks}")
-    specs = table.column("task_spec").to_pylist()
-    recorded = table.column("task_sha256").to_pylist()
-    for serialized, digest in zip(specs, recorded, strict=True):
-        if hashlib.sha256(serialized.encode()).hexdigest() != digest:
-            raise ValueError(f"Published task hash differs from its task_spec content: {tasks}")
+    if "task_spec" in table.column_names:
+        if "task_sha256" not in table.column_names:
+            raise ValueError(f"Cohort publication lacks the row-level task_sha256 column the loader requires: {tasks}")
+        specs = table.column("task_spec").to_pylist()
+        recorded = table.column("task_sha256").to_pylist()
+        for serialized, digest in zip(specs, recorded, strict=True):
+            if hashlib.sha256(serialized.encode()).hexdigest() != digest:
+                raise ValueError(f"Published task hash differs from its task_spec content: {tasks}")
+        return
+    if "lowered_task_spec" in table.column_names:
+        for row in table.to_pylist():
+            envelope = json.loads(row["lowered_task_spec"])
+            if not envelope.get("runtime"):
+                raise ValueError(f"{row['path']}: envelope carries no runtime machines")
+            TaskSpec.model_validate_json(json.dumps(envelope["task"]))
+        return
+    raise ValueError(f"Cohort publication carries neither the canonical nor the lowered task encoding: {tasks}")
 
 
 def _source_pin_line(card_text: str) -> str | None:
@@ -96,7 +108,7 @@ def publish(
         shutil.copyfile(card, staging / CARD_FILENAME)
         for source in evidence_files:
             shutil.copyfile(source, staging / source.name)
-        _require_loader_hash_column(staging / TASKS_FILENAME)
+        _require_loader_row_integrity(staging / TASKS_FILENAME)
         api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=exist_ok)
         if not api.repo_info(repo, repo_type="dataset").private:
             raise ValueError(f"Publication destination must be private: {repo}")
@@ -123,8 +135,11 @@ def main() -> None:
     parser.add_argument("--tasks", type=Path, required=True, help="lowered task spec parquet")
     parser.add_argument("--card", type=Path, required=True, help="dataset card markdown")
     parser.add_argument("--repo", required=True, help="dataset repo, e.g. open-athena/<name> (created private)")
+    parser.add_argument(
+        "--data-restriction", type=DataRestriction, required=True, help="the source's typed restriction tier"
+    )
     args = parser.parse_args()
-    revision = publish(args.tasks, args.card, args.repo)
+    revision = publish(args.tasks, args.card, args.repo, data_restriction=args.data_restriction)
     print(f"{args.repo}@{revision}")
 
 
