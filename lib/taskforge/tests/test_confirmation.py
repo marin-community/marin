@@ -53,7 +53,7 @@ from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
-from taskforge.effects.log import EventLog, JsonlSink, Record, Status, fold
+from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
 from taskforge.harness.tools.evidence import (
     TRIAL,
@@ -530,20 +530,20 @@ async def test_confirmation_usage_is_reported_under_its_own_phase_once(tmp_path:
     review = Resolved(InferenceRequest((), tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=11)))
     final = Resolved(InferenceRequest((), final_tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=13)))
     events = (
-        ScopeEntered("workpiece"),
-        ScopeEntered("validate"),
-        Resolved(SolverRollout(spec, 0, 0), (), rollout),
-        review,
-        ScopeExited("validate", False),
-        ScopeEntered("confirm"),
-        Resolved(SolverRollout(spec, 0, 0), (), rollout, replayed=True),  # the round's trial, read again: no usage
-        Resolved(SolverRollout(spec, 1, 1), (), rollout),
-        Resolved(SolverRollout(spec, 2, 1), (), rollout),
-        final,
-        ScopeExited("confirm", False),
-        StageCompleted(Stage.REVIEW, "", "Decided", terminal=Terminal.ACCEPTED),
+        (ScopeEntered("workpiece"), None),
+        (ScopeEntered("validate"), None),
+        (Resolved(SolverRollout(spec, 0, 0), (), rollout), Billing.SOLVER),
+        (review, Billing.SOLVE_REVIEW),
+        (ScopeExited("validate", False), None),
+        (ScopeEntered("confirm"), None),
+        (Resolved(SolverRollout(spec, 0, 0), (), rollout, replayed=True), None),  # the round's trial read again
+        (Resolved(SolverRollout(spec, 1, 1), (), rollout), Billing.CONFIRMATION),
+        (Resolved(SolverRollout(spec, 2, 1), (), rollout), Billing.CONFIRMATION),
+        (final, Billing.FINAL_REVIEW),
+        (ScopeExited("confirm", False), None),
+        (StageCompleted(Stage.REVIEW, "", "Decided", terminal=Terminal.ACCEPTED), None),
     )
-    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
+    records = tuple(Record(i, time.time(), event, billed=payer) for i, (event, payer) in enumerate(events, 1))
     sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
     sink.claim(None)
     await sink.local.write(records)
@@ -1155,6 +1155,19 @@ class Replies(InferenceClient):
         return replace(answer, usage=Usage(prompt_tokens=self.prompt))
 
 
+class Reviews(Replies):
+    """The reviewer's client: the round review's call bills 113 prompt tokens and every later call, the final
+    review's, 991, so that charging one review's call to the other shows."""
+
+    def __init__(self) -> None:
+        super().__init__("reviewer", 113, inner=CleanReviewer())
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        self.prompt = 991 if self.calls else 113
+        return await super().complete(request)
+
+
 class JudgedTrials(Trials):
     """Each slot asks the judge once from a grading thread, as VerifyIt does, and its turn bills 7 prompt tokens."""
 
@@ -1176,7 +1189,7 @@ def billed_bundle(author: Sequence[Completion] = script()) -> Resources:
     scope."""
     live, asked, answered = resources(JudgedEnvs(), ()), asyncio.Event(), asyncio.Event()
     roles = {
-        "solve_review": Replies("reviewer", 1000, inner=CleanReviewer()),
+        "solve_review": Reviews(),
         "adversary": Replies("adversary", 100, call("report", {"findings": []}, "report"), waits=asked, sets=answered),
         "judge": Replies("judge", 10000, Completion("PASS"), starts=asked, waits=answered),
     }
@@ -1205,10 +1218,10 @@ CHARGED = {
     "author": 4,
     "solver": 21,
     "adversary": 100,
-    "solve_review": 1000,
+    "solve_review": 113,
     "judge": 80000,
     "confirmation": 35,
-    "final_review": 1000,
+    "final_review": 991,
 }
 """``billed_bundle``'s prompt tokens by role: four author calls, three validation and five confirmation solves, one
 adversary call, one round and one final review call, and eight judge calls, one per solve."""
@@ -1225,25 +1238,62 @@ def charged(lines: Sequence[str]) -> dict[str, int]:
     }
 
 
+PAID = {
+    ("inference.request", "author"): 4,
+    ("grading.grade_candidate", "author"): 1,
+    ("rollouts.solver_rollout", "solver"): 3,
+    ("grading.grade_candidate", "solver"): 2,
+    ("inference.request", "adversary"): 1,
+    ("inference.request", "solve_review"): 1,
+    ("inference.request", "judge"): 8,
+    ("rollouts.solver_rollout", "confirmation"): 5,
+    ("inference.request", "final_review"): 1,
+}
+"""``billed_bundle``'s physical resolutions by kind and payer, sandbox commands and ids aside: they name none."""
+
+
+def payers(root: Path, replayed: bool) -> Counter[tuple[str, str | None]]:
+    """The payer of each resolution of ``root``'s journal that ``replayed`` or was paid, by request kind, sandbox
+    commands and ids aside."""
+    journal = read_journal(str(root))
+    assert journal is not None
+    return Counter(
+        (record.event.request.kind, record.billed)
+        for record in decode(journal.events())
+        if isinstance(record.event, Resolved)
+        and record.event.replayed is replayed
+        and not record.event.request.kind.startswith(("env.", "ids."))
+    )
+
+
 # Review 2026-11-21: the report guessed each call's role from the scopes open when it resolved, so an adversary call
 # that completed inside an open judge scope was charged to the judge: 80,100 judge and 0 adversary tokens here.
 async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     proposal: TaskProposal, tmp_path: Path
 ) -> None:
-    lines = await report(str(await billed_root(proposal, tmp_path)))
+    root = await billed_root(proposal, tmp_path)
+    lines = await report(str(root))
     assert charged(lines) == CHARGED
-    assert not [line for line in lines if line.startswith("tokens attribution=")]
+    assert not [line for line in lines if line.startswith("tokens role=unattributed")]
+    assert payers(root, replayed=False) == PAID and not payers(root, replayed=True)
+    live = billed_bundle(())
+    await billed_root(proposal, tmp_path, live, root)
+    clients = [live.inference, *live.role_inference.values()]
+    assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
+    assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
+    replayed = payers(root, replayed=True)  # eighteen resolutions, none naming a payer
+    assert sum(replayed.values()) == 18 and {payer for _, payer in replayed} == {None}
+    assert {payer for _, payer in payers(root, replayed=True)} == {None}
 
 
-async def test_a_format_9_root_keeps_its_inferred_charges_and_replays_with_zero_calls(
+async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_with_zero_calls(
     proposal: TaskProposal, tmp_path: Path
 ) -> None:
-    """Rows written before the payer was recorded keep the role the scopes suggest, counted as inferred; the root
+    """Rows written before the payer was recorded name none, and their tokens are charged as unattributed; the root
     resumes under the current reader, every request matching its recorded key."""
     root = plant_root(tmp_path / "root", FORMAT_9_ROOT)
     before = await report(str(root))
-    assert charged(before) == {**CHARGED, "adversary": 0, "judge": 80100}  # as the format-9 report had them
-    assert "tokens attribution=inferred calls=23" in before
+    assert charged(before) == {**dict.fromkeys(CHARGED, 0), "unattributed": 82160}
     journal = read_journal(str(root))
     assert journal is not None and journal.head.format == 9
     live = billed_bundle(())
@@ -1254,7 +1304,7 @@ async def test_a_format_9_root_keeps_its_inferred_charges_and_replays_with_zero_
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert isinstance(live.rollouts.engine, Trials) and not live.rollouts.engine.runs
     after = await report(str(root))
-    assert charged(after) == charged(before) and "tokens attribution=inferred calls=23" in after
+    assert charged(after) == charged(before)
 
 
 # Review 2026-11-21: a clean three-and-five confirmation built its evidence index three times (3, 8 and 8 trials) and

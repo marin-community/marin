@@ -6,7 +6,6 @@ import math
 import re
 import time
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import PurePosixPath
 
@@ -16,7 +15,6 @@ from taskforge.checkpoint import FORMAT_1, HEAD, read_journal
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted, event_digest
 from taskforge.effects.issues import UnsupportedFormat
 from taskforge.effects.log import Billing, decode
-from taskforge.harness.tools.evidence import ListTool, ReadTool, SearchTool
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 from taskforge.resources.env import RunCommand, WriteFile
@@ -25,15 +23,6 @@ from taskforge.resources.rollouts import SolverGeneration, SolverRollout
 
 EVENT_GAPS = {RunCommand.kind: "RunCommand", WriteFile.kind: "WriteFile", InferenceRequest.kind: "InferenceRequest"}
 """The request kinds whose wall-clock gaps are reported, with the labels dashboards key on."""
-
-
-def inferred(request: InferenceRequest, scopes: Mapping[str, Sequence[float]]) -> Billing:
-    """The role a row written before format 10 charges its inference to, guessed from the scopes open when it
-    resolved: the reviewer by its evidence tools, and the final review as the reviewer inside the confirmation."""
-    if {tool.name for tool in request.tools} >= {ListTool.name, ReadTool.name, SearchTool.name}:
-        return Billing.FINAL_REVIEW if scopes["confirm"] else Billing.SOLVE_REVIEW
-    adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
-    return Billing.JUDGE if scopes["judge"] else Billing.ADVERSARY if adversary else Billing.AUTHOR
 
 
 def reason_class(reason: str) -> str:
@@ -67,7 +56,6 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     counts, reasons = Counter[str](), Counter[tuple[str, str]]()
     tokens: dict[str, Counter[str]] = defaultdict(Counter)
     durations: dict[str, list[float]] = defaultdict(list)
-    unbilled = Counter[str]()
     accepted: list[float] = []
     unsupported: list[str] = []
     gate = asyncio.Semaphore(32)
@@ -117,20 +105,18 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 elif isinstance(event, Resolved) and not event.replayed and stamp >= cutoff:
                     if label := EVENT_GAPS.get(event.request.kind):
                         durations[f"event_gap={label}"].append(max(0, stamp - previous))
-                    # A row from before format 10 names no payer: its role is guessed from the open scopes.
+                    # A row from before format 10 names no payer, and its tokens are charged as unattributed.
+                    payer = record.billed or Billing.UNATTRIBUTED
                     if isinstance(event.request, InferenceRequest):
-                        unbilled["calls"] += record.billed is None
-                        tokens[record.billed or inferred(event.request, scopes)].update(asdict(event.value.usage))
+                        tokens[payer].update(asdict(event.value.usage))
                     elif isinstance(event.request, SolverGeneration) or (
                         isinstance(event.request, SolverRollout)
                         and (event_digest(event.request), event.fingerprints) not in generated
                     ):
-                        unbilled["calls"] += record.billed is None
                         rollout = event.value if isinstance(event.request, SolverGeneration) else event.value.rollout
-                        role = record.billed or (Billing.CONFIRMATION if scopes["confirm"] else Billing.SOLVER)
                         for conversation in rollout.conversations:
                             for step in conversation.steps:
-                                tokens[role].update(
+                                tokens[payer].update(
                                     step.turn.metadata.get("usage", asdict(step.turn.usage) if step.turn.usage else {})
                                 )
                 previous = stamp
@@ -150,11 +136,9 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
         count = sum(max(cutoff, now - hours * 3600) <= stamp <= now for stamp in accepted)
         rate = count / min(hours, since_hours or hours)
         lines.append(f"accepted_per_hour window_hours={hours} count={count} rate={rate:.3f}")
-    for role in Billing:
+    for role in [role for role in Billing if role is not Billing.UNATTRIBUTED or role in tokens]:  # where charged
         usage = " ".join(f"{name}={tokens[role][name + '_tokens']}" for name in ("prompt", "cached", "completion"))
         lines.append(f"tokens role={role} {usage}")
-    if unbilled["calls"]:
-        lines.append(f"tokens attribution=inferred calls={unbilled['calls']}")
     for key in (
         *[f"stage={stage}" for stage in Stage],
         *[f"event_gap={label}" for label in EVENT_GAPS.values()],

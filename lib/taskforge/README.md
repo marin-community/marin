@@ -273,8 +273,10 @@ spend or latency samples. Solver usage comes from recorded rollout steps. Each p
 is charged to the role its row names as payer (`billed`), set by the visit, judge callback or stage scope that made
 it, so overlapping roles never take each other's calls. The confirmation step reports apart, once: its solver slots
 as `role=confirmation` and its final review as `role=final_review`, never also under `solver` or `solve_review`; a
-judge call during it is `role=judge`. Rows written before format 10 name no payer: their role is guessed from the
-scopes open when they resolved, as before, and the report adds `tokens attribution=inferred calls=N` counting them. An interrupted solver attempt's partial usage is not reported (no journalled result holds it). Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
+judge call during it is `role=judge`. A row that names no payer, written before format 10, and a call from a visit
+built without one (`Visit(..., bills=...)` is keyword-only) are charged to `role=unattributed`, a line printed only
+when some charged row falls there; total spend is unchanged. A grade that follows its recorded generation names its
+payer but is not charged again. An interrupted solver attempt's partial usage is not reported (no journalled result holds it). Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
 `--since-hours` includes workpieces active in that window and filters metric events by time;
 acceptance windows are clipped to it, with rates divided by the clipped duration. Acceptance
 uses the terminal decision timestamp, not file upload time. Empty roots and unreadable artifacts
