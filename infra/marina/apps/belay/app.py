@@ -486,8 +486,9 @@ def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
     return hmac.compare_digest(_sha256(token), expected)
 
 
-# Lines a suggestion's label skips: its Track line and an agent's "🤖 Posted on behalf of ..." attribution.
-LABEL_SKIP = re.compile(r"^\W*track\W*:|^\W*posted on behalf of\b", re.IGNORECASE)
+# Lines a suggestion's label skips: its Track line, an agent's "🤖 Posted on behalf of ..." attribution, and lines
+# with no letters or digits (a bare "🤖" marker).
+LABEL_SKIP = re.compile(r"^\W*track\W*:|^\W*posted on behalf of\b|^\W*$", re.IGNORECASE)
 
 
 def text_label(text: str) -> str:

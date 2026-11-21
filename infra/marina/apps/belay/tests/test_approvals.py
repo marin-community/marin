@@ -625,6 +625,7 @@ def test_a_suggestion_label_skips_its_track_and_attribution_lines() -> None:
     body = "🤖 Posted on behalf of @someone.\n\nTrack: speedrun\n\nDynamic **short conv** on global K and V.\nMore."
     assert text_label(body) == "Dynamic short conv on global K and V."
     assert text_label("Track: ladder") == "Track: ladder"
+    assert text_label("🤖\n\nTrack: custom\n\nRerun the recipe with no flag.") == "Rerun the recipe with no flag."
 
 
 def trusted_comment(
