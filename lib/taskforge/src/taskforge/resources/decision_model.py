@@ -10,7 +10,6 @@ equivalent read replays without a call and another model identity misses.
 """
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -129,42 +128,50 @@ class DecisionModelRead(Event[float]):
     request: DecisionModelRequest
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class DecisionModel:
-    """At most ``policy.concurrency`` reads at once, each retried with backoff while the host is down, until
-    ``unavailable_wait`` after it was asked for; then ``DecisionModelUnavailable``."""
+    """At most ``policy.concurrency`` reads at once, each retried with backoff while the host is down; a read that has
+    no level ``unavailable_wait`` after it was asked for, its wait for a read slot included, raises
+    ``DecisionModelUnavailable``."""
 
     reader: DecisionModelReader
     policy: DecisionModelPolicy
-    clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     gate: asyncio.Semaphore = field(init=False)
+    down: str | None = field(default=None, init=False)
+    """Why the latest attempt failed, until one succeeds: what a read still waiting for a slot reports."""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "gate", asyncio.Semaphore(self.policy.concurrency))
+        self.gate = asyncio.Semaphore(self.policy.concurrency)
 
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("decision_model", digest(self.policy.model), ReplayPolicy.CACHE)
 
     async def read(self, event: DecisionModelRead, *, notify: Notify) -> float:
         policy = self.policy
-        deadline, delay, attempt = self.clock() + policy.unavailable_wait, policy.backoff_initial, 1
-        async with self.gate:
-            while True:
-                try:
-                    async with asyncio.timeout(policy.request_timeout):
-                        return await self.reader.read(event.request)
-                except DecisionModelDown as error:
-                    reason, asked = str(error), error.retry_after
-                except TimeoutError:
-                    reason, asked = f"no answer within {policy.request_timeout:g}s", 0.0
-                if (remaining := deadline - self.clock()) <= 0:
-                    raise DecisionModelUnavailable(
-                        f"{policy.model} answered no read for {policy.unavailable_wait:g}s; last {reason}"
-                    )
-                notify(Retrying(event, attempt, reason))
-                await self.sleep(min(max(asked, delay), remaining))
-                delay, attempt = min(delay * 2, policy.backoff_maximum), attempt + 1
+        delay, attempt, why = policy.backoff_initial, 1, f"none of its {policy.concurrency} read slots came free"
+        try:
+            async with asyncio.timeout(policy.unavailable_wait), self.gate:
+                while True:
+                    why = "its read went unanswered"
+                    try:
+                        async with asyncio.timeout(policy.request_timeout):
+                            level = await self.reader.read(event.request)
+                        self.down = None
+                        return level
+                    except DecisionModelDown as error:
+                        reason, asked = str(error), error.retry_after
+                    except TimeoutError:
+                        reason, asked = f"no answer within {policy.request_timeout:g}s", 0.0
+                    self.down = reason
+                    notify(Retrying(event, attempt, reason))
+                    await self.sleep(max(asked, delay))
+                    delay, attempt = min(delay * 2, policy.backoff_maximum), attempt + 1
+        except TimeoutError:
+            last = why if self.down is None else f"last {self.down}"
+            raise DecisionModelUnavailable(
+                f"{policy.model} gave no read within {policy.unavailable_wait:g}s: {last}"
+            ) from None
 
 
 async def read_level(event: DecisionModelRead, model: DecisionModel, *, notify: Notify) -> float:

@@ -232,9 +232,9 @@ def decision_model_policy(policy: Policy) -> DecisionModelPolicy | None:
     if bad := [f"decision_model.{name}" for name, value in named if not 0 < value < math.inf]:
         raise ValueError(f"{', '.join(bad)} must be positive and finite")
     settings = DecisionModelPolicy(model, concurrency, *timings)
-    if settings.unavailable_wait + settings.request_timeout >= policy.setting("solver.turn_timeout", float):
+    if settings.unavailable_wait >= policy.setting("solver.turn_timeout", float):
         # A decision-model grade has the solver turn as its verifier deadline: the typed outage must come first.
-        raise ValueError("decision_model.unavailable_wait plus request_timeout must end before solver.turn_timeout")
+        raise ValueError("decision_model.unavailable_wait must end before solver.turn_timeout")
     return settings
 
 

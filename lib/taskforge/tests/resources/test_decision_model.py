@@ -11,7 +11,7 @@ from typing import cast, override
 import httpx
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeWeb
-from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
+from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
 from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.decision_model import DecisionModelRequest
@@ -34,6 +34,7 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.decision_model import (
     ClefReader,
+    DecisionModel,
     DecisionModelDown,
     DecisionModelHealth,
     DecisionModelRead,
@@ -92,25 +93,23 @@ class FakeReader(DecisionModelReader):
 BACKOFF_STEPS = 10
 
 
-@dataclass
-class VirtualTime:
-    """A clock that only a backoff advances; ``recovered`` runs at the first backoff, as an outage ends. Each backoff
-    lets other tasks run a few steps, as a real wait would."""
+class VirtualTime(LoopTime):
+    """The loop's clock, which only a backoff advances; ``recovered`` is cleared at the first backoff, as an outage
+    ends. Each backoff first lets other tasks run a few steps, as a real wait would."""
 
-    now: float = 0.0
-    slept: list[float] = field(default_factory=list)
-    recovered: set[str] | None = None
+    def __init__(self, recovered: set[str] | None = None) -> None:
+        super().__init__()
+        self.slept: list[float] = []
+        self.recovered = recovered
 
-    def clock(self) -> float:
-        return self.now
-
-    async def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.now += seconds
-        for _ in range(BACKOFF_STEPS):
-            await asyncio.sleep(0)
+    @override
+    async def sleep(self, delay: float) -> None:
+        self.slept.append(delay)
         if self.recovered is not None:
             self.recovered.clear()
+        for _ in range(BACKOFF_STEPS):
+            await asyncio.sleep(0)
+        await super().sleep(delay)
 
 
 def installed(
@@ -119,7 +118,7 @@ def installed(
     providers = {"author": ScriptedProvider(()), "adversary": ScriptedProvider(()), "solver": solver}
     built = build_resources(policy, providers, {}, FakeWeb({}, {}), decision_model=reader)
     assert built.decision_model is not None
-    built = replace(built, decision_model=replace(built.decision_model, clock=time.clock, sleep=time.sleep))
+    built = replace(built, decision_model=replace(built.decision_model, sleep=time.sleep))
     install(ctx, built)
     return built
 
@@ -162,12 +161,12 @@ async def test_a_read_waits_out_an_outage_with_backoff_then_raises_the_typed_hol
     policy = overlaid().overlaid({"decision_model.unavailable_wait": 100.0, "decision_model.backoff_initial": 40.0})
     reader, time, ctx = FakeReader(down={"12"}), VirtualTime(), Context(log=EventLog())
     installed(policy, reader, ScriptedProvider(()), ctx, time)
-    with pytest.raises(DecisionModelUnavailable, match=f"{MODEL} answered no read for 100s; last HTTP 503"):
+    with pytest.raises(DecisionModelUnavailable, match=f"{MODEL} gave no read within 100s: last HTTP 503"):
         await ctx.emit(GradeCandidate(decision_spec(policy), Candidate("12")))
     await ctx.drain()
-    assert (time.slept, len(reader.reads)) == ([40.0, 60.0], 3)  # retry-after 30 never shortens the backoff
+    assert (time.slept, len(reader.reads)) == ([40.0, 60.0, 60.0], 3)  # retry-after 30 never shortens the backoff
     events = [record.event for record in ctx._log.records]
-    assert [event.attempt for event in events if isinstance(event, Retrying)] == [1, 2]
+    assert [event.attempt for event in events if isinstance(event, Retrying)] == [1, 2, 3]
     assert not [event for event in events if isinstance(event, Resolved)]  # nothing deferred is recorded paid
 
 
@@ -215,6 +214,57 @@ async def test_reads_in_flight_never_exceed_the_configured_concurrency() -> None
     assert reader.peak == 2
 
 
+class Gateway(FakeReader):
+    """Each read takes ``seconds`` on the loop's clock, then refuses while ``down`` and otherwise answers level 4."""
+
+    def __init__(self, seconds: float, down: bool) -> None:
+        super().__init__()
+        self.seconds, self.is_down = seconds, down
+
+    @override
+    async def read(self, request: DecisionModelRequest) -> float:
+        self.reads.append(request)
+        await asyncio.sleep(self.seconds)
+        if self.is_down:
+            raise DecisionModelDown("HTTP 503: clef_unavailable")
+        return 4.0
+
+
+NO_READ = f"{MODEL} gave no read within 100s: "
+
+
+# Review 2026-11-21 (n10 finding 3): reads queued behind the concurrency cap waited outside the availability window, so
+# a slow unavailable gateway outlived the verifier deadline and the driver published an ordinary held state. One bound
+# now covers the wait for a read slot and every attempt; queued reads report the outage another read observed, and a
+# queue on an answering model says so instead.
+@pytest.mark.parametrize(
+    "down, outcomes",
+    [
+        (True, [NO_READ + "last HTTP 503: clef_unavailable"] * 3),
+        (False, [4.0, NO_READ + "its read went unanswered", NO_READ + "none of its 1 read slots came free"]),
+    ],
+    ids=["down", "answering slowly"],
+)
+async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
+    down: bool, outcomes: list[object]
+) -> None:
+    time = LoopTime()
+    policy = decision_model_policy(overlaid().overlaid({"decision_model.concurrency": 1}))
+    assert policy is not None
+    model = DecisionModel(Gateway(30.0 if down else 60.0, down), replace(policy, unavailable_wait=100.0))
+    start = time.clock()
+    reads = asyncio.gather(
+        *(model.read(DecisionModelRead(request(str(n))), notify=lambda _: None) for n in range(3)),
+        return_exceptions=True,
+    )
+    while not reads.done() and time.clock() - start < 150.0:  # half a virtual second at a time
+        await time.sleep(0.5)
+    assert reads.done() and time.clock() - start < 105.0, "a read outlived its availability window"
+    ended = reads.result()
+    assert all(isinstance(read, float | DecisionModelUnavailable) for read in ended)
+    assert [read if isinstance(read, float) else str(read) for read in ended] == outcomes
+
+
 async def test_an_off_scale_level_is_an_infrastructure_error_that_is_read_again_on_resume() -> None:
     policy = overlaid()
     reader, ctx = FakeReader(levels={"12": 7}), Context(log=EventLog())
@@ -258,7 +308,7 @@ def test_the_author_schema_offers_the_decision_model_kind_only_where_one_is_conf
             {"decision_model.request_timeout": float("inf"), "decision_model.backoff_initial": -1.0},
             "decision_model.request_timeout, decision_model.backoff_initial must be positive and finite",
         ),
-        ({"decision_model.unavailable_wait": 4000.0}, "must end before solver.turn_timeout"),
+        ({"decision_model.unavailable_wait": 4200.0}, "unavailable_wait must end before solver.turn_timeout"),
     ],
 )
 def test_decision_model_settings_are_checked_at_wiring(overlay: Mapping[str, object], error: str) -> None:
