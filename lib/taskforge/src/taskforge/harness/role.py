@@ -57,13 +57,6 @@ class Fresh:
 
 
 @dataclass(frozen=True, slots=True)
-class Resume:
-    """A saved conversation, continued as it stands; an author repair resumes from its revision prompt."""
-
-    session: Conversation
-
-
-@dataclass(frozen=True, slots=True)
 class Answer:
     """A saved conversation whose last assistant turn left a tool call pending, answered with ``content``."""
 
@@ -71,7 +64,8 @@ class Answer:
     content: str
 
 
-type Opening = Fresh | Resume | Answer
+type Opening = Fresh | Conversation | Answer
+"""A saved ``Conversation`` continues as it stands; an author repair resumes from its revision prompt."""
 type Files = tuple[tuple[PurePosixPath, bytes], ...]
 
 
@@ -96,8 +90,8 @@ def opened(opening: Opening, tools: Mapping[str, Tool[object]]) -> Conversation:
     match opening:
         case Fresh(system, user):
             return Conversation((Message(Speaker.SYSTEM, system), Message(Speaker.USER, user)), schemas)
-        case Resume(session):
-            return session
+        case Conversation():
+            return opening
         case Answer(session, content):
             calls = session.messages[-1].tool_calls if session.messages else ()
             if not calls:

@@ -11,7 +11,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.harness.role import Files, Fresh, Resume, Visit, sitting
+from taskforge.harness.role import Files, Fresh, Visit, sitting
 from taskforge.lowering import lowering_settings, requirements
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.proposal import render
@@ -107,5 +107,5 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     visit = Visit("author", f"author/{workpiece.round}", machine, workspace)
     async with sitting(ctx, config.author, visit, resources) as session:
         if workpiece.session is not None:
-            return await session(Resume(workpiece.session))
+            return await session(workpiece.session)
         return await session(Fresh(system_prompt(policy), policy.prompt("author.user").render(proposal=proposal)))
