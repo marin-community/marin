@@ -53,6 +53,9 @@ _WHITESPACE = " \t\r\n"
 _HEX = frozenset("0123456789abcdefABCDEF")
 _CLOSE = MappingProxyType({"{": "}", "[": "]", '"': '"'})
 _FENCE_INDENT = r" {0,3}"
+# The parser takes two stack frames per nesting level, so this bound keeps it far below Python's
+# default recursion limit of 1,000 frames.
+MAX_JSON_DEPTH = 128
 
 
 class _JsonPrefix:
@@ -71,6 +74,12 @@ class _JsonPrefix:
 
     def fail(self, reason: str):
         raise _InvalidPrefix(self.position, reason)
+
+    def enter(self, opener: str):
+        if len(self.open) == MAX_JSON_DEPTH:
+            self.fail(f"JSON nested deeper than {MAX_JSON_DEPTH} levels")
+        self.open.append(opener)
+        self.position += 1
 
     def value(self):
         self.skip_space()
@@ -144,8 +153,7 @@ class _JsonPrefix:
         raise _PrefixEnd(None if key else self.suffix())
 
     def object(self):
-        self.open.append("{")
-        self.position += 1
+        self.enter("{")
         self.skip_space()
         if self.position == len(self.text):
             raise _PrefixEnd(self.suffix())
@@ -175,8 +183,7 @@ class _JsonPrefix:
                 return
 
     def array(self):
-        self.open.append("[")
-        self.position += 1
+        self.enter("[")
         self.skip_space()
         if self.position == len(self.text):
             raise _PrefixEnd(self.suffix())
@@ -213,8 +220,9 @@ def json_closure_state(prefix: str) -> ClosureState:
     boundary. A suffix never fills a key, value, literal, number, or escape.
     Closing a string or empty container may still truncate intended content:
     callers must separately verify the semantic boundary before using a suffix
-    as supervision. Duplicate object keys are rejected. Offsets index decoded
-    Python characters, not model tokens or UTF-8 bytes.
+    as supervision. Duplicate object keys and nesting deeper than
+    ``MAX_JSON_DEPTH`` are rejected. Offsets index decoded Python characters,
+    not model tokens or UTF-8 bytes.
     """
     parser = _JsonPrefix(prefix)
     try:
@@ -260,7 +268,8 @@ def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> Cl
 
     Markers inside JSON strings are literal content. The JSON payload has no
     schema checks here. Trailing non-whitespace content after the close marker
-    is outside this single-region contract and is rejected.
+    is outside this single-region contract and is rejected. Nesting deeper than
+    ``MAX_JSON_DEPTH`` is rejected.
     """
     opening_state = _opening_marker_state(prefix, opener, closer)
     if opening_state is not None:

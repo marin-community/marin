@@ -13,6 +13,7 @@ from verifyit.closure_scoring import (
     score_closure_region,
 )
 from verifyit.structure_closure import (
+    MAX_JSON_DEPTH,
     PrefixStatus,
     delimited_json_closure_state,
     json_closure_state,
@@ -211,6 +212,14 @@ def test_first_illegal_transition_is_localized(prefix, offset):
     assert state.error_offset == offset
     assert json_closure_state(prefix[:offset]).status != PrefixStatus.INVALID
     assert state.closing_suffix is None
+
+
+@pytest.mark.parametrize("opener,closer", [("[", "]"), ('{"a":', "}")])
+def test_json_nested_past_the_depth_limit_is_invalid_at_the_first_extra_opener(opener, closer):
+    text = opener * (MAX_JSON_DEPTH + 1) + "1" + closer * (MAX_JSON_DEPTH + 1)
+    state = json_closure_state(text)
+    assert (state.status, state.error_offset) == (PrefixStatus.INVALID, len(opener) * MAX_JSON_DEPTH)
+    assert json_closure_state(text[: state.error_offset]).status == PrefixStatus.EXTENDABLE
 
 
 def test_duplicate_keys_include_escaped_equivalents():
