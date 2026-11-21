@@ -297,6 +297,8 @@ region. This value overrides user and cluster environment values. Backends with
 no region or multiple advertised regions remove supplied values and leave it
 unset because they cannot attest one physical region. Consumers that require worker-region attestation need this
 controller version deployed before their task pods are created.
+Child jobs inherit the parent's region by default, as worker-backed tasks
+already do. An explicit region or the ANY marker overrides this default.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
