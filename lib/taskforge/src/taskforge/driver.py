@@ -129,7 +129,8 @@ async def one(args: argparse.Namespace) -> None:
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
     log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
-    wp = Workpiece(proposal.header.id, proposal)
+    latest = [Workpiece(proposal.header.id, proposal)]
+    wp = latest[0]
     try:
         async with checkpoints.running():
             source = endpoint_source(
@@ -140,7 +141,7 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("provider.pool", str),
             )
             async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
-                wp = await run_workpiece(proposal, config, resources, log, install=install)
+                wp = await run_workpiece(proposal, config, resources, log, install=install, reached=latest.append)
     except* (Superseded, CorruptJournal, PublicationFailed):
         raise  # The writer stopped; it publishes neither a hold nor a final head.
     except* (Hold, Restart, Transient, LogFailure) as error:
@@ -153,6 +154,7 @@ async def one(args: argparse.Namespace) -> None:
         if checkpoints.stopped is not None:
             raise
         detail = traceback.format_exc()
+        wp = latest[-1]
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
         await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Taskforge workpiece %s failed", proposal.header.id)

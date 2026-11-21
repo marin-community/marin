@@ -130,7 +130,9 @@ async def run_workpiece(
     log: EventLog,
     *,
     install: Callable[[Context, Resources], None],
+    reached: Callable[[Workpiece], None] = lambda _: None,
 ) -> Workpiece:
+    """``reached`` sees the workpiece each stage visit starts from, for a caller's diagnosis of an unexpected failure."""
     ctx = Context(log=log)
     wp = Workpiece(proposal.header.id, proposal)
     stage = Stage.AUTHOR
@@ -142,6 +144,7 @@ async def run_workpiece(
             install(ctx, resources)
             wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
             while True:
+                reached(wp)
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:

@@ -2076,6 +2076,28 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert "fallback" not in snapshot and not {"restore", "fallback"} & {key for d in snapshot["decisions"] for key in d}
 
 
+# Review 2026-11-21: a refused foreign restore digest published a bug-class hold whose snapshot had neither the
+# submission nor the evidence the refusal was about, because the driver still held its initial workpiece.
+async def test_a_refused_restore_publishes_the_last_workpiece_it_reached(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def restore_elsewhere(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+        return Accept(BandOutcome.TOO_EASY, (), "elsewhere")
+
+    @asynccontextmanager
+    async def foreign(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield replace(build_config(policy, {}), review=restore_elsewhere), resources(Envs(), script())
+
+    monkeypatch.setattr(driver, "runtime", foreign)
+    with pytest.raises(ValueError, match="Cannot restore elsewhere"):
+        await driver.one(driver_args)
+    workpiece = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert workpiece.terminal is Terminal.HELD and workpiece.submission is not None and len(workpiece.evidence) == 1
+    assert isinstance(held := workpiece.decisions[-1], Incomplete) and held.reasons[0].startswith("bug: ")
+
+
 STATUS = PurePosixPath("/workspace/status.txt")
 TASK = PurePosixPath("/workspace/task.json")
 
