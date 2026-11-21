@@ -3372,7 +3372,11 @@ async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process
 
     async def reading(ctx: Context, *_: object) -> object:
         policy = DecisionModelPolicy("clef@fixture-1", 1, 10.0, 20.0, 1.0, 1.0, 0.0)
-        ctx.handle(DecisionModelRead, partial(read_level, notify=ctx.notify), DecisionModel(Reader(), policy))
+        ctx.handle(
+            DecisionModelRead,
+            partial(read_level, ctx=ctx),
+            DecisionModel(Reader(), policy),
+        )
         request = DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", "12")
         await ctx.emit(DecisionModelRead(request))
         raise Hold("a human reads this")

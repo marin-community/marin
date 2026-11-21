@@ -10,7 +10,6 @@ equivalent read replays without a call and another model identity misses.
 """
 
 import asyncio
-import contextvars
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -190,10 +189,10 @@ class Flight:
     waiters: int = 0
 
 
-async def read_level(event: DecisionModelRead, model: DecisionModel, *, notify: Notify) -> float:
+async def read_level(event: DecisionModelRead, model: DecisionModel, *, ctx: Context) -> float:
     if (flight := model.reading.get(key := event_digest(event))) is None:
-        # Outside every caller's scope: its retries are root rows, whichever waiters remain.
-        read = asyncio.get_running_loop().create_task(model.level(event, notify), context=contextvars.Context())
+        # In the caller's context (its Iris client) outside every caller's scope: its retries are root rows.
+        read = asyncio.get_running_loop().create_task(model.level(event, ctx.notify), context=ctx.detached())
         flight = model.reading[key] = Flight(read)
     flight.waiters += 1
     try:

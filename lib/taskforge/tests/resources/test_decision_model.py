@@ -8,10 +8,12 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import cast, override
+from types import SimpleNamespace
+from typing import Any, cast, override
 
 import httpx
 import pytest
+from iris.client.client import IrisContext, iris_ctx_scope
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
@@ -51,7 +53,14 @@ from taskforge.stages.author import system_prompt, task_schema
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Validated
 from taskforge.stages.validate import solver_batch, validate
-from taskforge.wiring import build_config, build_resources, decision_model_policy, install, submit_gate
+from taskforge.wiring import (
+    RelayEndpoint,
+    build_config,
+    build_resources,
+    decision_model_policy,
+    install,
+    submit_gate,
+)
 
 MODEL = "clef@fixture-1"
 ROLES = ("author", "solver", "adversary")
@@ -260,7 +269,7 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
     model = DecisionModel(Gateway(30.0 if down else 60.0, down), replace(policy, unavailable_wait=100.0))
     start = time.clock()
     reads = asyncio.gather(
-        *(read_level(DecisionModelRead(request(str(n))), model, notify=lambda _: None) for n in range(3)),
+        *(read_level(DecisionModelRead(request(str(n))), model, ctx=Context(log=EventLog())) for n in range(3)),
         return_exceptions=True,
     )
     while not reads.done() and time.clock() - start < 150.0:  # half a virtual second at a time
@@ -620,6 +629,29 @@ async def test_the_default_reader_asks_clef_the_whole_request_and_returns_the_ex
         },
         "questions": {"whole": {"type": "score", "instructions": DECISION_QUESTION, "criteria": list(DECISION_LEVELS)}},
     }
+
+
+# Review 2026-11-21 (n10 follow-up 2, finding 2): the shared read ran in an empty context, so a caller's scoped Iris
+# client was gone and the installed grade raised Restart before any POST, though the same reader called directly read
+# 4.0. The read keeps the caller's context and leaves only Taskforge's effect scope.
+async def test_the_installed_grade_reads_clef_through_the_callers_iris_client() -> None:
+    sent: list[httpx.Request] = []
+
+    def answer(call: httpx.Request) -> httpx.Response:
+        sent.append(call)
+        probabilities = {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 1.0}
+        return httpx.Response(200, json={"answers": {"whole": {"probabilities": probabilities}}})
+
+    relay = SimpleNamespace(resolve=lambda _model: SimpleNamespace(endpoints=[SimpleNamespace(url="http://gateway")]))
+    client = SimpleNamespace(resolver_for_job=lambda _job: relay)
+    source = RelayEndpoint("/muchanem/glm53-relay", "secret", Pool("high"), "glm-5.3")
+    reader = ClefReader(source, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
+    policy, ctx = overlaid(), Context(log=EventLog())
+    with iris_ctx_scope(IrisContext(job_id=None, client=cast(Any, client))):
+        installed(policy, reader, ScriptedProvider(()), ctx, VirtualTime())
+        grade = await ctx.emit(GradeCandidate(decision_spec(policy), Candidate("12")))
+    await ctx.drain()
+    assert (grade.reward, [str(call.url) for call in sent]) == (1.0, ["http://gateway/v1/systemone"])
 
 
 async def test_the_default_reader_reads_unavailability_as_down_and_other_refusals_as_bugs() -> None:
