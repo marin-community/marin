@@ -38,7 +38,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, _reshard_state_dict_for_import
 from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
@@ -68,7 +68,7 @@ from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
-from levanter.utils.jax_utils import local_cpu_mesh
+from levanter.utils.jax_utils import best_effort_sharding, local_cpu_mesh
 from levanter.utils.mesh import MeshConfig
 
 
@@ -312,6 +312,61 @@ def test_snowball_public_import_consumes_owned_buffers_preserving_fp32_values_an
                 np.testing.assert_array_equal(np.asarray(value), expected[key])
             assert [leaf.sharding.spec for leaf in jax.tree.leaves(restored) if eqx.is_array(leaf)] == expected_specs
             assert any(array.is_deleted() for array in owned_inputs.values()), "import retained every owned HF buffer"
+
+
+@pytest.mark.multidevice
+def test_snowball_import_resharding_bounds_collective_scratch():
+    """Reproduce the import layout redistribution on the production data4/expert8 geometry."""
+    with use_test_devices(32) as devices:
+        if devices[0].platform != "cpu":
+            pytest.skip("Compiler memory regression uses the CPU SPMD executable")
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 4, 8, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        config = _tiny_config(
+            vocab_size=256,
+            hidden_dim=64,
+            intermediate_dim=64,
+            shared_expert_intermediate_dim=64,
+            num_experts=32,
+            num_layers=4,
+            head_dim=16,
+        )
+        with jax.set_mesh(mesh):
+            reference = SnowballLMHeadModel.init(Axis("vocab", 256), config, key=random.key(52))
+            canonical = {key: np.asarray(value).copy() for key, value in reference.to_state_dict().items()}
+            template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Axis("vocab", 256), config, key=random.key(0))
+
+            def import_weights(template, weights):
+                return from_torch_compatible_state_dict(template, weights)
+
+            convert = hax.named_jit(import_weights, axis_resources={}, donate_args=(False, True))
+            staged = {
+                key: jax.device_put(value, best_effort_sharding(value.shape, mesh=mesh))
+                for key, value in canonical.items()
+            }
+            original_shape = eqx.filter_eval_shape(import_weights, template, staged)
+            original_executable = convert.lower(template, staged).compile()
+            original_memory = original_executable.memory_analysis()
+            _reshard_state_dict_for_import(staged, original_shape, prefix=None)
+            aligned_executable = convert.lower(template, staged).compile()
+            aligned_memory = aligned_executable.memory_analysis()
+            # These are compiler buffer sizes, not model-size estimates or a GPU-fit assertion.
+            assert aligned_memory.temp_size_in_bytes < original_memory.temp_size_in_bytes / 2
+            assert "all-gather(" in original_executable.as_text()
+            assert "all-gather(" not in aligned_executable.as_text()
+            restored = convert(template, staged)
+            jax.block_until_ready(restored)
+            for key, value in restored.to_state_dict().items():
+                assert value.dtype == jnp.float32
+                np.testing.assert_array_equal(np.asarray(value), canonical[key])
+            assert [leaf.sharding.spec for leaf in jax.tree.leaves(restored) if eqx.is_array(leaf)] == [
+                leaf.sharding.spec
+                for leaf in jax.tree.leaves(original_shape)
+                if isinstance(leaf, jax.ShapeDtypeStruct)
+            ]
 
 
 def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output(tmp_path):

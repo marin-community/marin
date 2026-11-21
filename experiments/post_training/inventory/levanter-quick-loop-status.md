@@ -8,7 +8,9 @@ ran at BATCH priority and failed at 14:25:55 PST during model import: a
 56.79-GiB GPU allocation request in `jit_load_from_state_dict` exhausted memory.
 The failure occurred at the import-readiness barrier, before Adam allocation.
 The owned-buffer donation fix passes local checks and independent review, but
-does not make the full import fit. Converter peak-memory diagnosis is ongoing.
+does not make the full import fit. A follow-up aligns imported tensors one at
+a time to reduce collective scratch; its CPU checks pass and H100 fit remains
+unverified.
 Native Snowball initialization, updates, publication, generation,
 and checkpoint continuation remain unverified on H100. The matched comparison
 is gated on smoke acceptance.
@@ -199,6 +201,21 @@ requesting 56.79 GiB in `jit_load_from_state_dict`. This surfaced at
 fix therefore separates import from Adam, but the converter itself still exceeds
 available GPU memory. No native initialization or update acceptance passed.
 Both jobs are failed, with zero preemptions and zero automatic failure retries.
+All five GPU pods are gone; no task output archives were uploaded. The preserved
+original exception and actual resolved configuration were collected.
+
+A tiny 32-CPU reproduction on data4/expert8 found 62 all-gathers and eight
+all-to-alls in the monolithic import. The follow-up derives each HF tensor's
+layout from the abstract imported model and its normal export, then reshards
+one owned tensor at a time, waiting for completion. The final conversion is
+unchanged. In this reproduction its compiler temporary memory falls from
+2,225,668 to 492,544 bytes, and the final conversion has no collectives. The
+largest individual reshard uses 540,676 bytes of compiler temporary memory.
+Exact FP32 values and every final leaf's sharding are preserved. Three public
+import/compiler cases, three generic HF converter cases, and four real CPU
+update/checkpoint/restart cases pass on pinned JAX/JAXLIB `0.11.0`. These tiny
+compiler measurements establish a bounded-memory mechanism; they do not predict
+the full H100 peak or prove that the model fits.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;

@@ -510,6 +510,35 @@ def _to_state_dict_with_dtype(
     return state_dict
 
 
+def _reshard_state_dict_for_import(state_dict: StateDict, imported_shape, prefix: str | None) -> None:
+    """Align owned HF buffers with the inverse of the final model layout, one tensor at a time.
+
+    A whole-model transpose/reshard can combine all-gathers across many large expert banks.
+    Completing each donated reshard first bounds collective scratch to one HF tensor. Derive
+    layouts from the actual import, rather than model initialization, to preserve raw-leaf layouts.
+    """
+    target_shapes = eqx.filter_eval_shape(
+        lambda model: to_state_dict(flatten_modules_for_export(eqx.filter(model, is_jax_array_like)), prefix=prefix),
+        imported_shape,
+    )
+
+    def identity(array):
+        return array
+
+    for key in sorted(state_dict):
+        value = state_dict[key]
+        target = target_shapes.get(key)
+        if not isinstance(value, jax.Array) or target is None or target.sharding is None:
+            continue
+        # Resized vocabularies and export dtype conversions need the original conversion path.
+        if value.shape != target.shape or value.dtype != target.dtype:
+            continue
+        if value.sharding.is_equivalent_to(target.sharding, value.ndim):
+            continue
+        state_dict[key] = jax.jit(identity, out_shardings=target.sharding, donate_argnums=0)(value)
+        jax.block_until_ready(state_dict[key])
+
+
 @dataclass_with_default_init(frozen=True)
 class HFCheckpointConverter(Generic[LevConfig]):
     """
@@ -993,13 +1022,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             return lev_model
 
+        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
+        imported_shape = eqx.filter_eval_shape(load_from_state_dict, lev_model, state_dict)
+        _reshard_state_dict_for_import(state_dict, imported_shape, ignore_prefix)
         load_from_state_dict = haliax.named_jit(
             load_from_state_dict,
             axis_resources=axis_mapping,
             out_axis_resources=axis_mapping,
             donate_args=(False, True),
         )
-        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
         lev_model = load_from_state_dict(lev_model, state_dict)
 
         return lev_model
