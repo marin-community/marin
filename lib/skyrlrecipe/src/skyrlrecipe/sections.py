@@ -16,11 +16,23 @@ from .sampling import EvalSamplingParams
 
 class Sampling(Section):
     kind: (
-        Literal["domain-weighted", "naive", "thompson", "learnability", "grade-uniform", "grade-adaptive", "grade-prior"]
+        Literal[
+            "domain-weighted",
+            "ordered",
+            "naive",
+            "thompson",
+            "learnability",
+            "grade-uniform",
+            "grade-adaptive",
+            "grade-prior",
+        ]
         | None
     ) = field(None)
-    """null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-
+    """null = seeded passes (data.shuffle); domain-weighted|ordered|naive|thompson|learnability|grade-uniform|grade-
     adaptive|grade-prior"""
+    stages: tuple[OpenMap, ...] = field([])
+    """ordered kind: the declared stage sequence, each {source: teacher_route label, quota: prompts per stage visit
+    (null = draws the pool's row count)}"""
     domain_weights: NumberMap = field({})
     "exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted"
     decay: int | float = field(0.95)
