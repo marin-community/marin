@@ -13,12 +13,13 @@ from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec
-from skyrl_gym.rollout_specs import is_shell_harness
+from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
+from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract
 from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
@@ -30,7 +31,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
-from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime, text_task
+from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime, session_spec, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
@@ -149,3 +150,50 @@ def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
     assert task_messages(spec)[-1] == {"role": "assistant", "content": '{"a":[1'}
     assert spec.harness == ASSISTANT_PREFIX_HARNESS
     validate_spec(spec, {})
+
+
+@pytest.mark.parametrize("user", [None, "root", "10001"])
+def test_shared_integrity_actor_identity_is_checked_before_machine_creation(user):
+    task = text_task("shared-identity").model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image="fixture@sha256:" + "a" * 64,
+            ),
+            "integrity_contract": SharedIntegrityContract(
+                dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                reference_sha256="a" * 64,
+                harness_sha256="b" * 64,
+            ),
+        }
+    )
+    actor = machine_runtime("daytona").model_copy(update={"user": user})
+    spec = rollout_spec(task, session_spec(), task_machine=actor)
+    if user == "10001":
+        validate_spec(spec, FACTORIES)
+    else:
+        with pytest.raises(ValueError):
+            validate_spec(spec, FACTORIES)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_canonical_image_actor_uses_launch_backend_and_declared_identity(tmp_path, shared):
+    task = text_task("image-actor").model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image="fixture@sha256:" + "a" * 64,
+            ),
+            "integrity_contract": SharedIntegrityContract(
+                dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                reference_sha256="a" * 64,
+                harness_sha256="b" * 64,
+            )
+            if shared
+            else None,
+        }
+    )
+    (spec,) = _load(tmp_path, (task,))
+    assert spec.task_machine.backend == Backend.DAYTONA
+    assert spec.task_machine.user == ("10001" if shared else None)
+    validate_spec(spec, FACTORIES)

@@ -264,7 +264,9 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
                 REASONING_VIOLATION_TOKENS_KEY: [2],
             }
 
-    worker = TaskRolloutWorker(config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30)
+    worker = TaskRolloutWorker(
+        config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30
+    )
     try:
         (rollout,) = await worker.generate(request)
         batch = await worker.training_batch(request, [rollout])
@@ -408,9 +410,7 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "max_prompt_length": 2,
         }
     )
-    assert [row["prompt_token_ids"] for row in submitted] == (
-        [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
-    )
+    assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)
@@ -457,10 +457,11 @@ async def test_assistant_prefix_admission_and_transport_share_configured_templat
         [str(panel_path)],
         tokenizer,
         3,
+        minimum_verifier_timeout=config.environment.task_sessions.task_spec.minimum_verifier_timeout,
         num_workers=1,
         chat_template_kwargs=dict(config.generator.chat_template_kwargs),
     )
-    assert [row["input"].spec for row in dataset.collate_fn(list(dataset))] == [spec]
+    assert [row["input"].spec.task for row in dataset.collate_fn(list(dataset))] == [spec.task]
 
     class Engine:
         async def generate(self, request):
@@ -507,7 +508,13 @@ def test_assistant_prefix_dataset_counts_effective_continuation_without_new_gene
     )
     path = tmp_path / "assistant_prefix.parquet"
     write_tasks(path, [lowered_task(task, "assistant_prefix", max_turns=1) for task in (short, long)])
-    dataset = TaskDataset([str(path)], tokenizer, 6, num_workers=1)
+    dataset = TaskDataset(
+        [str(path)],
+        tokenizer,
+        6,
+        minimum_verifier_timeout=get_default_config().environment.task_sessions.task_spec.minimum_verifier_timeout,
+        num_workers=1,
+    )
     (selected,) = dataset.collate_fn(list(dataset))
     spec = selected["input"].spec
     assert spec.task.id == "short-assistant_prefix"

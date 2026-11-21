@@ -232,6 +232,7 @@ def classification_spec(
         label_case="upper",
         max_completion_tokens=2048,
         completion_policy=JudgeCompletionPolicy.CONTENT,
+        parse_attempts=1,
         request_timeout=60,
         transport_attempts=3,
         transport_budget=180,

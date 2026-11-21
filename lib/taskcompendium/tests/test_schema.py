@@ -333,3 +333,28 @@ def test_task_json_rejects_prior_schema_version(specification):
     payload["schema_version"] = "0.26"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))
+
+
+def test_current_execution_and_judge_contract_survives_json_loading(specification):
+    document = specification.model_dump(mode="json")
+    allocation = dict(cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=300.0, verifier_timeout_sec=60.0)
+    document.update(
+        execution_requirements=allocation, verifier_execution_requirements=allocation, integrity_contract=None
+    )
+    document["grader"] = ScriptGrader(
+        argv=("python3", "/tests/grade.py"),
+        environment=GRADING_ENVIRONMENT,
+        judge=JudgeSpec(
+            references=("done",),
+            context_char_limit=120000,
+            max_turns=1,
+            temperature=0.7,
+            parse_attempts=3,
+            chat_template_kwargs={"enable_thinking": "false"},
+        ),
+    ).model_dump(mode="json")
+    task = TaskSpec.model_validate_json(json.dumps(document))
+    restored = json.loads(task.model_dump_json())
+    assert restored["execution_requirements"] == allocation
+    assert restored["verifier_execution_requirements"] == allocation
+    assert restored["grader"]["judge"] == document["grader"]["judge"]

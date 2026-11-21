@@ -5,6 +5,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from omegaconf import OmegaConf
+from rolloutengine.models import MachineRuntimeSpec
+from shellbox.machine import Backend
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ExecutionRequirements
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
@@ -40,7 +43,13 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
             source_row_task(row, i, source_name="fixture", environment_configs=configs) for i, row in enumerate(rows)
         ]
         write_tasks(path, tasks)
-        dataset = TaskDataset([str(path)], _StubTokenizer(), 100, num_workers=2)
+        dataset = TaskDataset(
+            [str(path)],
+            _StubTokenizer(),
+            100,
+            minimum_verifier_timeout=configs["task_spec"]["minimum_verifier_timeout"],
+            num_workers=2,
+        )
     else:
         path.write_text("\n".join(json.dumps(row) for row in rows))
         dataset = SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=configs, num_workers=2)
@@ -51,6 +60,54 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     assert [row["input"].metadata.data_source for row in prepared] == ["fixture"] * len(indices)
     assert all(row["input"].metadata.teacher_route == "math" for row in prepared)
     assert bool(tuple(fork_records.iterdir())) == (row_count == 8)
+
+
+@pytest.mark.parametrize("stored", [False, True])
+def test_frozen_tasks_bind_verifier_floor_and_typed_local_actor(tmp_path, stored):
+    configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
+    lowered = source_row_task(
+        {
+            "prompt": [{"role": "user", "content": "Compute 2 + 2."}],
+            "env_class": "gsm8k",
+            "reward_spec": {"ground_truth": "4"},
+        },
+        0,
+        source_name="fixture",
+        environment_configs=configs,
+    )
+    task = lowered.task.model_copy(
+        update={
+            "execution_requirements": ExecutionRequirements(
+                cpus=1,
+                memory_mb=2048,
+                storage_mb=2048,
+                agent_timeout_sec=600,
+                verifier_timeout_sec=2400,
+            ),
+            "environment_requirements": EnvironmentRequirements(
+                required_backend=Backend.LOCAL,
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image="fixture@sha256:" + "a" * 64,
+            ),
+        }
+    )
+    path = tmp_path / "frozen.parquet"
+    if stored:
+        # Stored inputs retain their selected machine while phase and attempt deadlines are rebound.
+        runtime = MachineRuntimeSpec.model_validate(
+            {**configs["task_spec"]["required_actor"], "backend": Backend.LOCAL}
+        )
+        write_tasks(path, [lowered.model_copy(update={"task": task, "task_machine": runtime})])
+    else:
+        pq.write_table(pa.table({"task_spec": [task.model_dump_json()]}), path)
+    dataset = SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=configs, num_workers=1)
+    loaded = dataset.collate_fn([dataset[0]])[0]["input"].spec
+    assert loaded.task == task
+    assert loaded.task_machine.backend == Backend.LOCAL
+    assert loaded.limits.verifier_timeout == 2400
+    assert (
+        loaded.limits.attempt_timeout is None or loaded.limits.attempt_timeout >= 2400 + loaded.limits.cleanup_timeout
+    )
 
 
 @pytest.mark.parametrize(

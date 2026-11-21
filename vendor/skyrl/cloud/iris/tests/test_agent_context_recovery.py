@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import numpy as np
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from omegaconf import OmegaConf
@@ -25,10 +26,12 @@ from skyrl_train.trajectory_runners.model_clients import (
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
 from skyrl_gym.verification import VerificationStatus
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import NoGrader
+from taskcompendium.models import NoGrader, ProviderRequirement
 from taskcompendium.grader import verifyit_package
+from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, OpenResearcherState
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from verifyit.spec import NumericSpec
-from tests.cpu.task_specs import lowered_task, task_input, text_task
+from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
 
 class Decoder:
@@ -130,14 +133,15 @@ class HarborTrials:
 @pytest.fixture
 def open_worker(worker_config):
     @asynccontextmanager
-    async def create(installed_agents, replies, *, harbor):
+    async def create(installed_agents, replies, *, harbor, retrieval_service=None, factories=None):
         worker = TaskRolloutWorker(
             worker_config,
             WholeTaskProjection(worker_config, WorkerTokenizer()),
             ScriptedClient(replies),
-            {},
-            harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor})),
+            {} if factories is None else factories,
+            harbor=None if harbor is None else HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor})),
             installed_agents=installed_agents,
+            retrieval_service=retrieval_service,
             shutdown_timeout=5,
         )
         try:
@@ -248,7 +252,12 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
         ("reserialized", None),
     ],
     ids=[
-        "sampled-turn", "first-request", "agent-error-policy", "turn-budget", "token-budget", "model-failure",
+        "sampled-turn",
+        "first-request",
+        "agent-error-policy",
+        "turn-budget",
+        "token-budget",
+        "model-failure",
         "reserialized",
     ],
 )
@@ -270,17 +279,19 @@ async def test_harbor_trial_preserves_work_and_error_policy_after_generation_sto
     task = text_task().model_copy(update={"tags": ("harbor",), "grader": NoGrader(reason="Harbor grades the trial")})
     # Each request costs three tokens; the third would reach the cumulative budget of nine.
     request = TaskRequestBatch(
-        rows=(task_input(lowered_task(
-            task,
-            "harbor_trial",
-            max_turns=1 if stop == "max_turns" else 8,
-            max_total_tokens=9 if stop == "budget_reached" else None,
-        )),),
+        rows=(
+            task_input(
+                lowered_task(
+                    task,
+                    "harbor_trial",
+                    max_turns=1 if stop == "max_turns" else 8,
+                    max_total_tokens=9 if stop == "budget_reached" else None,
+                )
+            ),
+        ),
         trajectory_ids=(TrajectoryID("harbor", 0),),
     )
-    async with open_worker(
-        trials, replies, harbor={"max_retries": 0, "enable_error_classification": True}
-    ) as worker:
+    async with open_worker(trials, replies, harbor={"max_retries": 0, "enable_error_classification": True}) as worker:
         (result,) = await worker.generate(request)
         batch = await worker.training_batch(request, [result])
     responses = trials.responses
@@ -394,3 +405,57 @@ async def test_harbor_worker_resets_recovery_state_before_retrying(open_worker):
     assert result.stop_reason == "length"
     assert result.failure is None
     assert result.metrics["rollout_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_one_stored_task_checks_each_runs_retrieval_service_health(open_worker, monkeypatch):
+    state = OpenResearcherState(
+        implementation_revision="a" * 40,
+        corpus_revision="8367703babe6e080899a48782f365c284c32b668",
+        index_manifest_sha256="b" * 64,
+        tokenizer_revision="c" * 40,
+        top_k=5,
+        snippet_max_tokens=512,
+        include_get_document=True,
+    )
+    requirement = ProviderRequirement(
+        action_interface=OPENRESEARCHER_ACTION_INTERFACE,
+        network_access="service_only",
+        initial_state=state.model_dump(mode="json"),
+    )
+    task = text_task().model_copy(
+        update={
+            "environment_requirements": SHELL_ENVIRONMENT.model_copy(
+                update={"tool_providers": {"search": requirement}}
+            ),
+        }
+    )
+    stored = lowered_task(task, backend="shellsim")
+    frozen = stored.model_dump_json()
+    observed = []
+    async_client = httpx.AsyncClient
+
+    def health(request):
+        observed.append(str(request.url))
+        return httpx.Response(200, json={"state": state.model_dump(mode="json")})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: async_client(transport=httpx.MockTransport(health), **kwargs)
+    )
+    for endpoint in ("http://first-run:8788", "http://second-run:8788"):
+        async with open_worker(
+            None,
+            [sampled_reply("Finished")],
+            harbor=None,
+            retrieval_service=endpoint,
+            factories={"shellsim": ShellSimMachineFactory()},
+        ) as worker:
+            (result,) = await worker.generate(
+                TaskRequestBatch(
+                    rows=(task_input(stored),),
+                    trajectory_ids=(TrajectoryID("binding", 0),),
+                )
+            )
+        assert result.failure is None
+        assert stored.model_dump_json() == frozen
+    assert observed == ["http://first-run:8788/health", "http://second-run:8788/health"]

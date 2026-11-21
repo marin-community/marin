@@ -16,10 +16,11 @@ from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
+from skyrl_gym.rollout_specs import is_shell_harness, rollout_limits, rollout_spec, shell_harness
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
-from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.integrity import SharedIntegrityContract
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
@@ -60,7 +61,8 @@ def task_evaluation_identity(task: dict, selection: SelectionManifest | None) ->
 
 def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
     return dataset.add_column(
-        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+        TASK_EVALUATION_IDENTITY,
+        [identity.model_dump_json() if identity is not None else None for identity in identities],
     )
 
 
@@ -77,6 +79,27 @@ def task_prompt(lowered: TaskRolloutSpec) -> dict:
 
 class TaskDataset(PromptDataset):
     """Render public conversation fields and retain private lowered tasks for workers."""
+
+    def __init__(
+        self,
+        datasets: Sequence[str],
+        tokenizer: PreTrainedTokenizerBase,
+        max_prompt_length: int,
+        *,
+        minimum_verifier_timeout: float,
+        num_workers: int = 8,
+        chat_template_kwargs: dict | None = None,
+        prepare_source: Callable[[str, Dataset], Dataset] | None = None,
+    ):
+        self.minimum_verifier_timeout = minimum_verifier_timeout
+        super().__init__(
+            list(datasets),
+            tokenizer,
+            max_prompt_length,
+            num_workers=num_workers,
+            chat_template_kwargs=chat_template_kwargs,
+            prepare_source=prepare_source,
+        )
 
     def prepare_dataset(self, dataset):
         return dataset.map(
@@ -97,6 +120,13 @@ class TaskDataset(PromptDataset):
         inputs = []
         for _, environment, extras, uid in rows:
             lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
+            lowered = lowered.model_copy(
+                update={
+                    "limits": rollout_limits(
+                        lowered.task, lowered.limits, minimum_verifier_timeout=self.minimum_verifier_timeout
+                    )
+                }
+            )
             if (
                 isinstance(lowered.task.grader, NoGrader)
                 and lowered.harness != HARBOR_TRIAL_SESSION
@@ -231,6 +261,12 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    if machine is None and task_machine_reason(task) is not None:
+        machine = dict(config["required_actor"])
+        if task.environment_requirements.required_backend is not None:
+            machine["backend"] = task.environment_requirements.required_backend.value
+        if isinstance(task.integrity_contract, SharedIntegrityContract):
+            machine["user"] = str(task.integrity_contract.agent_uid)
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)
         if machine is not None and task_machine_reason(task) is not None
@@ -322,6 +358,7 @@ class SourceTaskDataset(TaskDataset):
             list(datasets),
             tokenizer,
             max_prompt_length,
+            minimum_verifier_timeout=environment_configs["task_spec"]["minimum_verifier_timeout"],
             num_workers=num_workers,
             chat_template_kwargs=chat_template_kwargs,
             prepare_source=prepare_source,

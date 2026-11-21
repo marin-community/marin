@@ -7,6 +7,9 @@ import hashlib
 import json
 from typing import Any
 
+GIT_REVISION_PATTERN = r"^[0-9a-f]{40}$"
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
 
 def canonical_sha256(row: dict[str, Any]) -> str:
     """Hash UTF-8 JSON with sorted keys and compact separators."""

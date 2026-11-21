@@ -457,6 +457,7 @@ class BasePPOExp:
             data_files=data_files,
             tokenizer=self.tokenizer,
             max_prompt_length=self.cfg.trainer.max_prompt_length,
+            minimum_verifier_timeout=self.cfg.environment.task_sessions.task_spec.minimum_verifier_timeout,
             cache_dir=Path(self.cfg.data.task_cache_dir),
             session={**dict(self.cfg.environment.task_sessions.session), "task_session": SHELLBOX_HARNESS},
             grader_override=HarborTaskSettings.from_config(self.cfg.terminal_bench_config).grader_override(),
