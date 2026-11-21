@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resources.iris_fakes import Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
@@ -596,3 +597,70 @@ async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.HELD
     assert "wc: not found" in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
+
+
+class SandboxController(LocalController):
+    """A local controller whose guest ``/workspace`` is ``root``."""
+
+    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str) -> None:
+        super().__init__(faults, prelude)
+        self.root = root
+
+    @override
+    def exec_in_container(self, request: object, timeout_ms: int) -> SimpleNamespace:
+        command = [part.replace("/workspace", str(self.root)) for part in request.command]  # type: ignore[attr-defined]
+        return super().exec_in_container(SimpleNamespace(command=command), timeout_ms)
+
+
+class LocalIrisEnvs(EnvFactory):
+    """Each environment is a fresh local Iris sandbox in its own directory with the same scripted faults."""
+
+    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str = "") -> None:
+        self.root, self.faults, self.prelude = root, faults, prelude
+        self.created: list[Path] = []
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+        workdir = self.root / f"sandbox-{len(self.created)}"
+        workdir.mkdir(parents=True)
+        self.created.append(workdir)
+        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude))
+        return ShellboxEnv(machine, "image", lambda _: None, AsyncExitStack())
+
+
+# Review 2026-11-20 (follow-up 3): a lost WebSocket upgrade reply reran the command in the same sandbox, and a
+# missing `wc` or an OOM-killed sandbox during capture held only after three sandboxes with one append each.
+@pytest.mark.parametrize(
+    "faults,prelude,sandboxes,cause",
+    [
+        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown"),
+        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found"),
+        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled"),
+    ],
+    ids=["lost-upgrade-reply", "capture-without-wc", "capture-oom-killed"],
+)
+async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    faults: tuple[Injection, ...],
+    prelude: str,
+    sandboxes: int,
+    cause: str,
+) -> None:
+    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude)
+    counted = (call("shell", {"command": "echo ran >> counter", "timeout": 5}, "inspect"), *script("S")[1:])
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield config(arm), resources(envs, counted)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    assert result.terminal is Terminal.HELD
+    assert cause in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
+    assert [(workdir / "counter").read_text() for workdir in envs.created] == ["ran\n"] * sandboxes
