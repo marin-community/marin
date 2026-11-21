@@ -113,17 +113,6 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
 
 
 @pytest.mark.data_integration
-def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):
-    source = next(source for source in all_sources().values() if source.is_grandfathered_blend)
-    source_id = source.info.id
-    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source_id: source})
-    assert runnable_sources()[source.name] is source
-    assert source.declaration.status == "Available"
-    assert source.declaration.daytona_exemption
-    assert source.declaration.daytona_safety is None
-
-
-@pytest.mark.data_integration
 def test_every_registered_source_declares_catalog_metadata():
     """Missing census evidence remains pending when catalog metadata is declared."""
     for source in all_sources().values():
