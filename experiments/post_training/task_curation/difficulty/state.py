@@ -21,6 +21,7 @@ class GapReason(StrEnum):
     TASK_SPEC_FACTORY_PENDING = "TASK_SPEC_FACTORY_PENDING"
     ENVIRONMENT_ARTIFACT_MISSING = "ENVIRONMENT_ARTIFACT_MISSING"
     JUDGE_ROUTE_UNQUALIFIED = "JUDGE_ROUTE_UNQUALIFIED"
+    GRADER_INFRASTRUCTURE_FAILURE = "GRADER_INFRASTRUCTURE_FAILURE"
     UNSUPPORTED_COMPOSE_DOCUMENT = "UNSUPPORTED_COMPOSE_DOCUMENT"
     EXECUTABILITY_ADMISSION_PENDING = "EXECUTABILITY_ADMISSION_PENDING"
     NO_MEASUREMENT_ROW = "NO_MEASUREMENT_ROW"
@@ -51,6 +52,9 @@ class Gap:
     capability: str | None = None
     artifact_kind: ArtifactKind | None = None
     judge_temperature: float | None = None
+    # The typed identity of the infrastructure failure, for example http_401
+    # from the judge transport evidence. Never free text.
+    error_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ class LedgerRow:
     legacy_status: str | None = None
     artifact_kind: ArtifactKind | None = None
     judge_temperature: float | None = None
+    error_identity: str | None = None
     secondary_gaps: tuple[Gap, ...] = ()
     queue_sha256: str | None = None
 
@@ -92,7 +97,13 @@ class LedgerRow:
         if self.reason is None:
             return None
         return Gap(
-            self.reason, self.artifact_uri, self.judge_model, self.capability, self.artifact_kind, self.judge_temperature
+            self.reason,
+            self.artifact_uri,
+            self.judge_model,
+            self.capability,
+            self.artifact_kind,
+            self.judge_temperature,
+            self.error_identity,
         )
 
 
@@ -234,7 +245,13 @@ def cell_state(ledger: Sequence[LedgerRow], source: CatalogSource, solver: Solve
             ),
         )
     elif any(
-        gap.reason not in {GapReason.COVERAGE_SHORTFALL, GapReason.PROVIDER_CAPACITY_WAIT, GapReason.NO_MEASUREMENT_ROW}
+        gap.reason
+        not in {
+            GapReason.COVERAGE_SHORTFALL,
+            GapReason.PROVIDER_CAPACITY_WAIT,
+            GapReason.NO_MEASUREMENT_ROW,
+            GapReason.GRADER_INFRASTRUCTURE_FAILURE,
+        }
         for gap in gaps
     ):
         state = CellStatus.BLOCKED

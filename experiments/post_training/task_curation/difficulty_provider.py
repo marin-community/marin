@@ -17,7 +17,23 @@ from rigging.timing import ExponentialBackoff
 
 LOGGER = logging.getLogger(__name__)
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# The provider's per-model authentication gate answers this exact identity with
+# HTTP 401 transiently while the credential itself is valid. It is a known
+# transient failure and retries within the provider's bounded backoff.
+TRANSIENT_MODEL_AUTH_MESSAGE = "Model authentication required"
 ADMISSION_POLL_SECONDS = 1.0
+
+
+def transient_model_auth(status_code: int, body: bytes) -> bool:
+    """Whether an upstream reply carries the provider's transient model-auth identity."""
+    if status_code != 401:
+        return False
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return isinstance(error, dict) and error.get("message") == TRANSIENT_MODEL_AUTH_MESSAGE
 
 
 @dataclass(frozen=True)
@@ -107,7 +123,9 @@ class ProviderGate:
                 response = client.post(endpoint.rstrip("/") + "/chat/completions", json=body)
                 (attempt / "response.body").write_bytes(response.content)
                 (attempt / "status.json").write_text(json.dumps({"status": response.status_code}))
-                if response.status_code not in RETRYABLE_STATUS:
+                if response.status_code not in RETRYABLE_STATUS and not transient_model_auth(
+                    response.status_code, response.content
+                ):
                     return response
                 delay = backoff.next_interval() if number + 1 < self.limits.attempts else 0
                 wait = root / "provider-waits" / f"{number:02d}.json"
@@ -118,6 +136,11 @@ class ProviderGate:
                             "status": response.status_code,
                             "backoff_seconds": delay,
                             "kind": "provider_wait",
+                            "reason": (
+                                "transient_model_auth"
+                                if transient_model_auth(response.status_code, response.content)
+                                else None
+                            ),
                             "task_attempt": False,
                         }
                     )

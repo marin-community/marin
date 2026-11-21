@@ -34,6 +34,7 @@ LEGACY_GAPS = {
     DifficultyGap.HOSTED_JUDGE_CANARY_INTERRUPTED: GapReason.JUDGE_ROUTE_UNQUALIFIED,
     DifficultyGap.HOSTED_UNSERVED_RAW_ZERO_GRADES: GapReason.COVERAGE_SHORTFALL,
     DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING: GapReason.ENVIRONMENT_ARTIFACT_MISSING,
+    DifficultyGap.GRADER_INFRASTRUCTURE_FAILURE: GapReason.GRADER_INFRASTRUCTURE_FAILURE,
     DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT: GapReason.UNSUPPORTED_COMPOSE_DOCUMENT,
     DifficultyGap.NETWORK_POLICY_VIOLATION: GapReason.NETWORK_POLICY_VIOLATION,
     DifficultyGap.NO_EXECUTABLE_GRADER: GapReason.EXECUTABILITY_ADMISSION_PENDING,
@@ -130,6 +131,7 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
                 capability=(
                     f"{legacy.value}:{detail or ''}" if canonical == GapReason.EXECUTABILITY_ADMISSION_PENDING else None
                 ),
+                error_identity=detail if canonical == GapReason.GRADER_INFRASTRUCTURE_FAILURE else None,
             )
         )
     if not gaps:

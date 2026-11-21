@@ -356,6 +356,7 @@ class EscalationRemediation:
 REMEDIATIONS: dict[GapReason, Remediation] = {
     GapReason.COVERAGE_SHORTFALL: AttemptRemediation(),
     GapReason.NO_MEASUREMENT_ROW: AttemptRemediation(),
+    GapReason.GRADER_INFRASTRUCTURE_FAILURE: AttemptRemediation(),
     GapReason.PROVIDER_CAPACITY_WAIT: ProviderRemediation(),
     GapReason.ENVIRONMENT_ARTIFACT_MISSING: ArtifactRemediation(),
     GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING: SnapshotRemediation(),

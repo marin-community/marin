@@ -38,9 +38,12 @@ CONTROLLER_SECRET_NAMES = (
     "CW_KEY_SECRET",
     "HF_TOKEN",
     "GLM_BULK_TOKEN",
-    "TOGETHER_API_KEY",
     "DAYTONA_DATA_API_KEY",
 )
+# Provider keys live in Google Secret Manager, not the submitter's environment:
+# the job bundle sources this reference directly, and every inheriting child
+# resolves it through the same name.
+TOGETHER_API_KEY_SECRET_REF = "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1"
 
 
 def run_controller(
@@ -114,6 +117,7 @@ def launch_controller(
     command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:" + REFRESH_TOKEN_ENV])
     for name in CONTROLLER_SECRET_NAMES:
         command.extend(["--secret", name, "env:" + name])
+    command.extend(["--secret", "TOGETHER_API_KEY", TOGETHER_API_KEY_SECRET_REF])
     command.extend(
         [
             "--secret",

@@ -155,6 +155,7 @@ class DifficultyGap(StrEnum):
     JUDGE_QUALIFICATION_PENDING = "judge_qualification_pending"
     NO_QUALIFIED_MEASUREMENT_RECORDED = "no_qualified_measurement_recorded"
     MATH_VERIFIER_DEADLINE = "math_verifier_deadline"
+    GRADER_INFRASTRUCTURE_FAILURE = "grader_infrastructure_failure"
     HOSTED_NATIVE_CONTEXT_UNQUALIFIED = "hosted_native_context_unqualified"
     HOSTED_TIMEOUT_GRADES_UNQUALIFIED = "hosted_timeout_grades_unqualified"
     HOSTED_DISPATCH_INTERRUPTED = "hosted_dispatch_interrupted"
@@ -235,6 +236,11 @@ DIFFICULTY_GAPS: Mapping[DifficultyGap, DifficultyGapSpec] = MappingProxyType(
             DifficultyGapOwner.PIPELINE,
             "The math verifier deadline exhausted during grading.",
             "The shared grader deadline is fixed or the task is re-graded after repair.",
+        ),
+        DifficultyGap.GRADER_INFRASTRUCTURE_FAILURE: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The grader or verifier infrastructure consumed the attempt before it could score.",
+            "The verifier credential or judge route is repaired and the attempt is re-run.",
         ),
         DifficultyGap.HOSTED_NATIVE_CONTEXT_UNQUALIFIED: DifficultyGapSpec(
             DifficultyGapOwner.PIPELINE,

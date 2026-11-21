@@ -71,6 +71,7 @@ def blocked(gap: Gap):
         capability=gap.capability,
         artifact_kind=gap.artifact_kind,
         judge_temperature=gap.judge_temperature,
+        error_identity=gap.error_identity,
     )
     return cell_state([observed], SOURCE, Solver.SMALL, CoveragePolicy())
 
@@ -436,3 +437,28 @@ def test_legacy_compound_split_preserves_the_registered_capacity_sentence():
         GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED,
         GapReason.PROVIDER_CAPACITY_WAIT,
     ]
+
+
+def test_grader_infrastructure_failure_maps_with_its_typed_identity():
+    (gap,) = legacy_gaps("grader_infrastructure_failure:http_401")
+    assert gap == Gap(GapReason.GRADER_INFRASTRUCTURE_FAILURE, error_identity="http_401")
+    (plain,) = legacy_gaps("grader_infrastructure_failure")
+    assert plain == Gap(GapReason.GRADER_INFRASTRUCTURE_FAILURE)
+    cell = blocked(gap)
+    assert cell.state == CellStatus.NEEDS_ATTEMPTS
+    (action,) = plan([cell], [])
+    assert isinstance(action, AttemptBatch)
+
+
+def test_attempts_lost_to_grader_infrastructure_are_re_attempted_not_blocked():
+    lost = replace(
+        row("lost", outcome=Outcome.UNSCORED),
+        reason=GapReason.GRADER_INFRASTRUCTURE_FAILURE,
+        error_identity="http_401",
+    )
+    state = cell_state([lost], SOURCE, Solver.SMALL, CoveragePolicy())
+    assert state.state == CellStatus.NEEDS_ATTEMPTS
+    assert state.n_missing == 2
+    actions = plan([state], [])
+    assert [isinstance(action, AttemptBatch) for action in actions] == [True]
+    assert actions[0].n_attempts == 2

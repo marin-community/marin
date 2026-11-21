@@ -100,6 +100,67 @@ def test_provider_retries_rejections_with_preserved_waits(tmp_path, monkeypatch)
     assert 1.5 <= waits[1]["backoff_seconds"] <= 2.5
 
 
+def test_provider_retries_the_transient_model_auth_401_with_bounded_backoff(tmp_path, monkeypatch):
+    calls = []
+    body = json.dumps({
+        "error": {"type": "authentication_error", "code": "authentication_error",
+                  "message": difficulty_provider.TRANSIENT_MODEL_AUTH_MESSAGE},
+    })
+
+    def upstream(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(401, content=body.encode())
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return [1]
+
+    real_client = httpx.Client
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(upstream)))
+    with difficulty_relay.budget_relay(
+        endpoint="https://provider.fixture/v1", model="fixture", api_key="fixture",
+        tokenizer_model="fixture", tokenizer_revision="a"*40, parameters={},
+        budget=RequestBudget(65536,49152,16384),
+        provider_limits=ProviderLimits(max_in_flight=1, attempts=3), receipts=tmp_path,
+    ) as relay, real_client() as client:
+        assert client.post(relay+"/task/v1/chat/completions", json={"messages": []}, timeout=30).status_code == 200
+    statuses = [json.loads(path.read_text())["status"] for path in sorted(tmp_path.glob("*/000000/upstream-attempts/*/status.json"))]
+    (wait,) = [json.loads(path.read_text()) for path in sorted(tmp_path.glob("*/000000/provider-waits/*.json"))]
+    assert statuses == [401, 200]
+    assert wait["reason"] == "transient_model_auth" and wait["task_attempt"] is False
+    assert wait["backoff_seconds"] > 0
+
+
+def test_provider_passes_other_authentication_401s_through_unretried(tmp_path, monkeypatch):
+    calls = []
+    body = json.dumps({"error": {"message": "Invalid API key"}})
+
+    def upstream(request):
+        calls.append(request)
+        return httpx.Response(401, content=body.encode())
+
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return [1]
+
+    real_client = httpx.Client
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(upstream)))
+    with difficulty_relay.budget_relay(
+        endpoint="https://provider.fixture/v1", model="fixture", api_key="fixture",
+        tokenizer_model="fixture", tokenizer_revision="a"*40, parameters={},
+        budget=RequestBudget(65536,49152,16384),
+        provider_limits=ProviderLimits(max_in_flight=1, attempts=3), receipts=tmp_path,
+    ) as relay, real_client() as client:
+        assert client.post(relay+"/task/v1/chat/completions", json={"messages": []}, timeout=30).status_code == 401
+    assert len(calls) == 1
+
+
 def test_relay_renders_tool_arguments_without_changing_upstream_wire_history(tmp_path, monkeypatch):
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]")), unk_token="[UNK]",

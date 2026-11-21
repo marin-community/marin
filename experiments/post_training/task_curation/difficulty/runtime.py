@@ -25,7 +25,7 @@ from marin.inference.config import VllmEngineConfig
 from marin.inference.iris import remote_inference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret
+from rigging.secrets import SECRETS_DIR, SECRETS_DIR_ENV, forwarded_secrets, require_secret
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
@@ -52,6 +52,10 @@ from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJud
 TOGETHER_BASE_URL = "https://api.together.xyz/v1"
 TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
 TOGETHER_MODEL = "zai-org/GLM-5.3"
+# Provider credential files the wave forwards from its job bundle into the
+# worker's private framework-secrets directory, where the dispatch scan resolves
+# them for task bundles that reference them.
+FORWARDED_PROVIDER_SECRET_FILES = ("TOGETHER_API_KEY",)
 
 
 def hosted_liveness_response(base_url: str, api_key: str, model: str) -> httpx.Response:
@@ -315,6 +319,18 @@ def run_trial_worker(
     secrets = {**forwarded_secrets(), "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key}
     if judge is not None and judge.api_key_secret is not None:
         secrets[judge.api_key_secret] = require_secret(judge.api_key_secret)
+    # Task bundles resolve provider credential templates from their granted
+    # guest environment; the worker's dispatch scan fails closed when a bundle
+    # references one this wave cannot grant. Forward the job bundle's provider
+    # credential files so that scan can resolve them without a second copy of
+    # the value in this process.
+    job_secrets = Path(os.environ.get(SECRETS_DIR_ENV, str(SECRETS_DIR)))
+    for name in FORWARDED_PROVIDER_SECRET_FILES:
+        source = job_secrets / name
+        if source.is_file():
+            target = secrets_dir / name
+            target.write_bytes(source.read_bytes())
+            target.chmod(0o600)
     worker_env = {**os.environ}
     if daytona_api_key is not None:
         worker_env["DAYTONA_DATA_API_KEY"] = daytona_api_key

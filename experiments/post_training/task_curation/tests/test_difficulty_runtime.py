@@ -80,6 +80,10 @@ print(json.dumps([context, completion_budget_from_count(
         raise AssertionError(f"Judgeless worker looked up {name}")
 
     monkeypatch.setattr(difficulty_runtime, "require_secret", unavailable_secret)
+    bundle_secrets = tmp_path / "job-bundle"
+    bundle_secrets.mkdir()
+    (bundle_secrets / difficulty_runtime.TOGETHER_API_KEY_ENV).write_text("fixture-provider-key")
+    monkeypatch.setenv(difficulty_runtime.SECRETS_DIR_ENV, str(bundle_secrets))
     monkeypatch.setattr(difficulty_runtime.subprocess, "run", native_worker)
     try:
         difficulty_runtime.run_trial_worker(
@@ -97,6 +101,10 @@ print(json.dumps([context, completion_budget_from_count(
         thread.join()
         server.server_close()
     assert results == [[65536, 16384]]
+    forwarded = tmp_path / "framework-secrets" / difficulty_runtime.TOGETHER_API_KEY_ENV
+    # The judgeless worker forwards the job bundle's provider credential file for
+    # the dispatch scan without resolving it in this process.
+    assert forwarded.is_file() and forwarded.read_text() == "fixture-provider-key"
 
 
 @pytest.mark.parametrize("with_judge", [False, True])

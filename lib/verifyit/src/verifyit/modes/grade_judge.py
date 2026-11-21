@@ -70,7 +70,24 @@ MODEL_ENV = "VERIFYIT_JUDGE_MODEL"
 
 REASONING_LIMIT = 400
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+# The provider's per-model authentication gate answers this exact identity with
+# HTTP 401 transiently while the credential itself is valid. It is a known
+# transient judge failure and retries within the bounded transport budget.
+TRANSIENT_MODEL_AUTH_MESSAGE = "Model authentication required"
 _TransportResult = TypeVar("_TransportResult")
+
+
+def _transient_model_auth(error: openai.APIStatusError) -> bool:
+    """Whether a 401 carries the provider's transient model-authentication identity."""
+    if error.status_code != 401:
+        return False
+    try:
+        body = json.loads(error.response.text)
+    except (TypeError, ValueError):
+        return False
+    payload = body.get("error") if isinstance(body, dict) else None
+    return isinstance(payload, dict) and payload.get("message") == TRANSIENT_MODEL_AUTH_MESSAGE
+
 
 REFERENCE_PROMPT = """You are an impartial grader for open-ended short-answer questions. Compare the \
 candidate response with the reference answer(s) below. Judge the substantive answer only: ignore \
@@ -460,7 +477,7 @@ def _judge_transport(
                 "body": error.response.text if isinstance(error, openai.APIStatusError) else None,
             }
             attempts.append(record)
-            retryable = status is None or status in RETRYABLE_STATUSES
+            retryable = status is None or status in RETRYABLE_STATUSES or _transient_model_auth(error)
             remaining = deadline - time.monotonic()
             if not retryable or index + 1 == spec.transport_attempts or remaining <= 0:
                 raise GradingInfraError(

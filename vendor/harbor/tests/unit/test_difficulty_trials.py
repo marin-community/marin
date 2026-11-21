@@ -75,7 +75,7 @@ def batch_manifest(root, source):
 def math_deadline_trial(phase):
     """A trial fixture whose verifier verdict carries one math-deadline phase."""
 
-    async def deadline_trial(configuration, _authentication):
+    async def deadline_trial(configuration, _authentication, _guest_environment):
         trial_dir = configuration.trials_dir / "candidate"
         verifier_dir = trial_dir / "verifier"
         verifier_dir.mkdir(parents=True)
@@ -99,7 +99,7 @@ def math_deadline_trial(phase):
 
 
 def scored_trial():
-    async def scored(configuration, _authentication):
+    async def scored(configuration, _authentication, _guest_environment):
         trial_dir = configuration.trials_dir / "candidate"
         verifier_dir = trial_dir / "verifier"
         verifier_dir.mkdir(parents=True)
@@ -219,10 +219,10 @@ def test_scored_attempt_clears_the_deadline_streak(tmp_path, monkeypatch):
     task, config, sample, identity, measurement = deadline_fixture(tmp_path / "source-task")
     phases = [MATH_DEADLINE_REFERENCE_PARSE, MATH_DEADLINE_REFERENCE_PARSE]
 
-    async def mixed_trial(configuration, _authentication):
+    async def mixed_trial(configuration, _authentication, _guest_environment):
         if phases:
-            return await math_deadline_trial(phases.pop(0))(configuration, _authentication)
-        return await scored_trial()(configuration, _authentication)
+            return await math_deadline_trial(phases.pop(0))(configuration, _authentication, {})
+        return await scored_trial()(configuration, _authentication, {})
 
     monkeypatch.setattr(difficulty_trials, "execute_trial", mixed_trial)
     outcome = difficulty_trials.run_task(
@@ -278,13 +278,17 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     )
     directory = tmp_path / "source-task"
     directory.mkdir()
+    (directory / "task.toml").write_text('[environment]\nworkdir = "/app"\n')
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
     (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
         task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
     ).model_dump_json())
     if upstream_failure in {"missing_image", "missing_images"}:
         (directory / "task.toml").write_text('[environment]\ndocker_image = "example.test/native:latest"\nworkdir = "/app"\n')
         (directory / "instruction.md").write_text("Original native task")
-        (directory / "tests").mkdir()
+        (directory / "tests").mkdir(exist_ok=True)
         (directory / "tests/test.sh").write_text("exit 0\n")
         source = source.model_copy(update={"tasks": [
             source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory),
@@ -293,7 +297,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     if upstream_failure == "compose_unsupported":
         (directory / "task.toml").write_text('[environment]\ndocker_image = "example.test/native@sha256:' + "a" * 64 + '"\nworkdir = "/app"\n')
         (directory / "instruction.md").write_text("Original native task")
-        (directory / "tests").mkdir()
+        (directory / "tests").mkdir(exist_ok=True)
         (directory / "tests/test.sh").write_text("exit 0\n")
         (directory / "docker-compose.yml").write_text(
             "services:\n"
@@ -382,10 +386,10 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     continuing = False
     original_execute_trial = difficulty_trials.execute_trial
 
-    async def physical_trial(configuration, authentication):
+    async def physical_trial(configuration, authentication, _guest_environment):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         if upstream_failure in {"missing_image", "missing_images"} and configuration.agent.name == "terminus-2":
-            return await original_execute_trial(configuration, authentication)
+            return await original_execute_trial(configuration, authentication, {})
         if upstream_failure == "compose_unsupported" and configuration.agent.name == "terminus-2":
             # The local backend cannot reach compose validation off Linux; raise the
             # genuine translator error the prepared sandbox would raise at construction.
@@ -450,6 +454,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                    "verifier_result": None if unserved else {"rewards": {"reward": verdict_reward}}}
         (directory / "result.json").write_text(json.dumps(payload))
         result = SimpleNamespace(finished_at=datetime.now(UTC), completion=None if unserved else "completed",
+                                 verifier=SimpleNamespace(started_at=datetime.now(UTC), finished_at=datetime.now(UTC)),
                                  exception_info=SimpleNamespace(exception_type="AgentTimeoutError") if failed else None,
                                  verifier_result=None if unserved else SimpleNamespace(rewards={"reward": verdict_reward}),
                                  model_dump=lambda **kwargs: payload)
@@ -507,6 +512,10 @@ def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypat
     )
     directory = tmp_path / "source-task"
     directory.mkdir()
+    (directory / "task.toml").write_text('[environment]\nworkdir = "/app"\n')
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
     (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
         task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
     ).model_dump_json())
@@ -550,7 +559,7 @@ def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypat
         **kwargs, transport=httpx.MockTransport(model_response)))
     monkeypatch.setattr(ledger_worker, "require_secret", lambda name: "fixture-host-key")
 
-    async def physical_trial(configuration, authentication):
+    async def physical_trial(configuration, authentication, _guest_environment):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         # The trial's first model request is transiently rejected and its retry succeeds through the relay.
         endpoint = configuration.agent.kwargs["api_base"]

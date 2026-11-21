@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from dataclasses import replace
@@ -38,8 +39,11 @@ from experiments.post_training.task_curation.difficulty_trials import (
     RunSealState,
     archive_model_traffic,
     preserved_model_traffic,
+    resolve_provider_secrets,
     run_task,
     seal_model_traffic,
+    task_guest_environment,
+    task_required_provider_secrets,
     write_replaced_json_evidence,
 )
 
@@ -71,7 +75,14 @@ def record_attempt(
         outcome=Outcome.OBSERVATION if row.reason == GapReason.PROVIDER_CAPACITY_WAIT else row.outcome,
     )
     append_rows(ledger, [row])
-    LOGGER.info("Recorded %s/%s: %s, %.6f GPU-h", source.sample.source_id, row.task_id, row.outcome, hours)
+    LOGGER.info(
+        "Recorded %s/%s: %s, %s, %.6f GPU-h",
+        source.sample.source_id,
+        row.task_id,
+        row.outcome,
+        row.reason or "-",
+        hours,
+    )
 
 
 def execute_task(
@@ -84,6 +95,7 @@ def execute_task(
     judge_relay: str | None,
     ledger: str,
     meter: GpuAccounting,
+    provider_secrets: Mapping[str, str],
 ) -> None:
     source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
     task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
@@ -93,7 +105,15 @@ def execute_task(
         record_attempt, source=source, config=config, output=output, ledger=ledger, meter=meter, task_key=task_key
     )
     outcome = run_task(
-        task, config, relay, local / source_key, str(destination), judge_relay, 0, record_attempt=recorder
+        task,
+        config,
+        relay,
+        local / source_key,
+        str(destination),
+        judge_relay,
+        0,
+        record_attempt=recorder,
+        guest_environment=task_guest_environment(task, provider_secrets),
     )
     hours = meter.finish(task_key)
     references = (destination / task_key / "*" / "attempt.json").glob()
@@ -154,6 +174,14 @@ def main() -> None:
     if args.local_root.exists() or StoragePath(args.output_root).exists():
         raise FileExistsError("Batch outputs are immutable; select a new action")
     args.local_root.mkdir(parents=True)
+    # Resolve the wave's provider credentials once, before any attempt runs: a
+    # bundle-referenced credential that cannot resolve fails the wave closed at
+    # dispatch instead of mid-verifier.
+    provider_secrets = resolve_provider_secrets(
+        task_required_provider_secrets(
+            Path(task.path) for source in sources for task in source.tasks if task.path is not None
+        )
+    )
     output = StoragePath(args.output_root)
     run_seal = RunSealState(
         config.solver.value, tuple(source.sample.source_id for source in sources), datetime.now(UTC).isoformat()
@@ -203,7 +231,17 @@ def main() -> None:
             meter.advance()
             futures = [
                 pool.submit(
-                    execute_task, task, source, config, relay, args.local_root, output, judge_relay, args.ledger, meter
+                    execute_task,
+                    task,
+                    source,
+                    config,
+                    relay,
+                    args.local_root,
+                    output,
+                    judge_relay,
+                    args.ledger,
+                    meter,
+                    provider_secrets,
                 )
                 for task in tasks
             ]

@@ -64,6 +64,7 @@ def read_rows(root: str) -> list[LedgerRow]:
                     gap["capability"],
                     ArtifactKind(gap["artifact_kind"]) if gap.get("artifact_kind") else None,
                     gap.get("judge_temperature"),
+                    gap.get("error_identity"),
                 )
                 for gap in value.get("secondary_gaps", [])
             )

@@ -46,6 +46,7 @@ class FakeJudgeServer(ThreadingHTTPServer):
     usage_tokens: list[int]
     http_statuses: list[int]
     retry_after: str | None
+    error_body: str | None
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -107,7 +108,11 @@ class _Handler(BaseHTTPRequestHandler):
             else server.http_status
         )
         if status != 200 and server.http_statuses:
-            body = json.dumps({"error": {"message": "fixture unavailable"}}).encode()
+            body = (
+                server.error_body.encode()
+                if server.error_body is not None
+                else json.dumps({"error": {"message": "fixture unavailable"}}).encode()
+            )
         self.send_response(status)
         if server.retry_after is not None:
             self.send_header("Retry-After", server.retry_after)
@@ -130,6 +135,7 @@ def fake_judge(monkeypatch):
     server.http_status = 200
     server.http_statuses = []
     server.retry_after = None
+    server.error_body = None
     server.message_fields = {}
     server.response_fields = {}
     server.raw_body = None
@@ -818,6 +824,74 @@ def test_judge_transport_retries_only_recoverable_failures_and_retains_unscored_
         assert verdict.reward == 1
         assert delays == [0.25]
         assert attempts[-1]["outcome"] == "succeeded"
+
+
+_TRANSIENT_AUTH_BODY = json.dumps(
+    {
+        "error": {
+            "type": "authentication_error",
+            "code": "authentication_error",
+            "message": grade_judge.TRANSIENT_MODEL_AUTH_MESSAGE,
+        }
+    }
+)
+
+
+def test_judge_transport_retries_the_transient_model_auth_401(fake_judge, monkeypatch):
+    fake_judge.http_statuses = [401, 200]
+    fake_judge.error_body = _TRANSIENT_AUTH_BODY
+    fake_judge.replies = ["[[A=B]]"]
+    delays = []
+    monkeypatch.setattr(grade_judge.random, "uniform", lambda *_: 0)
+    monkeypatch.setattr(grade_judge.time, "sleep", delays.append)
+    spec = _label_spec(
+        label_scan="whole", label_case="upper", request_timeout=10, transport_budget=10, transport_attempts=3
+    )
+    verdict = grade_judge.grade_judge_candidate(spec, "candidate")
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 1)
+    assert len(fake_judge.requests) == 2
+    assert delays == [1.0]
+    attempts = verdict.detail["transport_attempts"]
+    assert attempts[0]["status"] == 401
+    assert attempts[0]["reason"] == "http_401"
+    assert attempts[-1]["outcome"] == "succeeded"
+
+
+def test_judge_transport_does_not_retry_other_authentication_401s(fake_judge, monkeypatch):
+    fake_judge.http_statuses = [401]
+    fake_judge.error_body = json.dumps({"error": {"message": "Invalid API key"}})
+    fake_judge.replies = ["[[A=B]]"]
+    sleeps = []
+    monkeypatch.setattr(grade_judge.time, "sleep", sleeps.append)
+    spec = _label_spec(
+        label_scan="whole", label_case="upper", request_timeout=10, transport_budget=10, transport_attempts=3
+    )
+    with pytest.raises(GradingInfraError) as failure:
+        grade_judge.grade_judge_candidate(spec, "candidate")
+    assert len(fake_judge.requests) == 1
+    assert sleeps == []
+    attempts = failure.value.detail["transport_attempts"]
+    assert attempts[0]["status"] == 401
+    assert attempts[0]["reason"] == "http_401"
+
+
+def test_judge_transport_bounds_transient_model_auth_retries(fake_judge, monkeypatch):
+    fake_judge.http_statuses = [401, 401, 401, 401]
+    fake_judge.error_body = _TRANSIENT_AUTH_BODY
+    fake_judge.replies = ["[[A=B]]"]
+    delays = []
+    monkeypatch.setattr(grade_judge.random, "uniform", lambda *_: 0)
+    monkeypatch.setattr(grade_judge.time, "sleep", delays.append)
+    spec = _label_spec(
+        label_scan="whole", label_case="upper", request_timeout=10, transport_budget=10, transport_attempts=3
+    )
+    with pytest.raises(GradingInfraError) as failure:
+        grade_judge.grade_judge_candidate(spec, "candidate")
+    assert len(fake_judge.requests) == 3
+    assert len(delays) == 2
+    attempts = failure.value.detail["transport_attempts"]
+    assert [record["status"] for record in attempts] == [401, 401, 401]
+    assert all(record["reason"] == "http_401" for record in attempts)
 
 
 def test_direct_candidate_validates_trusted_constraints_before_empty_gate():

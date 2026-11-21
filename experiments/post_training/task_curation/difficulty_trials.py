@@ -11,7 +11,7 @@ import logging
 import math
 import os
 import tarfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,14 +26,17 @@ from finestore.rl.difficulty import (
     difficulty_gap_reason,
 )
 from harbor.environments.docker_translate import MissingPreparedImageError
-from harbor.host_capabilities import HostCapabilities, host_capabilities_from_environment
+from harbor.host_capabilities import MODEL_CREDENTIALS, HostCapabilities, host_capabilities_from_environment
+from harbor.models.task.task import Task
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import get_artifact_writer
+from harbor.utils.env import get_required_host_vars
 from harbor_config.errors import ErrorCategory, error_category
 from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
+from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
@@ -53,6 +56,93 @@ MISSING_PREPARED_IMAGE_REASON = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = difficulty_gap_reason(DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT)
 NETWORK_POLICY_REASON = difficulty_gap_reason(DifficultyGap.NETWORK_POLICY_VIOLATION)
 MATH_DEADLINE_LIMIT = 3
+
+# Provider credential env names a task bundle may resolve from its granted guest
+# environment. Each resolves from the GSM-backed secret bundle at wave start; a
+# bundle naming any other provider credential fails the wave closed at dispatch.
+TASK_PROVIDER_SECRETS: frozenset[str] = frozenset({"TOGETHER_API_KEY"})
+
+
+def task_required_provider_secrets(task_dirs: Iterable[Path]) -> frozenset[str]:
+    """Provider credential env names the selected task bundles resolve from the host."""
+    required: set[str] = set()
+    for directory in task_dirs:
+        task = Task(task_dir=directory)
+        for env in (task.config.environment.env, task.config.verifier.env, task.config.solution.env):
+            for name, _default in get_required_host_vars(dict(env)):
+                if name in MODEL_CREDENTIALS:
+                    required.add(name)
+    return frozenset(required)
+
+
+def resolve_provider_secrets(required: Iterable[str]) -> dict[str, str]:
+    """Resolve the wave's provider credentials from the GSM-backed secret bundle.
+
+    Raises before any attempt runs when a credential cannot resolve, so a wave
+    never fails mid-verifier.
+    """
+    unknown = frozenset(required) - TASK_PROVIDER_SECRETS
+    if unknown:
+        raise ValueError(f"Task bundles require provider credentials this lane cannot grant: {sorted(unknown)}")
+    return {name: require_secret(name) for name in sorted(required)}
+
+
+def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, str]) -> dict[str, str]:
+    """The granted guest environment for one task's provider credential templates.
+
+    Raises before the task's first attempt when a bundle-referenced credential
+    was not resolved for the wave, so a task never fails mid-verifier.
+    """
+    if task.path is None:
+        return {}
+    required = task_required_provider_secrets((Path(task.path),))
+    missing = required - provider_secrets.keys()
+    if missing:
+        raise ValueError(
+            f"Task {task.task_id} requires provider credentials the wave did not resolve: {sorted(missing)}"
+        )
+    return {name: provider_secrets[name] for name in sorted(required)}
+
+
+def read_verdict(trial: Trial) -> dict | None:
+    """The trial's structured verdict, when the verifier produced one."""
+    path = trial.paths.verifier_dir / "verdict.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def grader_infrastructure_reason(*, verifier_reached: bool, verdict: dict | None) -> str | None:
+    """Typed reason when the grading infrastructure consumed the attempt.
+
+    The verifier phase ran and either produced an ``infra_error`` verdict or
+    died before producing one. Task-input conditions, provider waits and
+    solver-side failures never reach this classification, and the identity is a
+    typed transport token (for example ``http_401``) or grading-failure value,
+    never free text.
+    """
+    if not verifier_reached:
+        return None
+    if verdict is None:
+        return DifficultyGap.GRADER_INFRASTRUCTURE_FAILURE.value
+    if verdict.get("status") != "infra_error":
+        return None
+    detail = verdict.get("detail")
+    identity = None
+    if isinstance(detail, dict):
+        attempts = detail.get("transport_attempts")
+        if isinstance(attempts, (list, tuple)):
+            for record in reversed(attempts):
+                if (
+                    isinstance(record, dict)
+                    and record.get("outcome") == "failed"
+                    and isinstance(record.get("reason"), str)
+                ):
+                    identity = record["reason"]
+                    break
+        if identity is None and isinstance(detail.get("failure"), str):
+            identity = detail["failure"]
+    return difficulty_gap_reason(DifficultyGap.GRADER_INFRASTRUCTURE_FAILURE, identity)
 
 
 @dataclass(frozen=True)
@@ -265,10 +355,9 @@ def math_deadline_phase(trial: Trial) -> str | None:
     deadlines follow the reply (the #11511 replay), so only the reference phase may
     drive the terminal block.
     """
-    path = trial.paths.verifier_dir / "verdict.json"
-    if not path.exists():
+    verdict = read_verdict(trial)
+    if verdict is None:
         return None
-    verdict = json.loads(path.read_text())
     detail = verdict.get("detail")
     if verdict.get("status") != "infra_error" or not isinstance(detail, dict):
         return None
@@ -291,10 +380,13 @@ def worker_host_capabilities(
     )
 
 
-async def execute_trial(configuration: TrialConfig, authentication: dict[str, str]):
+async def execute_trial(
+    configuration: TrialConfig, authentication: dict[str, str], guest_environment: Mapping[str, str]
+):
     trial = await Trial.create(
         configuration,
         host_capabilities=worker_host_capabilities(authentication),
+        guest_environment=guest_environment,
     )
     return trial, await trial.run()
 
@@ -308,6 +400,7 @@ def run_task(
     judge_url: str | None,
     prior_math_deadlines: int,
     record_attempt: Callable[[StoragePath], None] | None = None,
+    guest_environment: Mapping[str, str] = {},
 ) -> TaskOutcome:
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
@@ -382,7 +475,7 @@ def run_task(
         # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
         construction_reason = None
         try:
-            trial, result = asyncio.run(execute_trial(configuration, authentication))
+            trial, result = asyncio.run(execute_trial(configuration, authentication, guest_environment))
         except MissingPreparedImageError as error:
             construction_reason = MISSING_PREPARED_IMAGE_REASON
             exception_type = type(error).__name__
@@ -489,11 +582,20 @@ def run_task(
         reference_deadline = deadline_phase == MATH_DEADLINE_REFERENCE_PARSE
         math_deadlines = math_deadlines + 1 if reference_deadline else 0
         terminal_deadline = reference_deadline and math_deadlines >= MATH_DEADLINE_LIMIT
-        reason = (
-            difficulty_gap_reason(DifficultyGap.MATH_VERIFIER_DEADLINE, deadline_phase)
-            if deadline_phase is not None
-            else pending_reason if reward is None else None
-        )
+        grader_infra_reason = None
+        if reward is None and not unserved and not provider_wait and deadline_phase is None:
+            grader_infra_reason = grader_infrastructure_reason(
+                verifier_reached=result.verifier is not None and result.verifier.started_at is not None,
+                verdict=read_verdict(trial),
+            )
+        if deadline_phase is not None:
+            reason = difficulty_gap_reason(DifficultyGap.MATH_VERIFIER_DEADLINE, deadline_phase)
+        elif reward is not None:
+            reason = None
+        elif grader_infra_reason is not None:
+            reason = grader_infra_reason
+        else:
+            reason = pending_reason
         attempt = DifficultyAttempt(
             task_id=task.task_id,
             status=(
