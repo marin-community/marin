@@ -239,12 +239,16 @@ class GuestPathError(OSError):
     """The guest reported ``errno`` for the caller's path, never a failure on the host side of a transfer."""
 
 
+class GuestHelperFailed(RuntimeError):
+    """A guest utility that a transfer relies on is missing or failed; the caller's path is not at fault."""
+
+
 class MachineCancelled(RuntimeError):
     """The machine or the job that owns it was cancelled before the operation completed."""
 
 
 class ExecSetupFailed(RuntimeError):
-    """The command transport failed before the command was sent, so a retry cannot run it twice."""
+    """A helper exec's transport reported a setup failure; Kubernetes also reports one after a lost upgrade reply."""
 
 
 class CommandOutputLost(RuntimeError):

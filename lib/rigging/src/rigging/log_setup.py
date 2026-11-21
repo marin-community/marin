@@ -135,6 +135,14 @@ class RingBufferHandler(logging.Handler):
         )
 
 
+class LiveStderrHandler(logging.StreamHandler):
+    """Write each record to the current stderr after capture swaps streams."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
 @contextmanager
 def slow_log(log: logging.Logger, operation: str, threshold_ms: int = 100) -> Iterator[None]:
     """Log a WARNING if the enclosed block takes longer than threshold_ms.
@@ -243,7 +251,7 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
 
     formatter = LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
-    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler = LiveStderrHandler()
     stderr_handler.setLevel(level)
     stderr_handler.setFormatter(formatter)
     root.addHandler(stderr_handler)
