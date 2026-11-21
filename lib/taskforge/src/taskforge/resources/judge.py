@@ -6,7 +6,6 @@
 import asyncio
 from concurrent.futures import CancelledError as FutureCancelledError
 from dataclasses import dataclass, replace
-from functools import partial
 
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from verifyit.modes.grade_judge import JudgeCompletion, JudgeRequest
@@ -43,6 +42,12 @@ class JudgeEngine:
         closed = False
         active: asyncio.Task[Completion] | None = None
 
+        async def execute(event: InferenceRequest, client: InferenceClient) -> Completion:
+            completion = await complete(event, client, notify=self.ctx.notify)
+            if closed:  # A completion a provider returns after the grade closed is discarded, never resolved.
+                raise asyncio.CancelledError
+            return completion
+
         async def infer(request: JudgeRequest, sample: int) -> Completion:
             nonlocal active
             if closed:
@@ -52,7 +57,7 @@ class JudgeEngine:
             effort = ReasoningEffort(request.reasoning_effort or ReasoningEffort.HIGH)
             sampling = LLMPolicy(request.max_output_tokens, effort, temperature=0.0, max_continuations=0)
             async with self.ctx.scope("judge"):
-                self.ctx.handle(InferenceRequest, partial(complete, notify=self.ctx.notify), self.client)
+                self.ctx.handle(InferenceRequest, execute, self.client)
                 return await self.ctx.emit(InferenceRequest(messages, (), sampling, sample=sample))
 
         def judge(request: JudgeRequest) -> JudgeCompletion:

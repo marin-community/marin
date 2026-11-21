@@ -26,18 +26,18 @@ from verifyit.modes.grade_judge import JudgeCompletion, JudgeConnection, JudgeRe
 from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Resolved
+from taskforge.effects.events import Resolved, ScopeExited
 from taskforge.effects.issues import Restart
 from taskforge.effects.log import EventLog, Record, decode
-from taskforge.llm.client import Progress, Segment
-from taskforge.llm.policy import GLM_5_3, ModelProfile
+from taskforge.llm.client import ModelClient, Progress, Segment
+from taskforge.llm.policy import GLM_5_3, ModelProfile, RetryPolicy
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion, FinishReason, Usage
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.judge import JudgeEngine
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.wiring import build_resources, install
@@ -296,6 +296,59 @@ async def test_a_cancelled_grade_returns_with_its_journal_final_and_starts_no_la
     resumed = FakeInference((done("SCORE: 0"),))
     [result], _ = await grade_judged((JUDGED["checklist"][0],), resumed, log.records)
     assert (result.reward, [request.sample for request in resumed.requests]) == (0.5, [1])
+
+
+def judge_provider(provider: ScriptedProvider) -> InferenceClient:
+    return GlmInference(ModelClient(provider, GLM_5_3, RetryPolicy(0.1, 0.001, 0.001, 1.0), role="judge"), "judge")
+
+
+# Review 2026-11-21, follow-up 2: a provider that had parsed its segment, swallowed the grade's cancellation in cleanup
+# and returned it after a second cancellation released the caller journalled a late Resolved; a regrade then scored 0.5.
+async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_never_journalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    held, cleanup = asyncio.Event(), asyncio.Event()
+
+    async def swallows_cancellation(progress: Progress) -> Segment:
+        parsed = segment("SCORE: 1")
+        held.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await cleanup.wait()
+        return parsed
+
+    exited, raised = grading_thread_exits(monkeypatch)
+    log = EventLog()
+    ctx = Context(log=log)
+    client = judge_provider(ScriptedProvider((swallows_cancellation,)))
+    engine = JudgeEngine(rollout_engine({}, command_timeout=None), ctx, client)
+    judge = JUDGED["checklist"][0]
+    operation = asyncio.create_task(
+        GradingResource(engine, "judge").grade(GradeCandidate(judged_spec(judge), Candidate("Twelve")))
+    )
+    await held.wait()
+    operation.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not operation.done()
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    returned = len(log.records)
+    cleanup.set()
+    assert await asyncio.to_thread(exited.wait, 5)
+    await ctx.drain()
+    assert [type(error) for error in raised] == [asyncio.CancelledError]
+    # The disclosed late row is the sample's failed scope exit; its returned segment is never resolved.
+    assert [record.event for record in log.records[returned:]] == [ScopeExited("judge", failed=True)]
+    assert not judge_inference(log)
+    graded = []
+    for history in (log.records, ()):
+        zeros = ScriptedProvider((segment("SCORE: 0"), segment("SCORE: 0")))
+        [result], _ = await grade_judged((judge,), judge_provider(zeros), history)
+        graded.append((result.reward, len(zeros.bodies)))
+    assert graded == [(0.0, 2), (0.0, 2)]
 
 
 # Review 2026-11-21, follow-up 1: waiting for the grading thread at the verifier deadline turned a grade timeout
