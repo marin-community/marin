@@ -45,8 +45,7 @@ class JudgeEngine:
 
         async def infer(request: JudgeRequest, sample: int) -> Completion:
             nonlocal active
-            # An engine deadline cancels the grading await, which the judge cannot see; refuse further samples then.
-            if closed or run.cancelling():
+            if closed:
                 raise asyncio.CancelledError
             active = asyncio.current_task()
             messages = tuple(Message(Role(message.role), message.content) for message in request.messages)
@@ -70,18 +69,13 @@ class JudgeEngine:
             return JudgeCompletion(result.content, result.finish_reason.value, result.usage.completion_tokens)
 
         spec = spec.model_copy(update={"judge_connection": replace(connection, callback=judge)})
-        run = asyncio.ensure_future(self.engine.run_task(spec, model, run_id=run_id))
         try:
-            return await asyncio.shield(run)
+            return await self.engine.run_task(spec, model, run_id=run_id)
         except _EffectFailure as error:
             raise error.error from error.error.__cause__
-        except asyncio.CancelledError:
-            # Close before the engine sees the cancellation: it joins the grading thread, which this unblocks.
-            closed = True
-            if active is not None:
-                active.cancel()
-            run.cancel()
-            await asyncio.wait({run})
-            raise
         finally:
+            # A cancelled or expired grade may leave its grading thread unwinding; it starts and records no sample.
             closed = True
+            if active is not None and not active.done():
+                active.cancel()
+                await asyncio.wait({active})
