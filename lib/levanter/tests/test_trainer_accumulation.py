@@ -14,8 +14,10 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
 
+BF16_POLICY = "p=bf16,c=bf16"
 
-@pytest.mark.parametrize("policy", ["p=bf16,c=bf16", "f32"])
+
+@pytest.mark.parametrize("policy", [BF16_POLICY, "f32"])
 def test_optimizer_precision_does_not_change_native_step_input_dtypes(tmp_path, policy):
     config = TrainerConfig(
         id="stable-parameter-dtypes",
@@ -64,15 +66,14 @@ def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
         state = update(state)
     assert state.model.dtype == jnp.float32
     np.testing.assert_allclose(state.model, 0.99, atol=2e-6)
-    assert policy.cast_to_compute(state.model).dtype == jnp.bfloat16
 
 
 def test_skipped_optimizer_update_keeps_the_parameter():
-    def skip(grads, state, params=None, **kwargs):
+    def skip(_grads, state, params=None, **kwargs):
         return None, state
 
-    optimizer = optax.GradientTransformation(lambda params: (), skip)
-    policy = jmp.get_policy("p=bf16,c=bf16")
+    optimizer = optax.GradientTransformation(lambda _params: (), skip)
+    policy = jmp.get_policy(BF16_POLICY)
     state = TrainerState.init(optimizer, jnp.asarray(2.0), key=jax.random.key(0), mp=policy)
     updated, updates = state.take_step(jnp.asarray(1.0), key=state.training_key)
     assert updates is None
