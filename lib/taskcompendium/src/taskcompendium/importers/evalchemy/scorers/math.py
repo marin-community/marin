@@ -10,6 +10,7 @@ Keep source stops separate from the smaller set safe to send to a chat endpoint.
 import re
 import threading
 
+import verifyit.latex_percent  # noqa: F401
 from math_verify import parse, verify
 from sympy.core.relational import Relational
 from verifyit.adapters.completion import END_OF_TURN, final_text

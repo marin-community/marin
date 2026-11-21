@@ -27,7 +27,7 @@ GRADER_INTERPRETERS = ("3.10", "3.11")
 
 # Extras too heavy for the ephemeral venv; their modules may raise ImportError on the
 # missing third-party root, never on the staged package's own imports.
-UNINSTALLED_EXTRA_ROOTS = ("reasoning_gym", "sympy", "math_verify")
+UNINSTALLED_EXTRA_ROOTS = ("reasoning_gym", "sympy", "math_verify", "latex2sympy2_extended")
 
 # The third-party roots of the judge and schema extras, installed into the grader venv the
 # way an environment's own package lock provides a mode's dependencies.
