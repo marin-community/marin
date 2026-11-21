@@ -141,9 +141,10 @@ head; the first then fails with `Superseded` at its next checkpoint and publishe
 Readers follow only the chunks the head names. A root in any other journal format, including the
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
 replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
-defect direction with observed and deserved grades), fails with an error naming both formats and exits 4
+defect direction with observed and deserved grades) and format 4 (trials hydrated without a detail, a too-easy
+baseline in place of a digest-bound fallback), fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 4` and reports the
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 5` and reports the
 rest. Such roots are converted once by a separate migration, or rebuilt. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a

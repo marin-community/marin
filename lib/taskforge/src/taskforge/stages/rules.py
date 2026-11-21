@@ -72,7 +72,9 @@ def better(candidate: Fallback, stored: Fallback) -> Fallback:
 
 def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> Fallback | None:
     """The one choice of the submission to fall back to, or accept: the stored fallback while the policy accepts its
-    band, against the current submission at ``placement`` when the policy accepts that."""
+    band, against the current submission at ``placement`` when the policy accepts that. Returning the stored object
+    itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot tell rounds
+    apart."""
     kept = workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
     if workpiece.submission is None or placement is None or placement not in band.accepted:
         return kept
@@ -103,11 +105,9 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     if (placement is not None and not final) or chosen is None:
         return replace(decision, fallback=None if chosen is None else chosen.submission.digest)
     notes = exhausted_notes(result)
-    if workpiece.submission is not None and chosen.submission.digest == workpiece.submission.digest:
+    if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
         why = (
-            "A clean revision is placed on its own evidence"
-            if workpiece.fallback
-            else "Shared modification budget exhausted"
+            "Clean revision placed on its own evidence" if workpiece.fallback else "Shared modification budget exhausted"
         )
         return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes))
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"

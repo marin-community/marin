@@ -30,7 +30,7 @@ from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInfer
 from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
@@ -89,9 +89,10 @@ from taskforge.model.review import (
     Incomplete,
     Modify,
     Retry,
+    TrialResult,
 )
 from taskforge.model.stage import Exit, Stage
-from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
@@ -235,6 +236,36 @@ async def test_crash_resume_replays_commands_without_repeating_inference(proposa
 def needs_revision(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
     result = workpiece.evidence[-1]
     return Modify((f"Revise {result.task_digest} for band {band.low}-{band.high}",))
+
+
+class FirstRoundSolves(Engine):
+    """Every trial of the first validation solves (too easy); every later one grades the task invalid (a fault)."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        assert run_id is not None
+        first = run_id.endswith(":0")
+        grade = GradeResult(Outcome.GRADED, 1.0) if first else GradeResult(Outcome.INVALID_TASK, None, "bad task")
+        return GradedRollout(Rollout(run_id, (), "stop"), grade)
+
+
+# Review 2026-11-21 (follow-up 1): a faulted revision resubmitted the same task and controls with new notes; review
+# chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
+# the faulted round's notes shipped as a clean acceptance.
+async def test_a_faulted_resubmission_with_the_same_digest_restores_the_stored_submission(
+    proposal: TaskProposal,
+) -> None:
+    resubmit = (*script()[:3], call("submit", {"notes": "revised notes"}, "submit"))
+    bundle = resources(Envs(), (*script(), *resubmit))
+    bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=FirstRoundSolves()))
+    wp = await run_workpiece(proposal, config(), bundle, EventLog(), install=install)
+    first, final = wp.decisions
+    assert isinstance(first, Modify) and first.placement is BandOutcome.TOO_EASY
+    assert isinstance(final, Accept) and wp.terminal is Terminal.ACCEPTED and wp.round == 1
+    assert wp.evidence[0].task_digest == wp.evidence[1].task_digest  # the digest cannot tell the rounds apart
+    assert wp.submission is not None and wp.submission.notes == "done" and final.restore == wp.submission.digest
+    assert any(reason.startswith("The revision has a fault; restored submission") for reason in final.reasons)
+    assert wp.accepted_with is BandOutcome.TOO_EASY
 
 
 async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
@@ -2077,6 +2108,108 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     snapshot = json.loads(WORKPIECE.dump_json(Workpiece("w", proposal, decisions=decisions)))
     keys = {key for decision in snapshot["decisions"] for key in decision}
     assert "fallback" not in snapshot and not {"restore", "fallback", "awaits"} & keys
+
+
+# Review 2026-11-21 (follow-up 1): an empty restore and None serialised alike, so an invalid direct restore became an
+# ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
+def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
+    stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY)
+    values: dict[str, list[object]] = {
+        "detail": [TrialResult(0, None, Cause.HELD, detail) for detail in ("", "refused", " ")],
+        "restore": [Accept(BandOutcome.IN_BAND, (), restore) for restore in (None, "a" * 64, "b" * 64)],
+        "fallback": [Modify(("x",), None, fallback) for fallback in (None, "a" * 64, "b" * 64)],
+        "workpiece": [Workpiece("w", proposal, fallback=fallback) for fallback in (None, stored)],
+    }
+    for field, items in values.items():
+        adapter = TypeAdapter(type(items[0]))
+        encoded = [adapter.dump_json(item) for item in items]
+        assert [adapter.validate_json(data) for data in encoded] == items, field
+        assert len(set(encoded)) == len(items), field
+    for empty in (partial(Accept, BandOutcome.IN_BAND, (), ""), partial(Modify, ("x",), None, "")):
+        with pytest.raises(ValueError, match="An empty string is never a digest"):
+            empty()
+    with pytest.raises(ValidationError, match="An empty string is never a digest"):
+        TypeAdapter(Accept).validate_json(b'{"band": "in_band", "restore": ""}')
+
+
+def restoring_bundle(engine: Engine) -> Resources:
+    """A too-easy first round, then a faulted resubmission whose review restores the first submission."""
+    resubmit = (*script()[:3], call("submit", {"notes": "revised notes"}, "submit"))
+    bundle = resources(Envs(), (*script(), *resubmit))
+    return replace(bundle, rollouts=replace(bundle.rollouts, engine=engine))
+
+
+# Review 2026-11-21 (follow-up 2): after the coordinator returned the accepted fallback, an OSError on runtime exit
+# published HELD with the faulted revision's notes and [Modify, Incomplete], though the journal recorded the Accept.
+async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpiece(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @asynccontextmanager
+    async def failing_exit(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), restoring_bundle(FirstRoundSolves())
+        raise OSError(errno.EIO, "runtime cleanup failed")
+
+    monkeypatch.setattr(driver, "runtime", failing_exit)
+    with pytest.raises(OSError, match="runtime cleanup failed"):
+        await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert [type(decision) for decision in workpiece.decisions] == [Modify, Accept, Incomplete]
+    assert workpiece.submission is not None and workpiece.submission.notes == "done"
+    assert any(isinstance(r.event, StageCompleted) and r.event.exit == "Decided" for r in history(destination))
+
+
+class RevisionWaits(FirstRoundSolves):
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        if run_id is not None and not run_id.endswith(":0"):
+            self.entered.set()
+            await asyncio.Event().wait()  # until cancelled
+        return await super().run_task(spec, model, run_id=run_id)
+
+
+async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = RevisionWaits()
+    serve(monkeypatch, restoring_bundle(engine))
+    run = asyncio.create_task(driver.one(driver_args))
+    await engine.entered.wait()
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    journal = published(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    workpiece = journal.workpiece()
+    assert journal.head.status.terminal is None and workpiece is not None  # a running head, resumed by replay
+    assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
+
+
+# Review 2026-11-21 (follow-up 1): a disk-full error persisting the final review held the run from the initial
+# workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
+async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write, failed = JsonlSink._write, []
+
+    def full_once(sink: JsonlSink, records: Sequence[Record]) -> None:
+        reviewed = any(isinstance(r.event, StageCompleted) and r.event.stage is Stage.REVIEW for r in records)
+        if reviewed and not failed:
+            failed.append(OSError(errno.ENOSPC, "No space left on device"))
+            raise failed[-1]
+        write(sink, records)
+
+    monkeypatch.setattr(JsonlSink, "_write", full_once)
+    monkeypatch.setattr(driver, "EventLog", partial(EventLog, attempts=1))
+    serve(monkeypatch, resources(Envs(), script()))
+    await driver.one(driver_args)
+    workpiece = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert failed and workpiece.terminal is Terminal.HELD
+    assert workpiece.submission is not None and len(workpiece.evidence) == 1
 
 
 # Review 2026-11-21: a refused foreign restore digest published a bug-class hold whose snapshot had neither the

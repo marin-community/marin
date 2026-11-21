@@ -18,7 +18,7 @@ from taskforge.model.content_hash import digest
 from taskforge.model.controls import Control
 from taskforge.model.llm import Message, ToolSchema
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import OMIT_DEFAULT, BandOutcome, Decision, ValidationResult
+from taskforge.model.review import OMIT_NONE, BandOutcome, Decision, ValidationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +76,7 @@ class Workpiece:
     evidence: tuple[ValidationResult, ...] = ()
     decisions: tuple[Decision, ...] = ()
     terminal: Terminal | None = None
-    fallback: Annotated[Fallback | None, OMIT_DEFAULT] = None
+    fallback: Annotated[Fallback | None, OMIT_NONE] = None
     accepted_with: BandOutcome | None = None
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
