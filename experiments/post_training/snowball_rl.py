@@ -24,7 +24,13 @@ from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset, shell_tool_preset
+from experiments.post_training.rl_agentic_recipe import (
+    NO_AGENTIC_TASKS,
+    NO_IMAGE_SANDBOX,
+    agentic_limits,
+    agentic_preset,
+    shell_tool_preset,
+)
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
     HARBOR_EVALUATION,
@@ -212,7 +218,7 @@ _ASYNC_P40 = Recipe(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
-_GAPS = ("aaii-coverage", "no-agentic-tasks", "no-image-sandbox")
+_GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
 
@@ -337,7 +343,7 @@ _TRAIN_LONG_AGENTIC = agentic_preset(
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
-        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != "no-agentic-tasks"), "harbor-on-daytona"),
+        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS), "harbor-on-daytona"),
     ),
     name="train-long-agentic",
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
