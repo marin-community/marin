@@ -58,6 +58,13 @@ def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
     )
 
 
+def unscored(result: ValidationResult) -> tuple[str, ...]:
+    """How many solver slots of ``result`` had no score, when any did, and how many its placement went over."""
+    scored = sum(not missing(trial) for trial in result.solver)
+    absent = len(result.solver) - scored
+    return (f"{absent} of {len(result.solver)} solver trials have no score; placed over {scored}",) * bool(absent)
+
+
 def missing(trial: TrialResult) -> bool:
     """A solver slot without a score (held, timed out or ungraded): never a failed trial, never a zero."""
     cause = trial.cause or (Cause.NO_GRADE if trial.grade is None else None)
@@ -81,11 +88,15 @@ def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: Band
 
 def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
     """An acceptance with what the round of its accepted submission went without, and that round's review findings as
-    notes: the stored fallback's round for a restore (a digest cannot tell two rounds apart), else the latest."""
+    notes: the stored fallback's round for a restore (a digest cannot tell two rounds apart), else the latest. A
+    restore also carries that round's placement denominator and adversary exhaustion, which its decision did not."""
     if not isinstance(decision, Accept):
         return decision
     shipped = workpiece.fallback.evidence if decision.restore and workpiece.fallback else -1
-    review = workpiece.evidence[shipped].review if workpiece.evidence else None
+    result = workpiece.evidence[shipped] if workpiece.evidence else None
+    review = result.review if result is not None else None
+    if decision.restore and result is not None:
+        decision = replace(decision, reasons=(*decision.reasons, *unscored(result), *exhausted_notes(result)))
     missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no solve-review ran"),) if review is None else review.missing
     notes = () if review is None else review.findings
     why = "of the restored round recorded as notes" if decision.restore else "recorded as notes: no revision round left"
@@ -152,7 +163,8 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
-    restored = Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)
+    faults = (f"Revision fault: {finding}" for finding in decision.findings)
+    restored = Accept(chosen.band, (*tagged(chosen.band), why, *faults), chosen.submission.digest)
     return accepted(restored, workpiece)
 
 
@@ -211,7 +223,7 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
         return Modify(findings)
     solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
     place = band.place(solved / len(scored))
-    notes = (f"{absent} of {len(result.solver)} solver trials have no score; placed over {len(scored)}",) * bool(absent)
+    notes = unscored(result)
     if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place, (*notes, *exhausted_notes(result)))
     finding = f"{solved} of {len(scored)} trials solved: {place}"

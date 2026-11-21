@@ -67,8 +67,11 @@ from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
     Accept,
+    AdversaryResult,
+    AdversaryStatus,
     Attribution,
     BandOutcome,
+    Cause,
     ControlResult,
     Decision,
     EvidenceKind,
@@ -77,6 +80,7 @@ from taskforge.model.review import (
     Modify,
     ReviewEnd,
     ReviewFinding,
+    SearchLimit,
     SolveReview,
     TrialAccount,
     TrialResult,
@@ -977,3 +981,42 @@ async def test_a_second_process_replays_the_review_of_a_recorded_task_with_zero_
         done = subprocess.run([*probe, mode, str(tmp_path)], cwd=root, capture_output=True, text=True, timeout=120)
         assert done.returncode == 0, done.stderr[-3000:]
         assert done.stdout.strip() == f"{mode}: {1 if mode == 'record' else 0} reviewer call(s)"
+
+
+SPENT = "its context window ran out before a finding; it did not validate the task"
+
+
+def exhausted_round(review: SolveReview, reason: str = SPENT) -> ValidationResult:
+    """An in-band round over two of three scored slots whose adversary ran out of search budget without a finding."""
+    solver = (*round_with(None).solver, TrialResult(2, None, Cause.HELD))
+    search = AdversaryResult("false_accept", AdversaryStatus.EXHAUSTED, (), (reason,), SearchLimit.CONTEXT_WINDOW)
+    return replace(round_with(review), solver=solver, adversary=(search,))
+
+
+@pytest.mark.parametrize("ending", ["author stop", "same-digest fault"])
+def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: str) -> None:
+    """Review 2026-11-21 (n11 follow-up 2, P2): restoring round 0, whose adversary ran out of search budget and which
+    placed over two of three slots, dropped both notes on an author stop, and a same-digest faulted revision reported
+    its own adversary reason instead. The acceptance describes the round that ships, and names the fault apart."""
+    setup = settings_config(**{"budget.max_missing_trials": 1})
+    session = Conversation((Message(Role.SYSTEM, "author"),), ())
+    first = exhausted_round(SolveReview("v0", ReviewEnd.REPORTED, (FOUND,)))
+    _, wp = decided(Workpiece("w", proposal, submission=SUBMISSION, evidence=(first,), session=session), setup)
+    assert wp.fallback is not None and wp.fallback.evidence == 0
+    if ending == "author stop":
+        stopped, _ = advance(wp, Stage.AUTHOR, Stopped(StopReason.CONTEXT_LIMIT, session, "window full"), setup)
+        decision = stopped.decisions[-1]
+    else:
+        faulted = replace(
+            exhausted_round(SolveReview("v1", ReviewEnd.REPORTED), "the discarded round's search"),
+            controls=(ControlResult(0, GradeResult(Outcome.GRADED, 0.0), False),),
+        )
+        revision = replace(SUBMISSION, notes="revised")
+        decision, _ = decided(wp.with_(submission=revision, evidence=(*wp.evidence, faulted)), setup)
+        assert "Revision fault: Control 0 violates its expected reward" in decision.reasons
+    assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and decision.notes == (FOUND,)
+    assert (
+        f"false_accept: {SPENT}" in decision.reasons
+        and "1 of 3 solver trials have no score; placed over 2" in decision.reasons
+    )
+    assert not any("discarded round" in reason for reason in decision.reasons)
