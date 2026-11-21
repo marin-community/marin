@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 9:17 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 9:24 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -17,14 +17,14 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks are scheduling-gated. At 9:17 p.m., Kueue reported a shortfall of one GPU and one InfiniBand allocation. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks were still scheduling-gated at 9:24 p.m. The last detailed diagnostic showed a shortfall of one GPU and one InfiniBand allocation. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native online loop on current `main` | The local prototype completed both updates on one and four CPU devices. Each run consumed eight binary frames and sampled 128 tokens. The second rollout used the exact first published weight fingerprint. The maximum sampled-to-learner logprob difference was `4.06e-6`. The first four-TPUv4 run failed the score comparison. A rerun with shared normalization is queued. | Complete both updates on four TPUv4 chips. |
+| Native online loop on current `main` | The bounded prototype passed two updates on one and four CPU devices, then on four TPUv4 chips after aligning sampler normalization. The TPU proof decoded eight binary frames covering 128 tokens. Its second rollout used the exact first published weight fingerprint. | Qualify the integrated queue and cache barrier, then connect the native backend to the rollout service. |
 | Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
 | Typed binary protocol | The local native loop uses protobuf metadata and binary tensor buffers end to end between generation and learner batching. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Qualify cross-process native transport with bounded flow control, then migrate the learner pipe after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
-[First TPUv4 attempt][iris-native] · [TPUv4 normalization rerun][iris-native-rerun] ·
+[First TPUv4 attempt][iris-native] · [Successful TPUv4 proof][iris-native-rerun] ·
 [Snowball qualification report][snowball-status] ·
 [Historical quick-loop timing][timing]
 
@@ -242,23 +242,36 @@ absolute difference was `7.13e-5`. The assertion fired before the first
 optimizer update, so the run produced no step or publication receipt.
 [Native TPUv4 fixture][iris-native]
 
-The failing source uses the current paged and fused scoring paths. The
-earlier bitwise fixture used an opt-in fixed-schedule model and a shared
+The failing source uses the paged and fused scoring paths. The earlier
+bitwise fixture used an opt-in fixed-schedule model and a shared
 batch-invariant normalizer for the sampler and unfused learner loss.
-The rerun uses source `d7ddcf3c67` and the shared fixed-row FP32 normalizer
-for sampling and full-vocabulary learner scoring. It saves fused scorer
-values alongside the serving and learner scores before applying the
-original tolerance. The candidate completed two CPU updates with that
-profile and passed 35 focused CPU tests. The four-chip TPUv4 run was
-pending at the last check. [TPUv4 normalization rerun][iris-native-rerun] ·
+The rerun on `d7ddcf3c670b5c6aca19a111cba15e1082e8d560` used
+`levanter.testing.snowball_quick_loop --backend tpu --projection full_vocabulary`
+on four TPUv4 chips. Paged sampling and full-vocabulary learner scoring
+used the same fixed-row FP32 normalizer. Both optimizer updates completed.
+The second rollout's weight fingerprint matched the first publication, and
+each update produced a distinct weight fingerprint. An independent decode of
+the eight binary frames confirmed request IDs, weight identities, token IDs
+and raw score coverage for all 128 sampled tokens. The largest raw score
+error was `4.29e-6`, and both steps passed the original tolerance. The
+diagnostic fused forward scorer also passed against both rollout groups with
+the same maximum error. The optimizer used the full-vocabulary path.
+[Successful TPUv4 proof][iris-native-rerun] · [Proof archive in Filer][native-archive] ·
 [Earlier Snowball qualification][snowball-status]
+
+The archive is
+`gs://marin-us-central2/users/dlwh/quick-loop-rl/native-proof/2026.11.20.02/outputs.tar.zst`.
+Its SHA-256 is `fe3d11318301799d201e4a744cc604ac42c4009f40a37d6ba08539c6720178f0`.
 
 A separate local scheduler slice passed heterogeneous queue and slot-reuse
 replay on one and four CPU devices. The local policy owner also passed
 draining in-flight generation, swapping to a fresh KV cache, preserving
 the old policy on installation failure, and rejecting stale policy
-requests. The four-device CPU loop through that owner published policy
-stamps 1 and 2 and sampled its second group from stamp 1.
+requests. The integrated revision `ff1fc5e833` completed both updates on
+four CPU devices with queued generation and that policy owner in both
+scoring modes. Each run decoded eight binary frames and verified the
+`0 → 1 → 2` installed policy chain. The integrated revision still needs
+accelerator and cross-process validation.
 
 Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
 and a deterministic grader with mixed rewards within a group. Submit four
@@ -282,10 +295,14 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 ### 3. Qualify native serving for the inventory recipe
 
 - Connect the native backend to the RolloutEngine operations used by the
-  recipe. Prove one actual model/tool/model rollout end to end, with sampled
-  IDs, complete causal route coverage, predictor positions and zero loss on
-  tool observations. Then exercise tool and infrastructure failure masks
-  and a restart at the publication boundary.
+  recipe. Use SkyRL's exact-token chat continuation helper to retain the
+  first assistant turn's served tokens and append only the rendered boundary
+  and tool suffix. Prove one actual model/tool/model rollout end to end.
+  Retain both turns' sampled IDs and raw scores, cover the full causal prefix
+  with routes indexed by predictor position, and put zero objective weight
+  on tool observations. Reject a continuation when its served prefix or
+  policy identity disagrees. Then exercise tool and infrastructure failure
+  masks and a restart at the publication boundary. [Exact chat continuation][chat-continuation]
 - Load the pinned 67B checkpoint on the intended serving hardware. Qualify
   real context and batch sizes, expert sharding, precision, peak memory,
   compile time and sustained serving. Measure serve/score drift under the
@@ -330,7 +347,9 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 [snowball-compare]: https://github.com/marin-community/marin/compare/2bf3f721c9946150a02c3417c4c93e14b273a5e8...5992abd0529d81bb90356e97bab3a8ac498daf68
 [batch-bridge]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/vendor/skyrl/skyrl-train/skyrl_train/workers/levanter_batch.py#L46-L74
 [engine-replay]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/inference/snowball_engine_replay.py#L32-L42
+[chat-continuation]: https://github.com/marin-community/marin/blob/2bf3f721c9946150a02c3417c4c93e14b273a5e8/vendor/skyrl/skyrl-train/skyrl_train/inference_engines/chat_continuation.py#L28
 [rloo]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/utils/advantage_estimators.py#L176-L289
 [preset-migration]: https://github.com/marin-community/marin/pull/10740
 [iris-native]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-01
 [iris-native-rerun]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-02
+[native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
