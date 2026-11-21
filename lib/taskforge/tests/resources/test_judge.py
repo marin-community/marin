@@ -355,7 +355,8 @@ async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_ne
 
 
 # Review 2026-11-21: waiting for the grading thread at the verifier deadline turned a grade timeout
-# into an attempt failure and left the sample running. The HTTP transport shim (9eb1a96371) raised this Restart from this grade.
+# into an attempt failure and left the sample running. The HTTP transport shim (9eb1a96371) raised this Restart from
+# this grade.
 async def test_a_verifier_deadline_during_a_judge_sample_is_the_n5_grade_timeout_and_cancels_the_sample(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
