@@ -3,17 +3,12 @@
 November 21, 2026 (PST).
 
 The learner-only integration and CPU proofs are ready; H100 acceptance remains
-blocked. The latest 40-H100 smoke, version `2026.11.20.5` from
-`6936528c55df0212ec8ccd1fa619361863b4c420`, failed during native trainer mesh
-setup before model loading or updates. Its configured DCN (inter-host) axis
-product was one, while mesh validation required four slices. A source repair
-keeps GPU hosts in one global mesh and preserves TPU slice meshes; local
-topology regressions pass. Fresh smoke `2026.11.21.1`, from
-`1b6f4a9ca28bb3ee4faf46f7e3e98ba24462f6d8`, also failed during initialization:
-the host worker raised `MemoryError` while reading a learner IPC response frame.
-GPU or host memory exhaustion has not been established. The stdout/protocol
-boundary is under repair. Accelerator acceptance and the matched comparison
-remain pending.
+pending. Mesh topology and response-pipe repairs pass local checks. Fresh smoke
+`2026.11.21.4` is submitted at BATCH priority from
+`c44f448e651a014de3cf06048102aaf2047c7af0`. At 12:28 PST, its CPU coordinator
+was running and no GPU child had yet been discovered. Native Snowball updates,
+publication, generation, and checkpoint continuation remain unverified on H100;
+the matched comparison is gated on smoke acceptance.
 
 ## Scope and fixed recipe
 
@@ -100,7 +95,7 @@ independent source review passed for these fixes. The earlier broad suite had
 17 failures: six sandbox and ten router failures reproduced on clean main;
 one nested-launcher setup failure remained unclassified.
 
-## Failed smokes and planned reproduction
+## Failed smokes, current submission, and reproduction
 
 Smoke `2026.11.20.5` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2`,
@@ -143,14 +138,19 @@ failed run's original frame-header bytes were not captured, so the exact cause
 of its `MemoryError` remains an inference. The repair gives responses a dedicated
 pipe and leaves stdout available for logs.
 
-Run from the repository with the required storage, evaluation, and judge
-credentials loaded. The next smoke version `2026.11.21.4` is not submitted.
+Fresh smoke `2026.11.21.4` was submitted through coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.4-coordinator-2c045a7f`.
+Its accepted source bundle matches all 4,582 entries of frozen `c44f448e65`,
+including 41 required runtime files. The CPU coordinator has verified BATCH
+priority and is running; GPU admission and execution remain pending.
 Comparison versions `2026.11.21.2` and `2026.11.21.3` remain unsubmitted.
 The transport repair passes five pinned JAX/JAXLIB `0.11.0` cases: native
 import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
-A fresh source freeze is still required before submission. No successful
-accelerator rerun is established by this record.
+No successful accelerator rerun is established by this record.
+Run from the repository with the required storage, evaluation, and judge
+credentials loaded. The smoke command records the submitted attempt; choose
+a fresh unused version for another attempt.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
