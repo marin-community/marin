@@ -184,11 +184,11 @@ class InstalledAgentRuntime:
         authentication = {}
         protected = self.protected_values
         guest_environment = {}
-        if model_api_url(verifier_environment) is not None or model_api_url(package.environment.env) is not None:
+        model = judge_model(verifier_environment)
+        if model is not None:
             judge = lowered.judge_connection
-            model = judge_model(verifier_environment)
-            if judge is None or model is None:
-                raise ValueError("Harbor model calls require a remote judge connection and declared verifier model")
+            if judge is None:
+                raise ValueError("A declared Harbor verifier model requires a remote judge connection")
             kwargs.update(model_endpoint=judge.base_url, model_name=model)
             authentication[judge.base_url] = judge.api_key
             protected = protected | frozenset({judge.api_key})

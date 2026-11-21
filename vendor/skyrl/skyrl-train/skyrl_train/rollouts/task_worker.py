@@ -295,7 +295,9 @@ def _failed_rollout(
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
         diagnostics.update(
-            error_category=error.category, request_id=error.request_id, status_code=error.status_code,
+            error_category=error.category,
+            request_id=error.request_id,
+            status_code=error.status_code,
             message=error.message,
         )
     if interruption.grade.failure == GradingFailure.TIMEOUT:
@@ -374,7 +376,9 @@ class TaskRolloutWorker:
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
-        self.eval_factories = {name: OwnedMachineFactory(factory, name) for name, factory in (eval_factories or {}).items()}
+        self.eval_factories = {
+            name: OwnedMachineFactory(factory, name) for name, factory in (eval_factories or {}).items()
+        }
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
@@ -425,8 +429,12 @@ class TaskRolloutWorker:
     def _configured_task_and_harnesses(
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
+        lowered = lowered.model_copy(update={"judge_connection": self.judge_connection})
         harnesses = episode_harnesses(lowered, self.sessions)
-        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+        if (
+            lowered.harness == ASSISTANT_PREFIX_HARNESS
+            and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT
+        ):
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
@@ -447,9 +455,7 @@ class TaskRolloutWorker:
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
             # The bound Harbor trial retains and executes the original setup.
             # The recording engine must not provision a second task machine for it.
-            engine_task = lowered.task.model_copy(
-                update={"environment_requirements": engine_requirements}
-            )
+            engine_task = lowered.task.model_copy(update={"environment_requirements": engine_requirements})
             # Harbor owns the phase deadlines and must still run its verifier
             # after an agent timeout. The outer attempt deadline covers the full trial.
             lowered = lowered.model_copy(
@@ -500,7 +506,7 @@ class TaskRolloutWorker:
             lowered, harnesses = self._configured_task_and_harnesses(
                 lowered, harbor_settings[index], session_ids[index], phase
             )
-            lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
+            lowered_tasks[index] = lowered
             selected_harnesses.append(harnesses)
         factories = self.factories if phase == "train" else self.factories | self.eval_factories
         engines = [RolloutEngine(factories, harnesses) for harnesses in selected_harnesses]
@@ -633,7 +639,8 @@ class TaskRolloutWorker:
                     logger.error("Task worker shutdown deadline expired with {} active rollouts", len(remaining))
                     failures.append(TimeoutError("Task rollouts did not stop before the shutdown deadline"))
             results = await asyncio.gather(
-                *(factory.close(deadline) for factory in (*self.factories.values(), *self.eval_factories.values())), return_exceptions=True
+                *(factory.close(deadline) for factory in (*self.factories.values(), *self.eval_factories.values())),
+                return_exceptions=True,
             )
             failures.extend(result for result in results if isinstance(result, Exception))
         finally:

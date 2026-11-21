@@ -134,17 +134,18 @@ def harbor_package(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["train", "eval"])
+@pytest.mark.parametrize("judge_declared", [False, True])
 async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
-    tmp_path, monkeypatch, phase, harbor_package
+    tmp_path, monkeypatch, phase, judge_declared, harbor_package
 ):
     package = harbor_package
     with (package / "task.toml").open("a") as config_file:
         config_file.write("""
 [verifier.env]
-OPENAI_API_KEY = "${OPENAI_API_KEY}"
 OPENAI_BASE_URL = "https://original-provider.invalid/v1"
-MODEL_NAME = "fixture-judge"
 """)
+        if judge_declared:
+            config_file.write('OPENAI_API_KEY = "${OPENAI_API_KEY}"\nMODEL_NAME = "fixture-judge"\n')
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     task = task.model_copy(
         update={
@@ -154,9 +155,6 @@ MODEL_NAME = "fixture-judge"
         }
     )
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
-    lowered = lowered.model_copy(
-        update={"judge_connection": JudgeConnection("https://judge.invalid/v1", "judge-secret")}
-    )
     settings = InstalledAgentSettings(
         agent=AgentConfig(name="pi", kwargs={"thinking_format": "qwen-chat-template"}),
         output_path=str(tmp_path / "attempts"),
@@ -192,6 +190,7 @@ MODEL_NAME = "fixture-judge"
         harbor=harbor,
         shutdown_timeout=5,
         installed_agents=runtime,
+        judge_connection=JudgeConnection("https://judge.invalid/v1", "judge-secret") if judge_declared else None,
     )
     configured, harnesses = worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
@@ -245,7 +244,11 @@ MODEL_NAME = "fixture-judge"
     assert result.exception_info.exception_type == "ProviderUnavailable"
     archived_config = TrialConfig.model_validate_json((result_path.parent / "config.json").read_text())
     assert archived_config.environment.override_storage_mb == (16384 if phase == "eval" else 8192)
-    assert archived_config.verifier.env["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert archived_config.verifier.env["OPENAI_BASE_URL"] == (
+        "http://127.0.0.1:8787/v1" if judge_declared else "https://original-provider.invalid/v1"
+    )
+    if not judge_declared:
+        assert "model_endpoint" not in archived_config.environment.kwargs
     assert "judge-secret" not in (result_path.parent / "config.json").read_text()
 
 
@@ -341,6 +344,32 @@ MODEL_NAME = "fixture-judge"
     assert requests[0].url == "https://judge.invalid/v1/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer host-only-key"
     assert json.loads(requests[0].content)["model"] == "fixture-judge"
+
+
+def test_original_verifier_declaring_model_rejects_missing_connection(tmp_path, harbor_package):
+    with (harbor_package / "task.toml").open("a") as config_file:
+        config_file.write('\n[verifier.env]\nMODEL_NAME = "fixture-judge"\n')
+    task = harbor_trial_task(
+        harbor_package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    )
+    lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
+    runtime = InstalledAgentRuntime(
+        InstalledAgentSettings(
+            agent=AgentConfig(name="pi"),
+            output_path=str(tmp_path / "attempts"),
+            setup_timeout=5,
+            run_timeout=5,
+            cleanup_timeout=5,
+            service_startup_timeout=5,
+            service_shutdown_timeout=5,
+        ),
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
+        daytona_connection=DaytonaConnection(api_key="training-key"),
+        eval_daytona_connection=DaytonaConnection(api_key="evaluation-key"),
+    )
+    with pytest.raises(ValueError, match="declared Harbor verifier model requires a remote judge connection"):
+        runtime.original_harness(lowered, "session", HarborTaskSettings.from_config(OmegaConf.create({})), "eval")
 
 
 @pytest.mark.asyncio
