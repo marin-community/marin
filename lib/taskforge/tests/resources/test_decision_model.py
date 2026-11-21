@@ -317,6 +317,60 @@ async def test_equal_reads_in_flight_share_one_paid_read_and_survive_a_cancelled
     assert (reader.peak, [grade.reward for grade in rewards]) == (1, [1.0] * 3)
 
 
+class Answers(FakeReader):
+    """Each read waits for ``release``, then answers the next of ``answers``: a second paid read would show."""
+
+    def __init__(self, *answers: float) -> None:
+        super().__init__()
+        self.answers, self.release = list(answers), asyncio.Event()
+
+    @override
+    async def read(self, request: DecisionModelRequest) -> float:
+        self.reads.append(request)
+        await self.release.wait()
+        return self.answers.pop(0)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 1): an equal request arriving after the shared read left the table but
+# before its waiter recorded the level paid again, and the two read 1 and 4 for one key. The flight is owned until a
+# waiter has recorded its result: at every interleaving around completion, one call and one level.
+@pytest.mark.parametrize("steps", range(6))
+async def test_an_equal_request_around_a_reads_completion_shares_its_one_recorded_level(steps: int) -> None:
+    reader, ctx = Answers(4.0, 1.0), Context(log=EventLog())
+    installed(overlaid(), reader, ScriptedProvider(()), ctx, VirtualTime())
+    first = asyncio.create_task(ctx.emit(DecisionModelRead(request("12"))))
+    while not reader.reads:
+        await asyncio.sleep(0)
+    reader.release.set()
+    for _ in range(steps):
+        await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    second = asyncio.Task(ctx.emit(DecisionModelRead(request("12"))), loop=loop, eager_start=True)  # asks at this step
+    levels = (await first, await second)
+    await ctx.drain()
+    recorded = {r.event.value for r in ctx._log.records if isinstance(r.event, Resolved)}
+    assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 1): with every waiter cancelled, the shared read kept retrying after the
+# drain. The last waiter to leave cancels and joins it: nothing runs on, and nothing is recorded resolved.
+async def test_a_read_every_waiter_left_stops_before_the_drain_and_records_nothing() -> None:
+    reader, ctx = FakeReader(down={"12"}), Context(log=EventLog())
+    installed(overlaid(), reader, ScriptedProvider(()), ctx, VirtualTime())
+    waiters = [asyncio.create_task(ctx.emit(DecisionModelRead(request("12")))) for _ in range(2)]
+    while len(reader.reads) < 2:  # retrying
+        await asyncio.sleep(0)
+    for waiter in waiters:
+        waiter.cancel()
+    await asyncio.gather(*waiters, return_exceptions=True)
+    await ctx.drain()
+    calls, rows = len(reader.reads), len(ctx._log.records)
+    for _ in range(100):
+        await asyncio.sleep(0)
+    assert (len(reader.reads), len(ctx._log.records)) == (calls, rows)
+    assert not [r for r in ctx._log.records if isinstance(r.event, Resolved)]
+
+
 async def test_without_a_decision_model_its_grader_is_returned_to_the_author_before_any_validation() -> None:
     policy = overlaid("")
     task = arithmetic_task(grader=GRADER)

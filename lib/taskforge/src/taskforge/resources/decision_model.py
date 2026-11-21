@@ -10,6 +10,7 @@ equivalent read replays without a call and another model identity misses.
 """
 
 import asyncio
+import contextvars
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -147,10 +148,8 @@ class DecisionModel:
     gate: asyncio.Semaphore = field(init=False)
     down: str | None = field(default=None, init=False)
     """Why the latest attempt failed, until one succeeds: what a read still waiting for a slot reports."""
-    reading: dict[str, asyncio.Task[float]] = field(default_factory=dict, init=False)
-    """Reads in flight by event digest: equal requests share one paid read, and a cancelled waiter leaves it running
-    for the others. A finished read leaves at once, so a failure is never shared with a later request; the event log
-    replays a recorded one."""
+    reading: dict[str, "Flight"] = field(default_factory=dict, init=False)
+    """Reads in flight by event digest, so that equal requests share one paid read."""
 
     def __post_init__(self) -> None:
         self.gate = asyncio.Semaphore(self.policy.concurrency)
@@ -188,11 +187,30 @@ class DecisionModel:
             ) from None
 
 
+@dataclass(slots=True)
+class Flight:
+    """A paid read, findable until a waiter takes its result (recorded before any other task runs) or a failure; the
+    last waiter to leave early cancels and joins it."""
+
+    task: asyncio.Task[float]
+    waiters: int = 0
+
+
 async def read_level(event: DecisionModelRead, model: DecisionModel, *, notify: Notify) -> float:
-    if (shared := model.reading.get(key := event_digest(event))) is None:
-        shared = model.reading[key] = asyncio.ensure_future(model.level(event, notify))
-        shared.add_done_callback(lambda _: model.reading.pop(key))
-    return await asyncio.shield(shared)
+    if (flight := model.reading.get(key := event_digest(event))) is None:
+        # Outside every caller's scope: its retries are root rows, whichever waiters remain.
+        read = asyncio.get_running_loop().create_task(model.level(event, notify), context=contextvars.Context())
+        flight = model.reading[key] = Flight(read)
+    flight.waiters += 1
+    try:
+        return await asyncio.shield(flight.task)
+    finally:
+        flight.waiters -= 1
+        if (flight.task.done() or not flight.waiters) and model.reading.get(key) is flight:
+            del model.reading[key]
+        if not flight.task.done() and not flight.waiters:
+            flight.task.cancel()
+            await asyncio.gather(flight.task, return_exceptions=True)
 
 
 @dataclass(frozen=True, slots=True)
