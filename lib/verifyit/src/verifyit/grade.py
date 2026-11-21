@@ -8,6 +8,7 @@ import importlib
 import json
 import logging
 import math
+import re
 import sys
 import traceback
 from collections.abc import Callable, Sequence
@@ -71,6 +72,9 @@ class Aggregation(StrEnum):
 # transient failure; the judge transport and provider relays retry exactly this
 # identity within their bounded backoff budgets.
 TRANSIENT_MODEL_AUTH_MESSAGE = "Model authentication required"
+
+TRANSPORT_REASON = re.compile(r"http_[1-5]\d{2}|timeout|connection")
+"""The typed reason tokens the judge transport records for a failed attempt."""
 
 
 def transient_model_auth(status_code: int, body: bytes | str) -> bool:

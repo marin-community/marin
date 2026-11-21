@@ -65,9 +65,6 @@ MISSING_PREPARED_IMAGE_REASON = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = difficulty_gap_reason(DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT)
 NETWORK_POLICY_REASON = difficulty_gap_reason(DifficultyGap.NETWORK_POLICY_VIOLATION)
 MATH_DEADLINE_LIMIT = 3
-# The judge transport records one of these typed tokens per failed attempt;
-# anything else in a verdict's transport evidence stays out of the ledger.
-_TYPED_TRANSPORT_IDENTITIES = re.compile(r"http_[1-5]\d{2}|timeout|connection")
 
 
 def task_required_provider_secrets(task_dirs: Iterable[Path]) -> frozenset[str]:
@@ -141,7 +138,12 @@ def _declared_lock(environment: Environment) -> str | None:
         with TemporaryDirectory() as directory:
             compile_lock(environment.requirements, Path(directory) / LOCK_FILE)
             return _normalized_lock((Path(directory) / LOCK_FILE).read_text())
-    except Exception:
+    except Exception as error:
+        LOGGER.warning(
+            "Declared environment lock compile failed; its grader env cannot be matched: %s: %s",
+            type(error).__name__,
+            error,
+        )
         return None
 
 
@@ -154,6 +156,7 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
     it instead of the host. Returns None when no declaration matches, keeping the existing
     lock-built machine; callers that need the toolchain fail closed at the toolchain probe.
     """
+
     from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415
         DEFAULT_REPOSITORY,
         identity_digest,
@@ -194,6 +197,8 @@ def grader_infrastructure_reason(*, verifier_reached: bool, verdict: dict | None
     typed tokens (for example ``http_401``) or a grading-failure value; any
     other evidence stays out of the ledger.
     """
+    from verifyit.grade import TRANSPORT_REASON  # noqa: PLC0415
+
     if not verifier_reached:
         return None
     if verdict is None:
@@ -212,7 +217,7 @@ def grader_infrastructure_reason(*, verifier_reached: bool, verdict: dict | None
                     and isinstance(record.get("reason"), str)
                 ):
                     candidate = record["reason"]
-                    if _TYPED_TRANSPORT_IDENTITIES.fullmatch(candidate):
+                    if TRANSPORT_REASON.fullmatch(candidate):
                         identity = candidate
                     break
         failure = detail.get("failure")

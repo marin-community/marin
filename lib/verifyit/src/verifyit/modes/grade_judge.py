@@ -74,11 +74,6 @@ RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _TransportResult = TypeVar("_TransportResult")
 
 
-def _transient_model_auth(error: openai.APIStatusError) -> bool:
-    """Whether a 401 carries the provider's transient model-authentication identity."""
-    return transient_model_auth(error.status_code, error.response.text)
-
-
 REFERENCE_PROMPT = """You are an impartial grader for open-ended short-answer questions. Compare the \
 candidate response with the reference answer(s) below. Judge the substantive answer only: ignore \
 wording, notation, formatting, verbosity, hedging and extra detail that does not contradict a \
@@ -467,7 +462,11 @@ def _judge_transport(
                 "body": error.response.text if isinstance(error, openai.APIStatusError) else None,
             }
             attempts.append(record)
-            retryable = status is None or status in RETRYABLE_STATUSES or _transient_model_auth(error)
+            retryable = (
+                status is None
+                or status in RETRYABLE_STATUSES
+                or transient_model_auth(error.status_code, error.response.text)
+            )
             remaining = deadline - time.monotonic()
             if not retryable or index + 1 == spec.transport_attempts or remaining <= 0:
                 raise GradingInfraError(
