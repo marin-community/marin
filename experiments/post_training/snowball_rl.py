@@ -439,6 +439,11 @@ _PRESETS = (
         data_settings=frozenset(),
     ),
     _TRAIN_LONG,
+    replace(
+        _TRAIN_LONG,
+        name="train-long-rno2a",
+        recipe=replace(_TRAIN_LONG.recipe, layout=replace(P40, name="p40-rno2a", cluster="cw-rno2a")),
+    ),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
     replace(
