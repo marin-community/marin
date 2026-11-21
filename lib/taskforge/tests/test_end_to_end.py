@@ -263,7 +263,7 @@ class FirstRoundSolves(Engine):
         return GradedRollout(Rollout(run_id, (), "stop"), grade)
 
 
-# Review 2026-11-21 (follow-up 1): a faulted revision resubmitted the same task and controls with new notes; review
+# Review 2026-11-21: a faulted revision resubmitted the same task and controls with new notes; review
 # chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
 # the faulted round's notes shipped as a clean acceptance.
 async def test_a_faulted_resubmission_with_the_same_digest_restores_the_stored_submission(
@@ -715,7 +715,7 @@ async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
         ("events.jsonl.parts/000000000001.jsonl", 1, "format 1"),
         ("status.json", 1, "format 1"),
         ("workpiece.json", 1, "format 1"),
-        # The version gate refuses every format but its own: the n3 reader, at format 2, refuses this one's heads.
+        # The version gate refuses every format but its own: the format-2 reader refuses this one's heads.
         (HEAD, checkpoint.JOURNAL_FORMAT - 1, f"format {checkpoint.JOURNAL_FORMAT - 1}"),
         (HEAD, checkpoint.JOURNAL_FORMAT + 1, f"format {checkpoint.JOURNAL_FORMAT + 1}"),
     ],
@@ -1044,7 +1044,7 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
     ]
 
 
-# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. Follow-up 1 added
+# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. The faults also include
 # empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
@@ -1062,7 +1062,7 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
     assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
 
 
-# Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged (a known limit of the
+# Review 2026-11-21: a confirmed tail from an exited worker is still charged (a known limit of the
 # client-side bound, which consults no pool state).
 @pytest.mark.parametrize("tail", [False, True], ids=["live", "exited-worker-tail"])
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
@@ -1081,7 +1081,7 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
-# Review 2026-11-21, follow-up 2: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
+# Review 2026-11-21: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
 # (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
 async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1971,8 +1971,8 @@ def rows(records: Sequence[Record]) -> list[Record]:
 
 
 FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
-"""The policy digest the n3 and n4 fixtures recorded. The default policy has since gained the two adversary briefs,
-which changes only that digest in an author-only journal."""
+"""The policy digest the ``N3_JOURNAL`` and ``N4_JOURNAL`` fixtures recorded. The default policy has since gained the
+two adversary briefs, which changes only that digest in an author-only journal."""
 
 
 def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
@@ -2035,7 +2035,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
     return b"".join(lines[:cut])
 
 
-# Review 2026-11-20: the n3 reader claimed a positional journal under the same format number, ignoring its owners.
+# Review 2026-11-20: the format-2 reader claimed a positional journal under the same format number, ignoring its owners.
 @pytest.mark.parametrize(
     "events",
     [
@@ -2048,7 +2048,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
 async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
 ) -> None:
-    """The n3 fixture is the journal the n3 dispatch (e5ec5eba21) published for the held first launch of
+    """``N3_JOURNAL`` is the journal the format-2 dispatch (e5ec5eba21) published for the held first launch of
     ``held_after_stamp``; the positional one is ``N4_JOURNAL``, which an earlier revision published as format 2."""
     destination = plant(driver_args, events, 2)
     before = tree(destination)
@@ -2076,9 +2076,10 @@ N8_AUTHOR_HELD = Path(__file__).parent / "fixtures" / "n8-author-revision-held-r
 N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restored-root.json.gz"
 
 
-# Review 2026-11-21: n7 resumed this n6 head, accepted a fresh empty adversary report and published a round-0 Accept
-# without the author repair, dropping the finding both verifier grades had confirmed and the Modify it caused.
-# Review 2026-11-21 (n9): a format-4 root held in author revision re-held forever at its first positional write, and
+# Review 2026-11-21: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
+# a round-0 Accept without the author repair, dropping the finding both verifier grades had confirmed and the Modify
+# it caused.
+# Review 2026-11-21: a format-4 root held in author revision re-held forever at its first positional write, and
 # an accepted one lost its restoration provenance on read.
 @pytest.mark.parametrize("resume_held", [True, False])
 @pytest.mark.parametrize(
@@ -2089,9 +2090,9 @@ N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restore
 async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool, fixture: Path, found: int
 ) -> None:
-    """Each fixture is a whole published root. The n6 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
+    """Each fixture is a whole published root. The format-3 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
     holds a finding both verifier grades confirmed, Modify, and the author held in round 1 (73 rows); format 4
-    changed what an adversary finding means. The n8 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
+    changed what an adversary finding means. The format-4 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
     trial solved and every later one failed) are 58 rows held at the round-1 author's first model call and 96 rows
     accepted on the restored too-easy baseline; format 5 changed what a decision, a fallback and a solver slot
     mean."""
@@ -2107,7 +2108,8 @@ async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_unt
 
 
 def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(proposal: TaskProposal) -> None:
-    """Adding an optional persisted field changes no existing bytes: the n8 author hydrated these exact bytes."""
+    """Adding an optional persisted field changes no existing bytes: the author that recorded ``N8_AUTHOR_HELD``
+    hydrated these exact bytes."""
     root = json.loads(gzip.decompress(N8_AUTHOR_HELD.read_bytes()))
     records = decode("".join(root[f"chunks/{name}"] for name in json.loads(root[HEAD])["chunks"]).encode())
     (written,) = {
@@ -2124,7 +2126,7 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert "fallback" not in snapshot and not {"restore", "fallback", "awaits"} & keys
 
 
-# Review 2026-11-21 (follow-up 1): an empty restore and None serialised alike, so an invalid direct restore became an
+# Review 2026-11-21: an empty restore and None serialised alike, so an invalid direct restore became an
 # ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
 def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
     stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY)
@@ -2153,7 +2155,7 @@ def restoring_bundle(engine: Engine) -> Resources:
     return replace(bundle, rollouts=replace(bundle.rollouts, engine=engine))
 
 
-# Review 2026-11-21 (follow-up 2): after the coordinator returned the accepted fallback, an OSError on runtime exit
+# Review 2026-11-21: after the coordinator returned the accepted fallback, an OSError on runtime exit
 # published HELD with the faulted revision's notes and [Modify, Incomplete], though the journal recorded the Accept.
 async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpiece(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -2203,7 +2205,7 @@ async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
     assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
 
 
-# Review 2026-11-21 (follow-up 1): a disk-full error persisting the final review held the run from the initial
+# Review 2026-11-21: a disk-full error persisting the final review held the run from the initial
 # workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -3109,7 +3111,7 @@ def drafting_script() -> tuple[Completion, ...]:
     return (*(call("write_file", {"path": str(p), "content": d.decode()}, p.name) for p, d in drafts), *script()[2:])
 
 
-# Review 2026-11-21 (inherited follow-up): with guest /tmp unwritable, four-file hydration journalled EACCES for
+# Review 2026-11-21: with guest /tmp unwritable, four-file hydration journalled EACCES for
 # Taskforge's own archive as the caller's failure, and every resume on a healthy sandbox held as unreproducible.
 async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
