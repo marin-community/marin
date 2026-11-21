@@ -34,7 +34,7 @@ from taskforge.harness.tools.evidence import (
     ReportTool,
     SearchTool,
     Source,
-    checked,
+    consolidated,
     evidence_tools,
     source_listing,
 )
@@ -50,7 +50,6 @@ from taskforge.model.review import (
     SolveReview,
     TrialResult,
     same,
-    unique,
 )
 from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.resources.bundle import Resources
@@ -275,11 +274,10 @@ def earlier_reports(workpiece: Workpiece) -> str:
 
 
 def shipped_notes(index: Evidence, findings: Sequence[ReviewFinding]) -> tuple[ReviewFinding, ...]:
-    """Each (``same``) finding of ``findings`` once, at its first occurrence, in its first version whose citations all
-    check against ``index``: a version quoting text the shipped trials lack is never published, and a finding no
-    version of which checks is not carried."""
-    valid = unique(checked(index, findings)[0])
-    chosen = {same(finding): finding for finding in valid}
+    """Each (``same``) finding of ``findings`` once, at its first occurrence, carrying the citations of its versions
+    that check against ``index`` (``consolidated``): a version quoting text the shipped trials lack is never
+    published, and a finding no version of which checks is not carried."""
+    chosen = {same(finding): finding for finding in consolidated(index, findings)[0]}
     return tuple(chosen[key] for key in dict.fromkeys(map(same, findings)) if key in chosen)
 
 
@@ -291,12 +289,15 @@ FATES = {
 }
 
 
+DISCARDED = "; the driver then restored the version before that attempted fix, so this submission does not carry it"
+
+
 def fate(workpiece: Workpiece, index: int, finding: ReviewFinding, note: bool) -> str:
     """What became of ``finding`` of the review of evidence record ``index``: the author's response recorded against
     that review (a final review's ``note`` was sent as optional), else a note on an acceptance, else nothing."""
     response = next((r for r in reversed(workpiece.responses) if (r.review, r.finding) == (index, finding)), None)
     if response is not None:
-        sent = FATES[response.response].format(reason=response.reason)
+        sent = FATES[response.response].format(reason=response.reason) + (DISCARDED if response.discarded else "")
         return sent.replace("given to the author", "given to the author as an optional note") if note else sent
     if any(isinstance(d, Accept) and finding in d.notes for d in workpiece.decisions):
         return "recorded as a note on the acceptance"

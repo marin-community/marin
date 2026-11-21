@@ -27,7 +27,6 @@ from taskforge.model.review import (
     SolveReview,
     TrialAccount,
     same,
-    unique,
 )
 
 PAGE_ROOM = 120
@@ -220,6 +219,21 @@ def checked(
     return kept, dropped
 
 
+def consolidated(
+    evidence: Evidence, findings: Sequence[ReviewFinding]
+) -> tuple[list[ReviewFinding], list[tuple[ReviewFinding, str]]]:
+    """``findings`` as one record per (``same``) finding: every submitted version is checked against ``evidence``
+    first, and the versions that survive become one finding, at its first surviving version, carrying their distinct
+    citations in order. Every version that fails is dropped with its reasons, as ``checked`` drops it."""
+    kept, dropped = checked(evidence, findings)
+    merged: dict[tuple[str, str, str], ReviewFinding] = {}
+    for finding in kept:
+        first = merged.setdefault(same(finding), finding)
+        new = tuple(c for c in finding.citations if c not in first.citations)
+        merged[same(finding)] = replace(first, citations=(*first.citations, *new))
+    return list(merged.values()), dropped
+
+
 def report(
     evidence: Evidence,
     findings: Sequence[ReviewFinding],
@@ -229,13 +243,14 @@ def report(
     """The review, once its accounts cover every trial that did not pass and a failure blamed on a task defect has a
     finding that survives its citations and cites that trial: a submitted one, or an ``earlier`` report's whose
     citations all still check against this evidence. Any submitted finding whose citations fail is dropped with its
-    reason, never trusted and never refused back to the reviewer."""
+    reason, never trusted and never refused back to the reviewer; the versions of one finding are ``consolidated``, so
+    each finding is one record and one number for the author."""
     accounted = [account.trial for account in accounts]
     trials = {source.name for source in evidence.sources.values()}
     problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
-    kept, dropped = checked(evidence, findings)
+    kept, dropped = consolidated(evidence, findings)
     supported = (*kept, *checked(evidence, earlier)[0])  # an earlier claim is rechecked against these trials
     cited = {citation.source for finding in supported for citation in finding.citations}
     why = "".join(f" ({reason})" for _, reason in dropped)
@@ -308,12 +323,12 @@ class FinalReportTool(ValidatedTool[FinalReportArgs]):
         if both := {same(f) for f in args.revise} & {same(f) for f in args.note}:
             named = "; ".join(description for _, description, _ in sorted(both))
             return ToolResult(f"Invalid report: give each finding one disposition, revise or note ({named}).")
-        args = replace(args, revise=unique(args.revise), note=unique(args.note))  # each record answers one number
         outcome = report(self.evidence, (*args.revise, *args.note), args.accounts, self.earlier)
         if isinstance(outcome, ToolResult):
             return outcome
-        kept = outcome.payload.findings
-        revise, note = (tuple(f for f in found if f in kept) for found in (args.revise, args.note))
+        required = {same(f) for f in args.revise}
+        revise = tuple(f for f in outcome.payload.findings if same(f) in required)
+        note = tuple(f for f in outcome.payload.findings if same(f) not in required)
         return ReturnRequest("report", replace(outcome.payload, findings=revise, notes=note))
 
 

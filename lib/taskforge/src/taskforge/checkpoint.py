@@ -38,8 +38,9 @@ terminal; a format-7 acceptance ended at its validation round and names neither 
 round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
 finding (``responses``, each marked ``discarded`` once a restore drops the revision it answered), a final
 revision's optional notes and a confirmation record's shipped ``notes``: each is omitted at its default (``OMIT_*``
-in ``model/review.py``), and a fault revision omits its placement (``OMIT_NONE``) rather than writing null, so a
-format-8 decoder written before these fields still reads every row they appear beside.
+in ``model/review.py``), and a fault revision omits its placement (``OMIT_NONE``). This reader reads every earlier
+format-8 row, including the interim null placement; the interim readers before it cannot read a fault revision whose
+placement is omitted. Those interim revisions never wrote or read a root outside tests, so the format stays 8.
 Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
 names nothing although no review ran, and a resumed format-6 round would buy a review its recorded history lacks.
 Format 6 records an `effect.invalidated` row naming the refused slot result an operator-authorised replacement

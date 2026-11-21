@@ -317,9 +317,11 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
   checks and replay identity, is shown every earlier report with what became of each finding (the
   author's response recorded against the review that gave it: revised, declined with its reason, stopped,
-  a note, or not acted on), and sorts its new findings into `revise` and `note`. An account may blame a
+  a note, or not acted on; a revision a restore discarded says so), and sorts its new findings into `revise` and `note`. An account may blame a
   trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A
-  finding given both dispositions is refused, and one repeated within a list is kept once.
+  finding given both dispositions is refused. In every report, round or final, each submitted version of a
+  finding is checked against the evidence first, and the versions that survive become one finding carrying
+  their distinct citations, so a stale copy never hides a valid one and the author answers one number.
   As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
   `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
   finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:

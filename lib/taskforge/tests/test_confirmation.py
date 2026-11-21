@@ -48,7 +48,14 @@ from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageC
 from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
-from taskforge.harness.tools.evidence import FinalReportArgs, FinalReportTool, ReportTool, evidence_tools
+from taskforge.harness.tools.evidence import (
+    Evidence,
+    FinalReportArgs,
+    FinalReportTool,
+    ReportArgs,
+    ReportTool,
+    evidence_tools,
+)
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import Completion, Message, Role, Usage
@@ -301,7 +308,10 @@ async def test_a_restored_fallback_is_confirmed_on_its_own_round(proposal: TaskP
     assert "trial 0 attempt 0 answers 12" in reviewer.replies[-1]
     (opening,) = reviewer.finals_seen
     assert "Solve-review of validation record 0 (this submission, 3 trials):" in opening
-    assert "Outcome: given to the author, who revised the task." in opening
+    assert (  # the response to the revision the restore discarded says so
+        "Outcome: given to the author, who revised the task; the driver then restored the version before that "
+        "attempted fix, so this submission does not carry it." in opening
+    )
     final = wp.decisions[-1]
     assert isinstance(final, Accept) and final.notes == (finding(1),)  # the restored round's finding
 
@@ -945,3 +955,64 @@ def test_a_fault_revision_writes_no_placement() -> None:
     assert b"placement" not in adapter.dump_json(fault) and adapter.validate_json(adapter.dump_json(fault)) == fault
     placed = Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND)
     assert adapter.validate_json(adapter.dump_json(placed)) == placed
+
+
+# Review 2026-11-21 (n12 follow-up 2): every submitted version is checked before versions of one finding merge.
+
+
+def failed_trials(*trials: int) -> Evidence:
+    """An evidence index over unsolved trials ``trials``, each answering ``trial N attempt 0 answers 12``."""
+    rollouts = [
+        GradedRollout(
+            Rollout(f"r{t}", (transcript(f"trial {t} attempt 0 answers 12"),), "stop"), GradeResult(Outcome.GRADED, 0.0)
+        )
+        for t in trials
+    ]
+    return evidence(SUBMISSION, [(TrialResult(t, r.grade), r) for t, r in zip(trials, rollouts, strict=True)], 4000)
+
+
+def defect(*trials: int) -> tuple[TrialAccount, ...]:
+    return tuple(TrialAccount(t, Attribution.DEFECT, "the grader") for t in trials)
+
+
+@pytest.mark.parametrize("stale_first", [True, False])
+def test_a_stale_version_of_a_required_fix_never_hides_its_valid_one(stale_first: bool) -> None:
+    valid = finding(1)
+    stale = TypeAdapter(ReviewFinding).validate_python(found(1, quote="answers 13"))
+    submitted = (stale, valid) if stale_first else (valid, stale)
+    outcome = asyncio.run(
+        FinalReportTool(failed_trials(1)).run(Context(log=EventLog()), FinalReportArgs(submitted, (), defect(1)))
+    )
+    assert not isinstance(outcome, ToolResult)
+    assert outcome.payload.findings == (valid,) and outcome.payload.dropped[0][0] == stale
+
+
+def test_two_valid_versions_citing_different_trials_are_one_finding_carrying_both() -> None:
+    one, two, index, ctx = finding(1), finding(2), failed_trials(1, 2), Context(log=EventLog())
+    final = asyncio.run(FinalReportTool(index).run(ctx, FinalReportArgs((one, two), (), defect(1, 2))))
+    ordinary = asyncio.run(ReportTool(index).run(ctx, ReportArgs((one, two), defect(1, 2))))
+    for outcome in (final, ordinary):
+        assert not isinstance(outcome, ToolResult), outcome.content
+        assert outcome.payload.findings == (replace(one, citations=(*one.citations, *two.citations)),)
+
+
+@pytest.mark.parametrize("stale_first", [True, False])
+async def test_the_order_of_a_repeated_required_fix_does_not_change_the_run(
+    proposal: TaskProposal, stale_first: bool
+) -> None:
+    valid, stale = found(3, what="fix"), found(3, what="fix", quote="answers 13")
+    reviewer = Reviewer(finals=[([stale, valid] if stale_first else [valid, stale], [])])
+    live = bundle(Trials(), reviewer, (*script(), *RESUBMIT))
+    wp = await run_workpiece(proposal, setup(), live, EventLog(), install=install)
+    engine = live.rollouts.engine
+    assert isinstance(engine, Trials) and kinds(wp) == ["accept", "revise", "accept", "accept"]
+    assert len(engine.runs) == 16
+
+
+async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_once(proposal: TaskProposal) -> None:
+    reviewer = Reviewer(rounds=[[found(1), found(1)]])
+    live = bundle(Trials(), reviewer, (*script(), *DECLINE))
+    wp = await run_workpiece(proposal, setup(), live, EventLog(), install=install)
+    assert kinds(wp)[0] == "modify" and wp.evidence[0].review is not None
+    assert wp.evidence[0].review.findings == (finding(1),)
+    assert [(r.review, r.response, r.reason) for r in wp.responses] == [(0, Response.DECLINED, "the grader is right")]
