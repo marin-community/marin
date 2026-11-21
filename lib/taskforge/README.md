@@ -120,7 +120,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 2); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 3); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -138,8 +138,16 @@ compare-and-swap when it starts and advances it the same way after each chunk. A
 the same workpiece (a relaunch racing a live driver, a preempted worker's replacement) takes the
 head; the first then fails with `Superseded` at its next checkpoint and publishes nothing more.
 Readers follow only the chunks the head names. A root in any other journal format, including the
-format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), fails with an error naming
-the format found and is left untouched; such roots are converted once by a separate migration.
+format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`) and format 2 (sandbox rows
+replayed by content, without owners), fails with an error naming the format found and exits 4 with the
+root untouched; such roots are converted once by a separate migration. Before claiming, the reader
+validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
+one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
+resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
+row carries any of these, so cached results never enter an owner's history; references name an earlier
+open row or unanswered request of the same sandbox definition; and an answered request matches the
+request and outcome its owner already established at that position. A request left unanswered may differ
+from the recording, which is how a held divergence looks.
 A storage hiccup never costs paid model work; only an explicit refusal stops the writer
 (`checkpoint.is_transient_storage_error`). A refusal is an HTTP 4xx other than 408 and 429 (denied
 access, a bad key or signature, a missing bucket) or a local filesystem refusal (permission, a missing
@@ -169,11 +177,13 @@ request at a frontier (one whose outcome was never recorded) live once; a reques
 returns its fresh result. A served command returns its recorded output, so later model calls replay
 even when its text drifts (a PID, a timestamp, the truncation flag); each drift is logged at INFO as a
 `Replay of <kind> diverged` note naming digests only. A handled guest failure (an `OSError` such as a
-missing file) is recorded by errno name and text and served again when the guest fails the same way.
-The workpiece holds as `Unreproducible` when an owner reopens on another sandbox definition, issues
+missing file, the only failure tools hand to the model) is recorded by errno name and text and served
+again when the guest fails the same way; a transfer archive the backend cannot unpack is a stage
+restart. A recorded outcome that an attempt dispatched but could not verify (the machine failed first)
+is no frontier: the stage restarts within its replay budget and holds after it, never counting the
+attempt as evidence. The workpiece holds as `Unreproducible` when an owner reopens on another sandbox definition, issues
 another request at a recorded position, changes an outcome (success, errno, exit status or read
-bytes), or returns normally before its recorded history ends. A journal whose sandbox rows name no
-owner (written before this format) exits 4 with its root untouched; migrate it.
+bytes), or returns normally before its recorded history ends.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
 its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
 A workpiece process cancelled in-process publishes a terminal head only with the workpiece that
