@@ -9,6 +9,7 @@ import functools
 import logging as pylogging
 import os
 import sys
+import threading
 import typing
 import warnings
 from dataclasses import dataclass
@@ -342,6 +343,7 @@ class Trainer:
         self._cmanagers = []
         self._logged_jaxprs: set[str] = set()
         self._compiled_journal_variants: set[str] = set()
+        self._pending_debug_artifacts: list[Callable[[], None]] = []
 
     @cached_property
     def loss_fn(self) -> WrappedLossFunction:
@@ -648,6 +650,12 @@ class Trainer:
             }
             levanter.tracker.log(metrics_to_log, step=info.step)
 
+        pending, self._pending_debug_artifacts = self._pending_debug_artifacts, []
+        for write in pending:
+            try:
+                threading.Thread(target=write, name="training-debug-artifacts", daemon=True).start()
+            except (OSError, RuntimeError):
+                logger.warning("Could not start optional debug-artifact writer; continuing training.", exc_info=True)
         return info
 
     def training_steps(self, state: S, train_loader) -> typing.Iterator[StepInfo[S]]:
@@ -942,33 +950,50 @@ class Trainer:
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
+        lowered = None
         if self.journal is not None and name not in self._compiled_journal_variants:
             with phase(self.journal, "compile", step=int(args[0].step)):
-                compiled = fn.lower(*args, **kwargs).compile()
+                lowered = fn.lower(*args, **kwargs)
+                compiled = lowered.compile()
                 logger.info("Compiled %s memory analysis: %s", name, compiled.memory_analysis())
             self._compiled_journal_variants.add(name)
-        logged = False
-        if self.config.log_jaxprs and name not in self._logged_jaxprs:
-            logger.info("Tracing %s for jaxpr...", name)
-            with capture_time() as t:
-                jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
-            logger.info("Traced %s in %.1fs", name, t())
-            pretty = jaxpr.pretty_print(name_stack=True, use_color=False)
-            self.write_artifact(f"{name}.jaxpr.txt.gz", pretty, type="jaxpr")
-            logged = True
-
-        if self.config.log_xla_hlo and name not in self._logged_jaxprs:
-            logger.info("Lowering %s to HLO...", name)
-            with capture_time() as t:
-                hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
-            logger.info("Lowered %s in %.1fs", name, t())
-            self.write_artifact(f"{name}.hlo.txt", hlo, type="hlo")
-            logged = True
-
-        if logged:
+        if (self.config.log_jaxprs or self.config.log_xla_hlo) and name not in self._logged_jaxprs:
             self._logged_jaxprs.add(name)
+            if jax.process_index() == 0:
+                try:
+                    if self.config.log_xla_hlo and lowered is None:
+                        lowered = fn.lower(*args, **kwargs)
+                    # The step donates its inputs. Retain shapes, never the donated buffers,
+                    # for the host-only trace that runs after the first update finishes.
+                    abstract_args, abstract_kwargs = jax.tree.map(
+                        lambda x: (
+                            jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding, weak_type=x.weak_type)
+                            if isinstance(x, jax.Array)
+                            else x
+                        ),
+                        (args, kwargs),
+                    )
+                    self._pending_debug_artifacts.append(
+                        partial(self._write_debug_artifacts, name, fn, abstract_args, abstract_kwargs, lowered)
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not prepare optional debug artifacts for %s; continuing training.", name, exc_info=True
+                    )
 
         return fn(*args, **kwargs)
+
+    def _write_debug_artifacts(self, name, fn, args, kwargs, lowered):
+        try:
+            with haliax.partitioning.set_mesh(self.device_mesh), hax.axis_mapping(self.parameter_axis_mapping):
+                if self.config.log_jaxprs:
+                    jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+                    pretty = jaxpr.pretty_print(name_stack=True, use_color=False)
+                    self.write_artifact(f"{name}.jaxpr.txt.gz", pretty, type="jaxpr")
+                if self.config.log_xla_hlo:
+                    self.write_artifact(f"{name}.hlo.txt", lowered.as_text("stablehlo"), type="hlo")
+        except Exception:
+            logger.warning("Optional debug artifacts for %s failed; continuing training.", name, exc_info=True)
 
 
 def _compose_with_telemetry(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:

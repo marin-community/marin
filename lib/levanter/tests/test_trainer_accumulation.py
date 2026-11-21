@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
+import threading
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -10,6 +13,7 @@ import optax
 import jmp
 
 from levanter.tracker.json_file import JsonFileTrackerConfig
+from levanter.tracker.wandb import MAX_WANDB_ARTIFACT_BYTES, WandbTracker
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
@@ -34,6 +38,60 @@ def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
 class WeightedBatch(eqx.Module):
     values: hax.NamedArray
     weights: hax.NamedArray
+
+
+def test_debug_artifacts_do_not_block_updates_or_propagate_oversize_errors(tmp_path, monkeypatch, caplog):
+    artifact = tmp_path / "oversized.bin"
+    with artifact.open("wb") as stream:
+        stream.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+    uploaded = []
+
+    class Run:
+        def log_artifact(self, *args, **kwargs):
+            uploaded.append(args)
+
+    wandb = WandbTracker(Run())
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    written = []
+
+    def write_artifact(name, content, type):
+        entered.set()
+        assert release.wait(timeout=10)
+        wandb.log_artifact(artifact, name=name, type=type)
+        written.append(type)
+        if type == "hlo":
+            finished.set()
+
+    config = TrainerConfig(
+        id="nonblocking-debug-artifacts",
+        train_batch_size=1,
+        mesh=MeshConfig(axes={"data": 1, "model": 1, "replica": 1, "context": 1}),
+        tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+        require_accelerator=False,
+        log_jaxprs=True,
+        log_xla_hlo=True,
+    )
+    optimizer = optax.sgd(0.1)
+
+    def loss(model, batch, *, key=None):
+        return hax.mean((model - batch) ** 2).scalar()
+
+    with caplog.at_level(logging.WARNING), Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
+        monkeypatch.setattr(trainer, "write_artifact", write_artifact)
+        state = TrainerState.init(optimizer, jnp.asarray(2.0), key=jax.random.key(0), mp=config.mp)
+        batch = hax.named(jnp.ones((1,)), hax.Axis("batch", 1))
+        try:
+            first = trainer.train_step(state, batch)
+            assert entered.wait(timeout=10)
+            second = trainer.train_step(first.state, batch)
+            assert int(second.state.step) == 2
+            np.testing.assert_allclose(second.state.model, 1.64, rtol=1e-6)
+        finally:
+            release.set()
+        assert finished.wait(timeout=10)
+    assert written == ["jaxpr", "hlo"]
+    assert not uploaded
+    assert "Skipping W&B artifact" in caplog.text
 
 
 def test_token_weighted_microbatches_match_full_weighted_update(tmp_path):

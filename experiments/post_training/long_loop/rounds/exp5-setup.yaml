@@ -2,7 +2,7 @@
 # OpenResearcher's 5% share remains reserved; downstream RL is held.
 schema: 1
 name: long-loop-exp5/round5
-version: "2026.11.21.106"
+version: "2026.11.21.107"
 slug: mochi-exp5
 cluster: cw-rno2a
 storage:
