@@ -4,10 +4,42 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Mapping, Protocol, Sequence
 
 import numpy as np
 
+from marinskyrl.runtime_options import AdvantageEstimator
+
+
+@dataclass(frozen=True)
+class ExactPhysicalGroup:
+    """Require the estimator's complete physical rollout group."""
+
+
+@dataclass(frozen=True)
+class MinimumBaselineEligibleGroup:
+    """Allow a ragged baseline cohort down to a user-configured floor."""
+
+
+@dataclass(frozen=True)
+class NoGroupAdvantage:
+    """Declare that the estimator does not compute group-relative advantages."""
+
+
+GroupAdvantageContract = ExactPhysicalGroup | MinimumBaselineEligibleGroup | NoGroupAdvantage
+
+BUILTIN_GROUP_ADVANTAGE_CONTRACTS: Mapping[str, GroupAdvantageContract] = MappingProxyType(
+    {
+        AdvantageEstimator.UNIFORM: NoGroupAdvantage(),
+        AdvantageEstimator.REWARD: NoGroupAdvantage(),
+        AdvantageEstimator.REINFORCE_PP: NoGroupAdvantage(),
+        AdvantageEstimator.RLOO: ExactPhysicalGroup(),
+        AdvantageEstimator.RLOO_N: MinimumBaselineEligibleGroup(),
+        "rloo_n_pbs": MinimumBaselineEligibleGroup(),
+        AdvantageEstimator.GRPO: ExactPhysicalGroup(),
+    }
+)
 
 _INITIAL_ADMISSION_STALL_TIMEOUT = 1800.0
 _MINIMUM_ADMISSION_STALL_TIMEOUT = 600.0
@@ -392,18 +424,18 @@ class GroupAdmissionPolicy:
 
 
 def resolve_group_advantage_invariant(
-    *, advantage_estimator: str, physical_group_size: int, minimum_group_size: int | None
+    *,
+    advantage_estimator: str,
+    physical_group_size: int,
+    minimum_group_size: int | None,
+    contract: GroupAdvantageContract | None = None,
 ) -> GroupAdvantageInvariant:
     """Resolve registry metadata and user input into one validated run invariant."""
-    # Local import breaks the package cycle through skyrl_train.utils.__init__.
-    from skyrl_train.utils.algorithm_registry import (  # noqa: PLC0415
-        AdvantageEstimatorRegistry,
-        ExactPhysicalGroup,
-        MinimumBaselineEligibleGroup,
-        NoGroupAdvantage,
-    )
+    if contract is None:
+        # Local import breaks the package cycle through skyrl_train.utils.__init__.
+        from skyrl_train.utils.algorithm_registry import AdvantageEstimatorRegistry  # noqa: PLC0415
 
-    contract = AdvantageEstimatorRegistry.group_contract(advantage_estimator)
+        contract = AdvantageEstimatorRegistry.group_contract(advantage_estimator)
     if isinstance(contract, MinimumBaselineEligibleGroup):
         if isinstance(minimum_group_size, bool) or not isinstance(minimum_group_size, int):
             raise ValueError(f"advantage estimator '{advantage_estimator}' requires integer group_advantage_min_size")

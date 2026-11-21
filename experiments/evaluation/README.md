@@ -29,7 +29,8 @@ Choose exactly one model source:
 - `--model-config <path>`: a YAML or JSON file with the same schema.
 
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
-`smoke`, `core`, `nlp`, `chat`, `math`, `code`, and `agentic`.
+`smoke`, `core`, `nlp`, `chat`, `math`, `code`, `econevals`, `econevals-o3`, `econevals-sampled`,
+`econevals-sampled-o3`, and `agentic`.
 [configs/evalchemy.yaml](configs/evalchemy.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
 Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. With no selection, the launcher uses `smoke`.
@@ -259,3 +260,14 @@ platform. It checks a temporary copy and leaves the source unchanged.
 `upgrade-format` only after the smoke checks pass. These commands upgrade the
 FineStore format; `backfill-samples` rewrites normalized samples from retained
 source files. Read each command's `--help` before writing to production storage.
+
+## Micro210 judge policy
+
+Micro210 uses a [Together serverless judge](judge_config.py) and a
+[content-pinned policy](micro210_policy.py). Scores are not directly comparable
+to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
+for the proposed paired re-score.
+
+To read a past run's policy, pass the `policy_reference` from its
+`canonical-evaluation.json` to `read_micro210_policy` in the policy module.
+Mini840 keeps its existing judge policy.

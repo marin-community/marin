@@ -33,7 +33,7 @@ async def test_best_checkpoint_ignores_improvements_before_save_boundary(tmp_pat
     state = TrainerState(global_step=0, epoch=0, total_steps=20, num_steps_per_epoch=20)
 
     class CheckpointWriter:
-        cfg = SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path)))
+        cfg = SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path), export_path=str(tmp_path / "exports")))
 
         async def save_checkpoints(self):
             (tmp_path / f"global_step_{state.global_step}").mkdir()

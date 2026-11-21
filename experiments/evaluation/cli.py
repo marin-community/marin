@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 
 import click
-from evalrecords.records import RECORD_FILE, read_record
+from evalrecords.records import RECORD_FILE, TaskEvidence, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
@@ -228,6 +228,13 @@ def cli() -> None:
     "--seed", type=int, default=None, help="Run seed for curated evaluations. Default: 0, or unseeded on TPU vLLM."
 )
 @click.option(
+    "--task-evidence",
+    type=click.Choice([mode.value for mode in TaskEvidence]),
+    default=TaskEvidence.EMBEDDED.value,
+    show_default=True,
+    help="What curated attempt evidence keeps of each task: a corpus reference, or a full copy with hidden tests.",
+)
+@click.option(
     "--version",
     "version",
     default=None,
@@ -288,6 +295,7 @@ def launch(
     max_concurrent: int,
     instances: int,
     seed: int | None,
+    task_evidence: str,
     version: str | None,
     description: str | None,
     resume_results_path: str | None,
@@ -332,6 +340,7 @@ def launch(
         max_concurrent=max_concurrent,
         instances=instances,
         seed=seed,
+        task_evidence=TaskEvidence(task_evidence),
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
