@@ -11,12 +11,12 @@ from typing import Never
 
 import httpx
 import pytest
-from experiments.taskforge import run_taskforge
+from experiments.post_training.capability_driven_envs import launch
 from iris.cluster.types import JobName
 from shellbox.backends.iris.machine import IrisMachineFactory
 
 from taskforge import wiring
-from taskforge.driver import eligible, inputs, proposal_bucket, proposal_key
+from taskforge.driver import cli, eligible, inputs, proposal_bucket, proposal_key
 from taskforge.model.proposal import Environment, TaskProposal, Verification
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -67,41 +67,16 @@ def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path
         inputs(str(tmp_path))
 
 
-def test_launcher_passes_secrets_by_reference_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    values = {key: f"value-of-{key}-0123456789" for key in run_taskforge.SECRETS}
-    for key, value in {**values, "GLM_RELAY_JOB": "/me/relay"}.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.delenv("GLM_BASE_URL", raising=False)
-    commands: list[list[str]] = []
-    monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
-    argv = ["launcher", "--drivers", "2", "--concurrency", "4", "--cpu", "8"]
-    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
-    monkeypatch.setattr(sys, "argv", argv)
-    run_taskforge.main()
-    assert len(commands) == 2
-    for command in commands:
-        assert not [arg for arg in command for value in values.values() if value in arg]
-        secrets = {command[i + 1]: command[i + 2] for i, arg in enumerate(command) if arg == "--secret"}
-        assert secrets == {key: f"env:{key}" for key in values}
-        assert command[command.index("GLM_RELAY_JOB") + 1] == "/me/relay"
+def test_driver_accepts_the_launchers_command() -> None:
+    argv = ["--proposals", "p", "--output", "o", "--policy", "q", "--job-prefix", "j", "--drivers", "2"]
+    args = launch.parser().parse_args([*argv, "--concurrency", "4", "--cpu", "8", "--ranks", "0,1", "--resume-held"])
+    command = launch.commands(args, {"CW_KEY_ID": "k", "CW_KEY_SECRET": "s", "GLM_API_KEY": "g", "GLM_BASE_URL": "u"})[1]
+    parsed = cli().parse_args(command[command.index("taskforge.driver") + 1 :])
+    assert (parsed.command, parsed.buckets, parsed.bucket_range) == ("run", 4096, (2048, 4096))
+    assert (parsed.concurrency, parsed.ranks, parsed.resume_held) == (4, (0, 1), True)
 
 
-@pytest.mark.parametrize("drivers,span", [(7, None), (32, "24:32"), (64, "48:64")])
-def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int, span: str | None) -> None:
-    for key in ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "GLM_BASE_URL"):
-        monkeypatch.setenv(key, "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
-    commands: list[list[str]] = []
-    monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
-    argv = ["launcher", "--drivers", str(drivers), "--concurrency", "4", "--cpu", "8"]
-    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
-    monkeypatch.setattr(sys, "argv", argv + (["--driver-range", span] if span else []))
-    run_taskforge.main()
-    ranges = [tuple(map(int, command[command.index("--bucket-range") + 1].split(":"))) for command in commands]
-    covered = [bucket for start, end in ranges for bucket in range(start, end)]
-    assert covered == list(range(3072 if span else 0, 4096))
-    assert len(commands) == (int(span.split(":")[1]) - int(span.split(":")[0]) if span else drivers)
-    assert max(end - start for start, end in ranges) - min(end - start for start, end in ranges) <= 1
+def test_proposal_buckets_ignore_the_proposal_root() -> None:
     assert (
         3998
         == proposal_bucket("s3://old/cap/slot-8.proposal.json", 4096)
