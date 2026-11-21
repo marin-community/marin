@@ -443,7 +443,7 @@ class Preset:
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     harbor: HarborEvaluationCallback | None = None
-    then: Callable[[ArtifactStep], ArtifactStep] | None = None
+    then: Callable[[ArtifactStep], tuple[ArtifactStep, ...]] | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()

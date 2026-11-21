@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
+from experiments.post_training.task_curation.task_health import task_health_step
 
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -329,34 +330,49 @@ _AGENTIC_PATCH = RecipePatch(
     ),
 )
 
-_TRAIN_LONG_AGENTIC = agentic_preset(
-    replace(
-        _TRAIN_LONG.with_updates(10_000),
-        revision="2026.11.20.5",
-        recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
-        data_settings=frozenset({"shuffle"}),
-        evaluations=(replace(_TASK_SET, every=2),),
-        checkpoint_every=2,
-        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != "no-agentic-tasks"), "harbor-on-daytona"),
+
+def _task_health_and_micro210(run: ArtifactStep) -> tuple[ArtifactStep, ...]:
+    # Load Micro210's tokenizer dependencies only when the post-RL steps are planned.
+    from experiments.evaluation.micro210 import micro210_policy_step  # noqa: PLC0415
+
+    return task_health_step(run), micro210_policy_step(run)
+
+
+# Micro210's frozen policy runs on cw-rno2a at production priority, so one coordinator can submit it only
+# alongside RL that shares that route.
+_TRAIN_LONG_AGENTIC = replace(
+    agentic_preset(
+        replace(
+            _TRAIN_LONG.with_updates(10_000),
+            revision="2026.11.20.5",
+            recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
+            data_settings=frozenset({"shuffle"}),
+            evaluations=(replace(_TASK_SET, every=2),),
+            checkpoint_every=2,
+            gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != "no-agentic-tasks"), "harbor-on-daytona"),
+        ),
+        name="train-long-agentic",
+        # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
+        limits=agentic_limits(
+            trial_timeout=5400,
+            agent_timeout=1800,
+            stall_timeout=10_800,
+        ).merge(_AGENTIC_PATCH),
     ),
-    name="train-long-agentic",
-    # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
-    limits=agentic_limits(
-        trial_timeout=5400,
-        agent_timeout=1800,
-        stall_timeout=10_800,
-    ).merge(_AGENTIC_PATCH),
+    then=_task_health_and_micro210,
 )
+
+
 _TRAIN_MEDIUM_AGENTIC = replace(
     _TRAIN_LONG_AGENTIC.with_updates(10),
     name="train-medium-agentic",
+    revision="2026.11.20.6",
     recipe=replace(
         _TRAIN_LONG_AGENTIC.recipe,
         layout=replace(
             _AGENTIC_LAYOUT,
             name="h100x88",
             workload=Training(replace(_AGENTIC_PLAN, num_inference_engines=1)),
-            priority="interactive",
         ),
     ),
 )
