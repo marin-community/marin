@@ -33,13 +33,13 @@ async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() 
     client = FakeInference((finish("f"),))
     bundle = replace(resources(ctx), role_inference={"adversary": client})
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
-    async with sitting(ctx, role, Visit("review", "unused", None, Fresh("system", "user")), bundle) as session:
-        outcome = await session()
+    async with sitting(ctx, role, Visit("review", "unused", None), bundle) as session:
+        outcome = await session(Fresh("system", "user"))
     assert isinstance(bundle.envs, Environments) and not bundle.envs.created
     assert [m.content for m in client.requests[0].conversation] == ["system", "user"]
     assert isinstance(outcome, Stopped) and outcome.detail == "done"
     with pytest.raises(ValueError, match="has no machine"):
-        async with sitting(ctx, role, Visit("review", "unused", None, Fresh("s", "u"), ((PurePosixPath("/x"), b""),)), bundle):
+        async with sitting(ctx, role, Visit("review", "unused", None, ((PurePosixPath("/x"), b""),)), bundle):
             pass
 
 
@@ -51,15 +51,14 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     pending = Message(Role.ASSISTANT, "", (ToolCall("report-1", "report", "{}"),))
     saved = Conversation((Message(Role.SYSTEM, "s"), Message(Role.USER, "u"), pending), ())
-    visit = Visit("adversary:finder", "validate/0/0/adversary:finder/0/0", None, Answer(saved, "did not reproduce"))
+    visit = Visit("adversary:finder", "validate/0/0/adversary:finder/0/0", None)
     async with sitting(ctx, role, visit, bundle) as session:
-        await session()
+        await session(Answer(saved, "did not reproduce"))
     (request,) = client.requests
     assert request.conversation[-1] == Message(Role.TOOL, "did not reproduce", tool_call_id="report-1")
     assert request.conversation[:3] == saved.messages
     assert [s.name for s in request.tools] == [*role.tools]
     assert any(isinstance(r.event, ScopeEntered) and r.event.name == "adversary:finder" for r in log.records)
-    unanswerable = Visit("x", "y", None, Answer(Conversation(saved.messages[:2], ()), "late"))
     with pytest.raises(ValueError, match="pending tool call"):
-        async with sitting(ctx, role, unanswerable, bundle):
-            pass
+        async with sitting(ctx, role, Visit("x", "y", None), bundle) as session:
+            await session(Answer(Conversation(saved.messages[:2], ()), "late"))

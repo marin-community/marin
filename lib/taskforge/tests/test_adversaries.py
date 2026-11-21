@@ -224,6 +224,51 @@ async def test_a_report_must_copy_the_adversarys_own_grade_of_that_candidate(
         assert isinstance(decision, Modify) and [grade.candidate.reply for grade in fresh] == ["12.0"]
 
 
+# Review 2026-11-21: a nonempty report whose claim failed reproduction ended the search, so a real false reject the
+# adversary would have reported on its one revision was recorded as a search that ran out of budget.
+async def test_a_claim_that_fails_reproduction_gets_one_revision_in_the_same_session(workpiece: Workpiece) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    client = Scripted(
+        {
+            "false_accept": (call("report", {"findings": []}, "empty"),),
+            "false_reject": (
+                call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first"),
+                call("report", {"findings": [finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0)]}, "revised"),
+            ),
+        }
+    )
+    ctx = Context(log=EventLog())
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    calls = {
+        brief: [r for r in client.requests if phrase in r.conversation[1].content] for brief, phrase in BRIEFED.items()
+    }
+    assert {brief: len(requests) for brief, requests in calls.items()} == {"false_accept": 1, "false_reject": 2}
+    answered = calls["false_reject"][1].conversation[-1]
+    assert answered.tool_call_id == "first" and answered.content.startswith("Validation replayed your report")
+    assert '"reward": 1.0' in answered.content  # the first replay's grade, returned on the pending report call
+    _, reject = result.adversary
+    assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False), ("12.0", True)]
+    assert not any("ran out of search budget" in reason for reason in reject.reasons)
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify) and decision.findings == ("false_reject: 12.0 is graded 0.0, deserves 1.0",)
+
+
+async def test_a_search_is_out_of_budget_only_after_its_revision_ends_without_a_finding(workpiece: Workpiece) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
+    first = call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first")
+    client = Scripted({"false_reject": (first,)})  # its revision finishes without a report
+    ctx = Context(log=EventLog())
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    ((reject,),) = ((await validate(ctx, workpiece, setup, bundle)).result.adversary,)
+    assert len(client.requests) == 2 and reject.status is AdversaryStatus.REPORTED
+    assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False)]
+    assert reject.reasons == (
+        "ran out of search budget without a finding (its revision 1 ended without a report); "
+        "this is not a validation of the task",
+    )
+
+
 def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
     with pytest.raises(
         ValueError, match=re.escape("adversary.roster names finder without a prompt adversary.brief.<name>")

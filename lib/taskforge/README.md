@@ -227,7 +227,11 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   Prompt("...")})`) and a name on the roster. Every brief reports through one schema: a defect
   direction (`false_accept`, `false_reject`, `grader_crash`), the candidate, the grade the grader
   OBSERVED and the reward the candidate DESERVES. Validation keeps a finding only when the replayed
-  grade is wrong in the stated direction on the round's verifier and again on a fresh one. A search
+  grade is wrong in the stated direction on the round's verifier and again on a fresh one. The report
+  tool refuses a finding whose observed grade differs from the adversary's own latest grade of that
+  exact candidate in its visit. When findings of a nonempty report fail reproduction, the replay's
+  grades answer the pending report call and the adversary may report again in the same session,
+  `adversary.max_revisions` times (default 1); reproduced findings are kept. A search
   that ends without a reproduced finding, by an empty report or because its context window or output
   budget ran out first (`exhausted`), counts as evidence of a strong task: the task can still be
   accepted, and its result and the Accept's reasons say it ran out of search budget without a finding,

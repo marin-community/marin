@@ -5,7 +5,7 @@ Each finding is one concrete candidate (reply and files) and keeps two grades ap
 - false_reject, the grader gives less credit than deserved. A correct answer that grade scored 0.0: grader_observed_status graded, grader_observed_reward 0.0, deserved_reward 1.0. If grade returned submission_failure, report that status with a null grader_observed_reward.
 - grader_crash, the grader errors instead of grading (a grader failure status, missing or invalid reward, malformed checks): grader_observed_status grader_error, grader_observed_reward and deserved_reward null.
 
-The validator replays each candidate against the original task and confirms a finding only if the replayed grade is wrong in the stated direction.
+The validator replays each candidate against the original task and confirms a finding only if the replayed grade is wrong in the stated direction. If a finding does not reproduce, you are shown what the replay observed and may revise it or report a different defect.
 
 A demonstrated defect ends this audit: your next action must be report with that candidate, before deeper search or more tests. If a result is ambiguous, run one targeted check to resolve that specific uncertainty, then report demonstrated findings or an empty list. Do not revisit already-tested hypotheses or attempt an exhaustive proof that the task is correct.
 

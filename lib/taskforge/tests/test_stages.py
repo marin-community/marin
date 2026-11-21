@@ -101,10 +101,12 @@ def config(harness: RecordingHarness | None = None) -> TaskforgeConfig:
 
 
 def adversary_config(harness: RecordingHarness) -> TaskforgeConfig:
+    """One adversary whose recorded harness returns one fixed report; these tests pin that report's reproduction, so
+    it gets no revision (``test_adversaries`` pins the revision)."""
     setup = config(harness)
     return replace(
         setup,
-        policy=setup.policy.overlaid({"adversary.roster": ["false_accept"]}),
+        policy=setup.policy.overlaid({"adversary.roster": ["false_accept"], "adversary.max_revisions": 0}),
         adversary=replace(setup.adversary, harness=harness, tools={}),
     )
 

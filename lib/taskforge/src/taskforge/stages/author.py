@@ -104,6 +104,6 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
         else Fresh(system_prompt(policy), policy.prompt("author.user").render(proposal=proposal))
     )
     # A round has one author visit, which a stage restart reconstructs on its fresh machine.
-    visit = Visit("author", f"author/{workpiece.round}", machine, opening, tuple(writes))
+    visit = Visit("author", f"author/{workpiece.round}", machine, tuple(writes))
     async with sitting(ctx, config.author, visit, resources) as session:
-        return await session()
+        return await session(opening)

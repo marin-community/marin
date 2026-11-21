@@ -16,7 +16,8 @@ from taskforge.effects.context import Context
 from taskforge.effects.log import Opened
 from taskforge.harness.protocol import Harness, Tool
 from taskforge.lowering import host_requirements
-from taskforge.model.llm import Message, Role as Speaker
+from taskforge.model.llm import Message
+from taskforge.model.llm import Role as Speaker
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation
 from taskforge.resources.bundle import Resources
@@ -76,12 +77,11 @@ type Opening = Fresh | Resume | Answer
 @dataclass(frozen=True, slots=True)
 class Visit:
     """One sitting of a role: its scope, its sandbox owner and machine (``None``: no machine), the files hydrated
-    before its first model call, how its conversation opens, and tools bound to this visit alone."""
+    before its first model call, and tools bound to this visit alone."""
 
     scope: str
     owner: str
     machine: EnvironmentRequirements | None
-    opening: Opening
     files: tuple[tuple[PurePosixPath, bytes], ...] = ()
     tools: Mapping[str, Tool[object]] = field(default_factory=dict)
 
@@ -111,11 +111,11 @@ def install_env(ctx: Context, env: Env) -> None:
 @asynccontextmanager
 async def sitting(
     ctx: Context, role: Role, visit: Visit, resources: Resources
-) -> AsyncIterator[Callable[[], Awaitable[Exit]]]:
-    """Open ``visit``'s machine and scope, hydrate its files and yield its session, ready to run.
+) -> AsyncIterator[Callable[[Opening], Awaitable[Exit]]]:
+    """Open ``visit``'s machine and scope, hydrate its files and yield its session, ready to run from an opening.
 
-    The caller runs the session and reads its exit inside the scope (an adversary reproduces its claims there); the
-    machine closes after the scope, however it ends.
+    The caller runs the session and reads its exit inside the scope (an adversary reproduces its claims there, and may
+    run it again with an ``Answer`` to its report); the machine closes after the scope, however it ends.
     """
     if visit.machine is None and visit.files:
         raise ValueError(f"{visit.scope} hydrates files but has no machine")
@@ -126,7 +126,11 @@ async def sitting(
                 install_env(ctx, env)
                 await ctx.emit(WriteFiles(visit.files))
             tools = {**role.tools, **visit.tools}
-            yield partial(role.harness.run, ctx, opened(visit.opening, tools), resources.inference_for(role.name), tools)
+
+            async def session(opening: Opening) -> Exit:
+                return await role.harness.run(ctx, opened(opening, tools), resources.inference_for(role.name), tools)
+
+            yield session
     finally:
         if env is not None:
             await close_resource(env.close, ctx.notify)
