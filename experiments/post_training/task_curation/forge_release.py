@@ -17,9 +17,11 @@ This module reads those records and:
 2. roots each workspace resource at the task machine's declared working directory (``root_workspace_resources``):
    the runtime stack installs workspace resources at container root, while the author declared a working
    directory and wrote instructions that reference the resources relative to it;
-3. selects ``--target`` of them, coverage first: every capability's best task, then every
+3. preserves the authored golden control as private oracle resources (``golden_oracle_resources``): the
+   replay's oracle must rewrite the control's workspace files and read its reply the way forge graded it;
+4. selects ``--target`` of them, coverage first: every capability's best task, then every
    capability's second best, and so on, breaking the last partial tier by score;
-4. writes ``lowered-tasks.parquet`` (``path``, ``lowered_task_spec`` envelopes) for the selected
+5. writes ``lowered-tasks.parquet`` (``path``, ``lowered_task_spec`` envelopes) for the selected
    tasks, ``selection.jsonl`` (every candidate with its score and why it was or was not selected)
    and ``manifest.json`` (counts, hashes and the selection rule).
 
@@ -30,10 +32,12 @@ Run with CoreWeave credentials exported::
 """
 
 import argparse
+import base64
 import concurrent.futures
 import gzip
 import hashlib
 import json
+import posixpath
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -67,9 +71,13 @@ CONTROLS_CREDIT_CAP = 20
 # Every row's provenance names the forge export; the authored spec's own id and source are the author's
 # free text (zero-stripped slots, ids that collide across a capability) and are replaced.
 SOURCE_DATASET = "forge-task-records"
-IMPORTER_VERSION = "2026.11.21.1"
+IMPORTER_VERSION = "2026.11.21.2"
 WORKSPACE_RESOURCE_ROLES = ("all", "worker")
 """The resource groups a task machine stages in its workspace, at container root."""
+SOLUTION_SCRIPT_PATH = "solution/solve.sh"
+SOLUTION_ANSWER_PATH = "solution/answer.txt"
+REPLY_ANSWER_TYPES = frozenset({"text", "number", "json"})
+"""Answer types whose grader reads the reply, rather than only the workspace state."""
 # TaskSpec fields newer than main's TaskCompendium, which rejects unknown keys; omitted while unset.
 UNSET_NEWER_FIELDS = ("integrity_contract",)
 # Copies of ``taskforge.sandbox.images.GRADER_BASE_IMAGE`` and the serialized ``taskforge.spec.draft.LOCAL_CPYTHON``:
@@ -295,6 +303,11 @@ def lowered_spec(record: Mapping) -> LoweredSpec:
     if spec is None:
         raise ValueError(f"{record['id']}: no confirmation rollout spec was recorded")
     task, _ = root_workspace_resources(restored_task(record))
+    golden, _ = golden_oracle_resources(record)
+    if golden:
+        merged = dict(task.get("resources") or {})
+        merged["oracle"] = [*(merged.get("oracle") or []), *golden]
+        task = {**task, "resources": merged}
     return LoweredSpec(
         TaskSpec.model_validate(task),
         machine_shape(spec["task_machine"]),
@@ -332,6 +345,88 @@ def selection_rows(selection: Sequence[Candidate]) -> list[dict]:
     ]
 
 
+def golden_control(record: Mapping) -> Mapping:
+    """The authored control the grader must credit, exactly as forge confirmed it."""
+    controls = [
+        control for control in record["workpiece"]["submission"]["controls"] if control.get("kind") == "positive"
+    ]
+    if not controls:
+        raise ValueError(f"{record['id']}: no positive control was recorded")
+    return controls[0]
+
+
+def _heredoc_write(path: str, content: str) -> str:
+    """A POSIX shell command writing ``content`` to ``path`` through a keyed heredoc."""
+    try:
+        content.encode()
+    except UnicodeEncodeError as error:
+        raise ValueError(f"golden content is not text: {path}") from error
+    delimiter = f"FORGE_GOLDEN_{hashlib.sha256(content.encode()).hexdigest()[:12]}"
+    if any(line.strip() == delimiter for line in content.splitlines()):
+        raise ValueError(f"golden content carries its own heredoc delimiter: {path}")
+    return f"cat > '{path}' <<'{delimiter}'\n{content}\n{delimiter}\n"
+
+
+def golden_oracle_resources(record: Mapping) -> tuple[list[dict], int]:
+    """The authored golden control as private oracle resources the replay can execute.
+
+    A machine task publishes ``solution/solve.sh``, which rewrites the control's
+    workspace files at their authored working-directory locations, and — when the
+    grader reads the answer from the reply — ``solution/answer.txt``. An actorless
+    task that already carries preserved solution material publishes only the
+    answer file, because its declared control contract then runs a command
+    instead of the calibration response. The oracle role is private: an agent
+    never sees the answer. Returns the resources and how many were added.
+    """
+    control = golden_control(record)
+    candidate = control.get("candidate") or {}
+    task = record["rollout_spec"]["task"]
+    requirements = task.get("environment_requirements") or {}
+    machine = requirements.get("command_semantics") is not None
+    workdir = requirements.get("working_directory")
+    answer_type = task.get("answer_type")
+    preserved = any(
+        resource["path"].startswith("solution/") for resource in (task.get("resources") or {}).get("oracle") or []
+    )
+    resources: list[dict] = []
+    if machine:
+        if workdir is None:
+            raise ValueError(f"{record['id']}: a machine task must declare its working directory")
+        authored = (record["workpiece"]["submission"]["task"].get("environment_requirements") or {}).get(
+            "working_directory"
+        )
+        if authored is not None and authored != workdir:
+            raise ValueError(
+                f"{record['id']}: confirmed working directory {workdir!r} differs from the authored {authored!r}"
+            )
+        script = "#!/bin/sh\n# The authored golden control: rewrite its workspace files.\n"
+        for file in candidate.get("files") or []:
+            try:
+                content = base64.b64decode(file["source"]["content_base64"]).decode()
+            except UnicodeDecodeError as error:
+                raise ValueError(f"{record['id']}: golden file {file['path']} is not text") from error
+            script += _heredoc_write(posixpath.join(workdir, file["path"]), content)
+        resources.append(
+            {
+                "path": SOLUTION_SCRIPT_PATH,
+                "source": {"kind": "inline_file", "content_base64": base64.b64encode(script.encode()).decode()},
+                "mode": "0755",
+                "mtime_ns": None,
+            }
+        )
+    if reply := candidate.get("reply"):
+        if (machine and answer_type in REPLY_ANSWER_TYPES) or (not machine and preserved):
+            resources.append(
+                {
+                    "path": SOLUTION_ANSWER_PATH,
+                    "source": {"kind": "inline_file", "content_base64": base64.b64encode(reply.encode()).decode()},
+                    "mode": None,
+                    "mtime_ns": None,
+                }
+            )
+    return resources, len(resources)
+
+
 def workspace_repair_size(record: Mapping) -> int:
     """How many workspace resource paths the repair moves for one record."""
     return root_workspace_resources(record["rollout_spec"]["task"])[1]
@@ -344,6 +439,8 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
     lowered = []
     repaired_tasks = 0
     repaired_files = 0
+    solution_tasks = 0
+    solution_files = 0
     for record in sorted(records, key=lambda r: r["id"]):
         if record["id"] not in chosen:
             continue
@@ -354,6 +451,10 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
         if moved:
             repaired_tasks += 1
             repaired_files += moved
+        golden = golden_oracle_resources(record)[1]
+        if golden:
+            solution_tasks += 1
+            solution_files += golden
     if len({json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"]["id"] for row in lowered}) != len(lowered):
         raise ValueError("Selected tasks must have distinct task IDs")
     output.mkdir(parents=True, exist_ok=True)
@@ -376,6 +477,7 @@ def write_release(records: Sequence[Mapping], target: int, output: Path, records
             kind: sum(s.verification == kind for s in selected) for kind in {s.verification for s in selected}
         },
         "resource_repair": {"tasks": repaired_tasks, "files": repaired_files},
+        "golden_solution": {"tasks": solution_tasks, "files": solution_files},
         "environment": {
             kind: sum(s.environment == kind for s in selected) for kind in {s.environment for s in selected}
         },

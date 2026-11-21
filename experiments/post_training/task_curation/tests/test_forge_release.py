@@ -39,6 +39,7 @@ GRADER_BASE = EnvironmentRequirements(
 )
 # How forge's local sandbox records a grader-base machine: no image, an empty package spec.
 HOSTED = GRADER_BASE.model_copy(update={"docker_image": None, "package_spec": PackageSpec(pypi_packages=())})
+ACTORLESS = EnvironmentRequirements()
 
 
 def _task(identity: str, requirements: EnvironmentRequirements = SHELL_SIMULATOR, resources: dict | None = None) -> dict:
@@ -84,7 +85,20 @@ def _record(
             "notes": list(notes),
             "missing_evidence": [],
             "proposal": {"header": {"verification": "code", "environment": "shellsim"}},
-            "submission": {"controls": [{}] * 4, "verification": None, "task": _task(identity, authored)},
+            "submission": {
+                "controls": (
+                    [{}] * 4
+                    + [
+                        {
+                            "kind": "positive",
+                            "candidate": {"reply": "done", "files": []},
+                            "expected": {"status": "graded", "reward_min": 1.0, "reward_max": 1.0},
+                        }
+                    ]
+                ),
+                "verification": None,
+                "task": _task(identity, authored),
+            },
             "evidence": [{"confirmation": True, "solver": trials}],
             "decisions": decisions,
         },
@@ -199,9 +213,9 @@ def test_workspace_resources_without_a_working_directory_are_refused():
 
 def test_a_root_working_directory_leaves_workspace_paths_authored():
     record = _record("d01.a/01", 4)
-    record["rollout_spec"]["task"]["environment_requirements"] = SHELL_SIMULATOR.model_copy(
-        update={"working_directory": "/"}
-    ).model_dump(mode="json")
+    rooted = SHELL_SIMULATOR.model_copy(update={"working_directory": "/"}).model_dump(mode="json")
+    record["workpiece"]["submission"]["task"]["environment_requirements"] = rooted
+    record["rollout_spec"]["task"]["environment_requirements"] = rooted
     record["rollout_spec"]["task"]["resources"] = {"worker": [_resource("data.csv")]}
     task = forge_release.lowered_spec(record).task
     assert [resource.path for resource in task.resources.worker] == ["data.csv"]
@@ -217,4 +231,86 @@ def test_release_counts_the_workspace_repair_in_its_manifest(tmp_path):
     rows = pq.read_table(tmp_path / forge_release.LOWERED_FILENAME).to_pylist()
     tasks = {row["path"]: json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"] for row in rows}
     assert tasks["d01.a/01"]["resources"]["worker"][0]["path"] == "app/data.csv"
-    assert all(group == [] for group in tasks["d02.b/01"]["resources"].values())
+    # The golden control rides in the private oracle group, not the workspace groups.
+    assert all(tasks["d02.b/01"]["resources"][group] == [] for group in ("all", "worker"))
+    assert {row["path"] for row in tasks["d02.b/01"]["resources"]["oracle"]} == {
+        "solution/solve.sh",
+        "solution/answer.txt",
+    }
+
+
+def _positive_control(files: dict[str, str], reply: str) -> dict:
+    return {
+        "kind": "positive",
+        "candidate": {
+            "reply": reply,
+            "files": [
+                {
+                    "path": path,
+                    "source": {"kind": "inline_file", "content_base64": base64.b64encode(text.encode()).decode()},
+                }
+                for path, text in files.items()
+            ],
+        },
+        "expected": {"status": "graded", "reward_min": 1.0, "reward_max": 1.0},
+    }
+
+
+def _with_control(record: dict, control: dict) -> dict:
+    """Replace the fixture's default positive control with the given one."""
+    submission = record["workpiece"]["submission"]
+    submission["controls"] = [*submission["controls"][:-1], control]
+    return record
+
+
+def test_a_machine_task_publishes_its_golden_control_as_oracle_resources():
+    record = _record("d01.a/01", 4)
+    _with_control(record, _positive_control({"notes.txt": "n"}, "the answer is 7"))
+    task = forge_release.lowered_spec(record).task
+    oracle = {resource.path: resource for resource in task.resources.oracle}
+    assert set(oracle) == {"solution/solve.sh", "solution/answer.txt"}
+    script = base64.b64decode(oracle["solution/solve.sh"].source.content_base64).decode()
+    # The golden file is rewritten at its authored working-directory location.
+    assert "cat > '/app/notes.txt' <<'FORGE_GOLDEN_" in script and "\nn\n" in script
+    assert oracle["solution/solve.sh"].mode == "0755"
+    reply = base64.b64decode(oracle["solution/answer.txt"].source.content_base64).decode()
+    assert reply == "the answer is 7"
+
+
+def test_a_file_answer_publishes_only_the_solve_script():
+    record = _record("d01.a/01", 4)
+    record["rollout_spec"]["task"]["answer_type"] = "file"
+    _with_control(record, _positive_control({"matrix.tsv": "a\tb"}, "wrote the matrix"))
+    task = forge_release.lowered_spec(record).task
+    assert [resource.path for resource in task.resources.oracle] == ["solution/solve.sh"]
+
+
+def test_an_actorless_task_publishes_no_golden_resources():
+    record = _record("d01.a/01", 4, authored=ACTORLESS, hosted=ACTORLESS)
+    _with_control(record, _positive_control({}, "42"))
+    task = forge_release.lowered_spec(record).task
+    assert task.resources.oracle == ()
+
+
+def test_an_actorless_task_with_preserved_solution_material_publishes_the_answer():
+    record = _record("d01.a/01", 4, authored=ACTORLESS, hosted=ACTORLESS)
+    record["rollout_spec"]["task"]["resources"] = {
+        "oracle": [{"path": "solution/reference.json", "source": {"content_base64": base64.b64encode(b"{}").decode()}}]
+    }
+    _with_control(record, _positive_control({}, "the key"))
+    task = forge_release.lowered_spec(record).task
+    assert [resource.path for resource in task.resources.oracle] == ["solution/reference.json", "solution/answer.txt"]
+
+
+def test_a_task_without_a_positive_control_is_refused():
+    record = _record("d01.a/01", 4)
+    record["workpiece"]["submission"]["controls"] = [{}] * 4
+    with pytest.raises(ValueError, match="no positive control"):
+        forge_release.lowered_spec(record)
+
+
+def test_the_release_manifest_counts_the_golden_solution(tmp_path):
+    records = [_record("d01.a/01", 4), _record("d02.b/01", 3)]
+    manifest = forge_release.write_release(records, 2, tmp_path, "memory://records")
+    # Both fixture tasks run on a machine with a text answer: solve script plus reply.
+    assert manifest["golden_solution"] == {"tasks": 2, "files": 4}
