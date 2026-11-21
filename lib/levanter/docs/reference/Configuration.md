@@ -320,14 +320,11 @@ trainer:
 Notes:
 
 * W&B artifacts with more than 20,000,000 regular-file bytes (one file or a
-  directory tree) are skipped with a warning. Optional trainer JAXPR/HLO artifacts
-  are disabled with multiple JAX processes: tracing and lowering can synchronize
-  ranks. Use compiler-produced XLA dumps instead. With one JAX process, optional
-  artifacts render and upload on a daemon thread after a completed update, using shape-only
-  snapshots rather than donated training buffers. Python exceptions from rendering
-  or uploading are logged without propagating into the train loop. These best-effort
-  artifacts may be dropped at process exit. Configure compiler-dump retention with
-  `trainer.xla_dump_upload.ttl_days`; see [Capturing XLA compiler dumps](../Performance-Guide.md#capturing-xla-compiler-dumps).
+  directory tree) are skipped with a warning. Optional Python JAXPR/HLO artifacts
+  trace synchronously on every JAX process. Set both `trainer.log_jaxprs` and
+  `trainer.log_xla_hlo` to `false` to disable those traces; compiler-produced XLA
+  dumps remain independent. Configure their upload and retention with
+  `trainer.xla_dump_upload`; see [Capturing XLA compiler dumps](../Performance-Guide.md#capturing-xla-compiler-dumps).
 * WandB's code saving logic isn't very good for our use case, so we have our own. We automatically sniff out the git repo
 of your main script.
 * `fork_from` creates a new W&B child run with inherited history through the named step. It is mutually exclusive with
