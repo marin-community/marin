@@ -24,6 +24,7 @@ from skyrl_train.rollouts.training_record import (
 )
 
 from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
@@ -94,7 +95,7 @@ def rollout_loss_eligible(
         bool(any(rollout.loss_mask))
         and not treatment_excludes_from_baseline(treatment, verifier_available=graded)
         and missing_logprobs is None
-        and (not rollout.failure.diagnostics.get("timed_out") or error_handling.preserve_logprobs_on_timeout)
+        and (not rollout.failure.diagnostics.get(TIMED_OUT_DIAGNOSTIC) or error_handling.preserve_logprobs_on_timeout)
     )
 
 

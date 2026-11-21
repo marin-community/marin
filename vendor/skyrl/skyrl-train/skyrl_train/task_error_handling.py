@@ -36,7 +36,7 @@ class ErrorHandlingConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ErrorHandlingConfig":
-        """Validate the schema-derived mapping at the terminal-bench boundary."""
+        """Read a schema-validated mapping at the terminal-bench boundary."""
         defaults = DEFAULT_ERROR_HANDLING_CONFIG
         return cls(
             enable_error_classification=bool(
@@ -63,7 +63,7 @@ def retry_excluded_exception_types(
     configured_exclusions: Iterable[str] | None,
     error_handling: ErrorHandlingConfig,
 ) -> frozenset[str]:
-    """Return retry exclusions with every pass-through classification made terminal."""
+    """Add known and explicitly configured passthrough names to retry exclusions."""
     classification_candidates = set(known_error_types(categories=ERROR_CATEGORIES))
     if error_handling.default_error_treatment is not ErrorTreatment.PASSTHROUGH:
         classification_candidates.difference_update(

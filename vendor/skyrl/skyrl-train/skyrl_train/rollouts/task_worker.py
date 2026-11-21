@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rigging.task_errors import RetryDisposition, error_category, exception_identity
+from rigging.task_errors import ErrorIdentity, RetryDisposition, error_category, exception_identity
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -86,7 +86,7 @@ from skyrl_train.rollouts.training_record import (
     rollout_with_verifier_failure,
 )
 from skyrl_train.task_error_handling import ErrorHandlingConfig
-from skyrl_train.task_errors import ERROR_CATEGORIES
+from skyrl_train.task_errors import ERROR_CATEGORIES, TASK_MACHINE_ERROR, TEMPLATE_ERROR, TIMED_OUT_DIAGNOSTIC
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -264,12 +264,7 @@ def _machine_diagnostics(error: TaskMachineError, status_code: int | None) -> di
     return diagnostics
 
 
-def _failed_rollout(
-    interruption: GradedRolloutInterrupted,
-    lowered: TaskRolloutSpec,
-) -> TrainingRollout:
-    """Retain verified turns and safe diagnostics for the training policy."""
-    task = lowered.task
+def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
     error = interruption.__cause__
     assert isinstance(error, Exception)
     if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
@@ -280,7 +275,7 @@ def _failed_rollout(
         raise error
     failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
     exception_type = type(error).__name__
-    diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
+    diagnostics = {"operation": interruption.operation.value, TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
         provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
         failure = failure.model_copy(update={
@@ -297,10 +292,10 @@ def _failed_rollout(
             RolloutOperation.GRADE: "VerifierTimeoutError",
         }.get(interruption.operation, "AgentTimeoutError")
     elif isinstance(error, TemplateError):
-        exception_type = "TemplateError"
+        exception_type = TEMPLATE_ERROR
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
-        exception_type = "TaskMachineError"
+        exception_type = TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"
@@ -315,6 +310,30 @@ def _failed_rollout(
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
         exception_type = "VerifierTimeoutError"
+    return failure.model_copy(
+        update={
+            "exception_type": exception_type,
+            "category": error_category(exception_type, categories=ERROR_CATEGORIES),
+            "diagnostics": diagnostics,
+            "cause_type": failure.cause_type
+            or (failure.exception_type if exception_type != failure.exception_type else None),
+            "retry_disposition": failure.retry_disposition
+            if exception_type == failure.exception_type
+            else RetryDisposition.UNKNOWN,
+        }
+    )
+
+
+def _failed_rollout(
+    interruption: GradedRolloutInterrupted,
+    lowered: TaskRolloutSpec,
+) -> TrainingRollout:
+    """Retain verified turns and safe diagnostics for the training policy."""
+    task = lowered.task
+    error = interruption.__cause__
+    assert isinstance(error, Exception)
+    failure = _interruption_identity(interruption)
+    exception_type = failure.exception_type
     rollout = training_rollout(GradedRollout(interruption.rollout, interruption.grade), lowered)
     if (
         interruption.operation == RolloutOperation.ADVANCE
@@ -347,18 +366,7 @@ def _failed_rollout(
         rollout,
         grade=grade,
         stop_reason="error",
-        failure=failure.model_copy(
-            update={
-                "exception_type": exception_type,
-                "category": error_category(exception_type, categories=ERROR_CATEGORIES),
-                "diagnostics": diagnostics,
-                "cause_type": failure.cause_type
-                or (failure.exception_type if exception_type != failure.exception_type else None),
-                "retry_disposition": failure.retry_disposition
-                if exception_type == failure.exception_type
-                else RetryDisposition.UNKNOWN,
-            }
-        ),
+        failure=failure,
     )
 
 

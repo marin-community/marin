@@ -1943,25 +1943,17 @@ def test_repeatable_daytona_requests_retry_shared_transient_statuses(status_code
     assert attempts == 2
 
 
-@pytest.mark.parametrize("status_code", [HTTPStatus.UNAUTHORIZED, HTTPStatus.CONFLICT])
-def test_repeatable_daytona_requests_stop_on_nontransient_statuses(status_code, no_retry_wait):
-    attempts = 0
-    failure = DaytonaError("request failed", status_code=status_code)
-
-    async def request():
-        nonlocal attempts
-        attempts += 1
-        raise failure
-
-    with pytest.raises(DaytonaError) as caught:
-        asyncio.run(retry_transient(request))
-    assert caught.value is failure
-    assert attempts == 1
-
-
-def test_repeatable_daytona_requests_do_not_retry_certificate_failures(no_retry_wait):
-    failure = DaytonaConnectionError("TLS connection failed")
-    failure.__cause__ = SSLCertVerificationError("certificate rejected")
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DaytonaError("request failed", status_code=HTTPStatus.UNAUTHORIZED),
+        DaytonaError("request failed", status_code=HTTPStatus.CONFLICT),
+        DaytonaConnectionError("TLS connection failed"),
+    ],
+)
+def test_repeatable_daytona_requests_stop_on_nontransient_failures(failure, no_retry_wait):
+    if isinstance(failure, DaytonaConnectionError):
+        failure.__cause__ = SSLCertVerificationError("certificate rejected")
     attempts = 0
 
     async def request():
@@ -1969,7 +1961,7 @@ def test_repeatable_daytona_requests_do_not_retry_certificate_failures(no_retry_
         attempts += 1
         raise failure
 
-    with pytest.raises(DaytonaConnectionError) as caught:
+    with pytest.raises(type(failure)) as caught:
         asyncio.run(retry_transient(request))
     assert caught.value is failure
     assert attempts == 1

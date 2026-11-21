@@ -10,6 +10,8 @@ from rigging.task_errors import ErrorIdentity, RetryDisposition, exception_ident
 
 from shellbox.task_errors import ERROR_CATEGORIES
 
+DAYTONA_DELETE_OPERATION = "delete"
+
 
 def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity:
     """Classify SDK failures, including conflicts that clear during deletion."""
@@ -18,7 +20,7 @@ def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity
         return identity
     if (isinstance(error, DaytonaConnectionError) and identity.provider_status_code is None) or (
         isinstance(error, DaytonaConflictError)
-        and operation == "delete"
+        and operation == DAYTONA_DELETE_OPERATION
         and identity.provider_status_code in {None, HTTPStatus.CONFLICT}
     ):
         return identity.model_copy(update={"retry_disposition": RetryDisposition.TRANSIENT})
