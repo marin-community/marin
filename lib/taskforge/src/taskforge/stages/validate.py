@@ -569,20 +569,18 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
         trials = (*base, *added)
         pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
         earlier = tuple(f for result in workpiece.evidence if result.review for f in earlier_findings(result.review))
-        final = (
-            "solve_review.final",
-            partial(FinalReportTool, earlier=earlier),
-            earlier_reports(workpiece),
-            Billing.FINAL_REVIEW,
-        )
+        sources = evidence(submission, pairs, policy.setting("tools.output_chars", int))
+        final = ("solve_review.final", partial(FinalReportTool, earlier=earlier), earlier_reports(workpiece))
         probe = ValidationResult(submission.digest, trials, round_.controls, ())
         review = None  # as in validation, a record review would not decide on is not reviewed (``reviewed``)
         if not isinstance(assess(probe, config.band, len(trials)), Reject | Incomplete):
-            review = await solve_review(ctx, config, resources, workpiece.proposal, submission, pairs, *final)
+            review = await solve_review(
+                ctx, config, resources, workpiece.proposal, submission, pairs, *final, Billing.FINAL_REVIEW, sources
+            )
     noted = (
         *(f for d in workpiece.decisions if isinstance(d, Accept | Revise) for f in d.notes),
         *(() if review is None else (*review.notes, *review.findings)),
     )
-    notes = shipped_notes(evidence(submission, pairs, policy.setting("tools.output_chars", int)), noted)
+    notes = shipped_notes(sources, noted)
     result = ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index)
     return Validated(replace(result, notes=notes))

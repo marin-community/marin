@@ -12,7 +12,8 @@ checks read the same index: a citation is valid when it quotes text the reviewer
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import override
 
 from taskforge.effects.context import Context
@@ -51,15 +52,17 @@ class Source:
 
 @dataclass(frozen=True, slots=True)
 class Evidence:
-    """Every source in reading order; ``unpassed`` names the trials a report must account for."""
+    """Every source in reading order; ``unpassed`` names the trials a report must account for. The sources are frozen
+    at construction and ``version`` digests them then, once."""
 
     sources: Mapping[str, Source]
     unpassed: frozenset[int]
     output_chars: int
+    version: str = field(init=False, compare=False)
 
-    @property
-    def version(self) -> str:
-        return digest(tuple(self.sources.values()))
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sources", MappingProxyType(dict(self.sources)))
+        object.__setattr__(self, "version", digest(tuple(self.sources.values())))
 
 
 def normalized(text: str) -> str:

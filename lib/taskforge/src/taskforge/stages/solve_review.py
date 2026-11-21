@@ -200,16 +200,18 @@ async def solve_review(
     report: Callable[[Evidence], Tool[object]] = ReportTool,
     previous: str = "",
     bills: Billing = Billing.SOLVE_REVIEW,
+    index: Evidence | None = None,
 ) -> SolveReview:
     """Review ``trials`` of ``submission``; emits only the reviewer's inference effects. The final review passes its
-    own prompts, its report tool, the earlier reports (``earlier_reports``) as the template's ``{previous}`` and the
-    role its calls bill; it shares the round reviewer's model, profile and replay keys.
+    own prompts, its report tool, the earlier reports (``earlier_reports``) as the template's ``{previous}``, the role
+    its calls bill (it shares the round reviewer's model, profile and replay keys) and ``index``, the evidence of
+    ``trials`` that it also checks shipped notes against; without one the review builds it.
 
     The opening ends with the index's version whatever the policy's template renders, so changed evidence never
     replays a recorded review.
     """
     policy = config.policy
-    index = evidence(submission, trials, policy.setting("tools.output_chars", int))
+    index = evidence(submission, trials, policy.setting("tools.output_chars", int)) if index is None else index
     read = {trial.trial: len(index.sources[f"{TRIAL}{trial.trial}"].parts) > 1 for trial, _ in trials}  # a message
     cut = [trial.trial for trial, rollout in trials if not read[trial.trial] or (rollout and rollout.rollout.failure)]
     missing = (MissingEvidence(EvidenceKind.TRANSCRIPTS, f"solver trials {cut} have no complete transcript"),) * bool(
