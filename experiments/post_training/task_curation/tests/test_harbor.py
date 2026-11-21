@@ -39,6 +39,7 @@ from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import grade, read_output
 from verifyit.spec import ExactSpec, JsonSchemaSpec, MathSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
@@ -47,10 +48,10 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.verif
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.sources import all_sources
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from experiments.post_training.task_curation.tasktrove.export import main
 from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
 
