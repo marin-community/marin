@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 8:52 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 11:49 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,13 +18,13 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. | Submit the staged rerun once the inventory task service credentials are authorized for the CoreWeave job. The matched runs depend on smoke acceptance. |
+| 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. The corrected `2026.11.20.8` coordinator is running on frozen source `dba95c7f84`. | Verify the GPU child, both updates, receiver bytes, fresh-process recovery and generation. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
-[Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
+[Quick-loop branch status][learner-status] · [H100 rerun coordinator][iris-smoke-rerun] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
 [Snowball qualification report][snowball-status] ·
 [Historical quick-loop timing][timing]
@@ -282,13 +282,14 @@ only the envelope codec.
 
 ### 1. Qualify the Levanter learner on H100
 
-Use the staged `2026.11.20.8` smoke pinned to `dba95c7f84`. The prior
-`2026.11.20.5` attempt is terminal. The rerun reserves four eight-H100 learner
-hosts and one eight-H100 vLLM host in `cw-us-east-02a`. The learner places
+Iris accepted the `2026.11.20.8` smoke pinned to `dba95c7f84` at 11:46 a.m.
+PST on November 21. The prior `2026.11.20.5` GPU attempt is terminal.
+The rerun requests four eight-H100 learner hosts and one eight-H100 vLLM
+host in `cw-us-east-02a`. The learner places
 the four data shards across learner hosts and keeps the eight expert-axis
 shards within each host.
-Authorize the inventory task service credentials for the job before submission.
-Follow the coordinator if Iris retries the child.
+Follow the coordinator if Iris retries the child. [Rerun coordinator][iris-smoke-rerun] ·
+[Previous GPU attempt][iris-smoke]
 
 The launch handoff contains the exact Git bundles for the frozen learner and
 held serving comparison, their acceptance tools, and the commands to restore
@@ -968,6 +969,7 @@ arms. [Prior timing comparison][timing]
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
 [launch-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fquick-loop-launch-handoff.tar.zst
 [iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a8ae164919e7
+[iris-smoke-rerun]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.8-coordinator-5050ee06
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
 [h100-matched-audit]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-matched-audit%2F2026.11.21.1%2Fh100-matched-audit.tar.zst
 [frozen-validation-panel]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04%2Fvalidation.parquet
