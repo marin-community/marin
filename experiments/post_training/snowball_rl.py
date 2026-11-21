@@ -491,13 +491,13 @@ SNOWBALL = ModelPresets(
     presets=_PRESETS,
     namespace="snowball-rl",
     control_pins={
-        name: ControlPin(name, commit, revision, count)
-        for name, commit, revision, count in (
-            ("speed-short", "4a4e8f0a81", "2026.11.20.3", 5),
-            ("data-short", "4a4e8f0a81", "2026.11.20.3", 4),
-            ("speed-medium", "4a4e8f0a81", "2026.11.20.3", 4),
-            ("learning-medium", "648b5687f0", "2026.11.06.1", 4),
-            ("speed-long", "648b5687f0", "2026.11.06.1", 4),
+        pin.preset: pin
+        for pin in (
+            ControlPin("speed-short", "4a4e8f0a81", "2026.11.20.3", 5),
+            ControlPin("data-short", "4a4e8f0a81", "2026.11.20.3", 4),
+            ControlPin("speed-medium", "4a4e8f0a81", "2026.11.20.3", 4),
+            ControlPin("learning-medium", "648b5687f0", "2026.11.06.1", 4),
+            ControlPin("speed-long", "98da6db1de", "2026.11.20.3", 4, retries=(0, 0, 0, 1)),
         )
     },
 )
