@@ -43,18 +43,21 @@ addresses; `DENY` denies external traffic. Neither grants cluster access.
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Iris runs a command that has a timeout under the image's coreutils `timeout`, which sends TERM to the command's
-process group at the limit and, if the group's shell has not exited, KILL 5 seconds later. Its shell reports the
-command's exit status, and the outer shell reports `timeout`'s own exit; a command with neither record, such as one
-whose exec stream the controller cut, is an unknown outcome and the machine closes. A `timeout` exit of 124, or 137
-once the limit has passed, returns `TIMED_OUT` with the output so far and keeps the machine. That is evidence about
-the monitored process group only: a detached session can survive it, and a 137 without the command's record cannot
-tell the timer's KILL from an independent one. A timeout of zero or less returns `TIMED_OUT` without sending
+process group at the limit and, if the group's shell has not exited, KILL 5 seconds later. The command runs in a
+subshell whose parent reports its exit status, so `exit` and `exec` behave as usual, and the outer shell reports
+`timeout`'s own exit with the guest's elapsed seconds. A command with neither record, such as one whose exec stream
+the controller cut, is an unknown outcome and the machine closes. A `timeout` exit of 124 returns `TIMED_OUT` with the
+output so far and keeps the machine. A `timeout` exit of 137 does the same only when the guest clock shows the limit
+plus the grace had passed and the sandbox task still reports running; otherwise the task's terminal or OOM cause, or an
+unknown outcome, closes the machine. A timeout is evidence about the monitored process group only: a detached session
+can survive it. A timeout of zero or less returns `TIMED_OUT` without sending
 anything; a NaN or infinite one raises `ValueError`. The controller's exec deadline is the timeout plus 30 seconds and
 the client's RPC deadline adds 60 more; admission refusals and their retries spend neither, and stdin upload, output
 capture and cleanup have their own budgets. An image without a coreutils `timeout` keeps the earlier behaviour: the RPC
 deadline is the timeout itself. When this client's RPC deadline expires, the guest state is unknown, so the machine
 closes, and later calls raise `MachineTerminated` naming the command and the deadline that closed it. A deadline that
-an upstream service reports is an unknown outcome, like any other lost reply.
+an upstream service reports is an unknown outcome, like any other lost reply. A command without a timeout keeps the
+earlier decoding, so a Kubernetes exec stream that the controller cuts at its own deadline still reads as exit 124.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,

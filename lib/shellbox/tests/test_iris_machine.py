@@ -13,6 +13,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
@@ -1180,5 +1181,105 @@ def test_timer_escalating_to_kill_at_the_limit_is_a_timeout(tmp_path, monkeypatc
         assert (slow.reason, slow.exit_code) == (ExitReason.TIMED_OUT, None)
         assert (await machine.run(Command(("echo", "open"), timeout=5))).stdout == b"open\n"
         assert not job.cancelled
+
+    asyncio.run(scenario())
+
+
+class ReplyRpc(CountingRpc):
+    """Runs every exec, then replaces the reply of the one containing ``marker`` with exit 137 and ``stdout``."""
+
+    def __init__(self, marker: str, stdout: str):
+        super().__init__()
+        self.marker, self.stdout = marker, stdout
+
+    def exec_in_container(self, request, timeout_ms):
+        response = super().exec_in_container(request, timeout_ms)
+        if self.marker in request.command[-1]:
+            return SimpleNamespace(exit_code=137, stdout=self.stdout, stderr="", error="")
+        return response
+
+
+# Review follow-up 2026-11-21: a lone `timer 137` was read as the timer's KILL once the host had waited past the
+# budget, so a reply delivered late turned an OOM-killed sandbox into TIMED_OUT and reused a running one. The task's
+# status decides first, and only the guest's own clock past the limit plus the KILL grace makes it a timeout.
+@pytest.mark.parametrize(
+    "timeout,stdout,state,error_message,expected",
+    [
+        (0.001, "timer 137", TaskState.RUNNING, "", CommandOutcomeUnknown),
+        (0.001, "timer 137", TaskState.FAILED, "OOMKilled", MachineResourceExhausted),
+        (1, "timer 137 3", TaskState.RUNNING, "", CommandOutcomeUnknown),
+        (1, "timer 137 9", TaskState.FAILED, "OOMKilled", MachineResourceExhausted),
+        (1, "timer 137 9", TaskState.RUNNING, "", ExitReason.TIMED_OUT),
+    ],
+    ids=["no-clock", "no-clock-oom", "before-escalation", "escalated-oom", "escalated"],
+)
+def test_timer_kill_is_a_timeout_only_on_guest_clock_evidence_and_a_running_task(
+    tmp_path, timeout, stdout, state, error_message, expected
+) -> None:
+    task = LocalTask(TaskState.RUNNING)
+    machine, job = local_machine(tmp_path, ReplyRpc("printf partial", stdout), task)
+
+    async def scenario() -> None:
+        await machine.run(Command(("true",), timeout=5))  # The guest has a coreutils timeout.
+        task.status = lambda: SimpleNamespace(state=state, error_message=error_message)
+        if expected is ExitReason.TIMED_OUT:
+            result = await machine.run(Command(("printf", "partial"), timeout=timeout))
+            assert (result.reason, result.exit_code, result.stdout) == (ExitReason.TIMED_OUT, None, b"partial")
+            assert not job.cancelled
+            return
+        with pytest.raises(expected) as caught:
+            await machine.run(Command(("printf", "partial"), timeout=timeout))
+        assert type(caught.value) is expected
+        assert job.cancelled
+
+    asyncio.run(scenario())
+
+
+# Review follow-up 2026-11-21: argv that is a shell builtin ran in the status shell itself, so `exit` and `exec`
+# ended it before it wrote the command's record. At the base the argv was joined into the script and they worked.
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+def test_timed_commands_keep_their_own_exit_status_in_dash_and_bash(tmp_path, shell) -> None:
+    if not (shell_path := shutil.which(shell)) or not shutil.which("timeout"):
+        pytest.skip(f"{shell} or a coreutils timeout is not installed")
+
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path)
+        machine._guest_timer = (shutil.which("timeout"), shell_path, shutil.which("date"))  # type: ignore[assignment]
+        cases = [
+            (Command(("exit", "7"), timeout=5), 7, b""),
+            (Command(("exit", "124"), timeout=5), 124, b""),
+            (Command(("exec", "/bin/echo", "ok"), timeout=5), 0, b"ok\n"),
+            (Command(("sh", "-c", "exit 124"), timeout=5), 124, b""),
+            (Command(("cat",), stdin=b"\x00in\xff", timeout=5), 0, b"\x00in\xff"),
+            (Command(("sh", "-c", "echo leaked >&3 || exit 9"), timeout=5), 9, b""),  # fd 3 is closed to the command.
+        ]
+        for command, code, stdout in cases:
+            result = await machine.run(command)
+            assert (result.reason, result.exit_code, result.stdout) == (ExitReason.EXITED, code, stdout), command.argv
+        started = time.monotonic()
+        background = await machine.run(Command(("sh", "-c", "sleep 3 & echo bg"), timeout=10))
+        assert (background.exit_code, background.stdout) == (0, b"bg\n")
+        assert time.monotonic() - started < 2  # A background child does not hold the reply.
+        with pytest.raises(GuestHelperFailed):  # Inherited: capture reads a file the failed `cd` never created.
+            await machine.run(Command(("true",), cwd=str(tmp_path / "missing"), timeout=5))
+        assert not job.cancelled
+
+    asyncio.run(scenario())
+
+
+# Review follow-up 2026-11-21: an explicit user's uncached identity lookup ran before the budget was checked.
+@pytest.mark.parametrize("timeout", [0, math.nan])
+def test_budget_is_checked_before_the_user_lookup(tmp_path, timeout) -> None:
+    rpc = CountingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+
+    async def scenario() -> None:
+        command = Command(("true",), user="nobody", timeout=timeout)
+        if math.isnan(timeout):
+            with pytest.raises(ValueError, match="finite"):
+                await machine.run(command)
+        else:
+            assert (await machine.run(command)).reason == ExitReason.TIMED_OUT
+        assert rpc.scripts == []
 
     asyncio.run(scenario())

@@ -108,17 +108,19 @@ GUEST_KILL_GRACE_SECONDS = 5
 # The controller's own exec deadline beyond the guest bound: exec setup and the guest shell's exit. The client's RPC
 # deadline adds RPC_PADDING_SECONDS to it and is the host backstop for an exec that never returns.
 GUEST_EXEC_MARGIN_SECONDS = 25
-# Prints the absolute paths of a coreutils (GNU or uutils) ``timeout`` and of ``sh`` in the image's own environment,
-# or nothing; BusyBox's ``timeout`` differs in flags and exits. Callers' environments may not find either.
+# Prints the absolute paths of a coreutils (GNU or uutils) ``timeout``, ``sh`` and a ``date`` that prints epoch
+# seconds, in the image's own environment, or nothing; BusyBox's ``timeout`` differs in flags and exits. Callers'
+# environments may not find them.
 GUEST_TIMER_PROBE = (
-    'if t=$(command -v timeout) && s=$(command -v sh); then case "$("$t" --version 2>/dev/null)" in '
-    '*coreutils*) printf \'%s\\n%s\' "$t" "$s";; esac; fi'
+    'if t=$(command -v timeout) && s=$(command -v sh) && d=$(command -v date); then case "$("$t" --version '
+    '2>/dev/null)/$("$d" +%s)" in *coreutils*/[0-9]*) printf \'%s\\n%s\\n%s\' "$t" "$s" "$d";; esac; fi'
 )
-# A guest-timed command reports on the exec's stdout, which it never sees: its shell writes ``exit <code>`` when it
-# finishes, and the outer shell writes ``timer <code>`` once ``timeout`` itself has returned. A reply with neither,
-# such as the controller cutting an open exec stream, says nothing about the command.
-TIMED_COMMAND = '"$@" 3>&-; echo "exit $?" >&3'
-COMPLETION_RECORD = re.compile(r"(exit|timer) (\d+)")
+# A guest-timed command reports on the exec's stdout, which it never sees: its shell writes ``exit <code>`` when the
+# command, run in a subshell so ``exit`` or ``exec`` cannot end the reporter, finishes; the outer shell then writes
+# ``timer <code> <guest seconds>`` once ``timeout`` itself has returned. A reply with neither, such as the controller
+# cutting an open exec stream, says nothing about the command.
+TIMED_COMMAND = '("$@") 3>&-; echo "exit $?" >&3'
+COMPLETION_RECORD = re.compile(r"(exit|timer) (\d+)(?: (\d+))?")
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
 EGRESS_POLICIES = {
@@ -174,11 +176,12 @@ def _rpc_deadline(timeout: float | None, deadline: float | None) -> float:
 
 def _timer_paths(stdout: str) -> tuple[str, ...]:
     paths = tuple(stdout.split("\n"))
-    return paths if len(paths) == 2 and all(path.startswith("/") for path in paths) else ()
+    return paths if len(paths) == 3 and all(path.startswith("/") for path in paths) else ()
 
 
-def _completion_records(stdout: str) -> dict[str, int]:
-    return {match[1]: int(match[2]) for line in stdout.splitlines() if (match := COMPLETION_RECORD.fullmatch(line))}
+def _completion_records(stdout: str) -> dict[str, tuple[int, int | None]]:
+    records = (COMPLETION_RECORD.fullmatch(line) for line in stdout.splitlines())
+    return {match[1]: (int(match[2]), int(match[3]) if match[3] else None) for match in records if match}
 
 
 def never_connected(error: BaseException) -> bool:
@@ -387,6 +390,13 @@ class IrisMachine:
             detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
         return kind(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}")
 
+    def _runs(self) -> bool:
+        """Whether the sandbox task positively reports running; a failed lookup is no evidence."""
+        try:
+            return self.task.status().state == TaskState.RUNNING
+        except Exception:
+            return False
+
     def _raise_if_terminated(self, cause: Exception) -> None:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
         try:
@@ -487,6 +497,10 @@ class IrisMachine:
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise self._closed_error()
+        if command.timeout is not None and not math.isfinite(command.timeout):
+            raise ValueError(f"Command timeout must be finite: {command.timeout}")
+        if command.timeout is not None and command.timeout <= 0:
+            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)  # Nothing was sent.
         if command.user is not None and command.user not in await self._user_identity():
             uid, name = await self._user_identity()
             raise UnsupportedMachineSpec(
@@ -496,10 +510,6 @@ class IrisMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        if command.timeout is not None and not math.isfinite(command.timeout):
-            raise ValueError(f"Command timeout must be finite: {command.timeout}")
-        if command.timeout is not None and command.timeout <= 0:
-            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)  # Nothing was sent.
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
         if command.stdin:
@@ -521,11 +531,12 @@ class IrisMachine:
         # An exec without a positive deadline falls back to the controller's short Kubernetes default.
         exec_timeout, deadline = command.timeout, None
         if command.timeout is not None and timer:
-            timeout_path, sh_path = (shlex.quote(path) for path in timer)
+            timeout_path, sh_path, date_path = (shlex.quote(path) for path in timer)
             script = (
-                f'{exports}\ncd {cwd} || {{ echo "exit 1"; exit 1; }}\n'
+                f'{exports}\ncd {cwd} || {{ echo "exit 1"; exit 1; }}\n_shellbox_start=$({date_path} +%s)\n'
                 f"{timeout_path} -k {GUEST_KILL_GRACE_SECONDS} {command.timeout} {sh_path} -c "
-                f'{shlex.quote(TIMED_COMMAND)} shellbox {shlex.join(command.argv)} 3>&1 {redirects}; echo "timer $?"'
+                f"{shlex.quote(TIMED_COMMAND)} shellbox {shlex.join(command.argv)} 3>&1 {redirects}\n"
+                f'_shellbox_rc=$?; echo "timer $_shellbox_rc $(($({date_path} +%s) - _shellbox_start))"'
             )
             exec_timeout = command.timeout + GUEST_KILL_GRACE_SECONDS + GUEST_EXEC_MARGIN_SECONDS
         elif command.timeout is not None:
@@ -541,7 +552,8 @@ class IrisMachine:
         #             which the Kubernetes client reports after an exec whose upgrade reply was lost
         #                                                    -> unattributed outcome
         #             guest-timed: ``exit`` record           -> that exit status
-        #             ``timer`` 124, or 137 at the limit     -> TIMED_OUT with its output so far, machine kept
+        #             ``timer`` 124, or 137 once the guest clock passed the limit plus the KILL grace and the task
+        #             still runs                             -> TIMED_OUT with its output so far, machine kept
         #             no record, or any other ``timer``      -> unattributed outcome, machine closed
         #   capture   guest helper failed or sandbox gone    -> GuestHelperFailed / MachineTerminated
         #             any other error                        -> CommandOutcomeUnknown
@@ -549,7 +561,6 @@ class IrisMachine:
         # An unattributed outcome is CommandOutcomeUnknown, or MachineTerminated once the sandbox is gone.
         preview = shlex.join(command.argv)[:STUCK_EXEC_PREVIEW_CHARS]
         try:
-            started = time.monotonic()
             try:
                 response = await asyncio.to_thread(self._send, ["sh", "-c", script], exec_timeout, deadline)
             except MachineTerminated:
@@ -572,20 +583,26 @@ class IrisMachine:
             reason = ExitReason.EXITED
             if command.timeout is not None and timer:
                 records = _completion_records(response.stdout)
-                exit_code = records.get("exit")
-                timed_out = records.get("timer") == 124 or (
-                    records.get("timer") == 137 and time.monotonic() - started >= command.timeout
-                )
-                if exit_code is None and timed_out:
+                exit_code = records.get("exit", (None,))[0]
+                timer_rc, guest_seconds = records.get("timer", (None, None))
+                if exit_code is None and timer_rc == 124:
                     reason = ExitReason.TIMED_OUT
                 elif exit_code is None:
                     # A cut exec stream or a supervisor killed by something else: the command may still be running.
-                    state = f"timer {records['timer']}" if "timer" in records else f"exit {response.exit_code}"
+                    state = f"timer {timer_rc} after {guest_seconds} s" if timer_rc is not None else ""
                     tail = response.stderr.strip()[-300:]
-                    detail = f"no completion record ({state})" + (f": {tail}" if tail else "")
-                    outcome = await asyncio.to_thread(self._unattributed_outcome, detail, False)
-                    await self._close_because(f"command {preview!r} ended with {detail}")
-                    raise outcome
+                    detail = f"no completion record ({state or f'exit {response.exit_code}'})" + (
+                        f": {tail}" if tail else ""
+                    )
+                    # The timer's KILL comes at the limit plus the grace on the guest clock, whose whole seconds read up
+                    # to 1 s short; a kill before the limit reads at least the grace minus 1 s short of it.
+                    limit = command.timeout + GUEST_KILL_GRACE_SECONDS - 1
+                    escalated = timer_rc == 137 and guest_seconds is not None and guest_seconds > limit
+                    if not (escalated and await asyncio.to_thread(self._runs)):
+                        outcome = await asyncio.to_thread(self._unattributed_outcome, detail, False)
+                        await self._close_because(f"command {preview!r} ended with {detail}")
+                        raise outcome
+                    reason = ExitReason.TIMED_OUT
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
