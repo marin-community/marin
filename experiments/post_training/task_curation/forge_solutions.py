@@ -63,15 +63,18 @@ def write_responses(release_root: str, records_root: str, output: Path) -> dict:
     """Write one response directory per selected actorless task and return the counts."""
     root = StoragePath(release_root)
     manifest = json.loads((root / MANIFEST_FILENAME).read_bytes())
-    staged = pq.read_table(io.BytesIO((root / "lowered-tasks.parquet").read_bytes()), columns=[LOWERED_TASK_SPEC_COLUMN])
-    selected = {row["path"] for row in staged.to_pylist()}
+    staged = pq.read_table(
+        io.BytesIO((root / "lowered-tasks.parquet").read_bytes()), columns=["path", LOWERED_TASK_SPEC_COLUMN]
+    )
+    rows = staged.to_pylist()
+    selected = {row["path"] for row in rows}
     if len(selected) != manifest["selected"]:
         raise ValueError(f"Staged release holds {len(selected)} rows, manifest expects {manifest['selected']}")
     records = {record["id"]: record for record in read_records(records_root) if record["id"] in selected}
     if set(records) != selected:
         raise ValueError(f"Missing records for {sorted(selected - set(records))[:5]}")
     output.mkdir(parents=True, exist_ok=False)
-    envelopes = {row["path"]: json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"] for row in staged.to_pylist()}
+    envelopes = {row["path"]: json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"] for row in rows}
     written = 0
     for task_id, record in sorted(records.items()):
         if not actorless_without_solution(envelopes[task_id]):
