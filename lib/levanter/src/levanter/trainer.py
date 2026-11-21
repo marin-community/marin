@@ -967,7 +967,9 @@ class Trainer:
                     # for the host-only trace that runs after the first update finishes.
                     abstract_args, abstract_kwargs = jax.tree.map(
                         lambda x: (
-                            jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding, weak_type=x.weak_type)
+                            jax.ShapeDtypeStruct(
+                                x.shape, x.dtype, sharding=x.sharding, weak_type=jax.typeof(x).weak_type
+                            )
                             if isinstance(x, jax.Array)
                             else x
                         ),

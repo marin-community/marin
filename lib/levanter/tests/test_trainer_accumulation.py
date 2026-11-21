@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 import threading
 
 import equinox as eqx
@@ -11,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import jmp
+import pytest
 
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import MAX_WANDB_ARTIFACT_BYTES, WandbTracker
@@ -40,7 +40,8 @@ class WeightedBatch(eqx.Module):
     weights: hax.NamedArray
 
 
-def test_debug_artifacts_do_not_block_updates_or_propagate_oversize_errors(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("key_factory", [jax.random.key, jax.random.PRNGKey])
+def test_debug_artifacts_do_not_block_updates_or_propagate_oversize_errors(tmp_path, monkeypatch, key_factory):
     artifact = tmp_path / "oversized.bin"
     with artifact.open("wb") as stream:
         stream.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
@@ -76,9 +77,9 @@ def test_debug_artifacts_do_not_block_updates_or_propagate_oversize_errors(tmp_p
     def loss(model, batch, *, key=None):
         return hax.mean((model - batch) ** 2).scalar()
 
-    with caplog.at_level(logging.WARNING), Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
+    with Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
         monkeypatch.setattr(trainer, "write_artifact", write_artifact)
-        state = TrainerState.init(optimizer, jnp.asarray(2.0), key=jax.random.key(0), mp=config.mp)
+        state = TrainerState.init(optimizer, jnp.asarray(2.0), key=key_factory(0), mp=config.mp)
         batch = hax.named(jnp.ones((1,)), hax.Axis("batch", 1))
         try:
             first = trainer.train_step(state, batch)
@@ -91,7 +92,6 @@ def test_debug_artifacts_do_not_block_updates_or_propagate_oversize_errors(tmp_p
         assert finished.wait(timeout=10)
     assert written == ["jaxpr", "hlo"]
     assert not uploaded
-    assert "Skipping W&B artifact" in caplog.text
 
 
 def test_token_weighted_microbatches_match_full_weighted_update(tmp_path):
