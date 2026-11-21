@@ -82,7 +82,8 @@ READ_FILE = 'if [ ! -d "$p" ] && [ -r "$p" ]; then wc -c < "$p"; exit; fi; ' + (
 # Creates or truncates a file, then classifies only a failed attempt: a dangling link may still be writable.
 WRITE_FILE = (
     "case $p in */*) d=${p%/*}; d=${d:-/};; *) d=.;; esac; "
-    'if { [ -d "$d" ] || mkdir -p -- "$d"; } && : > "$p"; then exit 0; fi; '
+    # ``true``, not the special builtin ``:``, whose failed redirection would exit a POSIX shell.
+    'if { [ -d "$d" ] || mkdir -p -- "$d"; } && true > "$p"; then exit 0; fi; '
     + CLASSIFY_PATH.format(access="w", missing='[ -w "$a" ] || exit 104')
     + "exit 1"
 )

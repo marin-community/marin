@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -49,6 +50,8 @@ from shellbox.machine import (
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
+# Guest images' /bin/sh is a POSIX shell such as dash; macOS's sh is bash, which tolerates more.
+GUEST_SH = shutil.which("dash") or "sh"
 
 
 class LocalRpc:
@@ -56,7 +59,8 @@ class LocalRpc:
         del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error="[Errno 7] Argument list too long: 'docker'")
-        result = subprocess.run(request.command, capture_output=True, text=True, timeout=30)
+        command = [GUEST_SH if request.command[0] == "sh" else request.command[0], *request.command[1:]]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
         return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
 
 
