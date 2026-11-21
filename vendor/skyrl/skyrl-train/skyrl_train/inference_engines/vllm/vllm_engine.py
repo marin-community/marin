@@ -13,7 +13,6 @@ import numpy as np
 import asyncio
 import vllm
 from zmq.error import ZMQError
-from types import SimpleNamespace
 from vllm import SamplingParams
 from vllm.inputs import TokensPrompt
 from vllm.distributed.parallel_state import get_dp_group, get_ep_group, get_pp_group
@@ -72,6 +71,7 @@ from skyrl_train.inference_engines.placement import inference_worker_placement
 from skyrl_train.inference_engines.vllm.numa import set_async_worker_numa_affinity
 from skyrl_train.inference_engines.policy_steps import PolicyStepStamps
 from skyrl_train.inference_engines.request_timing import RequestTimings
+from skyrl_train.inference_engines.inference_http_backend import OpenAIRequest
 from skyrl_train.weight_sync.expert_block.receiver import ExpertBlockReceiver
 from skyrl_train.weight_sync.weight_loader import WeightLoader
 from skyrl_train.weight_sync.vllm_weight_conversion import load_weights_into_vllm
@@ -177,7 +177,7 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
     async def create_chat_completion_with_exact_prompt(
         self,
         request: ChatCompletionRequest,
-        raw_request: "_MinimalRequest",
+        raw_request: "OpenAIRequest",
         prompt_token_ids: list[int],
     ) -> ChatCompletionResponse | ErrorResponse | AsyncGenerator[str, None]:
         token = _exact_chat_prompt_token_ids.set(prompt_token_ids)
@@ -1603,8 +1603,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         assert endpoint in ["/chat/completions", "/completions"]
 
         body = request_payload.get("json", {})
-        headers = request_payload.get("headers", {})
-        request_id = headers.get("x-request-id") or uuid4().hex
+        minimal_request = OpenAIRequest(request_payload.get("headers", {}))
+        headers = minimal_request.headers
+        request_id = headers["x-request-id"]
         self._request_timings.start(request_id, headers.get(SESSION_ID_HEADER))
 
         # Explicit request sampling takes precedence for both training and evaluation.
@@ -1625,8 +1626,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         # 2. Call vllm engine
         try:
-            # Create a minimal request-like object with attributes used by vLLM
-            minimal_request = _MinimalRequest(headers)
             if endpoint == "/chat/completions":
                 if exact_prompt_token_ids is None:
                     generator = await self.openai_serving_chat.create_chat_completion(request, minimal_request)
@@ -1716,7 +1715,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         except Exception as e:
             return _build_error_response(str(e), HTTPStatus.BAD_REQUEST.phrase, HTTPStatus.BAD_REQUEST.value)
 
-        response = await self.openai_serving_tokenization.create_tokenize(request, _MinimalRequest(headers))
+        response = await self.openai_serving_tokenization.create_tokenize(request, OpenAIRequest(headers))
         assert isinstance(response, (TokenizeResponse, ErrorResponse))
         return response.model_dump()
 
@@ -1758,7 +1757,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         try:
             request = ChatCompletionRequest(**body)
-            minimal_request = _MinimalRequest(headers)
+            minimal_request = OpenAIRequest(headers)
             if exact_prompt_token_ids is None:
                 result = await self.openai_serving_chat.create_chat_completion(request, minimal_request)
             else:
@@ -1841,22 +1840,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self._forget_unclaimed_policy_steps()
         await self.llm.resume_generation()
         logger.info("resume_generation() finished, EngineCore scheduler released, policy_step={}", policy_step)
-
-
-class _MinimalRequest:
-    """
-    Minimal request-like object for vLLM's openai_serving_chat and openai_serving_completion.
-
-    We cannot use the original user Request object because it cannot be serialized and hence
-    cannot be a ray method argument. Instead we take the original request's headers and
-    reconstruct an instance of _MinimalRequest to mimic the FastAPI Request object.
-
-    The fields depend on what vLLM accesses internally.
-    """
-
-    def __init__(self, headers):
-        self.headers = headers  # Expect a mapping with .get support
-        self.state = SimpleNamespace()  # vLLM sets raw_request.state.request_metadata
 
 
 class VLLMWeightTransferReceiver:
