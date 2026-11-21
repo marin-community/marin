@@ -1,0 +1,14 @@
+experiment: X0253d768
+track: competitive-d768
+runs:
+  seed0:
+    seed: 0
+    variant: law-cap Frobenius ball, s(t)^2 head, late matrix anneal
+    flags:
+    - --opt-set
+    - muonh_law_cap_ball=true
+  control:
+    seed: 0
+    variant: competitive-d768 control
+    control: true
+    shared: s7n-d768
