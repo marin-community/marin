@@ -3,11 +3,12 @@
 November 21, 2026 (PST).
 
 The learner-only integration and CPU proofs are ready; H100 acceptance remains
-pending. Mesh topology and response-pipe repairs pass local checks. Fresh smoke
-`2026.11.21.4` is submitted at BATCH priority from
-`c44f448e651a014de3cf06048102aaf2047c7af0`. At 12:28 PST, its CPU coordinator
-was running and no GPU child had yet been discovered. Native Snowball updates,
-publication, generation, and checkpoint continuation remain unverified on H100;
+pending. Smoke `2026.11.21.4`, from `c44f448e651a014de3cf06048102aaf2047c7af0`,
+progressed to real Snowball weight reads on all four native learner hosts, then
+exceeded the 1,800-second initialization deadline. One host still had unfinished
+multi-GB loader chunks shortly before the deadline. Native Snowball initialization,
+updates, publication, generation, and checkpoint continuation remain unverified
+on H100. A fresh smoke with a one-hour native initialization budget is planned;
 the matched comparison is gated on smoke acceptance.
 
 ## Scope and fixed recipe
@@ -62,7 +63,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `2026.11.20.1` failed the device-count guard; `2026.11.20.5` failed mesh validation. Smoke `2026.11.21.1` ran all five GPU tasks for about seven minutes, then failed while reading an initialization response frame. No model initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
+| Actual H100 | Smoke `2026.11.20.1` failed the device-count guard; `2026.11.20.5` failed mesh validation; `2026.11.21.1` failed while reading an initialization response frame. Smoke `2026.11.21.4` reached real weight loading on all four learner hosts, then exceeded its initialization deadline. No model initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
 | Publication and resume | CPU Gloo replay and fresh-process native checkpoint transactions passed, including exact model, Adam, RNG, step, and model-averaging fingerprints. Four native child/host restart cases passed. | H100 NCCL/vLLM receiver replay with zero byte mismatches, subsequent nonempty generation stamped with the updated policy, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
@@ -138,19 +139,37 @@ failed run's original frame-header bytes were not captured, so the exact cause
 of its `MemoryError` remains an inference. The repair gives responses a dedicated
 pipe and leaves stdout available for logs.
 
-Fresh smoke `2026.11.21.4` was submitted through coordinator
+Smoke `2026.11.21.4` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.4-coordinator-2c045a7f`.
 Its accepted source bundle matches all 4,582 entries of frozen `c44f448e65`,
-including 41 required runtime files. The CPU coordinator has verified BATCH
-priority and is running; GPU admission and execution remain pending.
+including 41 required runtime files. The final child suffix was
+`users-dlwh-checkpoints-snowball-inventory-2026.11.21.4-afb536b55704`; both jobs
+had verified BATCH priority. It failed at `2026-11-21T21:15:15.594Z`:
+`Levanter learner initialize exceeded 1800 seconds`.
+
+Three native hosts reported reads through shard 39 of 39 by 20:48–20:53 UTC.
+The fourth still had unfinished earlier shards: a 3.36-GB chunk's progress span
+took 27m46s, and shard 29 began at 21:13:13 UTC. Loader progress includes device
+placement, so those timings do not isolate storage latency from transfer time.
+They do not establish completed model initialization or training. The exact blocking
+frame at the deadline was not captured. All five GPU pods are gone; the original
+exception and resolved configuration were collected, with no uploaded task
+archives to fetch.
+
+The next smoke, `2026.11.21.5`, is not submitted. Its native initialization
+budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
+the outer deadline can expire slightly earlier because it includes dispatch
+and finalization. Ordinary RPCs retain their 1,800-second limit. This changes
+no model, optimizer, objective, kernel, precision, or numerical tolerance.
+It does not guarantee that a slow cold load will finish in time.
 Comparison versions `2026.11.21.2` and `2026.11.21.3` remain unsubmitted.
 The transport repair passes five pinned JAX/JAXLIB `0.11.0` cases: native
 import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
 No successful accelerator rerun is established by this record.
 Run from the repository with the required storage, evaluation, and judge
-credentials loaded. The smoke command records the submitted attempt; choose
-a fresh unused version for another attempt.
+credentials loaded. The smoke command below is the planned fresh attempt.
+Freeze and record its source before submission.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
@@ -159,7 +178,7 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.4 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.5 \
   --learner levanter --steps 2 --verify-publication \
   --validate-native-checkpoint --coordinator-route regional --run
 ```

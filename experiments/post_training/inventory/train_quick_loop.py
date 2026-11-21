@@ -153,7 +153,7 @@ def training_recipe(
                             python_executable="/app/.levanter-policy-env/bin/python",
                             coordinator_port=38679,
                             command_timeout_seconds=1800,
-                            initialization_timeout_seconds=1800,
+                            initialization_timeout_seconds=3600,
                             mesh_axes=sections.LevanterMeshAxes(
                                 replica_dcn=1,
                                 replica=1,
