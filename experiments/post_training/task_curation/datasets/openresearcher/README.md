@@ -70,7 +70,7 @@ checks pass. The private receipt retains retrieval results,
 judge requests/responses and every keep/drop decision.
 
 The grounding judge uses temperature 0.7 with its model revision, serving
-configuration and backend job identities recorded. SAMPLE uses the exact V3
+configuration and backend job identities recorded. SAMPLE uses the pinned V4
 reviewer contract from the shared
 [`sample_qc.py` procedure](../../sample_qc.py), with the profile defined in
 [`full_qc.py`](../../full_qc.py).
@@ -101,7 +101,7 @@ process channel to the service. `get_document` transfers complete JSON in bounde
 frames to a temporary actor file and reads it with `Machine.download`, preserving
 documents above the stdout capture limit. Failed producers, transfers and malformed
 JSON abort the call. The index never occupies the actor disk. See
-[run-owned retrieval](../../../../../docs/references/rl-launching.md#run-owned-retrieval).
+[runtime support in PR #11851](https://github.com/marin-community/marin/pull/11851).
 Against a sandbox using the pinned thin actor image, verify production-provider calls
 for a normal document and pinned corpus document `7385` (18,388,915 UTF-8 bytes).
 Check the complete returned text against the corpus. The grounding JSON-line
