@@ -217,12 +217,36 @@ class SearchLimit(StrEnum):
     OUTPUT_BUDGET = "output budget"
 
 
+class SearchEnd(StrEnum):
+    """Why an adversary session stopped."""
+
+    REPORTED = "reported"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    HELD = "held"
+    """It raised a hold, or ended without its report: the workpiece cannot accept on it."""
+
+
+@dataclass(frozen=True, slots=True)
+class Continuation:
+    """Where an adversary session stopped, for a consumer that continues it; the default workflow never does.
+
+    ``owner`` is the sandbox owner whose journal rows rebuild the session's machine; ``conversation`` is the content
+    digest of its conversation at the exit, which replaying that owner's session reproduces (None when the session
+    raised before an exit), and ``turns`` its assistant turns.
+    """
+
+    owner: str
+    stopped: SearchEnd
+    conversation: str | None = None
+    turns: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class AdversaryResult:
     """One adversary's search; ``limit`` is set exactly when ``status`` is ``EXHAUSTED``.
 
-    The adversary's conversation is not kept here; a continuation of an exhausted search would need
-    it added as a session field, as the author's ``Workpiece.session`` is kept.
+    A search without a reproduced finding is evidence of a strong task, and its ``reasons`` say it ran out of
+    search budget without a finding, never that it validated the task.
     """
 
     name: str
@@ -230,6 +254,7 @@ class AdversaryResult:
     findings: tuple[AdversaryFinding, ...]
     reasons: tuple[str, ...] = ()
     limit: SearchLimit | None = None
+    continuation: Continuation | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,11 +39,11 @@ def passed(grade: GradeResult) -> bool:
 
 
 def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
-    """Why acceptance stands without an adversary report; never author-facing findings."""
+    """Why acceptance stands without an adversary finding: each search ran out of budget; never author-facing."""
     return tuple(
         f"{trial.name}: {reason}"
         for trial in result.adversary
-        if trial.status is AdversaryStatus.EXHAUSTED
+        if trial.status is not AdversaryStatus.FAILED
         for reason in trial.reasons
     )
 

@@ -25,21 +25,26 @@ from taskforge.lowering import (
     lowering_settings,
     requirements,
 )
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import Control
+from taskforge.model.llm import Role
 from taskforge.model.proposal import render
 from taskforge.model.review import (
     AdversaryFinding,
     AdversaryResult,
     AdversaryStatus,
     Cause,
+    Continuation,
     ControlResult,
     Modify,
     Observation,
     ObservedStatus,
+    SearchEnd,
     SearchLimit,
     TrialResult,
     ValidationResult,
 )
+from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
@@ -79,24 +84,36 @@ async def adversary_result(
 ) -> AdversaryResult:
     """One roster entry, ``occurrence`` among entries with its name; each search is its own environment owner."""
     visit = f"validate/{workpiece.round}/{len(workpiece.evidence)}"
+    owner = ""
     for retry in range(2):
         result = None
         try:
             owner = f"{visit}/adversary:{name}/{occurrence}/{retry}"
             result = await run_adversary(ctx, workpiece, config, resources, spec, name, owner)
         except* Hold as error:
-            result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
+            held = Continuation(owner, SearchEnd.HELD)
+            result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error), continuation=held)
         if result is not None:
             return result
         ctx.notify(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
-    return exhausted(name, SearchLimit.OUTPUT_BUDGET)
+    return exhausted(name, SearchLimit.OUTPUT_BUDGET, Continuation(owner, SearchEnd.BUDGET_EXHAUSTED))
 
 
-def exhausted(name: str, limit: SearchLimit) -> AdversaryResult:
-    reason = (
-        f"ran out of its {limit} without reporting a defect; its search budget ran out, it did not validate the task"
-    )
-    return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,), limit)
+def no_finding(how: str) -> str:
+    """The one wording for a search that ended without a reproduced finding: budget spent, never a validation."""
+    return f"ran out of search budget without a finding ({how}); this is not a validation of the task"
+
+
+def exhausted(name: str, limit: SearchLimit, continuation: Continuation) -> AdversaryResult:
+    reason = no_finding(f"its {limit} ran out before it reported")
+    return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,), limit, continuation)
+
+
+def stopped_at(owner: str, end: SearchEnd, outcome: Exit) -> Continuation:
+    if not isinstance(outcome, Returned | Stopped):
+        return Continuation(owner, end)
+    turns = sum(message.role == Role.ASSISTANT for message in outcome.session.messages)
+    return Continuation(owner, end, digest(outcome.session), turns)
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:
@@ -187,7 +204,7 @@ async def run_adversary(
         if outcome is None:
             return None
         if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
-            return exhausted(name, SearchLimit.CONTEXT_WINDOW)
+            return exhausted(name, SearchLimit.CONTEXT_WINDOW, stopped_at(owner, SearchEnd.BUDGET_EXHAUSTED, outcome))
         if (
             not isinstance(outcome, Returned)
             or outcome.tool != "report"
@@ -198,7 +215,9 @@ async def run_adversary(
                 if isinstance(outcome, Stopped)
                 else f"Expected report, got {type(outcome).__name__}"
             )
-            return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
+            return AdversaryResult(
+                name, AdversaryStatus.FAILED, (), (reason,), continuation=stopped_at(owner, SearchEnd.HELD, outcome)
+            )
         report = outcome.payload
         async with asyncio.TaskGroup() as group:
             claims = [
@@ -212,7 +231,11 @@ async def run_adversary(
             for reason in failure
         )
         status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
-        return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
+        findings = tuple(finding for finding, _ in results)
+        if not reasons and not any(finding.met for finding in findings):
+            reasons = (no_finding("its session ended with a report and no reproduced finding"),)
+        continuation = stopped_at(owner, SearchEnd.REPORTED, outcome)
+        return AdversaryResult(name, status, findings, reasons, continuation=continuation)
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:

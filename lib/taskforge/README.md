@@ -227,9 +227,13 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   Prompt("...")})`) and a name on the roster. Every brief reports through one schema: a defect
   direction (`false_accept`, `false_reject`, `grader_crash`), the candidate, the grade the grader
   OBSERVED and the reward the candidate DESERVES. Validation keeps a finding only when the replayed
-  grade is wrong in the stated direction on the round's verifier and again on a fresh one. An
-  adversary whose context window or output budget runs out before it reports is `exhausted`: the task can
-  still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
+  grade is wrong in the stated direction on the round's verifier and again on a fresh one. A search
+  that ends without a reproduced finding, by an empty report or because its context window or output
+  budget ran out first (`exhausted`), counts as evidence of a strong task: the task can still be
+  accepted, and its result and the Accept's reasons say it ran out of search budget without a finding,
+  never that it validated the task. Each result carries a `continuation` (the search's sandbox owner,
+  why it stopped: `reported`, `budget_exhausted` or `held`, and the digest of its conversation at the
+  stop) for a workflow that continues an exhausted search; the default workflow does not.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

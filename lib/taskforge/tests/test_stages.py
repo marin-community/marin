@@ -39,6 +39,7 @@ from taskforge.harness.tools import adversary_tools
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from taskforge.llm.policy import LLMPolicy, replay_arguments
 from taskforge.lowering import lowering_settings, machine_backend, requirements
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, Message, Role, ToolCall, Usage
 from taskforge.model.proposal import ResearchNeed, TaskProposal, render
@@ -52,6 +53,7 @@ from taskforge.model.review import (
     BandRules,
     Budget,
     Cause,
+    Continuation,
     ControlResult,
     Defect,
     DefectClaim,
@@ -60,6 +62,7 @@ from taskforge.model.review import (
     Observation,
     ObservedStatus,
     Retry,
+    SearchEnd,
     SearchLimit,
     TrialResult,
     ValidationResult,
@@ -530,6 +533,10 @@ async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None
     await ctx.drain()
 
 
+OWNER = "validate/0/0/adversary:false_accept/0"
+"""The first roster entry's sandbox owner in round 0, less its search retry."""
+
+
 # Pilot o-w6: each output-exhausted agent gets one fresh-machine retry, then failed evidence.
 @pytest.mark.parametrize("solver", [False, True])
 @pytest.mark.parametrize("failures", [1, 2])
@@ -562,8 +569,14 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
                 (),
             )
             assert "ran out" in result.reasons[0]
+            assert result.continuation == Continuation(f"{OWNER}/1", SearchEnd.BUDGET_EXHAUSTED)
         else:
-            assert result == AdversaryResult("false_accept", AdversaryStatus.REPORTED, ())
+            assert (result.status, result.findings) == (AdversaryStatus.REPORTED, ())
+            assert result.reasons == (
+                "ran out of search budget without a finding (its session ended with a report and no reproduced "
+                "finding); this is not a validation of the task",
+            )
+            assert result.continuation == Continuation(f"{OWNER}/1", SearchEnd.REPORTED, digest(Conversation((), ())), 0)
         assert isinstance(bundle.envs, Environments) and len(bundle.envs.created) == 2
         assert all(env.closed for env in bundle.envs.created)
         evidence = ValidationResult(
@@ -753,7 +766,13 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
         restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
         reason = "Hold: unavailable"
         assert restored.evidence[0].adversary == (
-            AdversaryResult("false_accept", AdversaryStatus.FAILED, (), (reason,)),
+            AdversaryResult(
+                "false_accept",
+                AdversaryStatus.FAILED,
+                (),
+                (reason,),
+                continuation=Continuation(f"{OWNER}/0", SearchEnd.HELD),
+            ),
         )
         assert len(result.solver) == 3 and len(result.controls) == 2
         decision = default_review(restored, setup.band, setup.budget)

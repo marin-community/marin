@@ -5,25 +5,48 @@
 
 import gzip
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import override
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources as stage_resources
-from lib.taskforge.tests.test_end_to_end import SETTINGS, Envs, ServedOnce, call, executions, resources
-from lib.taskforge.tests.test_stages import workpiece as workpiece  # the arithmetic workpiece fixture
+from lib.taskforge.tests.test_end_to_end import (
+    SETTINGS,
+    Envs,
+    ServedOnce,
+    call,
+    executions,
+    resources,
+    script,
+)
+from rolloutengine.test_support import arithmetic_task
+from taskcompendium.grading_result import Outcome
 
 from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, StageCompleted
+from taskforge.effects.issues import ContextExceeded
 from taskforge.effects.log import EventLog, decode
 from taskforge.model.content_hash import digest
+from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import AdversaryStatus, Defect, DefectClaim, Modify, Observation, ObservedStatus
-from taskforge.model.workpiece import Terminal, Workpiece
+from taskforge.model.review import (
+    Accept,
+    AdversaryStatus,
+    Continuation,
+    Defect,
+    DefectClaim,
+    Modify,
+    Observation,
+    ObservedStatus,
+    SearchEnd,
+    SearchLimit,
+)
+from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate
@@ -32,6 +55,17 @@ from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
 from taskforge.stages.validate import validate
 from taskforge.wiring import build_config, install
+
+
+@pytest.fixture
+def workpiece(proposal: TaskProposal) -> Workpiece:
+    """The arithmetic task, whose answer is 12, with a crediting and a refusing control."""
+    controls = (
+        Control(Candidate("12"), RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),
+        Control(Candidate("9"), RewardBand(Outcome.GRADED, reward_max=0), ControlKind.NEGATIVE),
+    )
+    return Workpiece("test", proposal, submission=Submission(arithmetic_task(), controls, "authored"))
+
 
 BRIEFED = {"false_accept": "hunt false accepts", "false_reject": "hunt false rejects"}
 """Each default brief by a phrase its first user message carries."""
@@ -49,9 +83,10 @@ def finding(defect: Defect, reply: str, observed: float, deserved: float) -> dic
 
 
 class Briefed(InferenceClient):
-    """Each adversary reports ``reports[<its brief>]`` on its first turn and finishes on any later one."""
+    """Each adversary reports the findings ``reports[<its brief>]`` on its first turn, or raises it, and finishes on
+    any later turn."""
 
-    def __init__(self, reports: Mapping[str, Mapping[str, object]]) -> None:
+    def __init__(self, reports: Mapping[str, Sequence[Mapping[str, object]] | Exception]) -> None:
         self.reports = reports
         self.requests: list[InferenceRequest] = []
 
@@ -65,7 +100,10 @@ class Briefed(InferenceClient):
         if len(request.conversation) > 2:
             return call("finish", {"reason": "no second report"}, "finish")
         brief = next(name for name, phrase in BRIEFED.items() if phrase in request.conversation[1].content)
-        return call("report", {"findings": [self.reports[brief]]}, brief)
+        report = self.reports[brief]
+        if isinstance(report, Exception):
+            raise report
+        return call("report", {"findings": list(report)}, brief)
 
 
 async def test_both_default_briefs_report_observed_and_deserved_and_a_false_reject_reproduces_fresh(
@@ -76,8 +114,8 @@ async def test_both_default_briefs_report_observed_and_deserved_and_a_false_reje
     assert setup.policy.setting("adversary.roster", tuple) == ("false_accept", "false_reject")
     client = Briefed(
         {
-            "false_accept": finding(Defect.FALSE_ACCEPT, "9", 1.0, 0.0),  # the grader does not credit 9
-            "false_reject": finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0),
+            "false_accept": [finding(Defect.FALSE_ACCEPT, "9", 1.0, 0.0)],  # the grader does not credit 9
+            "false_reject": [finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0)],
         }
     )
     log = EventLog()
@@ -114,7 +152,7 @@ async def test_a_report_whose_own_grades_show_no_defect_is_refused_back_to_the_a
     workpiece: Workpiece, args: dict[str, object]
 ) -> None:
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept"]}), {})
-    client = Briefed({"false_accept": args})
+    client = Briefed({"false_accept": [args]})
     ctx = Context(log=EventLog())
     bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
     (result,) = (await validate(ctx, workpiece, setup, bundle)).result.adversary
@@ -123,7 +161,9 @@ async def test_a_report_whose_own_grades_show_no_defect_is_refused_back_to_the_a
 
 
 def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
-    with pytest.raises(ValueError, match="adversary.roster names finder without a prompt adversary.brief.<name>"):
+    with pytest.raises(
+        ValueError, match=re.escape("adversary.roster names finder without a prompt adversary.brief.<name>")
+    ):
         build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept", "finder"]}), {})
 
 
@@ -145,7 +185,9 @@ async def test_a_single_adversary_policy_resumes_its_journal_from_before_the_bri
     policy = load_policy(DEFAULTS_DIR).overlaid(
         {"proposals.environments": ["container"], **SETTINGS, "adversary.roster": ["adversary"]}
     )
-    adversary = ServedOnce((call("shell", {"command": "inspect", "timeout": 5}, "look"), call("report", {"findings": []}, "r")), ())
+    adversary = ServedOnce(
+        (call("shell", {"command": "inspect", "timeout": 5}, "look"), call("report", {"findings": []}, "r")), ()
+    )
     adversary.identity = "adversary"
     resumed = replace(resources(Envs(), ()), inference=ServedOnce((), served), role_inference={"adversary": adversary})
     log = EventLog(replay_from=recorded, replayable=replayable_grade)
@@ -157,3 +199,38 @@ async def test_a_single_adversary_policy_resumes_its_journal_from_before_the_bri
     assert [result.name for result in workpiece.evidence[-1].adversary] == ["adversary"]
     was = next(r.event.config_digest for r in recorded if isinstance(r.event, StageCompleted))
     assert was != digest(policy)  # the briefs are new policy data under every overlay
+
+
+# Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record
+# says it ran out of search budget without a finding, never that it validated the task.
+async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with_a_continuation(
+    proposal: TaskProposal,
+) -> None:
+    policy = load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, "adversary.roster": ["false_accept", "false_reject"]})
+    client = Briefed({"false_accept": ContextExceeded("model window exceeded"), "false_reject": []})
+    bundle = replace(resources(Envs(), script()), role_inference={"adversary": client})
+    log = EventLog()
+    finished = await run_workpiece(proposal, build_config(policy, {}), bundle, log, install=install)
+    workpiece = WORKPIECE.validate_json(WORKPIECE.dump_json(finished))  # as published
+    assert workpiece.terminal is Terminal.ACCEPTED
+    exhausted, reported = workpiece.evidence[-1].adversary
+    assert (exhausted.status, exhausted.limit) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW)
+    assert reported.status is AdversaryStatus.REPORTED and not reported.findings
+    owners = [r.opened.owner for r in log.records if r.opened is not None]
+    (first,) = (request for request in client.requests if BRIEFED["false_accept"] in request.conversation[1].content)
+    assert exhausted.continuation == Continuation(
+        "validate/0/0/adversary:false_accept/0/0",
+        SearchEnd.BUDGET_EXHAUSTED,
+        digest(Conversation(first.conversation, first.tools)),  # the conversation the stopped session held
+        0,
+    )
+    assert reported.continuation is not None and reported.continuation.stopped is SearchEnd.REPORTED
+    assert exhausted.continuation is not None and {exhausted.continuation.owner, reported.continuation.owner} <= set(
+        owners
+    )
+    decision = workpiece.decisions[-1]
+    assert isinstance(decision, Accept)
+    notes = [reason for reason in decision.reasons if reason.startswith(("false_accept: ", "false_reject: "))]
+    assert len(notes) == 2 and all("ran out of search budget without a finding" in note for note in notes)
+    assert all("not a validation of the task" in note for note in notes)
+    assert not any("validated" in text for text in (*decision.reasons, *exhausted.reasons, *reported.reasons))
