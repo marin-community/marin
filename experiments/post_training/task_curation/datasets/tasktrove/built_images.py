@@ -38,7 +38,11 @@ def build_context_sha256(build: DockerBuildContext) -> str:
         (resource.path, int(resource.mode or "644", 8), hashlib.sha256(resource_bytes(resource)).hexdigest())
         for resource in build.files
     )
-    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+    entries.extend(
+        (entry.path + "/", int(entry.mode, 8), hashlib.sha256(str(entry.mtime_ns).encode()).hexdigest())
+        for entry in build.empty_directories
+    )
+    return hashlib.sha256(json.dumps(sorted(entries)).encode()).hexdigest()
 
 
 def archive_build_environment(data: Mapping[str, Any]) -> EnvironmentRequirements:
@@ -47,7 +51,8 @@ def archive_build_environment(data: Mapping[str, Any]) -> EnvironmentRequirement
     dockerfile = next(resource_bytes(resource).decode() for resource in resources if resource.path == DOCKERFILE)
     build = verifyit_build_context(dockerfile, resources, package=VERIFYIT_PACKAGE)
     source = DockerBuildContext(
-        files=tuple(resource for resource in build.files if not resource.path.startswith(f"{VERIFYIT_CONTEXT}/"))
+        files=tuple(resource for resource in build.files if not resource.path.startswith(f"{VERIFYIT_CONTEXT}/")),
+        empty_directories=build.empty_directories,
     )
     image = BUILT_IMAGES.get(build_context_sha256(source))
     return EnvironmentRequirements(

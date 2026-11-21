@@ -134,6 +134,14 @@ Public expectations belong in `context`: for example, the columns a CSV must con
 `environment_requirements` declares the initial state and operations needed to solve a task.
 
 `command_semantics` describes native Linux processes or a simulated shell.
+
+Native Harbor import and export retain explicit empty build-directory members,
+including modes and timestamps. They restore only directories present in the
+source archive. A missing `COPY` source does not authorize creating a directory
+or a placeholder file. Keep the archive pin and digest as source provenance.
+Build contexts without directory members retain their existing serialized form.
+The generated TaskTrove exporter rejects explicit empty-directory contexts;
+use the native Harbor path for these original packages.
 The caller selects a Shellbox factory; shared runtime preparation checks that it
 can satisfy the requirements and binds the image or lock-backed dependencies.
 Agent and grader requirements remain separate. Conversation-only tasks need no
@@ -144,7 +152,7 @@ command semantics, and missing packaging never implies simulation.
 | `capabilities` | Unique operation names, such as `shell`, `network`, `filesystem`, `process`, or `browser`. Names are open so future capabilities can be represented. |
 | `command_semantics` | `LINUX_PROCESS` for native execution, `SHELL_SIMULATOR` for the simulated command language and virtual filesystem, or `None` when no shell execution is required. |
 | `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
-| `docker_build` | Optional `DockerBuildContext(files=...)` containing inline regular files relative to the build-context root, including `Dockerfile`. The recipe is unresolved data. |
+| `docker_build` | Optional `DockerBuildContext(files=..., empty_directories=...)` containing original regular files and explicitly archived empty directories, with paths relative to the context root. `Dockerfile` is required. The recipe is unresolved data. |
 | `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
 | `environment_variables` | String values required in the worker or grading machine environment. |

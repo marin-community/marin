@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 
 from taskcompendium.models import NoGrader, TaskSpec
+from taskcompendium.runtime.docker_build import materialize_build_directories
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.staging import resource_files
 
@@ -39,3 +40,6 @@ def write_native_task(task: TaskSpec, directory: Path) -> None:
         target.chmod(file.mode)
         if file.mtime_ns is not None:
             os.utime(target, ns=(file.mtime_ns, file.mtime_ns))
+    build = task.environment_requirements.docker_build
+    if build is not None:
+        materialize_build_directories(build, directory / "environment")

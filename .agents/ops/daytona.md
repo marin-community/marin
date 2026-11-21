@@ -37,7 +37,7 @@ suitability census remains a measurement of the source's training configuration.
 Shellbox rejects Dockerfile `ADD` instructions before creating a sandbox. This
 check follows instruction continuations and `RUN`/`COPY` heredoc boundaries:
 an assembly `add` instruction inside a heredoc is passed through unchanged.
-Retain the original Dockerfile when diagnosing a preflight rejection. COPY inputs are resolved with the pinned Daytona SDK before a create request is logged. A missing local source raises `MissingDockerCopySource`; verify the original native inventory and record a source build failure rather than generating replacement files. This preflight performs no provider creation or cleanup.
+Retain the original Dockerfile when diagnosing a preflight rejection. COPY inputs are resolved with the pinned Daytona SDK before a create request is logged. A missing local source raises `MissingDockerCopySource`; verify the original native inventory and record a source build failure rather than generating replacement files. This preflight performs no provider creation or cleanup. If a pinned upstream archive contains an explicit empty directory that Git omitted, import that archive as a new source version and preserve the directory member through the native Harbor path. Bind the archive digest and directory metadata; do not insert placeholder files.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.

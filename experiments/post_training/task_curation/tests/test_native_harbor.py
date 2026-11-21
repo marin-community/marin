@@ -15,12 +15,15 @@ import pytest
 from finestore.rl.curation import DaytonaSafety
 from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import run
+from shellbox.image import DockerfileSource
 from taskcompendium.grading_environment import assess_grading_environment
+from taskcompendium.harbor.native_package import write_native_task
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.conversion import convert_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.runtime.docker_build import require_original_docker_build
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation import native_release, retirement
@@ -256,3 +259,41 @@ def test_native_registration_requires_actor_receipt_for_its_private_pin(source_i
     assert declaration.daytona_safety is DaytonaSafety.UNSAFE
     assert declaration.daytona_unsafe_counts == {"execution_requirement": 1}
     assert "excluded" not in source.info.tags
+
+
+def test_native_archive_restores_explicit_empty_build_directory_without_input_files(tmp_path):
+    files = {
+        "instruction.md": b"No input files are required. Write a SQL script.",
+        "task.toml": b'[environment]\ncpus=1\nmemory="1G"\nstorage="5G"\n',
+        "environment/Dockerfile": b"FROM ubuntu:22.04\nCOPY ./task_file /app/task_file\n",
+        "tests/test.sh": b"#!/bin/sh\ntest -f /app/task_file/solution.sql\n",
+        "solution/solve.sh": b"#!/bin/sh\nprintf 'SELECT 1;' >/app/task_file/solution.sql\n",
+    }
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, content in files.items():
+            member = tarfile.TarInfo(name)
+            member.size, member.mode = len(content), 0o644
+            archive.addfile(member, io.BytesIO(content))
+        directory = tarfile.TarInfo("environment/task_file")
+        directory.type, directory.mode, directory.mtime = tarfile.DIRTYPE, 0o755, 123
+        archive.addfile(directory)
+    context = ConversionContext({}, None)
+    data = unpack_native({"path": "task_14458", "task_binary": buffer.getvalue()}, context)
+    raw = RawRow("native", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), data)
+    normalized = convert_row(raw, native_task, context)
+    assert isinstance(normalized, NormalizedTask)
+    task = TaskSpec.model_validate_json(normalized.task.model_dump_json())
+    destination = tmp_path / "task"
+    write_native_task(task, destination)
+    restored = destination / "environment/task_file"
+    assert restored.is_dir() and list(restored.iterdir()) == []
+    assert restored.stat().st_mode & 0o777 == 0o755
+    assert restored.stat().st_mtime_ns == 123_000_000_000
+    assert {
+        path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()
+    } == files
+    build = task.environment_requirements.docker_build
+    require_original_docker_build(
+        build, DockerfileSource(destination / "environment", destination / "environment/Dockerfile")
+    )

@@ -20,6 +20,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.models import (
     AnswerType,
+    BuildDirectory,
     CommandSemantics,
     ConversationInput,
     DockerBuildContext,
@@ -145,7 +146,13 @@ def native_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRe
                 resource.model_copy(update={"path": name.removeprefix("environment/")})
                 for name, resource in resources.items()
                 if name.startswith("environment/")
-            )
+            ),
+            empty_directories=tuple(
+                BuildDirectory(path=name.removeprefix("environment/"), **metadata)
+                for name, metadata in sorted(data["directory_metadata"].items())
+                if name.startswith("environment/")
+                and not any(path.startswith(name + "/") for path in (*files, *data["directory_metadata"]))
+            ),
         )
     )
     return TaskSpec(
