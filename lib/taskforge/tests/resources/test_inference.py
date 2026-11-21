@@ -8,9 +8,9 @@ import pytest
 from lib.taskforge.tests.resources.inference_fakes import Backend, provider_completion, request
 
 from taskforge.effects.events import Event, Retrying
-from taskforge.effects.issues import ContextExceeded, Restart
+from taskforge.effects.issues import Restart
 from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelRequestRejected, ModelUnavailable
-from taskforge.model.llm import ToolCall
+from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.resources.inference import (
     GlmInference,
     complete,
@@ -82,7 +82,6 @@ async def test_retry_telemetry_preserves_wire_and_completion_values(transport_re
             1,
             1,
         ),
-        (ContextExhausted("maximum context length " + "x" * 500, ()), ContextExceeded, 1, 0),
         *(
             (ModelRequestRejected(status, "malformed request", ()), ModelRequestRejected, 1, 0)
             for status in (400, 401, 403, 404, 422)
@@ -100,5 +99,12 @@ async def test_provider_failures_preserve_classification_and_retry_bound(
     assert all("private" not in retry.cause for retry in retries.events)
     if expected is ModelRequestRejected:
         assert caught.value is error
-    if isinstance(error, ContextExhausted):
-        assert str(caught.value) == error.body and caught.value.__cause__ is error
+
+
+async def test_a_context_window_refusal_is_a_recorded_completion_one_request_long() -> None:
+    """The provider's context-exhaustion signal is a result, not a raise: the log records it under the request, so a
+    resumed request replays the same stop instead of asking the provider again."""
+    refusal = ContextExhausted("maximum context length " + "x" * 500, ())
+    backend = Backend((refusal, provider_completion()))
+    result = await complete(request(), GlmInference(backend, "provider"), notify=Retries())
+    assert result == Completion(refusal.body, finish_reason=FinishReason.CONTEXT_EXCEEDED) and len(backend.calls) == 1

@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 from taskforge.effects.context import Context
-from taskforge.effects.issues import ContextExceeded, Hold
+from taskforge.effects.issues import Hold
 from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.harness.protocol import (
     FinishRequest,
@@ -76,14 +76,13 @@ class AgenticHarness(Harness):
                         turns,
                     )
                 turns += 1
-                try:
-                    request = InferenceRequest(
-                        session.messages[consumed:], schemas, self.sampling, previous, sample=degenerate_completions
-                    )
-                    result = await ctx.emit(request)
-                    previous, consumed = request, len(session.messages)
-                except ContextExceeded as error:
-                    return Stopped(StopReason.CONTEXT_LIMIT, session, str(error), turns)
+                request = InferenceRequest(
+                    session.messages[consumed:], schemas, self.sampling, previous, sample=degenerate_completions
+                )
+                result = await ctx.emit(request)
+                if result.finish_reason is FinishReason.CONTEXT_EXCEEDED:
+                    return Stopped(StopReason.CONTEXT_LIMIT, session, result.content, turns)
+                previous, consumed = request, len(session.messages)
                 if result.finish_reason == FinishReason.LENGTH and not result.content and not result.tool_calls:
                     degenerate_completions += 1
                     if degenerate_completions == 2:
