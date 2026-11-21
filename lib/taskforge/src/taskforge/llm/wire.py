@@ -18,14 +18,15 @@ from taskforge.llm.client import Attempt, Completion
 from taskforge.model.llm import FinishReason, ToolCall
 
 
+def wire_tool_call(call: ToolCall) -> dict[str, Any]:
+    return {"id": call.id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
+
+
 def wire_message(content: str, reasoning: str, tool_calls: Sequence[ToolCall]) -> dict[str, Any]:
     """An assistant turn as it is replayed: ``reasoning_content`` is what GLM's template renders."""
     message: dict[str, Any] = {"role": "assistant", "content": content, "reasoning_content": reasoning}
     if tool_calls:
-        message["tool_calls"] = [
-            {"id": call.id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
-            for call in tool_calls
-        ]
+        message["tool_calls"] = [wire_tool_call(call) for call in tool_calls]
     return message
 
 

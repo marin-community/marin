@@ -12,6 +12,7 @@ from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
 from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelUnavailable
 from taskforge.llm.client import Completion as ProviderCompletion
 from taskforge.llm.policy import LLMPolicy, ModelProfile
+from taskforge.llm.wire import wire_tool_call
 from taskforge.model.llm import TOOL_SCHEMA, Completion, Message, ToolSchema
 from taskforge.resources.execution import Notify
 
@@ -74,14 +75,7 @@ def _message(message: Message) -> dict[str, object]:
     if message.tool_call_id is not None:
         wire["tool_call_id"] = message.tool_call_id
     if message.tool_calls:
-        wire["tool_calls"] = [
-            {
-                "id": call.id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": call.arguments},
-            }
-            for call in message.tool_calls
-        ]
+        wire["tool_calls"] = [wire_tool_call(call) for call in message.tool_calls]
     return wire
 
 
