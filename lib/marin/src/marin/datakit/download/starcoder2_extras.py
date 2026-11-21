@@ -32,11 +32,6 @@ def download_starcoder2_extras_step(subset: str) -> StepSpec:
     )
 
 
-def download_all_starcoder2_extras_steps() -> list[StepSpec]:
-    """Download all selected subsets of starcoder2data-extras."""
-    return [download_starcoder2_extras_step(subset) for subset in SUBSETS]
-
-
 def starcoder2_extras_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     """Return ``(download, normalize)`` chains for every StarCoder2-Extras subset.
 
