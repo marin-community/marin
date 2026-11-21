@@ -149,21 +149,18 @@ def install(ctx: Context, resources: Resources) -> None:
         if isinstance(value, GradeResult) and value.diagnostics.get("cleanup_errors"):
             ctx.notify(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
 
-    rollouts, grading = resources.rollouts, resources.grading
     solve = partial(run_rollout, notify=ctx.notify)
+    solving, graded, fresh = resources.rollouts.engine, resources.grading.engine, resources.grading.fresh_engine
     if (judge := resources.role_inference.get("judge")) is not None:
-        rollouts = replace(rollouts, engine=JudgeEngine(rollouts.engine, ctx, judge))
-        grading = replace(
-            grading,
-            engine=JudgeEngine(grading.engine, ctx, judge),
-            fresh_engine=JudgeEngine(grading.fresh_engine, ctx, judge) if grading.fresh_engine else None,
-        )
+        solving, graded = JudgeEngine(solving, ctx, judge), JudgeEngine(graded, ctx, judge)
+        fresh = fresh and JudgeEngine(fresh, ctx, judge)
     if (decision_model := resources.decision_model) is not None:
-        rollouts = replace(rollouts, engine=DecisionModelEngine(rollouts.engine, ctx))
-        fresh = DecisionModelEngine(grading.fresh_engine, ctx) if grading.fresh_engine else None
-        grading = replace(grading, engine=DecisionModelEngine(grading.engine, ctx), fresh_engine=fresh)
+        solving, graded = DecisionModelEngine(solving, ctx), DecisionModelEngine(graded, ctx)
+        fresh = fresh and DecisionModelEngine(fresh, ctx)
         ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), decision_model)
         solve = partial(decided_rollout, ctx=ctx)
+    rollouts = replace(resources.rollouts, engine=solving)
+    grading = replace(resources.grading, engine=graded, fresh_engine=fresh)
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.notify
@@ -320,8 +317,9 @@ def submit_gate(
     return ()
 
 
-def agentic_harness(policy: Policy, role: str, profile: ModelProfile) -> AgenticHarness:
-    """The ``role`` session: the prompt limit is ``<role>.context_tokens``, without an output allowance."""
+def agentic_harness(policy: Policy, role: str, profiles: Mapping[str, ModelProfile]) -> AgenticHarness:
+    """The ``role`` session under its profile (``GLM_5_3`` by default): the prompt limit is ``<role>.context_tokens``."""
+    profile = profiles.get(role, GLM_5_3)
     limit = policy.setting(f"{role}.context_tokens", int)
     if limit > profile.context_tokens:
         raise ValueError(f"{role}.context_tokens {limit} exceeds the model window {profile.context_tokens}")
@@ -359,7 +357,7 @@ def build_config(
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
     author = Role(
         "author",
-        agentic_harness(policy, "author", profiles.get("author", GLM_5_3)),
+        agentic_harness(policy, "author", profiles),
         standard_tools(
             task_path=task_path,
             controls_path=controls_path,
@@ -371,15 +369,13 @@ def build_config(
     )
     adversary = Role(
         "adversary",
-        agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3)),
+        agentic_harness(policy, "adversary", profiles),
         adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
     )
     final = ("solve_review.final.system", "solve_review.final.user", "solve_review.final.nudge", "author.notes")
     for prompt in ("solve_review.system", "solve_review.user", *final):
         policy.prompt(prompt)  # a missing prompt fails here, not at a round's first review
-    solve_review = Role(
-        "solve_review", agentic_harness(policy, "solve_review", profiles.get("solve_review", GLM_5_3)), {}
-    )
+    solve_review = Role("solve_review", agentic_harness(policy, "solve_review", profiles), {})
     budget = Budget(
         policy.setting("budget.max_modify_rounds", int),
         policy.setting("budget.max_validation_retries", int),
