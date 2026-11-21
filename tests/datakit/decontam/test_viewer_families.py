@@ -13,11 +13,17 @@ from experiments.datakit.decontam.viewer import export_run
 
 
 def test_uncheatable_records_group_by_subset_and_lm_eval_records_by_task():
-    eval_ids = ["uncheatable-bbc_news-0", "uncheatable-bbc_news-17", "uncheatable-github_cpp-3", "gsm8k-test-12"]
+    eval_ids = [
+        "uncheatable-bbc_news-0",
+        "uncheatable-bbc_news-17",
+        "uncheatable-github_cpp-3",
+        "gsm8k-test-12",
+        "gsm8k-test-12-fields",
+    ]
 
     families = Counter(export_run.eval_id_to_family(eval_id) for eval_id in eval_ids)
 
-    assert families == {"uncheatable_bbc_news": 2, "uncheatable_github_cpp": 1, "gsm8k": 1}
+    assert families == {"uncheatable_bbc_news": 2, "uncheatable_github_cpp": 1, "gsm8k": 2}
 
 
 def test_uncheatable_eval_text_loads_from_its_subset_artifact(tmp_path, monkeypatch):
