@@ -30,7 +30,6 @@ from finestore.rl.run_records import (
 )
 from finestore.store import DataStore
 from iris.rpc import controller_pb2, job_pb2
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import (
     RECORD_FILENAME,
     Artifact,
@@ -77,8 +76,6 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
-
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -1435,27 +1432,11 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path, token
         tokenizer,
         "tokenizer-commit" if tokenizer else None,
     )
-    evaluation = ModelConfig(name="finished", location=SKYRL_POLICY_LOCATION, tokenizer="declared/tokenizer")
-    evaluated = resolve_skyrl_model(context, source, evaluation)
-    assert (evaluated.location, evaluated.tokenizer, evaluated.tokenizer_revision) == (
-        str(root / "policy"),
-        tokenizer or str(root / "policy"),
-        "tokenizer-commit" if tokenizer else None,
-    )
+    identity = f"tests/finished@2026.10.26:{source.fingerprint()}"
+    assert resolved.identity == identity
     fingerprint = StepContext.for_fingerprint({}, model.deps())
     policy_identity = model.resolve(fingerprint)
-    evaluation_identity = resolve_skyrl_model(fingerprint, source, evaluation)
-    assert (evaluation_identity.location, evaluation_identity.tokenizer, evaluation_identity.tokenizer_revision) == (
-        policy_identity.uri,
-        policy_identity.tokenizer_uri or policy_identity.uri,
-        policy_identity.tokenizer_revision,
-    )
-    assert evaluated.identity == evaluation_identity.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
-    assert evaluation_identity.location == f"tests/finished@2026.10.26:{source.fingerprint()}/policy"
-    other = ArtifactStep.adopt("tests/other-policy", "2026.10.27", str(root), kind=SkyRLRun)
-    other_model = resolve_skyrl_model(StepContext.for_fingerprint({}, (other,)), other, evaluation)
-    assert other_model.identity == f"tests/other-policy@2026.10.27:{other.fingerprint()}"
-    assert other_model.location == f"tests/other-policy@2026.10.27:{other.fingerprint()}/policy"
+    assert (policy_identity.uri, policy_identity.identity) == (f"{identity}/policy", identity)
 
 
 def test_reject_forced_socket_transport_blocks_multi_node_overrides() -> None:
@@ -1475,3 +1456,11 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+def test_ttl_run_path_preserves_a_run_already_under_the_temporary_root(monkeypatch):
+    monkeypatch.setattr("marin.rl.skyrl.marin_temp_bucket", lambda **kwargs: "s3://regional/tmp/ttl=14d")
+    temporary = skyrl_temporary_run_path("s3://regional/marin/run", ttl_days=14)
+    assert skyrl_temporary_run_path(temporary, ttl_days=14) == temporary
+    sibling = skyrl_temporary_run_path("s3://regional/tmp/ttl=14d-other/run", ttl_days=14)
+    assert sibling == "s3://regional/tmp/ttl=14d/skyrl/tmp/ttl=14d-other/run"

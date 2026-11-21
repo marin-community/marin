@@ -29,7 +29,9 @@ from evalrecords.records import (
     ModelConfigRef,
     ModelRef,
     PromptFormat,
+    RLAttemptRef,
     RunStatus,
+    TaskEvidence,
     list_records,
     scoring_settings,
 )
@@ -166,6 +168,7 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -174,6 +177,7 @@ class LaunchSpec:
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
+    rl_attempt: RLAttemptRef | None = None
 
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
@@ -267,6 +271,7 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
+    task_evidence: TaskEvidence,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
@@ -287,7 +292,7 @@ def _resolve_definitions(
             protocol = resolve_selection(
                 definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
             )
-            settings = settings_for(definition, model, limit, seed, default_seed)
+            settings = settings_for(definition, model, limit, seed, default_seed, task_evidence)
             resolved.append(
                 (
                     name,
@@ -385,6 +390,8 @@ def build_evaluation_batch(
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
+    if spec.task_evidence is not TaskEvidence.EMBEDDED and not has_curated_definitions:
+        raise ValueError("--task-evidence applies only to curated evaluations")
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
             f"{spec.version} requires its historical Evalchemy checkout; curated runs need a new cohort label"
@@ -411,6 +418,7 @@ def build_evaluation_batch(
         spec.limit,
         spec.seed,
         DEFAULT_RUN_SEED if seeded else None,
+        spec.task_evidence,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
     )
@@ -536,6 +544,7 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_attempt=spec.rl_attempt,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,

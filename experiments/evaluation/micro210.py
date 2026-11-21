@@ -5,18 +5,14 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 
 import click
 import draccus
 import yaml
-from iris.rpc.proto_display import priority_band_value
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.inference.iris import remote_inference
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -34,20 +30,27 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.secrets import resolve_secret_spec
 from transformers import AutoTokenizer
 
+from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
+    PREPARED_COMMIT,
+    PREPARED_REPO,
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
 )
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
-PREPARED_INPUTS = (
-    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/" "documents/mochi-exp3-final-eval-inputs/2026.11.18.61"
-)
+# The prepared table re-hosts benchmark items that must not be public; tasks read it
+# with the standard HF_TOKEN.
+PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
+
+# Relocation needs a new adoption identity even though the prepared bytes are unchanged.
+PREPARED_INPUTS_VERSION = "2026.11.20.1"
+
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 
 
@@ -56,7 +59,15 @@ class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
     canonical_launch_sha256: str
-    counterpart_api_key: SecretSpec
+
+
+def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
+    """Bind all runtime judge routes from the typed policy without changing other settings."""
+    config = deepcopy(config)
+    config["environment"]["task_sessions"]["remote_judge"].update(base_url=judge.base_url, api_key_env="JUDGE_API_KEY")
+    config["extra_env"]["JUDGE_BASE_URL"] = judge.base_url
+    config["terminal_bench"]["installed_agent"]["judge_model"] = judge.model
+    return config
 
 
 def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
@@ -79,7 +90,6 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
-    counterpart_api_key = resolve_secret_spec(config.counterpart_api_key).value
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
@@ -87,32 +97,9 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
         json.dumps(asdict(config.evaluation.record()), indent=2)
     )
     evaluation_policy = config.evaluation.policy()["evaluation"]
-    judge = draccus.decode(ModelConfig, evaluation_policy["judge"])
-    launch = yaml.safe_load(config.skyrl.launch_config_yaml)
-    inference = inference_config_for_model(
-        judge,
-        AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type=evaluation_policy["gpu_variant"],
-            gpu_count=evaluation_policy["judge_gpu_count"],
-            target_cluster=None,
-        ),
-        env_vars={},
-        priority=priority_band_value(launch["iris"]["priority"]),
-        capability_origin=evaluation_policy["capability_origin"],
-        api_model=judge.location,
-    )
-    with remote_inference(inference) as served:
-        launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = served.model.endpoint.base_url
-        for section in (launch["skyrl"]["extra_env"], launch["runtime"]["task_env"]):
-            section["JUDGE_BASE_URL"] = served.model.endpoint.base_url
-        return run_skyrl(
-            replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
-            env_vars={
-                "JUDGE_API_KEY": served.model.endpoint.api_key or "EMPTY",
-                "OPENAI_API_KEY": counterpart_api_key,
-            },
-        )
+    judge = draccus.decode(JudgeConfig, evaluation_policy["judge"])
+    api_key = resolve_secret_spec((judge.credential,)).value
+    return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
 
 
 def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactStep[SkyRLRun]:
@@ -125,7 +112,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
     )
     inputs = ArtifactStep.adopt(
         "evaluation/micro210/prepared",
-        "2026.11.18",
+        PREPARED_INPUTS_VERSION,
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )
@@ -141,7 +128,11 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(evaluation_policy["config"]),
+            config_yaml=yaml.safe_dump(
+                judge_runtime_config(
+                    evaluation_policy["config"], draccus.decode(JudgeConfig, evaluation_policy["judge"])
+                )
+            ),
             model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=evaluation_policy["data_relative_path"]),),
@@ -166,7 +157,6 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
             replace(run, launch_config_yaml=rendered),
             replace(binding, output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
-            ("env:TOGETHER_API_KEY",),
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)

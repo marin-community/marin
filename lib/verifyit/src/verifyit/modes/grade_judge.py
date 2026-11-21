@@ -3,13 +3,13 @@
 
 """Mode judge: IFEval gate, exact gate, then an LLM judge.
 
-Three rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
+Four rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
 default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
-explicit task score. All rubrics can sit behind ``constraints``, deterministic
-IFEval checks that must all pass first.
+explicit task score. ``pairwise`` ports Arena-Hard's two-game comparison against a baseline answer.
+All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
 ``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set). A runner
@@ -55,6 +55,7 @@ from verifyit.modes.ifeval import Check
 from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
     RUBRIC_LABELS,
+    RUBRIC_PAIRWISE,
     RUBRIC_REFERENCE,
     EmptyOutputPolicy,
     ExactSpec,
@@ -115,6 +116,8 @@ Score 1 when the candidate clearly satisfies the requirement and 0 when it does 
 Give at most 25 words of reasoning, then end with a final line of exactly this form:
 SCORE: <0|1>
 """
+
+PAIRWISE_METRIC = "win_rate"
 
 SCORE_PATTERN = re.compile(r"score\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 
@@ -279,6 +282,8 @@ def grade_judge_candidate(
             return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
             return _judge_labels(spec, validated.references[0], context, candidate, client, model)
+        if spec.rubric == RUBRIC_PAIRWISE:
+            return _judge_pairwise(spec, spec.references[0], candidate, client, model)
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
@@ -306,64 +311,132 @@ def _judge_labels(
     spec: JudgeSpec, reference: str, context: str, candidate: str, client: openai.OpenAI, model: str
 ) -> Reward:
     fields = {"question": spec.question, "reference": reference, "candidate": candidate, "context": context}
+    messages = _judge_messages(spec, fields)
+    labels = _case_normalized(spec, spec.label_scores)
+    label_metrics = _case_normalized(spec, spec.label_metrics)
+    parse_history = []
+    for parse_attempt in range(spec.parse_attempts):
+        answer, detail = _judged_answer(
+            spec,
+            client,
+            model,
+            messages,
+            attempt_detail={"parse_attempt": parse_attempt + 1, "previous_parse_attempts": list(parse_history)},
+        )
+        if spec.label_scan == "whole":
+            final = answer
+            observed = {answer}
+        else:
+            final = answer.rsplit("\n", 1)[-1].strip()
+            completed_lines = {line.strip() for line in answer.splitlines()}
+            observed = {
+                label
+                for label in labels
+                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+            }
+        if final not in labels or observed != {final}:
+            if parse_attempt + 1 < spec.parse_attempts:
+                parse_history.append({"attempt": parse_attempt + 1, "completion": detail["completion"]})
+                continue
+            raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
+        detail.update(verdict=final, reasoning=_reasoning(answer))
+        if label_metrics:
+            detail["metrics"] = label_metrics[final]
+        return scored(float(labels[final]), **detail)
+    raise RuntimeError("judge exhausted parse attempts")
+
+
+def _case_normalized(spec: JudgeSpec, table: dict[str, Any]) -> dict[str, Any]:
+    return {label.upper() if spec.label_case == "upper" else label: value for label, value in table.items()}
+
+
+def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatCompletionMessageParam]:
     messages: list[ChatCompletionMessageParam] = []
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
+    return messages
+
+
+def _judged_answer(
+    spec: JudgeSpec,
+    client: openai.OpenAI,
+    model: str,
+    messages: list[ChatCompletionMessageParam],
+    *,
+    attempt_detail: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets."""
     budgets = _completion_budgets(spec)
-    labels = {
-        label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
-    }
-    label_metrics = {
-        label.upper() if spec.label_case == "upper" else label: values for label, values in spec.label_metrics.items()
-    }
-    parse_history = []
-    for parse_attempt in range(spec.parse_attempts):
-        for index, budget in enumerate(budgets):
-            completion = _label_completion(spec, client, model, messages, budget)
-            detail: dict[str, Any] = {
-                "model": model,
-                "requested_model": model,
-                "response_model": completion.response_model,
-                "response_id": completion.response_id,
-                "finish_reason": completion.finish_reason,
-                "transport_attempts": completion.transport_attempts,
-                "parse_attempt": parse_attempt + 1,
-                "previous_parse_attempts": list(parse_history),
-                "completion": completion.text,
-                "judge_request": completion.request,
-                "prompt_tokens": completion.prompt_tokens,
-            }
-            if completion.incomplete:
-                if index + 1 < len(budgets):
-                    continue
-                raise GradingInfraError("judge completion is incomplete", **detail)
-            answer = _answer_text(
-                completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
-            )
-            if spec.label_case == "upper":
-                answer = answer.upper()
-            if spec.label_scan == "whole":
-                final = answer
-                observed = {answer}
-            else:
-                final = answer.rsplit("\n", 1)[-1].strip()
-                completed_lines = {line.strip() for line in answer.splitlines()}
-                observed = {
-                    label
-                    for label in labels
-                    if (label in completed_lines if spec.label_scan == "lines" else label in answer)
-                }
-            if final not in labels or observed != {final}:
-                if parse_attempt + 1 < spec.parse_attempts:
-                    parse_history.append({"attempt": parse_attempt + 1, "completion": completion.text})
-                    break
-                raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
-            detail.update(verdict=final, reasoning=_reasoning(answer))
-            if label_metrics:
-                detail["metrics"] = label_metrics[final]
-            return scored(float(labels[final]), **detail)
+    for index, budget in enumerate(budgets):
+        completion = _label_completion(spec, client, model, messages, budget)
+        detail: dict[str, Any] = {
+            "model": model,
+            "requested_model": model,
+            "response_model": completion.response_model,
+            "response_id": completion.response_id,
+            "finish_reason": completion.finish_reason,
+            "transport_attempts": completion.transport_attempts,
+            "completion": completion.text,
+            "judge_request": completion.request,
+            "prompt_tokens": completion.prompt_tokens,
+            **attempt_detail,
+        }
+        if completion.incomplete:
+            if index + 1 < len(budgets):
+                continue
+            raise GradingInfraError("judge completion is incomplete", **detail)
+        answer = _answer_text(
+            completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
+        )
+        return (answer.upper() if spec.label_case == "upper" else answer), detail
     raise RuntimeError("judge exhausted completion budgets")
+
+
+def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
+    """Judge both orders; the reward is the candidate's weighted share of games won, ties counting half."""
+    labels = _case_normalized(spec, spec.label_scores)
+    weights = _case_normalized(spec, spec.label_weights)
+    games = []
+    won = 0.0
+    weight = 0.0
+    for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
+        messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
+        answer, detail = _judged_answer(spec, client, model, messages, attempt_detail={})
+        verdict = _pairwise_verdict(answer, spec.verdict_patterns)
+        if verdict is None or verdict not in labels:
+            raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
+        score_a = float(labels[verdict])
+        candidate_score = score_a if candidate_position == "A" else 1.0 - score_a
+        game_weight = float(weights.get(verdict, 1.0))
+        won += candidate_score * game_weight
+        weight += game_weight
+        games.append(
+            {
+                "verdict": verdict,
+                "candidate_position": candidate_position,
+                "candidate_score": candidate_score,
+                "weight": game_weight,
+                **detail,
+            }
+        )
+    reward = won / weight
+    return scored(
+        reward,
+        model=model,
+        games=games,
+        metrics={PAIRWISE_METRIC: reward},
+        metric_weights={PAIRWISE_METRIC: weight},
+    )
+
+
+def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
+    """The last nonempty match of the first pattern with one, as Arena-Hard parses verdicts."""
+    for pattern in patterns:
+        matches = [match for match in re.findall(pattern, reply) if match]
+        if matches:
+            return matches[-1].strip("\n")
+    return None
 
 
 def _label_completion(

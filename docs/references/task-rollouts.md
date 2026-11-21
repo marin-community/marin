@@ -181,8 +181,8 @@ and token limits:
   exact prompt `token_ids`. It returns the model's turn. A later `start` starts another conversation, for
   example after the harness makes its history shorter or changes its tools. The rollout keeps each
   conversation as a `ConversationRecord`, and the task machine does not reset.
-- `reply(observations, *, token_ids=None)` sends new messages after the model's last message and returns the
-  next turn. `token_ids` pins the exact tokens of the next prompt.
+- `reply(observations, *, token_ids=None, options=None)` sends new messages after the model's last message
+  and returns the next turn. `token_ids` pins the exact tokens of the next prompt. `options` can update output caps.
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
@@ -280,7 +280,11 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 `complete` obeys these rules:
 
 - A prompt that extends the last prompt with the model's message, under the same options, is a `reply`. Its
-  `token_ids`, if any, pin the next request. Any other prompt starts a new conversation.
+  `token_ids`, if any, pin the next request. After a turn that finishes within its token limit, a prompt
+  without pinned tokens can also reply with equivalent messages and updated output caps (`max_tokens`,
+  `max_completion_tokens`, or `max_output_tokens`). Message comparison accepts empty optional text fields
+  and reserialized tool argument JSON.
+  Other prompts start a new conversation.
 - The agent can call `complete` from other tasks, such as HTTP handlers. One model request can be open at a
   time: a call that needs the model while another call waits for it raises `RuntimeError`.
 - The last prompt again, for example after the HTTP client lost the response, gets the same turn without a new
