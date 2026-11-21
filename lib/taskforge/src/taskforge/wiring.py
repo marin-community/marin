@@ -4,6 +4,7 @@
 """Bind real adapters and executable policy at the process boundary."""
 
 import logging
+import math
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -323,6 +324,12 @@ def build_config(
         policy.setting("budget.max_validation_retries", int),
         policy.setting("budget.max_missing_trials", int),
     )
+    slots, beat = policy.setting("solver.concurrency", int), policy.setting("solver.heartbeat_interval", float)
+    if slots < 1 or not 0 < beat < math.inf or budget.max_missing_trials < 0:
+        raise ValueError(
+            f"solver.concurrency {slots} must be positive, solver.heartbeat_interval {beat} finite and positive, and "
+            f"budget.max_missing_trials {budget.max_missing_trials} nonnegative"
+        )
     band = BandRules(
         policy.setting("band.low", float),
         policy.setting("band.high", float),

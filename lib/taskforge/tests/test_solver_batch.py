@@ -5,6 +5,8 @@
 
 import asyncio
 import contextlib
+import math
+import re
 from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import override
@@ -31,11 +33,12 @@ from taskforge.effects.issues import Hold, Restart, Unreproducible
 from taskforge.effects.log import EventLog, Record
 from taskforge.llm.client import ModelRequestRejected
 from taskforge.model.review import Cause, TrialResult
-from taskforge.policy import load_policy
+from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
 from taskforge.stages.classify import replay_rule
 from taskforge.stages.validate import solver_batch
+from taskforge.wiring import build_config
 
 SPEC = rollout_spec(arithmetic_task())
 POLICY = load_policy(DEFAULTS_DIR)
@@ -298,3 +301,25 @@ async def test_a_generation_limit_is_a_failed_slot_and_an_outage_restarts_after_
     await resumed.drain()
     assert again.executed == ["arithmetic:1:0"]  # the outage recorded no slot, so only it executes
     assert results[2].cause is Cause.GENERATION_LIMIT and results[2].grade is not None  # a failed, graded trial
+
+
+# Review 2026-11-21: zero concurrency stalled a pending slot forever and a zero heartbeat wrote 1,088 notes in 25 ms.
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("solver.concurrency", 0),
+        ("solver.heartbeat_interval", 0.0),
+        ("solver.heartbeat_interval", math.inf),
+        ("solver.heartbeat_interval", math.nan),
+        ("budget.max_missing_trials", -1),
+    ],
+)
+def test_a_batch_setting_that_would_stall_or_flood_fails_at_wiring(key: str, value: object) -> None:
+    with pytest.raises(ValueError, match=re.escape(key)):
+        build_config(POLICY.overlaid({key: value}), {})
+
+
+@pytest.mark.parametrize("key", ["solver.concurrency", "solver.heartbeat_interval", "budget.max_missing_trials"])
+def test_a_complete_policy_without_a_batch_setting_fails_at_wiring_naming_it(key: str) -> None:
+    with pytest.raises(KeyError, match=re.escape(key)):
+        build_config(Policy({name: value for name, value in POLICY.entries.items() if name != key}), {})
