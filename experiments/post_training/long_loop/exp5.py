@@ -220,7 +220,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
         HARDMATH_REPO: "nonagentic",
     }
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
-    pools = prepared_pools(resolved) if stage != "sft" else None
+    pools = prepared_pools(resolved)
     require_archive_binds_final_sft_checkpoint(resolved)
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps({key: value for key, value in resolved.items() if key != "resolved_sha256"}, sort_keys=True).encode()
@@ -229,7 +229,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
         resolved,
         spec.version,
         through=stage,
-        data_artifacts=pools,
+        data_artifacts=pools if stage != "sft" else None,
         curriculum=curriculum,
         sft_release=handle,
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, spec)),
