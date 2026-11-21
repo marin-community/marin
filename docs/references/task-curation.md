@@ -901,8 +901,9 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
-The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
-outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.
+The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
+`--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
+sandboxes through its API.
 Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.

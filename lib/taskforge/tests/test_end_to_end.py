@@ -13,7 +13,7 @@ import tarfile
 import time
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -26,12 +26,14 @@ from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
+from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
+from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
@@ -87,7 +89,7 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpie
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand
+from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand, ShellboxEnv
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
 from taskforge.resources.inference import InferenceClient, InferenceRequest
@@ -170,7 +172,7 @@ def script() -> tuple[Completion, ...]:
     )
 
 
-def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
+def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
     return Resources(
         envs,
         FakeInference(responses),
@@ -2554,3 +2556,154 @@ async def test_claim_takes_a_journal_held_on_a_divergent_unanswered_request(
     sink = CheckpointSink(tmp_path / "claim", str(destination))
     assert rows(sink.claim(published(destination))) == rows(held)
     assert published(destination).head.writer == sink.writer
+
+
+class HelperlessMachine(Machine):
+    """Runs every command; file downloads fail because the image lacks a transfer helper."""
+
+    @override
+    async def run(self, command: Command) -> Result:
+        return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+    @override
+    async def upload(self, source: Path, target: str) -> None:
+        pass
+
+    @override
+    async def download(self, source: str, target: Path) -> None:
+        raise GuestHelperFailed("Iris command failed (127): wc: not found")
+
+    @override
+    async def close(self) -> None:
+        pass
+
+
+class HelperlessEnvs(EnvFactory):
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+        return ShellboxEnv(HelperlessMachine(), "image", AsyncExitStack())
+
+
+# Review 2026-11-20 (follow-up 1): a missing guest `wc` was stored as a bug hold and failed the child process.
+async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), resources(HelperlessEnvs(), script())
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    result = published_workpiece(destination)
+    assert result.terminal is Terminal.HELD
+    assert "wc: not found" in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
+
+
+class SandboxController(LocalController):
+    """A local controller whose guest ``/workspace`` is ``root``."""
+
+    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str) -> None:
+        super().__init__(faults, prelude)
+        self.root = root
+
+    @override
+    def exec_in_container(self, request: object, timeout_ms: int) -> SimpleNamespace:
+        command = [part.replace("/workspace", str(self.root)) for part in request.command]  # type: ignore[attr-defined]
+        return super().exec_in_container(SimpleNamespace(command=command), timeout_ms)
+
+
+class LocalIrisEnvs(EnvFactory):
+    """Each environment is a fresh local Iris sandbox in its own directory with the same scripted faults."""
+
+    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str = "") -> None:
+        self.root, self.faults, self.prelude = root, faults, prelude
+        self.created: list[Path] = []
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+        workdir = self.root / f"sandbox-{len(self.created)}"
+        workdir.mkdir(parents=True)
+        self.created.append(workdir)
+        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude))
+        return ShellboxEnv(machine, "image", AsyncExitStack())
+
+
+# Review 2026-11-20 (follow-up 3): a lost WebSocket upgrade reply reran the command in the same sandbox, and a
+# missing `wc` or an OOM-killed sandbox during capture held only after three sandboxes with one append each.
+@pytest.mark.parametrize(
+    "faults,prelude,sandboxes,cause",
+    [
+        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown"),
+        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found"),
+        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled"),
+    ],
+    ids=["lost-upgrade-reply", "capture-without-wc", "capture-oom-killed"],
+)
+async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    faults: tuple[Injection, ...],
+    prelude: str,
+    sandboxes: int,
+    cause: str,
+) -> None:
+    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude)
+    counted = (call("shell", {"command": "echo ran >> counter", "timeout": 5}, "inspect"), *script()[1:])
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), resources(envs, counted)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    result = published_workpiece(destination)
+    assert result.terminal is Terminal.HELD
+    assert cause in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
+    assert [(workdir / "counter").read_text() for workdir in envs.created] == ["ran\n"] * sandboxes
+
+
+# Review 2026-11-21 (follow-up 4): a lost upgrade reply for an upload chunk retried the write in the same sandbox; the
+# original append landed after the retry truncated the file, and the next read returned `proofproof` in an ACCEPTED run.
+async def test_lost_upload_reply_never_reads_back_a_doubled_write(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FirstSandboxFaulted(LocalIrisEnvs):
+        @override
+        async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+            env = await super().create(requirements)
+            self.faults = ()
+            return env
+
+    # The stage hydrates proposal.json first; fault the append of proof.txt itself.
+    monkeypatch.setitem(SITES, "proof-append", lambda script: "| base64 -d >>" in script and "proof.txt" in script)
+    envs = FirstSandboxFaulted(tmp_path / "sandboxes", (("proof-append", Fault.SETUP_FAILED_LATE, True),))
+    responses = (
+        call("write_file", {"path": "proof.txt", "content": "proof"}, "write-proof"),
+        call("read_file", {"path": "proof.txt"}, "read-proof"),
+        *(
+            call("write_file", {"path": str(path), "content": data.decode()}, path.name)
+            for path, data in Envs().commands["write-draft"].writes.items()
+        ),
+        *script()[2:],
+    )
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), resources(envs, responses)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    result = published_workpiece(destination)
+    assert result.terminal is Terminal.ACCEPTED and result.session is not None
+    assert [message.content for message in result.session.messages if message.tool_call_id == "read-proof"] == ["proof"]
+    assert len(envs.created) == 2 and (envs.created[1] / "proof.txt").read_bytes() == b"proof"

@@ -13,7 +13,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import HANDLED_FAILURE
-from taskforge.effects.issues import Hold
+from taskforge.effects.issues import Hold, OutputBudgetExhausted
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.base import ValidatedTool
 from taskforge.lowering import InvalidTaskSpec, LoweringSettings, check_candidates, lower_with_settings
@@ -78,7 +78,12 @@ class GradeTool(ValidatedTool[CandidateArgs]):
         except (ValueError, NotImplementedError) as error:
             # A host that cannot run a valid draft is not the author's defect; submit's gate holds the same way.
             raise Hold(f"Lowering failed: {error}") from error
-        result = await ctx.emit(GradeCandidate(spec, candidate))
+        try:
+            result = await ctx.emit(GradeCandidate(spec, candidate))
+        except OutputBudgetExhausted as error:
+            # The grading machine's budget, not the caller's session: raised, it would read as the caller's own
+            # exhausted search. The caller may grade another candidate; reproducing this one stays inconclusive.
+            return ToolResult(f"Grading this candidate failed and produced no grade: {error} on the grading machine")
         try:
             checks = grader_checks(result)
         except ValueError as error:
