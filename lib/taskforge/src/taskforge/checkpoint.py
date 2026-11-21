@@ -35,12 +35,13 @@ from taskforge.model.workpiece import WORKPIECE, Workpiece
 JOURNAL_FORMAT = 10
 """Format 10 names the role that paid for each physical cached resolution (a row's ``billed``, outside the event), so
 the usage report no longer guesses it from overlapping scopes; request digests and replay keys are unchanged. Every
-format-8 and format-9 row means the same at 10, so this reader resumes both, and the report keeps guessing the role of
-their unbilled rows, which it counts as inferred. Format-9 readers refuse a format-10 root as another format.
+format-8 and format-9 row means the same at 10, so this reader resumes both and its claim writes 10; the report
+charges their rows, which name no payer, to one unattributed bucket. Format-9 readers refuse a format-10 root as
+another format.
 Format 9 records a ``rollouts.solver_generation`` row: a slot's finished generation that its decision model did not
 score, which a resumed slot grades without generating again. Format-8 readers cannot decode that row, and would report
 the root corrupt; at 9 they refuse it as another format, untouched. Every format-8 row means the same at 9, so this
-reader also resumes a format-8 root (``READABLE``), and its claim writes 9.
+reader also resumes a format-8 root (``READABLE``).
 Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
 terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
 round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
