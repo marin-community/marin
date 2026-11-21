@@ -746,7 +746,7 @@ def test_a_clean_revision_that_changes_placement_is_accepted_on_its_own_evidence
     final = reviewed(first.with_(submission=harder, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
     assert final.submission == harder and decision.restore is None and final.accepted_with is BandOutcome.TOO_HARD
-    assert "A clean revision is placed on its own evidence" in decision.reasons
+    assert "Clean revision placed on its own evidence" in decision.reasons
 
 
 def test_a_faulted_revision_restores_the_fallback_by_digest_with_its_band(workpiece: Workpiece) -> None:

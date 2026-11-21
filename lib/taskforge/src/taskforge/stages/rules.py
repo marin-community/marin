@@ -107,9 +107,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     notes = exhausted_notes(result)
     if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
         why = (
-            "A clean revision is placed on its own evidence"
-            if workpiece.fallback
-            else "Shared modification budget exhausted"
+            "Clean revision placed on its own evidence" if workpiece.fallback else "Shared modification budget exhausted"
         )
         return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes))
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"

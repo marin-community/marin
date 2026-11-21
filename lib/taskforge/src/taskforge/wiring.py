@@ -326,10 +326,7 @@ def build_config(
     )
     slots, beat = policy.setting("solver.concurrency", int), policy.setting("solver.heartbeat_interval", float)
     if slots < 1 or not 0 < beat < math.inf or budget.max_missing_trials < 0:
-        raise ValueError(
-            f"solver.concurrency {slots} must be positive, solver.heartbeat_interval {beat} finite and positive, and "
-            f"budget.max_missing_trials {budget.max_missing_trials} nonnegative"
-        )
+        raise ValueError("solver.concurrency, solver.heartbeat_interval or budget.max_missing_trials is out of range")
     band = BandRules(
         policy.setting("band.low", float),
         policy.setting("band.high", float),

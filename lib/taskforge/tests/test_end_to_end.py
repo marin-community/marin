@@ -30,7 +30,7 @@ from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInfer
 from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
@@ -88,9 +88,10 @@ from taskforge.model.review import (
     Incomplete,
     Modify,
     Retry,
+    TrialResult,
 )
 from taskforge.model.stage import Exit, Stage
-from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
@@ -2104,6 +2105,28 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     decisions = (Accept(BandOutcome.IN_BAND), Modify(("harder",), BandOutcome.TOO_EASY), Incomplete(("held",)))
     snapshot = json.loads(WORKPIECE.dump_json(Workpiece("w", proposal, decisions=decisions)))
     assert "fallback" not in snapshot and not {"restore", "fallback"} & {key for d in snapshot["decisions"] for key in d}
+
+
+# Review 2026-11-21 (follow-up 1): an empty restore and None serialised alike, so an invalid direct restore became an
+# ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
+def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
+    stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY)
+    values: dict[str, list[object]] = {
+        "detail": [TrialResult(0, None, Cause.HELD, detail) for detail in ("", "refused", " ")],
+        "restore": [Accept(BandOutcome.IN_BAND, (), restore) for restore in (None, "a" * 64, "b" * 64)],
+        "fallback": [Modify(("x",), None, fallback) for fallback in (None, "a" * 64, "b" * 64)],
+        "workpiece": [Workpiece("w", proposal, fallback=fallback) for fallback in (None, stored)],
+    }
+    for field, items in values.items():
+        adapter = TypeAdapter(type(items[0]))
+        encoded = [adapter.dump_json(item) for item in items]
+        assert [adapter.validate_json(data) for data in encoded] == items, field
+        assert len(set(encoded)) == len(items), field
+    for empty in (partial(Accept, BandOutcome.IN_BAND, (), ""), partial(Modify, ("x",), None, "")):
+        with pytest.raises(ValueError, match="An empty string is never a digest"):
+            empty()
+    with pytest.raises(ValidationError, match="An empty string is never a digest"):
+        TypeAdapter(Accept).validate_json(b'{"band": "in_band", "restore": ""}')
 
 
 # Review 2026-11-21: a refused foreign restore digest published a bug-class hold whose snapshot had neither the

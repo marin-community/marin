@@ -15,10 +15,16 @@ from taskcompendium.grading_result import GradeResult
 
 from taskforge.model.controls import Candidate
 
-OMIT_DEFAULT = Field(exclude_if=lambda value: value is None or value == "")
-"""Persistence rule: a new optional persisted field is omitted from the serialised form when it holds its default, so
-adding it changes no existing bytes (the author hydrates earlier evidence into the sandbox and replays it by position).
-Mark every such field ``Annotated[T, OMIT_DEFAULT]``; a change of meaning instead bumps the journal format."""
+OMIT_NONE, OMIT_EMPTY = Field(exclude_if=lambda value: value is None), Field(exclude_if=lambda value: value == "")
+"""Persistence rule: a new optional persisted field is omitted from its serialised form when it holds its ONE declared
+default (``None`` or ``""``, marked ``Annotated[T, OMIT_NONE]`` or ``OMIT_EMPTY``), so adding it changes no existing
+serialised bytes, and no other valid value encodes like it. Canonical content digests still visit every field; a
+change of meaning bumps the journal format."""
+
+
+def nonempty(digest: str | None) -> None:
+    if digest == "":
+        raise ValueError("An empty string is never a digest")
 
 
 class Cause(StrEnum):
@@ -60,8 +66,11 @@ class Accept:
 
     band: BandOutcome
     reasons: tuple[str, ...] = ()
-    restore: Annotated[str | None, OMIT_DEFAULT] = None
+    restore: Annotated[str | None, OMIT_NONE] = None
     kind: Literal["accept"] = "accept"
+
+    def __post_init__(self) -> None:
+        nonempty(self.restore)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +86,11 @@ class Modify:
 
     findings: tuple[str, ...]
     placement: BandOutcome | None = None
-    fallback: Annotated[str | None, OMIT_DEFAULT] = None
+    fallback: Annotated[str | None, OMIT_NONE] = None
     kind: Literal["modify"] = "modify"
+
+    def __post_init__(self) -> None:
+        nonempty(self.fallback)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +145,7 @@ class TrialResult:
     trial: int
     grade: GradeResult | None
     cause: Cause | None = None
-    detail: Annotated[str, OMIT_DEFAULT] = ""
+    detail: Annotated[str, OMIT_EMPTY] = ""
 
 
 @dataclass(frozen=True, slots=True)

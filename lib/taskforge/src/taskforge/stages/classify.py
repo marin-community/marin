@@ -96,19 +96,15 @@ async def grader_infra_unavailable(event: Resolved[object]) -> None:
         raise Hold(grade.error or "Grader infrastructure unavailable")
 
 
-def held(event: Resolved[object]) -> bool:
-    return isinstance(event.value, GradedRollout) and refused(event.value)
-
-
 def replayable_grade(event: Resolved[object]) -> bool:
     """Resume successful evidence and slot holds, but reevaluate unavailable infrastructure."""
     value = event.value
     grade = value.grade if isinstance(value, GradedRollout) else value
     unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
-    return held(event) or not unavailable
+    return refused(event.value) or not unavailable
 
 
 def replay_rule(previous: Sequence[Record], resume: bool) -> Callable[[Resolved[object]], bool]:
     """``replayable_grade``, except that an explicit resume runs the slot holds an earlier launch recorded again."""
     stale = {id(record.event) for record in previous if resume and isinstance(record.event, Resolved)}
-    return lambda event: replayable_grade(event) and not (id(event) in stale and held(event))
+    return lambda event: replayable_grade(event) and not (id(event) in stale and refused(event.value))

@@ -47,10 +47,10 @@ the one place to add a typed model-outage hold. Every other hold (``Unreproducib
 unknown) holds the workpiece."""
 
 
-def refused(result: GradedRollout) -> bool:
+def refused(value: object) -> bool:
     """A recorded slot-local hold: the engine sets ``failure`` only on an interrupted attempt, which a returned
     result never is, so no model output can produce it."""
-    return result.rollout.failure is not None
+    return isinstance(value, GradedRollout) and value.rollout.failure is not None
 
 
 class Engine(Protocol):
