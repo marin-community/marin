@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
@@ -41,6 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
+from skyrlrecipe.model_staging import model_metadata_subpath, tokenizer_metadata_subpath
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
@@ -422,6 +423,42 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
+def _matches_staged_metadata(value: object, subpath: PurePosixPath | None) -> bool:
+    if subpath is None or not isinstance(value, str):
+        return False
+    path = PurePosixPath(value)
+    return path.is_absolute() and path.parts[-len(subpath.parts) :] == subpath.parts
+
+
+def _normalize_staged_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
+    policy = "skyrl.trainer.policy.model"
+    model_metadata = None
+    if (
+        get_path(config, f"{policy}.source_uri") == recorded.model_uri
+        and get_path(config, f"{policy}.source_identity") == recorded.model_identity
+    ):
+        model_metadata = model_metadata_subpath(recorded.model_uri, recorded.model_identity)
+    model_input = config["inputs"]["model"]
+    tokenizer_uri = model_input.get("tokenizer_uri")
+    tokenizer_metadata = (
+        tokenizer_metadata_subpath(tokenizer_uri, model_input.get("tokenizer_revision"))
+        if tokenizer_uri
+        else model_metadata
+    )
+    for role in ("policy", "ref"):
+        base = f"skyrl.trainer.{role}.model"
+        path = f"{base}.path"
+        if _matches_staged_metadata(get_path(config, path), model_metadata):
+            set_path(config, path, recorded.model_local_path)
+        path = f"{base}.tokenizer_path"
+        if _matches_staged_metadata(get_path(config, path), tokenizer_metadata):
+            revision = f"{base}.tokenizer_revision"
+            if get_path(config, revision) is not None:
+                raise InvalidComparison(f"native staged tokenizer has a local revision: {revision}")
+            set_path(config, path, recorded.model_local_path)
+            set_path(config, revision, recorded.model_identity)
+
+
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
     """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
@@ -483,6 +520,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                     )
                 )
 
+    _normalize_staged_model_bindings(config, recorded)
     aliases = [recorded.model_uri, recorded.model_local_path]
     config["inputs"]["model"]["local_path"] = "<model-staging>"
     for path in (
@@ -839,8 +877,14 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
     return pin
 
 
+def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) -> str:
+    name = control_name(pin.preset, pin.commit, index, table=table)
+    retry = pin.retries[index] if pin.retries else 0
+    return f"{name}-retry{retry}" if retry else name
+
+
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
+    return recipe.run_path(preset, _pinned_control_name(pin, index, table=table), pin.revision)
 
 
 def _gate_artifact(
@@ -856,11 +900,13 @@ def _gate_artifact(
 ) -> ArtifactStep[GateReport]:
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
     name += "-defaults-" + fingerprint_hash(
-        canonical_json((defaults.fingerprint(), defaults.runtime_args, Provenance.capture(recipe.REPO_ROOT).tree_hash))
+        canonical_json(
+            (defaults.fingerprint(), defaults.runtime_args, pin, Provenance.capture(recipe.REPO_ROOT).tree_hash)
+        )
     )
     controls = tuple(
         (
-            f"{control_name(pin.preset, pin.commit, index, table=table)}@{pin.revision}",
+            f"{_pinned_control_name(pin, index, table=table)}@{pin.revision}",
             control_path(preset, pin, index, table=table),
         )
         for index in range(pin.replicates)
@@ -973,7 +1019,7 @@ def command(table: ModelPresets) -> click.Command:
             if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
                 raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
-            candidate_name = control_name(pin.preset, pin.commit, index, table=table)
+            candidate_name = _pinned_control_name(pin, index, table=table)
         name, separator, version = candidate_name.partition("@")
         source = recipe.run_path(preset, name, version if separator else preset.revision)
         namespace = user_owned_name(

@@ -268,7 +268,7 @@ def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
 
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(command, "configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path))
+    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path / recipe.SELECTION_PREFIX))
     monkeypatch.setattr(recipe, "artifact_prefix", lambda cluster: str(tmp_path))
     training = {preset.tasks for preset in snowball_model.SNOWBALL.by_name.values()}
     task_sets = {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}

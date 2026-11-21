@@ -55,12 +55,15 @@ Check cold-loaded run and attempt hash links, refresh after repeat publication,
 and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 
-The `Marin - Release RL Progress` workflow runs manually from main, with inspection as its default. The `rl-progress` CI job runs the packaged API and `marina journey rl_progress` browser owner.
+The `Marin - Release RL Progress` workflow checks the recorded release when this app's directory
+changes on `main`. It publishes a changed package against the current base version. Manual dispatch
+defaults to inspection. A release without Git provenance requires manual dispatch with
+`bootstrap_unrecorded` enabled. The `rl-progress` CI job runs the packaged API and
+`marina journey rl_progress` browser check.
 
 Deploy a Marina runtime containing `finestore.rl.rl_progress` before releasing the app package.
 
-For production, follow [Marina's release procedure](../../README.md). Inspect the
-current private revision, then release with its exact `--base-version`. Merging
-source does not publish it. Verify the deployed assets, selected revision and all
-stored records after release. Do not change access mode or rewrite historical
-results as part of a frontend update.
+For production, follow [Marina's release procedure](../../README.md). Review the
+current private revision and supply its exact `--base-version` for a CLI release.
+Verify the deployed assets, selected revision and stored records after release.
+Keep the existing access mode and historical results when updating the frontend.

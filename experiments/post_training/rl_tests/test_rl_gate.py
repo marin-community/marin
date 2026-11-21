@@ -90,10 +90,23 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
-    controls(recorded_runs, "speed-medium")
+def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypatch):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-medium"]
+    pin = gate.control_pin(preset, table=table)
+    for index in range(pin.replicates):
+        name = gate.control_name(pin.preset, pin.commit, index, table=table)
+        if index != 1:
+            recorded_runs(preset.name, name, speed=100 + index)
+        if index < 2:
+            recorded_runs(preset.name, name + "-retry1", speed=100 + index, attempt_id=f"replacement-{index}")
+    updated = replace(pin, retries=(1, 1) + (0,) * (pin.replicates - 2))
+    monkeypatch.setattr(
+        snowball_model, "SNOWBALL", replace(table, control_pins={**table.control_pins, pin.preset: updated})
+    )
     report = compare("speed-medium", "--leave-out", "r0")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
+    assert report["run"]["attempt_ids"] == ["replacement-0"]
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}

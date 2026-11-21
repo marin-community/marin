@@ -268,14 +268,37 @@ _LEARNING_MEDIUM = _snowball(
 )
 
 
+# KV all-gather supports packed sliding windows with Grug's five KV heads.
+_TRAIN_LONG_MEGATRON_KWARGS = {"cp_comm_type": "all_gather"}
+
 _TRAIN_LONG = _snowball(
-    revision="2026.11.20.4",
+    revision="2026.11.21.2",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
     export="best",
     name="train-long",
-    recipe=_ASYNC_P40,
+    recipe=replace(
+        _ASYNC_P40,
+        layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
+        config=_ASYNC_P40.config.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    use_sample_packing=True,
+                    policy=sections.Policy(
+                        megatron_config=sections.PolicyMegatronConfig(
+                            transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
+                        ),
+                    ),
+                    ref=sections.Ref(
+                        megatron_config=sections.RefMegatronConfig(
+                            transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
     owned_keys=_OWNED_KEYS,
     updates=100,
     measured=range(1, 101),
@@ -333,7 +356,7 @@ _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
         revision="2026.11.20.5",
-        recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
+        recipe=replace(_ASYNC_P40, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
@@ -445,6 +468,7 @@ _PRESETS = (
         _TRAIN_LONG,
         name="train-long-harbor",
         revision="2026.11.20.7",
+        recipe=_ASYNC_P40,
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),
@@ -467,13 +491,13 @@ SNOWBALL = ModelPresets(
     presets=_PRESETS,
     namespace="snowball-rl",
     control_pins={
-        name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)
-        for name, count in (
-            ("speed-short", 5),
-            ("data-short", 4),
-            ("speed-medium", 4),
-            ("learning-medium", 4),
-            ("speed-long", 4),
+        name: ControlPin(name, commit, revision, count)
+        for name, commit, revision, count in (
+            ("speed-short", "4a4e8f0a81", "2026.11.20.3", 5),
+            ("data-short", "4a4e8f0a81", "2026.11.20.3", 4),
+            ("speed-medium", "648b5687f0", "2026.11.06.1", 4),
+            ("learning-medium", "648b5687f0", "2026.11.06.1", 4),
+            ("speed-long", "648b5687f0", "2026.11.06.1", 4),
         )
     },
 )
