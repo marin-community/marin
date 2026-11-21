@@ -43,6 +43,10 @@ def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
     return reason
 
 
+LOCAL_ACTOR_SOURCES: frozenset[str] = frozenset({"OpenResearcher:OpenResearcher-Dataset"})
+"""Sources whose actor image exceeds the Daytona snapshot limit and rerun on the maintained LOCAL backend."""
+
+
 def restore_source_locks(tasks: Sequence[TaskSpec]) -> None:
     locks = {
         environment.packages_lock
@@ -120,7 +124,9 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                 runtime_sha256=contract["runtime_sha256"],
                 path=str(directory) if reason is None else None,
                 workload="native" if native else "task_spec",
-                backend=source.backend,
+                # The frozen backend auto-chooses Daytona for static-safe sources; a source whose
+                # actor image exceeds the Daytona snapshot limit reruns on the LOCAL backend.
+                backend="local" if source.sample.source_id in LOCAL_ACTOR_SOURCES else source.backend,
                 reason=reason,
                 judge_model=None if judge is None else judge.model,
             )
