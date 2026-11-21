@@ -29,7 +29,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved, event_digest
-from taskforge.effects.issues import Hold, Restart, Unreproducible
+from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Unreproducible
 from taskforge.effects.log import EventLog, Record
 from taskforge.llm.client import ModelRequestRejected
 from taskforge.model.review import Cause, TrialResult
@@ -301,6 +301,36 @@ async def test_a_generation_limit_is_a_failed_slot_and_an_outage_restarts_after_
     await resumed.drain()
     assert again.executed == ["arithmetic:1:0"]  # the outage recorded no slot, so only it executes
     assert results[2].cause is Cause.GENERATION_LIMIT and results[2].grade is not None  # a failed, graded trial
+
+
+def waits() -> RolloutInterrupted:
+    """What the engine raises when a slot's grade gets no decision-model read within the wait."""
+    error = RolloutInterrupted(Rollout("waits", (), "interrupted"), RolloutOperation.GRADE)
+    error.__cause__ = DecisionModelUnavailable("clef@fixture-1 answered no read for 900s")
+    return error
+
+
+# Review 2026-11-21 (n10 finding 2): a refusal beside a slot waiting for the decision model was dropped, the child
+# deferred, and the next launch bought the refused slot again. Holds beyond the allowance outrank the outage; within it
+# the outage defers alone and the recorded refusal replays.
+@pytest.mark.parametrize("allowance", [0, 1])
+async def test_a_refusal_beside_a_decision_model_outage_is_settled_before_the_batch_waits(allowance: int) -> None:
+    ctx, log = context(Slots(failures={1: rejected(), 2: waits()}))
+    with pytest.raises(BaseException) as raised:
+        await solver_batch(
+            ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=allowance
+        )
+    await ctx.drain()
+    if allowance == 0:
+        assert type(raised.value) is Hold and str(raised.value) == f"solver trial 1: {REFUSED}"
+        return
+    assert isinstance(raised.value, BaseExceptionGroup)
+    assert [type(error) for error in raised.value.exceptions] == [DecisionModelUnavailable]
+    again = Slots(failures={0: AssertionError("slot 0 ran again"), 1: AssertionError("slot 1 ran again")})
+    resumed, _ = context(again, log.records)  # an ordinary launch, never --resume-held
+    results = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
+    await resumed.drain()
+    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
 
 
 # Review 2026-11-21: zero concurrency stalled a pending slot forever and a zero heartbeat wrote 1,088 notes in 25 ms.

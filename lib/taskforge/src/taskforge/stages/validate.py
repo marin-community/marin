@@ -94,6 +94,7 @@ async def solver_batch(
     concurrency: int,
     heartbeat: float,
     max_missing: int = 0,
+    stopped: Callable[[], bool] = lambda: False,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[TrialResult, ...]:
@@ -104,16 +105,17 @@ async def solver_batch(
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
     enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
     re-executes only it; more than ``max_missing`` held slots hold the batch instead. A decision-model outage defers
-    the batch the same way, and a slot not yet started then never starts, so no rollout is bought to wait.
+    the batch the same way. Once a slot waits for the decision model or ``stopped()`` says a validation sibling holds,
+    no further slot starts, so no rollout is bought to wait; the batch then returns short only beside that sibling.
     """
     first = max(occupied, default=-1) + 1
     gate, running = asyncio.Semaphore(concurrency), dict[int, float]()
     outages: list[DecisionModelUnavailable] = []
 
-    async def slot(trial: int) -> TrialResult | Restart | DecisionModelUnavailable:
+    async def slot(trial: int) -> TrialResult | Restart | DecisionModelUnavailable | None:
         async with gate:
-            if outages:
-                return outages[0]
+            if outages or stopped():
+                return None
             running[trial] = clock()
             try:
                 return await solver_result(ctx, spec, trial, attempt)
@@ -140,30 +142,29 @@ async def solver_batch(
         ticker.cancel()
         await asyncio.gather(ticker, return_exceptions=True)
     results = [slot.result() for slot in slots]
-    if outages:
-        raise BaseExceptionGroup(f"Solver {phase} slots wait for the decision model", outages)
     holds = [
         f"solver trial {r.trial}: {r.detail}" for r in results if isinstance(r, TrialResult) and r.cause is Cause.HELD
     ]
-    if restarts := [result for result in results if isinstance(result, Restart)]:
-        if len(holds) > max_missing:
-            raise Hold("; ".join(holds))  # what review would decide, before the restart re-buys anything
-        raise BaseExceptionGroup(f"Solver {phase} slots restart", restarts)
+    unfinished = [result for result in results if isinstance(result, Restart | DecisionModelUnavailable)]
+    if (unfinished or stopped()) and len(holds) > max_missing:
+        raise Hold("; ".join(holds))  # what review would decide, before anything unfinished is bought again
+    if unfinished:
+        raise BaseExceptionGroup(f"Solver {phase} slots did not finish", unfinished)
     return tuple(result for result in results if isinstance(result, TrialResult))
 
 
-async def settled[T](work: Awaitable[T], outages: list[BaseException]) -> T | None:
-    """``work``'s result, or None with its decision-model outage kept, so that the outage cancels no sibling."""
+async def settled[T](work: Awaitable[T], holds: list[BaseException]) -> T | None:
+    """``work``'s result, or None with its hold kept, so that no hold cancels a sibling's evidence."""
     try:
         return await work
-    except* DecisionModelUnavailable as outage:
-        outages.append(outage)
+    except* Hold as held:
+        holds.append(held)
     return None
 
 
 def kept[T](task: asyncio.Task[T | None]) -> T:
     result = task.result()
-    assert result is not None, "only an outage leaves no result, and an outage raised"
+    assert result is not None, "only a hold leaves no result, and a hold raised"
     return result
 
 
@@ -422,10 +423,10 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
     async with ctx.scope("validate"):
         ctx.observe(Resolved, grader_infra_unavailable)
         roster = config.policy.setting("adversary.roster", tuple)
-        outages: list[BaseException] = []  # each sibling settles before an outage defers the workpiece
+        holds: list[BaseException] = []  # every sibling settles before a hold or an outage stops the workpiece
         async with asyncio.TaskGroup() as group:
             controls = [
-                group.create_task(settled(control_result(ctx, spec, index, control), outages))
+                group.create_task(settled(control_result(ctx, spec, index, control), holds))
                 for index, control in enumerate(submission.controls)
             ]
             solver = group.create_task(
@@ -441,20 +442,21 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                         concurrency=config.policy.setting("solver.concurrency", int),
                         heartbeat=config.policy.setting("solver.heartbeat_interval", float),
                         max_missing=config.budget.max_missing_trials,
+                        stopped=lambda: bool(holds),
                     ),
-                    outages,
+                    holds,
                 )
             )
             adversary = [
                 group.create_task(
                     settled(
                         adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name)),
-                        outages,
+                        holds,
                     )
                 )
                 for i, name in enumerate(roster)
             ]
-        if outages:
-            raise BaseExceptionGroup("Validation waits for the decision model", outages)
+        if holds:
+            raise BaseExceptionGroup("Validation holds", holds)
         controls_done, adversaries_done = tuple(map(kept, controls)), tuple(map(kept, adversary))
         return Validated(ValidationResult(submission.digest, kept(solver), controls_done, adversaries_done))

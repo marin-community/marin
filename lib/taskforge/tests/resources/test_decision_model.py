@@ -89,9 +89,13 @@ class FakeReader(DecisionModelReader):
         raise AssertionError("grading never reads health")
 
 
+BACKOFF_STEPS = 10
+
+
 @dataclass
 class VirtualTime:
-    """A clock that only a backoff advances; ``recovered`` runs at the first backoff, as an outage ends."""
+    """A clock that only a backoff advances; ``recovered`` runs at the first backoff, as an outage ends. Each backoff
+    lets other tasks run a few steps, as a real wait would."""
 
     now: float = 0.0
     slept: list[float] = field(default_factory=list)
@@ -103,6 +107,8 @@ class VirtualTime:
     async def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
         self.now += seconds
+        for _ in range(BACKOFF_STEPS):
+            await asyncio.sleep(0)
         if self.recovered is not None:
             self.recovered.clear()
 
@@ -293,10 +299,10 @@ async def late_twelve(_progress: Progress) -> Segment:
 
 
 async def validated(
-    proposal: TaskProposal, reader: FakeReader, history: Sequence[Record] = ()
+    proposal: TaskProposal, reader: FakeReader, history: Sequence[Record] = (), concurrency: int = 3
 ) -> tuple[Validated | BaseExceptionGroup, int, Sequence[Record]]:
     """Validate a decision-model task: three solver trials answering 12, and the controls 12 and 13."""
-    policy = overlaid().overlaid({"decision_model.unavailable_wait": 10.0})
+    policy = overlaid().overlaid({"decision_model.unavailable_wait": 10.0, "solver.concurrency": concurrency})
     solver = ScriptedProvider((late_twelve,) * 3)
     log = EventLog(replay_from=history)
     ctx = Context(log=log)
@@ -328,6 +334,20 @@ async def test_an_outage_mid_wave_keeps_finished_siblings_and_resumes_paying_onl
     assert (solved, healthy.reads) == (0, [request("13")])
     assert resumed == clean and all(control.met for control in resumed.result.controls)
     assert [trial.grade.reward for trial in resumed.result.solver if trial.grade] == [1.0] * 3
+
+
+# Review 2026-11-21 (n10 finding 2): with one solver slot at a time and the negative control already waiting for the
+# decision model, every solver slot still started. One admission stop serves the batch and its validation siblings:
+# the running slot finishes and keeps its row, and no other slot is bought to wait beside the outage.
+async def test_a_control_outage_admits_no_further_solver_slot_and_resumes_only_what_never_ran(
+    proposal: TaskProposal,
+) -> None:
+    clean, _, _ = await validated(proposal, FakeReader())
+    held, solved, history = await validated(proposal, FakeReader(down={"13"}), concurrency=1)
+    assert isinstance(held, BaseExceptionGroup) and held.split(DecisionModelUnavailable)[1] is None
+    assert solved == 1
+    resumed, solved, _ = await validated(proposal, FakeReader(), history, concurrency=1)
+    assert (resumed, solved) == (clean, 2)
 
 
 async def test_an_outage_in_a_solver_slot_starts_no_waiting_slot_and_resumes_only_unfinished_slots(
