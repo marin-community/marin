@@ -24,6 +24,7 @@ _COMPILE_FINGERPRINT_TIMEOUT_MS = 30 * 60_000
 _COMPILE_FINGERPRINT_PREFIX = "iris/compile-fingerprint/v1"
 _EXECUTABLE_TEXT_PREFIX = "iris/compile-executable-hash/v1"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir="
+# Warn once per process even if JAX installs a new guard after distributed reset.
 _unsupported_text_warning_lock = threading.Lock()
 _unsupported_text_warned = False
 
@@ -78,7 +79,7 @@ def _observed_fingerprints(client: _Coordinator, prefix: str) -> dict[int, str]:
 class _ExecutableRecord:
     text_sha256: str | None
     autotune_dir: str
-    autotune_file_count: int
+    autotune_file_count: int | None
 
 
 def check_distributed_executable_text(
@@ -89,7 +90,7 @@ def check_distributed_executable_text(
     cache_key: str,
     executable_text: str | None,
     autotune_dir: str,
-    autotune_file_count: int,
+    autotune_file_count: int | None,
     timeout_ms: int = _COMPILE_FINGERPRINT_TIMEOUT_MS,
 ) -> None:
     """Fail before execution if participating ranks compiled different optimized HLO."""
@@ -124,10 +125,13 @@ def check_distributed_executable_text(
         _warn_unsupported_text()
     elif len(hashes) > 1:
         groups = ", ".join(f"{digest}: {ranks}" for digest, ranks in sorted(hashes.items()))
-        metadata = ", ".join(
-            f"{rank}: {peer_record.autotune_dir!r} file_count={peer_record.autotune_file_count}"
-            for rank, peer_record in sorted(observed.items())
-        )
+        metadata_parts = []
+        for rank, peer_record in sorted(observed.items()):
+            file_count = (
+                "unavailable" if peer_record.autotune_file_count is None else str(peer_record.autotune_file_count)
+            )
+            metadata_parts.append(f"{rank}: {peer_record.autotune_dir!r} file_count={file_count}")
+        metadata = ", ".join(metadata_parts)
         raise RuntimeError(
             f"GPU executable text mismatch on process {process_id}; cache key {cache_key}; "
             f"{len(hashes)} distinct executable_text_sha256 values: {groups}; autotune inputs: {metadata}"
@@ -173,7 +177,7 @@ def _optimized_hlo_text(loaded: object, runtime_error_type: type[Exception]) -> 
     return None
 
 
-def _autotune_cache_metadata() -> tuple[str, int]:
+def _autotune_cache_metadata() -> tuple[str, int | None]:
     flags = os.environ.get("XLA_FLAGS", "").split()
     autotune_dir = next(
         (
@@ -188,8 +192,10 @@ def _autotune_cache_metadata() -> tuple[str, int]:
     try:
         with os.scandir(autotune_dir) as entries:
             return autotune_dir, sum(entry.is_file() for entry in entries)
-    except OSError:
+    except FileNotFoundError:
         return autotune_dir, 0
+    except OSError:
+        return autotune_dir, None
 
 
 @dataclass

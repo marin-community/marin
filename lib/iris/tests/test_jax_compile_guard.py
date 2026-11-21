@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -154,7 +155,12 @@ def test_distributed_executable_unsupported_text_continues_on_all_ranks(caplog: 
         list(executor.map(check, (0, 1)))
 
     assert service.values == {}
-    assert "unavailable" in caplog.text
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "iris.jax.compile_guard" and record.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1
 
 
 def test_distributed_executable_missing_peer_reports_observed_rank() -> None:
@@ -206,3 +212,13 @@ def test_autotune_cache_metadata_counts_files_in_active_directory(
     monkeypatch.setenv("XLA_FLAGS", f"--xla_gpu_autotune_level=0 --xla_gpu_per_fusion_autotune_cache_dir={tmp_path}")
 
     assert _autotune_cache_metadata() == (str(tmp_path), 2)
+
+
+def test_autotune_cache_metadata_non_directory_path_has_unknown_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    not_a_directory = tmp_path / "file.textproto"
+    not_a_directory.write_text("file")
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_gpu_per_fusion_autotune_cache_dir={not_a_directory}")
+
+    assert _autotune_cache_metadata() == (str(not_a_directory), None)
