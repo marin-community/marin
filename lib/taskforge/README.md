@@ -367,7 +367,10 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   valid scores and generation limits are placed: a generation limit is an unsolved trial, and any other
   slot without a score is named (`confirmation_trials`) and excluded. The final review
   (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
-  checks and replay identity, is shown every earlier report with what became of each finding (the
+  checks and replay identity (the confirmation builds one index for its final review and its shipped-note check; its
+  sources are a read-only mapping and its version is computed once, so a `solve_review(report=...)` factory that
+  serializes the index converts `dict(evidence.sources)`, a `dict[str, Source]`, with the fields it needs:
+  `dataclasses.asdict` and a pydantic dump of `Evidence` refuse the read-only mapping), is shown every earlier report with what became of each finding (the
   author's response recorded against the review that gave it: revised, declined with its reason, stopped,
   a note, or not acted on; a revision a restore discarded says so), and sorts its new findings into `revise` and `note`. An account may blame a
   trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A
