@@ -25,6 +25,54 @@ owns reusable source importers and the corpus publisher.
 
 ## Pipeline overview
 
+### Numina answer disclosure classification
+
+Auto-informalization keeps only the frozen `no` decisions in
+`numina_answer_disclosure.json`. The allowlist uses source row keys containing the parquet position,
+UUID, and a hash of both statements. Changed or unclassified inputs are excluded. Shared compilation
+and evaluation-overlap filters still apply. The current selection has 5,169 train and 208 evaluation
+tasks. Curation reads the manifest without invoking Gemini; classifier tooling can be removed
+independently. The model decisions have not all been manually reviewed.
+
+`experiments.post_training.task_curation.datasets.lean.classify_answer_disclosure` labels whether a
+Lean statement supplies an answer requested by the original problem. It checks answer disclosure
+only; it does not check mathematical correctness. Inputs contain the original problem and the public
+Lean statement without its proof. Decisions include line references and a reason; uncertain decisions
+and processing failures remain separate.
+
+Prepare rows from the pinned parquet and Prime lists (`unported.json.gz`, `misformalized.json.gz`):
+
+```bash
+classifier=experiments.post_training.task_curation.datasets.lean.classify_answer_disclosure
+uv run python -m "$classifier" prepare /path/to/train-00000-of-00001.parquet \
+  --prime-lists /path/to/prime-lists --output /tmp/disclosure-sample.jsonl
+```
+
+The default sample has 250 rows balanced across question categories and discovery wording. Use
+`--limit 0` for all eligible rows. This sample is not a population frequency estimate.
+
+Estimate a classification run using current [Gemini prices](https://ai.google.dev/gemini-api/docs/pricing):
+
+```bash
+uv run python -m "$classifier" classify \
+  --input /tmp/disclosure-sample.jsonl --output /tmp/disclosure-results.jsonl \
+  --model MODEL_ID --input-rate INPUT_USD_PER_MILLION --output-rate OUTPUT_USD_PER_MILLION \
+  --budget 5
+```
+
+Set `GEMINI_API_KEY` and add `--execute` to make paid requests. The local budget reserves conservative
+token costs before each request and is not a provider billing cap. Output pricing must include thinking
+tokens. Keep the output ledger when resuming; completed rows are skipped. A timed-out request may
+have been billed. Requests are sequential and are not automatically retried.
+
+Review predictions independently before using them for curation. To compare with a review JSONL,
+fill `human_answer_disclosure` with `yes`, `no`, or `uncertain`, then run:
+
+```bash
+uv run python -m "$classifier" score \
+  --review /tmp/disclosure-human-review.jsonl --results /tmp/disclosure-results.jsonl
+```
+
 The driver runs each dataset's conversion graph, then binds the embedding graph
 to the completed source artifacts. QUICK converts without review; SAMPLE reviews
 a bounded panel; FULL expands accepted sources and verifies kept tasks.

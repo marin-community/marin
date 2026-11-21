@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.datasets.lean.proofs import (
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+NUMINA_REPO = "project-numina/NuminaMath-LEAN"
 NUMINA_REVISION = "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94"
 NUMINA_FILE = "data/train-00000-of-00001.parquet"
 PRIME_ENVS_REVISION = "15e4e9d2f7d52d8d725a2668e483cf51a067e5ba"
@@ -64,18 +65,26 @@ UNCOMPILABLE = frozenset(
         "02ebf693-3300-56be-bb03-c2698fed047b",
         "16364ea0-2c3d-5ee0-bcf7-2b063ce7e435",
         "1ea042ec-2381-52b6-97b3-f914aa475ece",
+        "2b28ce9a-4d3c-5141-9300-e54d7e22788c",
+        "405dfbfe-1767-5043-8569-67b186826a8e",
         "4a0c0c05-35fa-5b46-a458-f14802c28962",
         "5448eed8-0238-5c1a-9bcc-143755ae842b",
+        "57f8c4d2-3e4d-5c25-b030-0b3023e829a2",
         "6e6c4a43-2598-52a3-87ff-0dd122860c72",
         "7d3b55e0-7416-59e3-b94e-a23d67a519e6",
         "80cc5f79-626f-5bd4-95b6-2f8e468d49c5",
         "823823da-b876-5d55-bb7d-12f23e3b5105",
         "89528741-3b0b-5e53-b664-38ea45ae3e0c",
         "8f9719f2-54a2-5803-a6d4-e8d6cc090c11",
+        "92462247-be42-58e5-8e8b-f5f50bcd7f2d",
         "9cf2b5ae-0a00-57bb-a770-d6b927b1b8d6",
         "9d4bb29e-2eb1-51bd-9b6b-ea86ddea6abc",
+        "ba9acd92-a60a-5a0f-a09a-bff8a94388c5",
         "c2c91166-9b1c-52d6-b76a-07ad11f6ecb9",
+        "cf12b4f8-7268-5dba-9b3e-d826cd78405d",
+        "cf1a0a5a-4d5b-50bb-b242-f0fde5974f3c",
         "d020f221-f004-589a-989f-8de795c88d71",
+        "d4d12b5b-c2d2-57be-b7f9-4946d66e28cd",
         "dbece6f1-2292-525c-8294-2220eb303453",
     }
 )
@@ -120,6 +129,10 @@ def is_human_proof_row(row: dict[str, Any], _context: ConversionContext | None) 
     return row.get("author") == "human" and row.get("ground_truth_type") == "complete"
 
 
+def is_human_statement_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
+    return row.get("author") == "human"
+
+
 @cache
 def prime_list(path: StoragePath) -> frozenset[str]:
     with path.open("rb") as stream:
@@ -161,11 +174,26 @@ def row_contract(
 ) -> Contract | ImportRejection:
     """The frozen contract of one row, or why the row is left out; ``listed`` names the Prime Intellect list
     that holds a uuid, if any. ``require_passing_proof`` is off only while ``PROOFS_FILE`` is written."""
-    uuid, problem, statement, proof = (
-        data.get(key) for key in ("uuid", "problem", "formal_statement", "formal_ground_truth")
-    )
-    if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement, proof)):
+    proof = data.get("formal_ground_truth")
+    if not isinstance(proof, str) or not proof.strip():
         return source_defect("missing_input", "uuid, problem, formal_statement and formal_ground_truth are required")
+    contract = statement_row_contract(data, listed)
+    if isinstance(contract, ImportRejection):
+        return contract
+    if OLD_BIG_OPERATOR.search(without_comments(proof)):
+        return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
+    if UNUSABLE_PROOF.search(without_comments(proof)):
+        return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
+    if require_passing_proof and proof_key(data) not in PASSING_PROOFS:
+        return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
+    return contract
+
+
+def statement_row_contract(data: Mapping[str, Any], listed: Callable[[str], str | None]) -> Contract | ImportRejection:
+    """Freeze one human statement after applying shared toolchain and contamination filters."""
+    uuid, problem, statement = (data.get(key) for key in ("uuid", "problem", "formal_statement"))
+    if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement)):
+        return source_defect("missing_input", "uuid, problem and formal_statement are required")
     if data.get("source") in HELD_OUT_SOURCES:
         return unsupported("held_out_split", "The problem comes from a test split Marin evaluates on")
     if (name := listed(uuid)) is not None:
@@ -174,16 +202,11 @@ def row_contract(
         return source_defect("does_not_compile", "The statement does not compile with the grader's toolchain")
     if uuid in EVAL_OVERLAP:
         return unsupported("eval_overlap", "The row states a problem of the frozen Lean eval set")
-    if OLD_BIG_OPERATOR.search(without_comments(statement)) or OLD_BIG_OPERATOR.search(without_comments(proof)):
+    if OLD_BIG_OPERATOR.search(without_comments(statement)):
         return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
-    if UNUSABLE_PROOF.search(without_comments(proof)):
-        return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
     if UNUSABLE_STATEMENT.search(without_comments(statement)):
         return unsupported("unusable_statement", "The statement runs code, which the reference would run as root")
-    contract = numina_contract(statement)
-    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in PASSING_PROOFS:
-        return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
-    return contract
+    return numina_contract(statement)
 
 
 def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -230,7 +253,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name="lean-numina-human",
                 source=HfSource(
-                    "project-numina/NuminaMath-LEAN",
+                    NUMINA_REPO,
                     NUMINA_REVISION,
                     (NUMINA_FILE,),
                     SourceFormat.PARQUET,
