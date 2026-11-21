@@ -3,15 +3,27 @@ import asyncio
 """Trial-level tests for separate verifier environments."""
 
 import contextlib
+import hashlib
+import json
 import re
+import tarfile
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import pytest
-from taskcompendium.harbor.negative_control import NativeInstructionSetup, NegativeControlSource
-from taskcompendium.models import ExecutionRequirements
+from finestore.rl.curation import ContentEvidenceReference
+from pydantic import TypeAdapter
+from taskcompendium.harbor.negative_control import DeclaredSourceSetup, NativeInstructionSetup, NativeNoSetup, NegativeControlSource
+from taskcompendium.identity import task_spec_sha256
+from taskcompendium.models import (
+    AnswerType, ConversationInput, EnvironmentRequirements, ExecutionRequirements,
+    NoGrader, PlainText, ResourceGroups, Source, TaskSpec, TextMessage,
+)
+from taskcompendium.runtime.resources import inline_resource
+
+from experiments.post_training.task_curation.negative_controls import negative_control_from_archive
 
 from harbor.environments.base import ExecResult
 from harbor.host_capabilities import HostCapabilities
@@ -522,6 +534,89 @@ async def test_physical_nop_writer_preserves_native_public_setup_and_its_failure
         assert record["trial_result"]["verifier_result"] is None
     else:
         assert record["trial_result"]["verifier_result"]["rewards"] == {"reward": 0}
+
+
+@pytest.mark.parametrize("declared_setup", [False, True])
+async def test_native_no_setup_control_preserves_zero_setup_and_collects_physical_reward(tmp_path, monkeypatch, declared_setup):
+    task_dir = _single_step_task_with_separate_verifier(tmp_path)
+    configuration = (
+        "[agent]\ntimeout_sec=10\n[verifier]\ntimeout_sec=10\n"
+        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+    )
+    if declared_setup:
+        configuration += '[environment.setup]\ncommand="touch /workspace/answer"\ntimeout_sec=5\n'
+    (task_dir / "task.toml").write_text(configuration)
+    # This is an instruction example, not a declared setup command.
+    (task_dir / "instruction.md").write_text("Produce an answer. Example:\n```bash\ntouch /workspace/answer\n```\n")
+    (task_dir / "tests/test.sh").write_text("test -e /workspace/answer\n")
+    source_task = TaskSpec(
+        id="native-task",
+        source=Source(dataset="native-fixture", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content=(task_dir / "instruction.md").read_text()),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="Original native verifier"),
+        resources=ResourceGroups(verifier=tuple(
+            inline_resource(str(path.relative_to(task_dir)), path.read_bytes())
+            for path in sorted(task_dir.rglob("*")) if path.is_file()
+        )),
+        tags=("harbor",),
+    )
+    frozen_specification = source_task.model_dump(mode="json")
+    del frozen_specification["labels"]
+    source_task = TaskSpec.model_validate_json(json.dumps(frozen_specification))
+    checksum = Task(task_dir).checksum
+    source = NegativeControlSource(
+        task_id=source_task.id, source_task_sha256=task_spec_sha256(source_task),
+        source_task_checksum=checksum, task_sha256=task_spec_sha256(source_task),
+        runtime_sha256=None, task_checksum=checksum,
+        execution_requirements=ExecutionRequirements(cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=10, verifier_timeout_sec=10),
+        verifier_execution_requirements=None,
+    )
+    selected = TypeAdapter(NativeInstructionSetup | DeclaredSourceSetup | NativeNoSetup).validate_json(
+        json.dumps({"kind": "native_no_setup", "task_spec": frozen_specification})
+    )
+    root = tmp_path / "control"
+    answer = tmp_path / "answer"
+    environment = _stock_mock_env()
+
+    async def execute(command, **kwargs):
+        if "touch /workspace/answer" in command:
+            answer.touch()
+        if "/tests/test.sh" in command:
+            verifier = root / "trials/native-nop/verifier"
+            verifier.mkdir(parents=True, exist_ok=True)
+            (verifier / "reward.txt").write_text("1" if answer.exists() else "0")
+        return ExecResult(stdout="/", stderr="", return_code=0)
+
+    environment.exec.side_effect = execute
+    environment.exec_control.side_effect = execute
+    monkeypatch.setattr("harbor.trial.trial.EnvironmentFactory.create_environment_from_config", lambda **kwargs: environment)
+    config = TrialConfig(task=TrialTaskConfig(path=task_dir), trial_name="native-nop", trials_dir=root / "trials", agent=AgentConfig(name="nop"), environment=EnvironmentConfig(type="local"))
+    if declared_setup:
+        with pytest.raises(ValueError, match="original zero-setup source"):
+            await run_negative_control(config, source, root, selected, HostCapabilities())
+        assert not root.exists() and not answer.exists()
+        return
+    record = await run_negative_control(config, source, root, selected, HostCapabilities())
+    assert record["trial_result"]["verifier_result"]["rewards"] == {"reward": 0}
+    assert not answer.exists() and Task(task_dir).checksum == checksum
+    assert record["setup"]["setup_exit_code"] is None
+    assert record["setup"]["preparation_completed"]
+    assert record["setup_kind"] == "native_no_setup"
+    assert not (root / "original-public-setup.sh").exists()
+    archive = tmp_path / "control.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(root, arcname="control")
+    receipt = negative_control_from_archive(
+        ContentEvidenceReference(uri=str(archive), sha256=hashlib.sha256(archive.read_bytes()).hexdigest()),
+        "control/negative-control.json", source_task_sha256=source.source_task_sha256,
+        source_task_checksum=checksum, execution_requirements=source.execution_requirements,
+    )
+    assert receipt.public_preparation_completed and receipt.conclusive and not receipt.passed(None)
+    assert receipt.trial.native_grade.rewards == {"reward": 0}
+    assert json.loads((root / "native-no-setup-preparation.json").read_text())["declared_setup"] is None
 
 
 @pytest.mark.parametrize(

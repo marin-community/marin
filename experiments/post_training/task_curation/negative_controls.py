@@ -16,6 +16,7 @@ from taskcompendium.harbor.negative_control import (
     NegativeControlSetupKind,
     NegativeControlSource,
     declared_setup_preparation,
+    native_no_setup_preparation,
     negative_control_setup_kind,
     public_task_preparation,
 )
@@ -40,16 +41,19 @@ def preparation_filename(kind: NegativeControlSetupKind | None) -> str:
         return "task-spec-preparation.json"
     if kind is NegativeControlSetupKind.DECLARED_SETUP:
         return "declared-setup-preparation.json"
+    if kind is NegativeControlSetupKind.NATIVE_NO_SETUP:
+        return "native-no-setup-preparation.json"
     return "original-public-setup.sh"
 
 
-def _require_declared_setup(
+def _require_native_preparation(
     members: dict[str, bytes],
     root: PurePosixPath,
     control: dict,
     result: dict,
     setup: dict,
     execution_requirements: ExecutionRequirements,
+    kind: NegativeControlSetupKind,
 ) -> None:
     specification_bytes = members[str(root / "source-task-spec.json")]
     task = TaskSpec.model_validate_json(specification_bytes)
@@ -68,14 +72,17 @@ def _require_declared_setup(
         execution_requirements=execution_requirements,
         verifier_execution_requirements=result["config"]["task"].get("verifier_execution_requirements"),
     )
-    preparation = declared_setup_preparation(task, source, members[str(root / "consumed-task.toml")])
+    prepare = (
+        native_no_setup_preparation if kind is NegativeControlSetupKind.NATIVE_NO_SETUP else declared_setup_preparation
+    )
+    preparation = prepare(task, source, members[str(root / "consumed-task.toml")])
     preparation["task_spec_file_sha256"] = hashlib.sha256(specification_bytes).hexdigest()
     if (
-        json.loads(members[str(root / "declared-setup-preparation.json")]) != preparation
+        json.loads(members[str(root / preparation_filename(kind))]) != preparation
         or control["preparation"] != preparation
         or setup["setup_exit_code"] is not None
     ):
-        raise ValueError("Negative control changed the source-declared native setup")
+        raise ValueError("Negative control changed the source-bound native preparation")
     if setup["preparation_completed"] and (
         setup["event"] != "agent_start"
         or control["hook_calls"] != 1
@@ -181,14 +188,15 @@ def negative_control_from_archive(
     setup_kind = NegativeControlSetupKind(control["setup_kind"]) if control.get("setup_kind") is not None else None
     converted = setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION
     declared = setup_kind is NegativeControlSetupKind.DECLARED_SETUP
-    automatic_preparation = converted or declared
+    no_setup = setup_kind is NegativeControlSetupKind.NATIVE_NO_SETUP
+    automatic_preparation = converted or declared or no_setup
     descriptor_member = str(root / preparation_filename(setup_kind))
     verdict_member = str(trial_root / "verifier/verdict.json")
     rewards = {str(trial_root / "verifier" / name) for name in ("reward.json", "reward.txt")}
     preparation_names = (
         {str(root / "source-task-spec.json"), str(trial_root / "network-policy.json")} if converted else set()
     )
-    if declared:
+    if declared or no_setup:
         preparation_names = {str(root / "source-task-spec.json"), str(root / "consumed-task.toml")}
     members = verified_archive_members(
         archive,
@@ -231,13 +239,14 @@ def negative_control_from_archive(
     )
     if setup_kind is not None and setup["setup_kind"] != setup_kind.value:
         raise ValueError("Negative-control preparation kind differs from its actual setup receipt")
-    if declared:
+    if declared or no_setup:
+        assert setup_kind is not None
         if (
             control["source_task_sha256"] != source_task_sha256
             or control["source_task_checksum"] != source_task_checksum
         ):
             raise ValueError("Declared negative control belongs to another original source")
-        _require_declared_setup(members, root, control, result, setup, execution_requirements)
+        _require_native_preparation(members, root, control, result, setup, execution_requirements, setup_kind)
     if not automatic_preparation and control.get("preparation") is not None:
         raise ValueError("Native negative controls cannot claim TaskSpec preparation")
 

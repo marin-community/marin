@@ -1109,6 +1109,7 @@ class OracleNegativeControlReceipt(BaseModel):
         automatic_preparation = self.setup_kind in (
             NegativeControlSetupKind.TASK_SPEC_PREPARATION,
             NegativeControlSetupKind.DECLARED_SETUP,
+            NegativeControlSetupKind.NATIVE_NO_SETUP,
         )
         if automatic_preparation != (self.preparation_artifact is not None):
             raise ValueError("Automatic negative-control setup requires its physical preparation manifest")
@@ -1223,7 +1224,7 @@ class OracleNegativeControlReceipt(BaseModel):
     @property
     def public_preparation_completed(self) -> bool:
         """Match the original public setup independently of final result collection."""
-        if self.setup_kind is NegativeControlSetupKind.DECLARED_SETUP:
+        if self.setup_kind in (NegativeControlSetupKind.DECLARED_SETUP, NegativeControlSetupKind.NATIVE_NO_SETUP):
             preparation = self.trial.result.get("environment_setup") or {}
             return (
                 self.original_public_setup
@@ -1830,7 +1831,10 @@ class OracleFilterReceipt(BaseModel):
         if entry.negative_control is not None:
             expected_setup = negative_control_setup_kind(task)
             observed_setup = entry.negative_control.setup_kind or NegativeControlSetupKind.NATIVE_SCRIPT
-            if expected_setup != observed_setup:
+            allowed_setups = {expected_setup}
+            if expected_setup is NegativeControlSetupKind.NATIVE_SCRIPT:
+                allowed_setups.add(NegativeControlSetupKind.NATIVE_NO_SETUP)
+            if observed_setup not in allowed_setups:
                 raise ValueError(f"Negative-control preparation differs from the original source workload: {task.id}")
         if (
             entry.has_oracle

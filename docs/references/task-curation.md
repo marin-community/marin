@@ -5025,6 +5025,16 @@ consumed identities. This path also has no aggregate shell exit code. A failed
 setup never reaches the observation hook and remains pending. Instruction-block
 selection is rejected for a package with declared setup.
 
+Original native tasks with no declared setup use
+`native_setup: {"kind": "native_no_setup", "task_spec": <original source TaskSpec>}`.
+This explicit selection runs the unchanged native environment and verifier with
+the nop agent; it does not select or execute instruction examples as setup.
+The writer rejects setup declared in either the source or consumed package.
+Its `native_no_setup` receipt archives the original TaskSpec, consumed
+`task.toml`, `native-no-setup-preparation.json`, and completed production
+environment timing. No setup script or shell exit code is generated. The
+collector verifies these source-bound artifacts before accepting the control.
+
 An inherited Trial configuration can leave `source_runtime` null while
 production preparation reads the binding from the consumed native packet.
 For this case the collector requires the archived

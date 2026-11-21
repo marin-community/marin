@@ -6,6 +6,7 @@
 import hashlib
 import tomllib
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,6 +19,7 @@ from taskcompendium.runtime.resources import resource_bytes
 class NegativeControlSetupKind(StrEnum):
     NATIVE_SCRIPT = "native_script"
     DECLARED_SETUP = "declared_setup"
+    NATIVE_NO_SETUP = "native_no_setup"
     TASK_SPEC_PREPARATION = "task_spec_preparation"
 
 
@@ -47,6 +49,41 @@ class DeclaredSourceSetup(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     task_spec: TaskSpec
+
+
+class NativeNoSetup(BaseModel):
+    """Bind a native task that declares no public setup to its original source."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["native_no_setup"]
+    task_spec: TaskSpec
+
+
+def native_no_setup_preparation(task: TaskSpec, source: NegativeControlSource, config_bytes: bytes) -> dict:
+    """Verify that neither the original nor consumed native package declares setup."""
+    config = tomllib.loads(config_bytes.decode())
+    original = next(resource for resource in task.resources.verifier if resource.path == "task.toml")
+    original_config = tomllib.loads(resource_bytes(original).decode())
+    if (
+        negative_control_setup_kind(task) is not NegativeControlSetupKind.NATIVE_SCRIPT
+        or task.id != source.task_id
+        or task_spec_sha256(task) != source.source_task_sha256
+        or config.get("environment", {}).get("setup") is not None
+        or original_config.get("environment", {}).get("setup") is not None
+        or native_execution_limits(config).requirements != source.execution_requirements
+    ):
+        raise ValueError("Native no-setup control differs from the original zero-setup source")
+    return {
+        "version": 1,
+        "setup_kind": NegativeControlSetupKind.NATIVE_NO_SETUP.value,
+        "task_spec_file": "source-task-spec.json",
+        "task_spec_sha256": source.source_task_sha256,
+        "source_task_checksum": source.source_task_checksum,
+        "source_native_checksum": source.task_checksum,
+        "native_config_file": "consumed-task.toml",
+        "native_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "declared_setup": None,
+    }
 
 
 def declared_setup_preparation(task: TaskSpec, source: NegativeControlSource, config_bytes: bytes) -> dict:

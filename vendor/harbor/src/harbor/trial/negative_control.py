@@ -16,9 +16,11 @@ from rigging.timing import active_timeout
 from taskcompendium.harbor.negative_control import (
     DeclaredSourceSetup,
     NativeInstructionSetup,
+    NativeNoSetup,
     NegativeControlSetupKind,
     NegativeControlSource,
     declared_setup_preparation,
+    native_no_setup_preparation,
     public_task_preparation,
     require_nop_trial_config,
 )
@@ -55,7 +57,7 @@ async def run_negative_control(
     config: TrialConfig,
     source: NegativeControlSource,
     output_root: Path,
-    native_setup: NativeInstructionSetup | DeclaredSourceSetup | None,
+    native_setup: NativeInstructionSetup | DeclaredSourceSetup | NativeNoSetup | None,
     host_capabilities: HostCapabilities,
 ) -> dict:
     """Run one nop Trial and write its actual preparation and result artifacts.
@@ -79,7 +81,12 @@ async def run_negative_control(
     setup_kind = NegativeControlSetupKind.TASK_SPEC_PREPARATION if converted else NegativeControlSetupKind.NATIVE_SCRIPT
     script = None
     preparation = None
-    if isinstance(native_setup, DeclaredSourceSetup):
+    if isinstance(native_setup, NativeNoSetup):
+        setup_kind = NegativeControlSetupKind.NATIVE_NO_SETUP
+        preparation = native_no_setup_preparation(
+            native_setup.task_spec, source, packet.paths.config_path.read_bytes()
+        )
+    elif isinstance(native_setup, DeclaredSourceSetup):
         setup_kind = NegativeControlSetupKind.DECLARED_SETUP
         preparation = declared_setup_preparation(
             native_setup.task_spec, source, packet.paths.config_path.read_bytes()
@@ -123,13 +130,16 @@ async def run_negative_control(
         }
         descriptor = output_root / "task-spec-preparation.json"
         _write_json(descriptor, preparation)
-    elif isinstance(native_setup, DeclaredSourceSetup):
+    elif isinstance(native_setup, (DeclaredSourceSetup, NativeNoSetup)):
         assert preparation is not None
         specification_bytes = task_spec_json(native_setup.task_spec, indent=2).encode()
         (output_root / "source-task-spec.json").write_bytes(specification_bytes)
         shutil.copy2(packet.paths.config_path, output_root / "consumed-task.toml")
         preparation["task_spec_file_sha256"] = hashlib.sha256(specification_bytes).hexdigest()
-        descriptor = output_root / "declared-setup-preparation.json"
+        descriptor = output_root / (
+            "native-no-setup-preparation.json" if isinstance(native_setup, NativeNoSetup)
+            else "declared-setup-preparation.json"
+        )
         _write_json(descriptor, preparation)
     else:
         assert script is not None
