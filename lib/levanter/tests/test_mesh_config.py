@@ -84,3 +84,24 @@ def test_resolved_param_mapping_inherits_shared():
     assert mapping["heads"] == "model"
     # embed should come from the default param_mapping override
     assert mapping["embed"] == "data"
+
+
+def test_cross_node_data_axis_keeps_context_groups_inside_each_host():
+    config = MeshConfig(
+        axes={"context": 8, "expert": 1, "replica": 1, "model": 1},
+        dcn_axes={"data": -1, "replica_dcn": 1},
+    )
+    ici, dcn = config.axis_shapes(256, 32)
+    mesh = create_mesh_from_axis_specs(
+        ici_axes=ici,
+        dcn_axes=dcn,
+        devices=[GpuDevice(i, i // 8, i // 8) for i in range(256)],
+    )
+    assert mesh.shape["data"] == 32 and mesh.shape["replica_dcn"] == 1
+    context_index = mesh.axis_names.index("context")
+    data_index = mesh.axis_names.index("data")
+    for node in range(32):
+        group = mesh.devices.take(node, axis=data_index).reshape(-1)
+        assert {device.process_index for device in group} == {node}
+        assert len(group) == mesh.shape["context"] == 8
+    assert ici["context"] == 8 and context_index != data_index

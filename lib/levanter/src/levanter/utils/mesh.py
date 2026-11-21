@@ -82,8 +82,9 @@ class MeshConfig:
 
         per_slice = num_devices // num_slices
 
-        axes = {**DEFAULT_ICI_AXIS_SPEC, **self.axes}
-        dcn_axes = {**DEFAULT_DCN_AXIS_SPEC, **self.dcn_axes}
+        # An explicit network placement replaces that axis's default placement.
+        axes = {**{k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in self.dcn_axes}, **self.axes}
+        dcn_axes = {**{k: v for k, v in DEFAULT_DCN_AXIS_SPEC.items() if k not in self.axes}, **self.dcn_axes}
 
         # If the user added another absorber (-1), drop the default absorber so exactly one remains.
         if sum(1 for v in axes.values() if v == -1) > 1 and "data" in axes and "data" not in self.axes:
