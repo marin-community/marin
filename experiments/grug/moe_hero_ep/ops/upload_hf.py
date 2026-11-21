@@ -38,6 +38,7 @@ from experiments.grug.moe_hero_ep.ops.export_metadata import (
     MANIFEST_FILENAME,
     artifact_config,
     bf16_hf_config,
+    export_identity,
 )
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
@@ -283,7 +284,7 @@ def _upload_plan(config: UploadConfig) -> _UploadPlan:
     request = manifest["request"]
     version = request["export_version"]
     if version == 2:
-        expected_config = draccus.encode(config.export)
+        expected_config = export_identity(draccus.encode(config.export))
     elif version == EXPORT_VERSION:
         expected_config = artifact_config(draccus.encode(config.export))
     else:

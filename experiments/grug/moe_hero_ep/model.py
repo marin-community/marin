@@ -59,6 +59,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
+    ShadowExperts,
     moe_routing_stats_local,
     qb_beta_topk_shard,
     qb_topk_physical_count,
@@ -359,6 +360,8 @@ class GrugModelConfig:
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
     num_expert_waves: int = 1
+    shadow_experts: ShadowExperts | None = None
+    """Compute each expert-parallel group's most-loaded experts outside the ragged transport (`ShadowExperts`)."""
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -420,6 +423,8 @@ class GrugModelConfig:
             raise ValueError("capacity_factor must be positive")
         if self.expert_chunks <= 0:
             raise ValueError("expert_chunks must be positive")
+        if self.shadow_experts is not None and self.moe_implementation != "ragged_all_to_all":
+            raise ValueError(f"shadow_experts requires ragged_all_to_all, got {self.moe_implementation!r}")
         if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
             raise ValueError("pooled_transport_capacity_factor must be positive")
         if (
@@ -1123,6 +1128,7 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
+                shadow_experts=cfg.shadow_experts,
                 pspecs=MoEExpertMlpPspecs(expert=_EXPERT_WEIGHT_AXES),
             ),
             cfg=cfg,

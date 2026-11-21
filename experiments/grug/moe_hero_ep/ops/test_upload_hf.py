@@ -16,6 +16,7 @@ import pytest
 from huggingface_hub import RepoFile
 from huggingface_hub.errors import HfHubHTTPError
 from levanter.compat.hf_export import HFShardRecord
+from levanter.grug.grug_moe import ShadowExperts
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from safetensors.numpy import save_file
 
@@ -178,7 +179,14 @@ class FakeHub:
 def upload_fixture(tmp_path, monkeypatch):
     root = tmp_path / "export"
     root.mkdir()
-    model = GrugModelConfig(vocab_size=32, hidden_dim=16, intermediate_dim=8, num_layers=2, num_heads=2)
+    model = GrugModelConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_layers=2,
+        num_heads=2,
+        moe_implementation="ragged_all_to_all",
+    )
     config = CpuExportConfig(
         checkpoint=str(tmp_path / "checkpoint" / "step-17"),
         metadata_digest="b" * 64,
@@ -215,10 +223,13 @@ def upload_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(upload_hf, "snapshot_download", tokenizer_download)
 
     def build(dtype=jnp.bfloat16, *, shards=2, version=EXPORT_VERSION):
+        # Every existing export was written before the model had `shadow_experts`.
+        encoded = draccus.encode(config)
+        del encoded["model"]["shadow_experts"]
         request = {
             "export_version": version,
             "implementation": "cpu",
-            "config": draccus.encode(config) if version == 2 else artifact_config(draccus.encode(config)),
+            "config": encoded if version == 2 else artifact_config(encoded),
             "hf_config": bf16_hf_config(model),
         }
         export_id = digest(request)
@@ -382,6 +393,16 @@ def test_upload_resumes_an_interrupted_second_batch_without_rewriting_identity(u
     commits = len(hub.snapshots)
     reused = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert reused["weights_commit"] == result["weights_commit"] and len(hub.snapshots) == commits
+
+
+@pytest.mark.parametrize("version", [2, EXPORT_VERSION])
+def test_upload_accepts_an_export_pinned_before_shadow_experts_with_shadowing_on(upload_fixture, version):
+    build, hub = upload_fixture
+    config = build(version=version)
+    model = dataclasses.replace(config.export.model, shadow_experts=ShadowExperts(count=2, rows_per_token=1.0))
+    config = dataclasses.replace(config, export=dataclasses.replace(config.export, model=model))
+    result = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert result["weights_commit"] in hub.snapshots
 
 
 @pytest.mark.parametrize("expected", list(upload_hf.RepositoryVisibility))
