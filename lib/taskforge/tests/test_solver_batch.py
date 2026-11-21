@@ -26,7 +26,7 @@ from rolloutengine.models import (
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from shellbox.machine import MachineTerminated
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved, event_digest
@@ -297,6 +297,51 @@ async def test_a_generation_limited_slot_replays_with_its_transcript_beside_an_i
     assert await solver_batch(rebuilt, SPEC, "validation", 0, (), 0, 3, concurrency=1, heartbeat=HEARTBEAT) == results
     await rebuilt.drain()
     assert not cold.executed and kept(rebuilt_log, 0).conversations[0].messages == PROMPT
+
+
+# Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded; when its grader failed for
+# infrastructure (here the host judge's incomplete completion), the exemption above replayed the failure forever.
+@pytest.mark.parametrize("resume", [False, True])
+async def test_a_length_stopped_answer_whose_grader_failed_is_graded_again(resume: bool) -> None:
+    answered = ConversationRecord((*PROMPT, {"role": "assistant", "content": "12"}), (), (), (), None)
+    infra = GradeResult(
+        Outcome.INFRA_ERROR, None, "judge returned an incomplete completion", failure=GradingFailure.EXECUTION
+    )
+    failed = GradedRollout(Rollout("cut", (answered,), LENGTH_STOP_REASON), infra)
+    ctx, log = context(Slots(results={0: failed}))
+    (first,) = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
+    await ctx.drain()
+    healthy = Slots()
+    resumed, _ = context(healthy, log.records, resume=resume)
+    (second,) = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
+    await resumed.drain()
+    assert first.cause is Cause.GENERATION_LIMIT and healthy.executed == ["arithmetic:0:0"]
+    assert second.cause is None and second.grade is not None and second.grade.reward == 1.0
+
+
+def refused_at_length() -> RolloutInterrupted:
+    """A model-server refusal after the generation had reached its length limit."""
+    error = RolloutInterrupted(Rollout("refused", (), LENGTH_STOP_REASON), RolloutOperation.MODEL)
+    error.__cause__ = ModelRequestRejected(400, "malformed request", ())
+    return error
+
+
+async def test_a_refusal_at_a_length_stop_stays_held_and_is_replaced_only_on_explicit_resume() -> None:
+    ctx, log = context(Slots(failures={0: refused_at_length()}))
+    (held,) = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT, max_missing=1)
+    await ctx.drain()
+    assert held == TrialResult(0, None, Cause.HELD, REFUSED)
+    unasked = Slots(failures={0: AssertionError("a held slot ran without --resume-held")})
+    replayed, _ = context(unasked, log.records)
+    assert await solver_batch(
+        replayed, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT, max_missing=1
+    ) == (held,)
+    await replayed.drain()
+    replacing = Slots()
+    replaced, _ = context(replacing, log.records, resume=True)
+    (fresh,) = await solver_batch(replaced, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
+    await replaced.drain()
+    assert not unasked.executed and replacing.executed == ["arithmetic:0:0"] and fresh.cause is None
 
 
 async def test_an_unavailable_grade_after_an_ordinary_stop_still_runs_again() -> None:
