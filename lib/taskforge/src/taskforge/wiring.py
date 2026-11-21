@@ -285,6 +285,9 @@ def build_config(
     policy: Policy, factories: Mapping[str, MachineFactory], profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES
 ) -> TaskforgeConfig:
     """The run's sessions and rules; ``profiles`` overrides the model profile per role, as in ``build_resources``."""
+    unbriefed = [name for name in policy.setting("adversary.roster", tuple) if f"adversary.brief.{name}" not in policy.entries]
+    if unbriefed:
+        raise ValueError(f"adversary.roster names {', '.join(unbriefed)} without a prompt adversary.brief.<name>")
     settings = lowering_settings(policy)
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")

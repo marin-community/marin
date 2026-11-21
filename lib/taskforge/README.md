@@ -65,8 +65,9 @@ command line; the driver reads them from Iris secret files.
   carries `environment` (`reasoning`, `shellsim`, `container`). The driver skips environments not
   in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over
-  `src/taskforge/policy/defaults/policy.json`, stored on S3. The pilots use
-  `{"adversary.roster": ["adversary"]}` because the default roster is empty.
+  `src/taskforge/policy/defaults/policy.json`, stored on S3. The default roster runs the two
+  adversary briefs; the earlier pilots' `{"adversary.roster": ["adversary"]}` still selects their
+  single legacy adversary.
 - **Ranks**: `--ranks 0,1,2` selects proposals by rank; no trailing comma (BSD `seq -s,` adds
   one, strip it with `sed 's/,$//'`).
 
@@ -217,10 +218,17 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
   reverting to the earlier submission if the hardening broke something.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
-- **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
-  `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
-  the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
-  whose context window or output budget runs out before it reports is `exhausted`: the task can
+- **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
+  `false_accept` and `false_reject`), `adversary.image`. Each name needs a prompt
+  `adversary.brief.<name>` (`prompts/adversary/brief/<name>.md`): `false_accept` looks for a submission
+  the grader accepts but should not, `false_reject` for a correct submission the grader rejects, and
+  `adversary` is the earlier single adversary's strategy line. An overlay may rewrite a brief's text;
+  a new brief is a new prompt entry in the policy (`Policy({**policy.entries, "adversary.brief.mine":
+  Prompt("...")})`) and a name on the roster. Every brief reports through one schema: a defect
+  direction (`false_accept`, `false_reject`, `grader_crash`), the candidate, the grade the grader
+  OBSERVED and the reward the candidate DESERVES. Validation keeps a finding only when the replayed
+  grade is wrong in the stated direction on the round's verifier and again on a fresh one. An
+  adversary whose context window or output budget runs out before it reports is `exhausted`: the task can
   still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
@@ -232,8 +240,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   workspace and the model gets the head plus the path.
 
 Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the live
-`TaskSpec` and control schemas, and the adversary's user prompt renders the task without file
-payloads (they are in the workdir).
+`TaskSpec` and control schemas, and the adversary's user prompt renders its brief and the task without
+file payloads (they are in the workdir).
 
 ## Models and providers
 

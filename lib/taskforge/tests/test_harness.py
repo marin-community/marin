@@ -15,6 +15,7 @@ import pytest
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.iris_fakes import LocalController, local_iris_machine
+from lib.taskforge.tests.stage_fakes import OVER_CREDITED, over_credited
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from taskcompendium.grader import verifyit_package
@@ -191,9 +192,12 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
             {
                 "findings": [
                     {
-                        "claim": "false reject",
+                        "defect": "false_reject",
+                        "why_the_grade_is_wrong": "a correct answer earned nothing",
                         "candidate": {"reply": "12", "files": ["/workspace/answer"]},
-                        "expected": {"status": "graded", "reward_max": 0},
+                        "grader_observed_status": "graded",
+                        "grader_observed_reward": 0.0,
+                        "deserved_reward": 1.0,
                     }
                 ]
             },
@@ -467,17 +471,12 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
         tool = ReportTool(task)
         commentary = await tool(ctx, {"findings": ["No grading defect found"]})
         assert isinstance(commentary, ToolResult)
-        claim = {
-            "claim": "wrong answer accepted",
-            "candidate": {"reply": "9"},
-            "expected": {"status": "graded", "reward_min": 1},
-        }
+        claim = over_credited("wrong answer accepted", "9")
         report = await tool(ctx, {"findings": [claim]})
         assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
         finding = report.payload.findings[0]
         assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
-        assert finding.expected.met_by(GradeResult(Outcome.GRADED, 1))
-        assert not finding.expected.met_by(GradeResult(Outcome.GRADED, 0))
+        assert finding.defect == OVER_CREDITED
         # The adversary can edit its scratch task file, but cannot change the bound task's machine requirement.
         edited = arithmetic_task(environment_requirements=requirements(image=None))
         await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), edited.model_dump_json().encode()))

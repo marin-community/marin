@@ -23,6 +23,7 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge.effects.context import Context
 from taskforge.effects.issues import Hold, Restart
 from taskforge.harness.protocol import Harness, Tool
+from taskforge.model.review import Defect, DefectClaim, Observation, ObservedStatus
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation
 from taskforge.resources.env import EnvFactory
@@ -97,3 +98,19 @@ class CandidateEngine(Engine):
 
 async def solver_model(request: ModelRequest) -> ModelTurn:
     return ModelTurn({"role": "assistant", "content": "12"}, (), (), None, "stop")
+
+
+OVER_CREDITED = DefectClaim(Defect.FALSE_ACCEPT, Observation(ObservedStatus.GRADED, 1.0), 0.0)
+"""A false accept: the grader gave full credit to a candidate that deserves none."""
+
+
+def over_credited(why: str, reply: str, files: tuple[str, ...] = ()) -> dict[str, object]:
+    """``report`` arguments for one ``OVER_CREDITED`` finding."""
+    return {
+        "defect": "false_accept",
+        "why_the_grade_is_wrong": why,
+        "candidate": {"reply": reply, "files": list(files)},
+        "grader_observed_status": "graded",
+        "grader_observed_reward": 1.0,
+        "deserved_reward": 0.0,
+    }

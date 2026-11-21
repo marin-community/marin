@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 
 from rolloutengine.models import TaskRolloutSpec, TraceMode
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
@@ -32,6 +33,9 @@ from taskforge.model.review import (
     AdversaryStatus,
     Cause,
     ControlResult,
+    Modify,
+    Observation,
+    ObservedStatus,
     SearchLimit,
     TrialResult,
     ValidationResult,
@@ -41,7 +45,7 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
-from taskforge.stages.classify import grade_cause, grader_infra_unavailable, trial_cause
+from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
 from taskforge.stages.summary import task_manifest
 
@@ -103,14 +107,27 @@ def failure_reasons(error: BaseException) -> tuple[str, ...]:
     return reasons + (failure_reasons(error.__cause__) if error.__cause__ is not None else ())
 
 
+def observation(grade: GradeResult, task: TaskSpec) -> Observation | None:
+    """What a replay shows about the grader; an infrastructure failure shows nothing."""
+    cause = grade_cause(grade, task)
+    if cause is not None:
+        return Observation(ObservedStatus.GRADER_ERROR) if CAUSE_DECISIONS.get(cause) is Modify else None
+    if grade.status is Outcome.SUBMISSION_FAILURE:
+        return Observation(ObservedStatus.SUBMISSION_FAILURE)
+    return Observation(ObservedStatus.GRADED, grade.reward)
+
+
+def shows(claim: AdversaryClaim, grade: GradeResult, task: TaskSpec) -> bool:
+    return (observed := observation(grade, task)) is not None and claim.defect.shown_by(observed)
+
+
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
+    """The one reproduction check of every brief: the defect shows on the round's verifier, then on a fresh one."""
     grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
-    if grade_cause(grade, spec.task) is None and claim.expected.met_by(grade):
+    if shows(claim, grade, spec.task):
         grade = await ctx.emit(GradeCandidate(spec, claim.candidate, fresh_verifier=True))
-    cause = grade_cause(grade, spec.task)
-    return AdversaryFinding(
-        claim.claim, claim.candidate, claim.expected, grade, cause is None and claim.expected.met_by(grade), cause
-    )
+    met = shows(claim, grade, spec.task)  # on the fresh verifier's grade: the first one did not show it otherwise
+    return AdversaryFinding(claim.claim, claim.candidate, claim.defect, grade, met, grade_cause(grade, spec.task))
 
 
 async def reproduced(
@@ -120,7 +137,7 @@ async def reproduced(
 
     Its own scope collects observer holds on its grades, so a sibling claim's grade survives them.
     """
-    finding, reasons = AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False), ()
+    finding, reasons = AdversaryFinding(claim.claim, claim.candidate, claim.defect, None, False), ()
     try:
         async with ctx.scope(f"claim:{index}"):
             graded = await claim_result(ctx, spec, claim)
@@ -154,7 +171,10 @@ async def run_adversary(
     opening = Fresh(
         config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
         config.policy.prompt("adversary.user").render(
-            task=task_manifest(spec.task), proposal=render(workpiece.proposal), name=name, workdir=workdir
+            task=task_manifest(spec.task),
+            proposal=render(workpiece.proposal),
+            brief=config.policy.prompt(f"adversary.brief.{name}").template,
+            workdir=workdir,
         ),
     )
     visit = Visit(f"adversary:{name}", owner, machine, opening, files, {"report": ReportTool(spec.task)})

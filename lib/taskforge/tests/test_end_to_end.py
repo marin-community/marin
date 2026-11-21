@@ -1833,6 +1833,22 @@ def rows(records: Sequence[Record]) -> list[Record]:
     return [replace(record, wall_time=0.0) for record in records]
 
 
+FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
+"""The policy digest the n3 and n4 fixtures recorded. The default policy has since gained the two adversary briefs,
+which changes only that digest in an author-only journal."""
+
+
+def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
+    """``recorded`` with each stage completion's fixture policy digest replaced by the one ``fresh`` recorded."""
+    current = next(r.event.config_digest for r in fresh if isinstance(r.event, StageCompleted))
+    completed = [r.event for r in recorded if isinstance(r.event, StageCompleted)]
+    assert completed and all(event.config_digest == FIXTURE_CONFIG_DIGEST for event in completed)
+    return [
+        replace(r, event=replace(r.event, config_digest=current)) if isinstance(r.event, StageCompleted) else r
+        for r in recorded
+    ]
+
+
 async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated_model_calls(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
@@ -1842,7 +1858,8 @@ async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated
     recorded = decode(gzip.decompress(N4_JOURNAL.read_bytes()))
     await held_after_stamp(monkeypatch, driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert rows(history(destination)) == rows(recorded)
+    fresh = history(destination)
+    assert rows(fresh) == rows(rebased(recorded, fresh))
     served = [
         record.event.request
         for record in recorded
@@ -2009,7 +2026,8 @@ async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
     deliberate change to the author prompts, tool schemas, event identities or envelopes invalidates it."""
     served = await held_after_polls(monkeypatch, driver_args, (b"pending", b"done"))
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert rows(history(destination)) == rows(decode(gzip.decompress(N4_POLLS.read_bytes())))
+    fresh = history(destination)
+    assert rows(fresh) == rows(rebased(decode(gzip.decompress(N4_POLLS.read_bytes())), fresh))
     envs = ProducerEnvs(STATUS, (b"pending", b"done"))
     resumed = replace(resources(envs, ()), inference=ServedOnce(polling_script()[2:], served))
     serve(monkeypatch, resumed)
@@ -2200,6 +2218,10 @@ class RoleEnvs(Envs):
         return env
 
 
+BRIEFED = {"false_accept": "hunt false accepts", "false_reject": "hunt false rejects"}
+"""Each default brief by a phrase its first user message carries."""
+
+
 class Adversaries(InferenceClient):
     """Each adversary runs ``ROLE``, then reports no findings, or with ``hold`` fails on that turn instead."""
 
@@ -2226,7 +2248,7 @@ class Adversaries(InferenceClient):
         """(adversary name, the role output its report turn saw), for each report turn."""
         return sorted(
             (
-                next(name for name in ("alpha", "beta") if name in request.conversation[1].content),
+                next(name for name in BRIEFED if BRIEFED[name] in request.conversation[1].content),
                 json.loads(request.conversation[-1].content)["stdout"],
             )
             for request in self.requests
@@ -2238,9 +2260,9 @@ class Adversaries(InferenceClient):
 @pytest.mark.parametrize(
     ("roster", "recorded", "fresh", "overlap"),
     [
-        (("alpha", "beta"), ("alpha 1\n", "beta 1\n"), ("alpha 2\n", "beta 2\n"), False),
-        (("alpha", "alpha"), ("first 1\n", "second 1\n"), ("first 2\n", "second 2\n"), False),
-        (("alpha", "beta"), ("/workspace\n", "/workspace\n"), ("/workspace\n", "/workspace\n"), True),
+        (("false_accept", "false_reject"), ("accept 1\n", "reject 1\n"), ("accept 2\n", "reject 2\n"), False),
+        (("false_accept", "false_accept"), ("first 1\n", "second 1\n"), ("first 2\n", "second 2\n"), False),
+        (("false_accept", "false_reject"), ("/workspace\n", "/workspace\n"), ("/workspace\n", "/workspace\n"), True),
     ],
     ids=["reversed readiness", "duplicate roster names", "identical results overlapping"],
 )
@@ -2347,7 +2369,7 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, exhausted: int
 ) -> None:
     overlay = json.loads(Path(driver_args.policy).read_text())
-    Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["alpha"]}))
+    Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["false_accept"]}))
     held = Adversaries(hold=True)
     serve(monkeypatch, replace(resources(ExhaustedRole(0), script()), role_inference={"adversary": held}))
     await driver.one(driver_args)

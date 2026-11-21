@@ -12,7 +12,15 @@ import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference
-from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
+from lib.taskforge.tests.stage_fakes import (
+    OVER_CREDITED,
+    CandidateEngine,
+    Environments,
+    RecordingHarness,
+    SolverEngine,
+    over_credited,
+    solver_model,
+)
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -45,8 +53,12 @@ from taskforge.model.review import (
     Budget,
     Cause,
     ControlResult,
+    Defect,
+    DefectClaim,
     Incomplete,
     Modify,
+    Observation,
+    ObservedStatus,
     Retry,
     SearchLimit,
     TrialResult,
@@ -89,7 +101,7 @@ def adversary_config(harness: RecordingHarness) -> TaskforgeConfig:
     setup = config(harness)
     return replace(
         setup,
-        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        policy=setup.policy.overlaid({"adversary.roster": ["false_accept"]}),
         adversary=replace(setup.adversary, harness=harness, tools={}),
     )
 
@@ -227,7 +239,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     harness = RecordingHarness(
         Returned(
             "report",
-            AdversaryReport((AdversaryClaim("wrong answer accepted", Candidate(reply), RewardBand(Outcome.GRADED, 1)),)),
+            AdversaryReport((AdversaryClaim("wrong answer accepted", Candidate(reply), OVER_CREDITED),)),
             session,
         )
     )
@@ -255,9 +267,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
 async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept(
     workpiece: Workpiece, replies: tuple[str, ...]
 ) -> None:
-    claims = tuple(
-        AdversaryClaim(f"{reply} earns credit", Candidate(reply), RewardBand(Outcome.GRADED, 1)) for reply in replies
-    )
+    claims = tuple(AdversaryClaim(f"{reply} earns credit", Candidate(reply), OVER_CREDITED) for reply in replies)
     setup = adversary_config(RecordingHarness(Returned("report", AdversaryReport(claims), Conversation((), ()))))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
@@ -284,7 +294,7 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
 # recorded an exhausted search with no findings and review accepted.
 async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_accept(workpiece: Workpiece) -> None:
     setup = config()
-    claim = {"claim": "13 earns credit", "candidate": {"reply": "13"}, "expected": {"status": "graded", "reward_min": 1}}
+    claim = over_credited("13 earns credit", "13")
     client = FakeInference(
         (
             Completion("", (ToolCall("1", "grade", json.dumps({"reply": "13"})),)),
@@ -302,7 +312,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
     harness = AgenticHarness(262144, sampling(setup.policy, LLMPolicy()), "report findings", 20000, replay_arguments)
     setup = replace(
         setup,
-        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        policy=setup.policy.overlaid({"adversary.roster": ["false_accept"]}),
         adversary=replace(setup.adversary, harness=harness, tools=tools),
     )
 
@@ -327,9 +337,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
 async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sibling_grade(
     workpiece: Workpiece,
 ) -> None:
-    claims = tuple(
-        AdversaryClaim(f"{reply} earns credit", Candidate(reply), RewardBand(Outcome.GRADED, 1)) for reply in ("13", "9")
-    )
+    claims = tuple(AdversaryClaim(f"{reply} earns credit", Candidate(reply), OVER_CREDITED) for reply in ("13", "9"))
     setup = adversary_config(RecordingHarness(Returned("report", AdversaryReport(claims), Conversation((), ()))))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
@@ -404,6 +412,7 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     workpiece: Workpiece, status: Outcome, failure: GradingFailure | None, cause: Cause
 ) -> None:
     setup = config()
+    setup = replace(setup, policy=setup.policy.overlaid({"adversary.roster": []}))  # controls alone
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     grader = GradingResource(
@@ -447,7 +456,7 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder", 0)
+    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "false_accept", 0)
     await ctx.drain()
     assert harness.session is not None
     prompt = harness.session.messages[-1].content
@@ -466,7 +475,7 @@ async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) ->
     finding = AdversaryFinding(
         "wrong answer accepted",
         Candidate("x", (inline_resource("answer.bin", b"\x00\xffz"),)),
-        RewardBand(Outcome.GRADED, 1),
+        OVER_CREDITED,
         grade,
         True,
     )
@@ -474,7 +483,7 @@ async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) ->
         workpiece.submission.digest,
         (TrialResult(0, grade),),
         (ControlResult(0, grade, True),),
-        (AdversaryResult("finder", AdversaryStatus.REPORTED, (finding,)),),
+        (AdversaryResult("false_accept", AdversaryStatus.REPORTED, (finding,)),),
     )
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
@@ -499,7 +508,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
     spec = rollout_spec(workpiece.submission.task)
     with pytest.raises(Restart, match="verifier preempted"):
         if claim:
-            await claim_result(ctx, spec, AdversaryClaim("wrong", control.candidate, control.expected))
+            await claim_result(ctx, spec, AdversaryClaim("wrong", control.candidate, OVER_CREDITED))
         else:
             await control_result(ctx, spec, 0, control)
     await ctx.drain()
@@ -543,7 +552,9 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         harness.run = run
         setup = config()
         setup = replace(setup, adversary=replace(setup.adversary, harness=harness, tools={}))
-        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
+        result = await adversary_result(
+            ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0
+        )
         if failures == 2:
             assert (result.status, result.limit, result.findings) == (
                 AdversaryStatus.EXHAUSTED,
@@ -552,7 +563,7 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
             )
             assert "ran out" in result.reasons[0]
         else:
-            assert result == AdversaryResult("finder", AdversaryStatus.REPORTED, ())
+            assert result == AdversaryResult("false_accept", AdversaryStatus.REPORTED, ())
         assert isinstance(bundle.envs, Environments) and len(bundle.envs.created) == 2
         assert all(env.closed for env in bundle.envs.created)
         evidence = ValidationResult(
@@ -689,7 +700,7 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
     finding = AdversaryFinding(
         "Huge integer breaks the grader",
         Candidate('{"target_value":' + "9" * 400 + "}"),
-        RewardBand(Outcome.GRADED, 0, 0),
+        DefectClaim(Defect.GRADER_CRASH, Observation(ObservedStatus.GRADER_ERROR), None),
         grade,
         False,
         cause,
@@ -741,10 +752,12 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
         result = (await validate(ctx, workpiece, setup, bundle)).result
         restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
         reason = "Hold: unavailable"
-        assert restored.evidence[0].adversary == (AdversaryResult("finder", AdversaryStatus.FAILED, (), (reason,)),)
+        assert restored.evidence[0].adversary == (
+            AdversaryResult("false_accept", AdversaryStatus.FAILED, (), (reason,)),
+        )
         assert len(result.solver) == 3 and len(result.controls) == 2
         decision = default_review(restored, setup.band, setup.budget)
-        assert isinstance(decision, Incomplete) and decision.reasons == (f"finder: {reason}",)
+        assert isinstance(decision, Incomplete) and decision.reasons == (f"false_accept: {reason}",)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
@@ -771,7 +784,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     )
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": client})
-    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
+    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0)
     assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
     (note,) = result.reasons
     assert "ran out" in note and "context window" in note
@@ -786,7 +799,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
     after = apply_decision(wp.with_(session=author), decision, setup.budget, setup.policy)
     if isinstance(decision, Accept):
-        assert f"finder: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
+        assert f"false_accept: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):
         assert after.session is not None and after.session.messages[-1].role == Role.USER
         assert not any(note in text for text in (*decision.findings, after.session.messages[-1].content))

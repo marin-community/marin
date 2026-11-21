@@ -1,4 +1,4 @@
-Review strategy: {name}
+Review strategy: {brief}
 
 Task manifest (resource paths, byte sizes and roles; payloads omitted):
 {task}
