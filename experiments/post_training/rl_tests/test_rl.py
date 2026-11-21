@@ -687,7 +687,7 @@ def _assert_mochi_preset_documents(revisions, configs):
         assert served[path] == value, path
 
 
-def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
+def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, recorded_runs):
     learning = snowball_model.SNOWBALL.by_name["learning-medium"]
     data = snowball_model.SNOWBALL.by_name["data-short"]
     with pytest.raises(click.BadParameter, match="accepts no --set"):
@@ -712,15 +712,13 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
     task_set_name = snowball_model.DEFAULT_EVAL_LITE_NAME
     task_set_version = snowball_model.DEFAULT_EVAL_LITE_VERSION
-    new_task_set = tmp_path / task_set_name / "2026.11.05"
+    original_task_set = Path(recipe.selection_artifact(f"{task_set_name}@{task_set_version}").path())
+    new_task_set_version = "2026.11.05"
+    new_task_binding = f"{task_set_name}@{new_task_set_version}"
+    new_task_set = Path(recipe.selection_artifact(new_task_binding).path())
     new_task_set.mkdir(parents=True)
-    (new_task_set / "summary.json").write_bytes(
-        (tmp_path / task_set_name / task_set_version / "summary.json").read_bytes()
-    )
-    changed_task_set = replace(
-        learning,
-        held_out_tasks=f"{task_set_name}@2026.11.05",
-    )
+    (new_task_set / "summary.json").write_bytes((original_task_set / "summary.json").read_bytes())
+    changed_task_set = replace(learning, held_out_tasks=new_task_binding)
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
@@ -762,11 +760,11 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary["recipe"]["heldout"] = heldout
     summary_path.write_text(json.dumps(summary))
     for current in (data, snowball_model.SNOWBALL.by_name["data-medium"]):
-        selected = replace(current, held_out_tasks=f"{task_set_name}@2026.11.05")
+        selected = replace(current, held_out_tasks=new_task_binding)
         with pytest.raises(click.BadParameter, match="full held-out selection"):
             snowball.build_experiment(selected, tasks=selection, table=snowball_model.SNOWBALL)
         summary["recipe"]["exclusions"] = [
-            {"uri": str(new_task_set / FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
+            {"uri": str(new_task_set / FULL_VALIDATION_FILENAME), "version": new_task_set_version}
         ]
         summary_path.write_text(json.dumps(summary))
         assert snowball.build_experiment(selected, tasks=selection, table=snowball_model.SNOWBALL).gate is not None
