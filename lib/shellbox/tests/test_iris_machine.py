@@ -8,12 +8,13 @@ import json
 import os
 import pwd
 import re
+import shutil
 import signal
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from errno import EACCES, EISDIR, ENOENT, ENOTDIR
+from errno import EACCES, EISDIR, ENAMETOOLONG, ENOENT, ENOTDIR
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -29,6 +30,7 @@ from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
+from iris.rpc.async_adapter import BoundedThreadExecutor
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
@@ -37,6 +39,7 @@ from shellbox.machine import (
     Command,
     CommandOutcomeUnknown,
     ExecSetupFailed,
+    GuestHelperFailed,
     GuestPathError,
     MachineCancelled,
     MachineSpec,
@@ -48,6 +51,8 @@ from shellbox.machine import (
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
+# Guest images' /bin/sh is a POSIX shell such as dash; macOS's sh is bash, which tolerates more.
+GUEST_SH = shutil.which("dash") or "sh"
 
 
 class LocalRpc:
@@ -55,7 +60,8 @@ class LocalRpc:
         del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error="[Errno 7] Argument list too long: 'docker'")
-        result = subprocess.run(request.command, capture_output=True, text=True, timeout=30)
+        command = [GUEST_SH if request.command[0] == "sh" else request.command[0], *request.command[1:]]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
         return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
 
 
@@ -68,16 +74,17 @@ class FailingRpc:
 class RefusingRpc(LocalRpc):
     """Fails the first ``refusals`` execs with ``code`` before running anything, then runs them locally."""
 
-    def __init__(self, code: Code, refusals: int, cause: Exception | None = None):
+    def __init__(self, code: Code, refusals: int, cause: Exception | None = None, message: str = "refused"):
         self.code = code
         self.refusals = refusals
         self.cause = cause
+        self.message = message
         self.scripts: list[str] = []
 
     def exec_in_container(self, request, timeout_ms):
         self.scripts.append(request.command[-1])
         if len(self.scripts) <= self.refusals:
-            raise ConnectError(self.code, "refused") from self.cause
+            raise ConnectError(self.code, self.message) from self.cause
         return super().exec_in_container(request, timeout_ms)
 
     def sent(self, marker: str) -> int:
@@ -314,7 +321,7 @@ def test_command_on_an_ended_sandbox_raises_machine_terminated(tmp_path: Path, s
         asyncio.run(machine.run(Command(("true",))))
 
 
-def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Path) -> None:
+def test_exec_error_on_a_running_sandbox_is_an_unknown_outcome(tmp_path: Path) -> None:
     rpc = SimpleNamespace(
         exec_in_container=lambda request, timeout_ms: SimpleNamespace(
             exit_code=0, stdout="", stderr="", error="unexpected adapter bug"
@@ -322,9 +329,28 @@ def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Pat
     )
     machine, _ = local_machine(tmp_path, rpc, LocalTask(TaskState.RUNNING))
 
-    with pytest.raises(RuntimeError, match="Iris exec failed") as raised:
+    with pytest.raises(CommandOutcomeUnknown, match="unexpected adapter bug"):
         asyncio.run(machine.run(Command(("true",))))
-    assert not isinstance(raised.value, MachineTerminated)
+
+
+class FailingCleanupRpc(LocalRpc):
+    def exec_in_container(self, request, timeout_ms):
+        if request.command[-1].startswith("rm -f /tmp/.shellbox-"):
+            return SimpleNamespace(exit_code=1, stdout="", stderr="rm: Operation not permitted", error="")
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_failed_capture_cleanup_is_logged_and_keeps_the_result(tmp_path: Path, caplog) -> None:
+    machine, _ = local_machine(tmp_path, FailingCleanupRpc())
+
+    result = asyncio.run(machine.run(Command(("echo", "kept"))))
+
+    assert (result.exit_code, result.stdout) == (0, b"kept\n")
+    # The guest's own diagnostic reaches the operator; the result is unchanged.
+    assert any(
+        record.levelname == "WARNING" and "rm: Operation not permitted" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path) -> None:
@@ -334,15 +360,48 @@ def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path
         asyncio.run(machine.run(Command(("true",))))
 
 
+def pool_refusal() -> ConnectError:
+    """The refusal lib/iris's bounded exec pool raises when it is full, from the real executor."""
+    executor = BoundedThreadExecutor(max_workers=1, max_pending=0, thread_name_prefix="test-exec")
+    release = threading.Event()
+
+    async def refused() -> ConnectError:
+        busy = asyncio.ensure_future(executor.run(release.wait))
+        await asyncio.sleep(0)
+        try:
+            await executor.run(lambda: None)
+        except ConnectError as error:
+            return error
+        finally:
+            release.set()
+            await busy
+            executor.shutdown()
+        raise AssertionError("A full exec pool admitted another call")
+
+    return asyncio.run(refused())
+
+
 def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
-    rpc = RefusingRpc(Code.RESOURCE_EXHAUSTED, refusals=2)
+    refusal = pool_refusal()
+    rpc = RefusingRpc(refusal.code, refusals=2, message=refusal.message)
     machine, _ = local_machine(tmp_path, rpc)
 
     result = asyncio.run(machine.run(Command(("echo", "ran"))))
 
     assert result.stdout == b"ran\n"
     assert rpc.sent("echo ran") == 3
+
+
+# Review 2026-11-20 (follow-up 3): the generated client raises RESOURCE_EXHAUSTED for a reply above its read limit,
+# after the exec ran, and that reran the command in place.
+def test_resource_exhausted_other_than_the_pool_refusal_is_not_retried(tmp_path: Path) -> None:
+    rpc = RefusingRpc(Code.RESOURCE_EXHAUSTED, refusals=1, message="message is larger than configured max 24")
+    machine, _ = local_machine(tmp_path, rpc)
+
+    with pytest.raises(CommandOutcomeUnknown, match="larger than configured max"):
+        asyncio.run(machine.run(Command(("echo", "once"))))
+    assert rpc.sent("echo once") == 1
 
 
 @pytest.mark.parametrize("connected", [True, False])
@@ -361,7 +420,8 @@ class ClosingRpc(RefusingRpc):
     """Refuses every exec for a full pool; during the first refusal another thread closes the machine."""
 
     def __init__(self):
-        super().__init__(Code.RESOURCE_EXHAUSTED, refusals=1_000)
+        refusal = pool_refusal()
+        super().__init__(refusal.code, refusals=1_000, message=refusal.message)
         self.machine: IrisMachine | None = None
         self.closer: threading.Thread | None = None
 
@@ -757,3 +817,80 @@ def test_download_of_a_file_that_vanishes_mid_read_fails_while_an_empty_file_suc
     asyncio.run(scenario())
     assert not (tmp_path / "vanishing.out").exists()
     assert (tmp_path / "empty.out").read_bytes() == b""
+
+
+class CountingRpc(LocalRpc):
+    """Runs each exec locally after ``prelude`` and records its script."""
+
+    def __init__(self, prelude: str = ""):
+        self.prelude = prelude
+        self.scripts: list[str] = []
+
+    def exec_in_container(self, request, timeout_ms):
+        *shell, script = request.command
+        self.scripts.append(script)
+        return super().exec_in_container(SimpleNamespace(command=[*shell, self.prelude + script]), timeout_ms)
+
+
+# Review 2026-11-20 (follow-up 1): a directory read was archived over five RPCs; writes through a link cycle, a
+# dangling link with a missing target parent, or an overlong name raised runtime errors; a failing `dirname`
+# looped forever. Each path fault is classified in the one exec that attempted the operation.
+@pytest.mark.parametrize(
+    "operation,name,code",
+    [
+        ("read", "directory", EISDIR),
+        ("read", "loop", ENOENT),
+        ("read", "absent/deeper/file", ENOENT),
+        ("read", "n" * 256, ENAMETOOLONG),
+        ("write", "loop", ENOENT),
+        ("write", "dangling", ENOENT),
+        ("write", "parent-link/file", ENOENT),
+        ("write", "n" * 256, ENAMETOOLONG),
+        ("write", "directory", EISDIR),
+        ("write", "regular/child", ENOTDIR),
+    ],
+)
+def test_guest_path_faults_are_classified_in_one_exec(tmp_path: Path, operation: str, name: str, code: int) -> None:
+    (tmp_path / "directory").mkdir()
+    (tmp_path / "regular").write_text("file")
+    (tmp_path / "loop").symlink_to(tmp_path / "loop")
+    (tmp_path / "dangling").symlink_to(tmp_path / "absent" / "file")
+    (tmp_path / "parent-link").symlink_to(tmp_path / "absent")
+    source = tmp_path / "input.txt"
+    source.write_text("payload")
+    rpc = CountingRpc(prelude="dirname() { return 1; }; ")
+    machine, _ = local_machine(tmp_path, rpc)
+
+    async def scenario() -> None:
+        try:
+            with pytest.raises(GuestPathError) as raised:
+                if operation == "read":
+                    await machine.download_file(str(tmp_path / name), tmp_path / "out")
+                else:
+                    await machine.upload(source, str(tmp_path / name))
+            assert (raised.value.errno, raised.value.filename) == (code, str(tmp_path / name))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert len(rpc.scripts) == 1
+
+
+def test_directory_download_stays_recursive_and_helper_failures_are_typed(tmp_path: Path) -> None:
+    (tmp_path / "tree" / "nested").mkdir(parents=True)
+    (tmp_path / "tree" / "nested" / "leaf.txt").write_text("leaf")
+    (tmp_path / "present.txt").write_text("present")
+
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        broken, _ = local_machine(tmp_path, CountingRpc(prelude="wc() { echo 'wc: not found' >&2; return 127; }; "))
+        try:
+            await machine.download(str(tmp_path / "tree"), tmp_path / "copy")
+            assert (tmp_path / "copy" / "nested" / "leaf.txt").read_text() == "leaf"
+            with pytest.raises(GuestHelperFailed, match="wc: not found"):
+                await broken.download(str(tmp_path / "present.txt"), tmp_path / "out")
+        finally:
+            await machine.close()
+            await broken.close()
+
+    asyncio.run(scenario())
