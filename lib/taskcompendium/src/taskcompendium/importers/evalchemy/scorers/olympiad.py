@@ -13,11 +13,11 @@ from collections.abc import Sequence
 
 import verifyit.latex_percent  # noqa: F401
 from math_verify import parse, verify
-from sympy.core.relational import Relational
 from verifyit.adapters.completion import END_OF_TURN
 from verifyit.grade import Reward, invalid_task, scored
 
 from .minerva import is_equiv, normalize_final_answer
+from .relations import same_relations, symbol_free_relation
 
 
 def reference_answers(raw: str | int | float | Sequence[str]) -> tuple[str, ...]:
@@ -82,12 +82,10 @@ def answers_equivalent(candidate: str, expected: tuple[str, ...]) -> bool:
     for answer in expected:
         reference = parse(r"\boxed{" + answer + "}", parsing_timeout=timeout)
         if reference and prediction:
-            values = [[value for value in parsed if not isinstance(value, str)] for parsed in (reference, prediction)]
-            relations = all(
-                items and all(isinstance(value, Relational) and not value.free_symbols for value in items)
-                for items in values
-            )
-            if not relations and verify(gold=reference, target=prediction, timeout_seconds=timeout):
+            if symbol_free_relation(reference):
+                if same_relations(prediction, reference):
+                    return True
+            elif verify(gold=reference, target=prediction, timeout_seconds=timeout):
                 return True
         elif is_equiv(normalize_final_answer(candidate), normalize_final_answer(answer)):
             return True

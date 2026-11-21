@@ -10,10 +10,15 @@ resolver = "2"
 # DataFusion/Arrow dependency graph makes even thin LTO add several minutes to
 # small server changes, while ordinary opt-level 3 remains representative for
 # deployment. The Python wheel selects its own size-oriented profile below.
+#
+# Nothing is stripped here, so `perf` and gdb report function names on a
+# deployed server; the symbol table is not loaded at run time. The deploy
+# Dockerfile removes the debug info afterwards. `strip = "debuginfo"` cannot do
+# that in the image: mold 1.10.1 drops the symbol table on `--strip-debug`.
 [profile.release]
 lto = false
 codegen-units = 16
-strip = "symbols"
+strip = "none"
 
 # Even-faster iteration profile for dev/test deploys (e.g. marin-dev): lowers
 # opt-level to 2 on top of release's parallel codegen. Still optimized enough
