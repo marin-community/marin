@@ -622,6 +622,7 @@ class Checkpointer:
         if force and step == self._last_save_step and self.temporary_base_path is None:
             # Promote the committed temporary save without rewriting its arrays or manifest.
             self._manager.wait_until_finished()
+            # Match save_checkpoint's path so the temporary retention entry can be removed.
             checkpoint_path = os.path.join(self.base_path, f"step-{step}")
             _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=self.metadata)
             if jax.process_index() == 0:
