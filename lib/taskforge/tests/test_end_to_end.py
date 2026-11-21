@@ -75,7 +75,7 @@ from taskforge.llm.policy import GLM_5_3, ModelProfile
 from taskforge.lowering import rollout_engine
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
-from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
+from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import (
     VALIDATION_RESULT,
     Abandon,
@@ -95,6 +95,7 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpie
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
+from taskforge.resources.decision_model import DecisionModelHealth
 from taskforge.resources.env import (
     CommandResult,
     EnvFactory,
@@ -3032,3 +3033,110 @@ async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_una
         return
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2
+
+
+@dataclass
+class TickingClock:
+    """Each reading is ``step`` later, so every wait a run computes is already over: no test waits in real time."""
+
+    now: float = 0.0
+    step: float = 0.0
+
+    def __call__(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+def answering(*answers: DecisionModelHealth) -> tuple[list[DecisionModelHealth], Any]:
+    """A health read giving ``answers`` in turn and then the last one; the list collects each answer given."""
+    given: list[DecisionModelHealth] = []
+
+    async def health() -> DecisionModelHealth:
+        given.append(answers[min(len(given), len(answers) - 1)])
+        return given[-1]
+
+    return given, health
+
+
+async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_proposals_until_healthy(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    decision = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
+    paths = {name: tmp_path / f"{name}.proposal.json" for name in ("first", "second", "code")}
+    for name, path in paths.items():
+        path.write_bytes(TASK_PROPOSAL.dump_json(proposal if name == "code" else decision))
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("\n".join(map(str, paths.values())))
+    driver_args.proposals, driver_args.concurrency = str(manifest), 1
+    codes = {str(paths["first"]): [driver.DEFERRED, 0]}
+    launches: list[tuple[str, bool]] = []
+
+    async def child(args: Namespace) -> int:
+        launches.append((Path(args.proposals).stem.removesuffix(".proposal"), args.resume_held))
+        return codes.get(args.proposals, [0]).pop(0)
+
+    given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
+    monkeypatch.setattr(driver, "one", child)
+    monkeypatch.setattr(driver, "decision_model_health", lambda _: health)
+    monkeypatch.setattr(driver, "Deferrals", partial(driver.Deferrals, clock=TickingClock(step=1000.0)))
+    monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
+    await driver.run(driver_args)
+    assert launches == [("first", False), ("code", False), ("first", True), ("second", True)]
+    assert given[:2] == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
+    out = capsys.readouterr().out
+    assert f"OUTCOME deferred exit={driver.DEFERRED} proposal={paths['first']}" in out
+    assert "submitted=4 completed=4 failed=0 skipped=0" in out
+
+
+class VirtualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_without_a_health_route_one_deferred_proposal_probes_and_the_rest_wait_for_it() -> None:
+    clock = VirtualClock()
+    given, health = answering(DecisionModelHealth.UNSUPPORTED)
+    deferrals = driver.Deferrals(health, 300.0, clock)
+    assert deferrals.ended("a", driver.DEFERRED) and deferrals.ended("b", driver.DEFERRED)
+    await deferrals.advance()
+    assert (deferrals.take(), deferrals.wake()) == (None, 300.0)  # the probe starts an interval after the hold
+    clock.now = 300.0
+    await deferrals.advance()
+    assert (deferrals.take(), deferrals.take(), deferrals.wake()) == ("a", None, None)
+    assert deferrals.ended("a", driver.DEFERRED)  # the probe was deferred again: wait a full interval
+    clock.now = 599.0
+    await deferrals.advance()
+    assert deferrals.take() is None
+    clock.now = 600.0
+    await deferrals.advance()
+    assert (deferrals.take(), deferrals.take()) == ("b", None)
+    assert not deferrals.ended("b", 0)  # the probe was answered: everything deferred starts
+    await deferrals.advance()
+    assert (deferrals.take(), deferrals.take(), deferrals.down) == ("a", None, False)
+    assert set(given) == {DecisionModelHealth.UNSUPPORTED}
+
+
+async def test_a_healthy_model_releases_every_deferred_proposal_after_a_random_share_of_the_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = VirtualClock()
+    monkeypatch.setattr(driver.random, "uniform", lambda low, high: (low + high) / 2)
+    given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
+    deferrals = driver.Deferrals(health, 300.0, clock)
+    deferrals.ended("a", driver.DEFERRED), deferrals.ended("b", driver.DEFERRED)
+    await deferrals.advance()  # a hold reads health at once: still down
+    assert (deferrals.take(), deferrals.wake()) == (None, 300.0)
+    clock.now = 300.0
+    await deferrals.advance()
+    assert (deferrals.take(), deferrals.wake()) == (None, 150.0)
+    clock.now = 450.0
+    await deferrals.advance()
+    assert [deferrals.take(), deferrals.take(), deferrals.take()] == ["a", "b", None]
+    assert given == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]

@@ -9,14 +9,18 @@ import hashlib
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
+import time
 import traceback
 from collections import Counter
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -38,12 +42,13 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, Status, fold
-from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
+from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
+from taskforge.resources.decision_model import ClefReader, DecisionModelHealth
 from taskforge.stages.classify import replay_rule
 from taskforge.wiring import endpoint_source, install, runtime
 
@@ -182,6 +187,89 @@ async def one(args: argparse.Namespace) -> int:
     return DEFERRED if deferred(wp) else 0
 
 
+@dataclass
+class Deferrals:
+    """Decision-model proposals the run holds back while the decision model is down, and when it starts them.
+
+    A child that exits ``DEFERRED`` marks the model down; new decision-model proposals then wait too. Every
+    ``interval`` the run reads the host's health route, never a read: healthy releases them all after a random share
+    of ``interval``, so drivers one recovery releases do not refill at once. A host without the route releases one
+    deferred proposal as a probe ``interval`` after the latest hold, and the rest once the probe is not deferred.
+    """
+
+    health: Callable[[], Awaitable[DecisionModelHealth]]
+    interval: float
+    clock: Callable[[], float] = time.monotonic
+    paths: list[str] = field(default_factory=list)
+    down: bool = False
+    probe: str | None = None
+    probe_due: bool = False
+    held_at: float = 0.0
+    check_at: float = 0.0
+    release_at: float | None = None
+
+    async def advance(self) -> None:
+        now = self.clock()
+        if not self.down or self.probe is not None or self.probe_due:
+            return
+        if self.release_at is None and now >= self.check_at:
+            self.check_at = now + self.interval
+            match await self.health():
+                case DecisionModelHealth.HEALTHY:
+                    self.release_at = now + random.uniform(0, self.interval)
+                case DecisionModelHealth.UNSUPPORTED if now >= self.held_at + self.interval:
+                    self.probe_due = True
+                case DecisionModelHealth.UNSUPPORTED:
+                    self.check_at = self.held_at + self.interval
+        if self.release_at is not None and now >= self.release_at:
+            self.down, self.release_at = False, None
+
+    def take(self) -> str | None:
+        """A deferred proposal to start now: any once the model is up, else the due probe."""
+        if not self.paths or (self.down and not self.probe_due):
+            return None
+        if self.down:
+            self.probe, self.probe_due = self.paths[0], False
+        return self.paths.pop(0)
+
+    def ended(self, path: str, code: int) -> bool:
+        """Record a child's exit; whether it deferred."""
+        was_probe = path == self.probe
+        if was_probe:
+            self.probe, self.down = None, code == DEFERRED
+        if code != DEFERRED:
+            return False
+        # A hold can come from a wait that began before the model returned: read health at once, unless it probed.
+        now = self.clock()
+        self.down, self.release_at, self.held_at = True, None, now
+        self.check_at = now + self.interval if was_probe else now
+        self.paths.append(path)
+        return True
+
+    def wake(self) -> float | None:
+        if not self.down or self.probe is not None or self.probe_due or not self.paths:
+            return None
+        return max(0.0, (self.release_at if self.release_at is not None else self.check_at) - self.clock())
+
+
+def decision_model_health(policy: Policy) -> Callable[[], Awaitable[DecisionModelHealth]]:
+    """The default reader's health read on ``decision_model.route``, through the same endpoint as ``one``."""
+
+    async def health() -> DecisionModelHealth:
+        route = policy.setting("decision_model.route", str)
+        source = endpoint_source(
+            os.environ.get("GLM_BASE_URL"),
+            os.environ.get("GLM_RELAY_JOB"),
+            require_secret("GLM_API_KEY"),
+            route,
+            policy.setting("provider.pool", str),
+        )
+        async with httpx.AsyncClient() as http:
+            return await ClefReader(source, http).health()
+
+    return health
+
+
 async def run(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     logging.info("Secret files (names only): %s", ", ".join(list_secret_names()) or "none")
@@ -194,43 +282,57 @@ async def run(args: argparse.Namespace) -> None:
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     labels, failed = Counter[str](), list[str]()
     policy = run_policy(args.policy)
+    deferrals = Deferrals(decision_model_health(policy), policy.setting("decision_model.retry_interval", float))
     skipped = completed = submitted = 0
     try:
         exhausted = False
-        while active or not exhausted:
-            while len(active) < args.concurrency and not exhausted:
-                path = next(proposals, None)
-                if path is None:
+        while active or not exhausted or deferrals.paths:
+            await deferrals.advance()
+            while len(active) < args.concurrency:
+                if (path := deferrals.take()) is not None:
+                    resume = True
+                elif exhausted or (path := next(proposals, None)) is None:
                     exhausted = True
                     break
-                with open_url(path, "rt") as source:
-                    proposal = TASK_PROPOSAL.validate_json(source.read())
-                if not eligible(proposal, policy):
-                    skipped += 1
-                    continue
+                else:
+                    with open_url(path, "rt") as source:
+                        proposal = TASK_PROPOSAL.validate_json(source.read())
+                    if not eligible(proposal, policy):
+                        skipped += 1
+                        continue
+                    if deferrals.down and proposal.header.verification is Verification.DECISION_MODEL:
+                        deferrals.paths.append(path)
+                        continue
+                    resume = args.resume_held
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
                 command += [
                     item
                     for name in ("output", "policy", "work_dir")
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
-                if args.resume_held:
+                if resume:
                     command.append("--resume-held")
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
+            wake = deferrals.wake()
             if active:
-                done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(active, timeout=wake, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
-                    if (code := task.result()) == 0:
+                    if deferrals.ended(path, code := task.result()):
+                        print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
+                        continue
+                    if code == 0:
                         continue
                     label, action = OUTCOMES.get(code, ("failed", "see its log"))
                     labels[label] += 1
                     print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
                     if code != SUPERSEDED:
                         failed.append(path)
+            elif wake is not None:
+                await asyncio.sleep(wake)
     finally:
         for _, process in active.values():
             if process.poll() is None:
