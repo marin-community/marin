@@ -92,10 +92,15 @@ class PublicationFailed(LogFailure):
 class ContextExceeded(Exception):
     """The provider rejected the conversation because its context window is full.
 
-    Not an effect decision: retrying or replacing the machine cannot shrink the conversation. The inference resource
-    records the provider's refusal as a ``FinishReason.CONTEXT_EXCEEDED`` completion, so a resumed request replays it;
-    the agent loop ends its session with a context-limit stop, and a caller without one raises this.
+    Not an effect decision: retrying or replacing the machine cannot shrink the conversation, so the agent harness's
+    inference handler records it as a ``FinishReason.CONTEXT_EXCEEDED`` completion that ends the visit with a
+    context-limit stop and replays on resume. Any other caller (the judge) lets it propagate unrecorded, so an
+    unfinished grade asks the provider again. ``retries`` names the transport attempts that preceded the refusal.
     """
+
+    def __init__(self, message: str, *, retries: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.retries = retries
 
 
 def describe_exception(error: BaseException) -> str:
