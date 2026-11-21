@@ -16,7 +16,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -69,18 +70,20 @@ class Labels:
         self.iris_manual = f"iris-{prefix}-manual"
 
 
-def find_free_port(start: int = -1) -> int:
-    """Find an available port.
+def find_free_port() -> int:
+    """Ask the kernel for an available ephemeral port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
-    Args:
-        start: Starting port for sequential scan. Default of -1 lets the kernel
-            pick a random ephemeral port, which avoids collisions when multiple
-            processes search for ports concurrently (e.g. pytest-xdist).
+
+@contextmanager
+def reserve_free_port(start: int) -> Iterator[int]:
+    """Hold an Iris lock for a free port until the context exits.
+
+    The probe socket closes before yielding so the tunnel can bind. The lock
+    coordinates Iris callers; it does not keep the port bound.
     """
-    if start == -1:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
     for port in range(start, start + 1000):
         lock = Path(f"/tmp/iris/port_{port}")
         try:
@@ -93,9 +96,17 @@ def find_free_port(start: int = -1) -> int:
                 s.bind(("", port))
                 lock.parent.mkdir(parents=True, exist_ok=True)
                 lock.write_text(str(os.getpid()))
-                return port
             except OSError:
                 continue
+        try:
+            yield port
+        finally:
+            try:
+                if lock.read_text() == str(os.getpid()):
+                    lock.unlink()
+            except FileNotFoundError:
+                pass
+        return
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
