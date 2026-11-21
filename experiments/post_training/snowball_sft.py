@@ -150,6 +150,7 @@ MIXTURE_SPEC = replace(
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
 # The same mixture on cw-rno2a, reading a copy of its caches and tokenizer in that region's bucket.
+_RNO_CLUSTER = "cw-rno2a"
 _RNO_BUCKET = "s3://marin-us-east-08a"
 _RNO_NAME = f"{_MIXTURE_NAME}-rno2a"
 _RNO_TOKENIZER = prefix_join(_RNO_BUCKET, _TOKENIZER_KEY)
@@ -170,10 +171,10 @@ _MIXTURE_RNO2A = SFTPreset(
         model=replace(MIXTURE_SPEC.model, tokenizer_path=_RNO_TOKENIZER),
         prepared_data=PreparedData(_RNO_DATA, _MANIFEST, _RNO_TOKENIZER),
     ),
-    replace(MIXTURE_RESOURCES, regions=("RNO2A",), target_cluster="cw-rno2a"),
+    replace(MIXTURE_RESOURCES, regions=("RNO2A",), target_cluster=_RNO_CLUSTER),
 )
 MIXTURE_262K_32NODE = SFTPreset(
-    _MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES, regional=MappingProxyType({"cw-rno2a": _MIXTURE_RNO2A})
+    _MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES, regional=MappingProxyType({_RNO_CLUSTER: _MIXTURE_RNO2A})
 )
 SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
 
