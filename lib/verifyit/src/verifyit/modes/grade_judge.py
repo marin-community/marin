@@ -12,8 +12,8 @@ explicit task score. ``pairwise`` ports Arena-Hard's two-game comparison against
 All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
-``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set). A runner
-without a configured endpoint returns an infrastructure failure.
+``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set), or a
+``JudgeConnection`` callback. A runner without a configured endpoint returns an infrastructure failure.
 """
 
 import json
@@ -27,6 +27,7 @@ import string
 import time
 import unicodedata
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -122,6 +123,35 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class JudgeMessage:
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class JudgeRequest:
+    """One greedy (temperature 0) judge sample; an empty ``reasoning_effort`` leaves the effort to the model."""
+
+    model: str
+    messages: tuple[JudgeMessage, ...]
+    max_output_tokens: int
+    reasoning_effort: str
+
+
+@dataclass(frozen=True)
+class JudgeCompletion:
+    """The reply; ``truncated`` when it stopped at ``max_output_tokens``, which retries or fails as incomplete."""
+
+    text: str
+    truncated: bool
+    completion_tokens: int | None = None
+
+
+JudgeCallback = Callable[[JudgeRequest], JudgeCompletion]
+"""Answers each judge sample in order from the grading thread: one per checklist criterion, pairwise game and retry."""
+
+
+@dataclass(frozen=True)
 class JudgeConnection:
     """Per-call endpoint credentials, kept outside serialized task specifications.
 
@@ -132,8 +162,10 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
-    transport: Any = field(default=None, kw_only=True, repr=False, compare=False)
-    """Optional in-process HTTP transport; runtime-only, like the endpoint credentials."""
+    callback: JudgeCallback | None = field(default=None, kw_only=True, repr=False, compare=False)
+
+
+_Client = openai.OpenAI | JudgeCallback
 
 
 @dataclass(frozen=True)
@@ -275,6 +307,7 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
     if spec.api != "chat_completions" or spec.completion_policy is not JudgeCompletionPolicy.COMPLETED_TEXT:
         raise InvalidTask("judge_reply needs the chat_completions API and the completed_text policy")
     client, model = _client(spec, None)
+    assert isinstance(client, openai.OpenAI)
     try:
         with client:
             completion = _label_completion(
@@ -348,7 +381,7 @@ def grade_judge_candidate(
     if connection is None and runtime is None:
         raise RuntimeError("remote judge grading requires an explicit endpoint selection")
     client, model = _client(spec, connection)
-    with client:
+    with client if isinstance(client, openai.OpenAI) else nullcontext():
         if spec.rubric == RUBRIC_REFERENCE:
             return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
@@ -467,7 +500,7 @@ def _answer_text(
     return text.strip().removesuffix("<|eot_id|>").strip()
 
 
-def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
+def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: _Client, model: str) -> Reward:
     messages = _judge_messages(spec, {"question": spec.question, "reference": reference, "candidate": candidate})
     labels = _case_normalized(spec, spec.label_scores)
     label_metrics = _case_normalized(spec, spec.label_metrics)
@@ -498,7 +531,7 @@ def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatComplet
 
 
 def _judged_answer(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list[ChatCompletionMessageParam]
+    spec: JudgeSpec, client: _Client, model: str, messages: list[ChatCompletionMessageParam]
 ) -> tuple[str, dict[str, Any]]:
     """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets."""
     budgets = _completion_budgets(spec)
@@ -525,7 +558,7 @@ def _judged_answer(
     raise RuntimeError("judge exhausted completion budgets")
 
 
-def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
+def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: _Client, model: str) -> Reward:
     """Judge both orders; the reward is the candidate's weighted share of games won, ties counting half."""
     labels = _case_normalized(spec, spec.label_scores)
     weights = _case_normalized(spec, spec.label_weights)
@@ -571,9 +604,14 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
     return None
 
 
-def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
-) -> _LabelCompletion:
+def _label_completion(spec: JudgeSpec, client: _Client, model: str, messages: list, budget: int) -> _LabelCompletion:
+    if not isinstance(client, openai.OpenAI):
+        reply = client(_request(spec, model, messages, budget))
+        finish = "length" if reply.truncated else "stop"
+        if spec.api == "chat_completions" and spec.completion_policy is JudgeCompletionPolicy.CONTENT:
+            return _LabelCompletion(reply.text, False, None, None, finish)
+        text = reply.text if reply.truncated else _completed_text(finish, reply.text)
+        return _LabelCompletion(text, reply.truncated, None, None, finish)
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
         request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
@@ -607,9 +645,8 @@ def _label_completion(
             return _LabelCompletion(
                 choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts, usage
             )
-        return _LabelCompletion(
-            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts, usage
-        )
+        text = _completed_text(choice.finish_reason, choice.message.content)
+        return _LabelCompletion(text, False, response.model, response.id, choice.finish_reason, attempts, usage)
     options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     request = {
         "model": model,
@@ -762,7 +799,7 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai.OpenAI, str]:
+def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[_Client, str]:
     base_url = connection.base_url.strip() if connection else os.environ.get(BASE_URL_ENV, "").strip()
     fallback = (
         connection.default_model
@@ -770,17 +807,15 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
         else os.environ.get(MODEL_ENV, "")
     )
     model = spec.model.strip() or fallback.strip()
-    if not base_url:
+    callback = connection.callback if connection is not None else None
+    if not base_url and callback is None:
         raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
+    if callback is not None:
+        return callback, model
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) else {}
-    if connection is not None and connection.transport is not None:
-        # Only an in-process host transport needs httpx; staged grader runtimes need not ship it.
-        import httpx  # noqa: PLC0415
-
-        options["http_client"] = httpx.Client(transport=connection.transport)
     return (
         openai.OpenAI(
             base_url=base_url,
@@ -796,7 +831,7 @@ def _question(spec: JudgeSpec) -> str:
 
 
 def _judge_reference(
-    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: openai.OpenAI, model: str
+    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: _Client, model: str
 ) -> Reward:
     prompt = REFERENCE_PROMPT.format(
         question=_question(spec),
@@ -808,7 +843,7 @@ def _judge_reference(
 
 
 def _judge_checklist(
-    spec: JudgeSpec, criteria: tuple[str, ...], context: str, candidate: str, client: openai.OpenAI, model: str
+    spec: JudgeSpec, criteria: tuple[str, ...], context: str, candidate: str, client: _Client, model: str
 ) -> Reward:
     context_block = f"\nReference context (not the candidate):\n{context.strip()}\n" if context.strip() else ""
     results = []
@@ -835,27 +870,21 @@ def _judge_checklist(
 
 
 def _ask(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
+    spec: JudgeSpec, client: _Client, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
 ) -> _ScoreResult:
     """Parse a final SCORE, retrying truncated replies with the larger budget."""
     attempts: list[_CompletionAttempt] = []
     budgets = _completion_budgets(spec)
     for attempt in range(1, ATTEMPTS + 1):
         for index, budget in enumerate(budgets):
-            response = _complete(spec, client, model, prompt, budget)
-            choice = _completion_choice(response)
-            attempts.append(
-                _CompletionAttempt(
-                    finish_reason=choice.finish_reason,
-                    completion_tokens=response.usage.completion_tokens if response.usage else None,
-                )
-            )
-            if choice.finish_reason == "length":
+            completion, content = _complete(spec, client, model, prompt, budget)
+            attempts.append(completion)
+            if completion.finish_reason == "length":
                 if index + 1 < len(budgets):
                     continue
                 raise GradingInfraError("judge completion is incomplete", **_attempt_detail(attempts))
             try:
-                reply = _completed_text(choice)
+                reply = _completed_text(completion.finish_reason, content)
             except RuntimeError as error:
                 raise GradingInfraError(str(error), **_attempt_detail(attempts)) from error
             score = _score(reply, allowed_scores)
@@ -878,17 +907,31 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
     return (spec.max_completion_tokens,)
 
 
-def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
+def _complete(
+    spec: JudgeSpec, client: _Client, model: str, prompt: str, budget: int
+) -> tuple[_CompletionAttempt, str | None]:
+    messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt}]
+    if not isinstance(client, openai.OpenAI):
+        reply = client(_request(spec, model, messages, budget))
+        return _CompletionAttempt("length" if reply.truncated else "stop", reply.completion_tokens), reply.text
     options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-    return _chat_completion(
+    response = _chat_completion(
         client,
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         temperature=0.0,
         timeout=spec.request_timeout,
         max_completion_tokens=budget,
         **options,
     )
+    choice = _completion_choice(response)
+    tokens = response.usage.completion_tokens if response.usage else None
+    return _CompletionAttempt(choice.finish_reason, tokens), choice.message.content
+
+
+def _request(spec: JudgeSpec, model: str, messages: list[ChatCompletionMessageParam], budget: int) -> JudgeRequest:
+    turns = tuple(JudgeMessage(message["role"], cast(str, message["content"])) for message in messages)
+    return JudgeRequest(model, turns, budget, spec.reasoning_effort)
 
 
 def _chat_completion(client: openai.OpenAI, **options: Any) -> ChatCompletion:
@@ -910,9 +953,8 @@ def _completion_choice(response: ChatCompletion):
     return choice
 
 
-def _completed_text(choice) -> str:
-    content = choice.message.content
-    if choice.finish_reason != "stop" or not isinstance(content, str) or not content.strip():
+def _completed_text(finish_reason: str | None, content: str | None) -> str:
+    if finish_reason != "stop" or not isinstance(content, str) or not content.strip():
         raise RuntimeError("judge completion is incomplete or has no text")
     return content
 

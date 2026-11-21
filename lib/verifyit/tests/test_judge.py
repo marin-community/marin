@@ -1235,3 +1235,53 @@ def test_judge_reply_never_returns_an_incomplete_or_refused_reply(fake_judge, fa
     spec = JudgeSpec(references=("document",), exact_gate=False)
     with pytest.raises(GradingInfraError):
         grade_judge.judge_reply(spec, [{"role": "user", "content": "Check this."}])
+
+
+@pytest.mark.parametrize("rubric", ["reference", "checklist", "labels", "pairwise"])
+def test_a_judge_callback_answers_every_sample_without_an_endpoint(rubric):
+    specs = {
+        "reference": JudgeSpec(references=("12",), exact_gate=False, reasoning_effort="low"),
+        "checklist": JudgeSpec(rubric="checklist", criteria=("Correct", "Terse"), exact_gate=False),
+        "labels": _label_spec(),
+        "pairwise": _pairwise_spec(),
+    }
+    replies = {"reference": ["SCORE: 1"], "checklist": ["SCORE: 1", "SCORE: 0"], "labels": ["[[A=B]]"]}
+    script = iter(replies.get(rubric, ["[[B>>A]]", "[[A=B]]"]))
+    requests = []
+
+    def judge(request):
+        requests.append(request)
+        return grade_judge.JudgeCompletion(next(script), truncated=False)
+
+    connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=judge)
+    result = grade_judge.grade_judge_candidate(specs[rubric], "candidate", connection=connection, runtime=None)
+    assert (result.status, result.reward) == (Status.SCORED, {"checklist": 0.5, "pairwise": 0.875}.get(rubric, 1.0))
+    assert len(requests) == {"checklist": 2, "pairwise": 2}.get(rubric, 1)
+    assert {(request.model, request.max_output_tokens) for request in requests} == {("callback-judge", 8192)}
+    assert requests[0].reasoning_effort == ("low" if rubric == "reference" else "")
+    assert requests[0].messages[-1].role == "user" and "candidate" in requests[0].messages[-1].content
+
+
+@pytest.mark.parametrize("rubric", ["reference", "labels"])
+@pytest.mark.parametrize("retry", [0, 64])
+def test_a_truncated_callback_reply_retries_at_the_larger_budget_or_is_incomplete(rubric, retry):
+    spec = (
+        JudgeSpec(references=("12",), exact_gate=False, max_completion_tokens=16, incomplete_retry_tokens=retry)
+        if rubric == "reference"
+        else _label_spec(max_completion_tokens=16, incomplete_retry_tokens=retry)
+    )
+    budgets = []
+
+    def judge(request):
+        budgets.append(request.max_output_tokens)
+        reply = "SCORE: 1" if rubric == "reference" else "[[A=B]]"
+        return grade_judge.JudgeCompletion("partial" if len(budgets) == 1 else reply, truncated=len(budgets) == 1)
+
+    connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=judge)
+    if not retry:
+        with pytest.raises(GradingInfraError, match="judge completion is incomplete"):
+            grade_judge.grade_judge_candidate(spec, "candidate", connection=connection)
+        assert budgets == [16]
+        return
+    assert grade_judge.grade_judge_candidate(spec, "candidate", connection=connection).reward == 1.0
+    assert budgets == [16, 64]
