@@ -7,6 +7,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 
 import yaml
 from fray.types import ResourceConfig
@@ -15,7 +16,7 @@ from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.lazy import OUT, apply
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedData, SFTPreset, SFTSpec, main
 
@@ -87,7 +88,9 @@ MIXTURE_RESOURCES = replace(
     regions=("US-EAST-02A",),
     target_cluster="cw-us-east-02a",
 )
-MIXTURE_TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+_DATA_BUCKET = "s3://marin-us-east-02a"
+_TOKENIZER_KEY = "marin/grug_sft/tokenizer/2026.09.18"
+MIXTURE_TOKENIZER = prefix_join(_DATA_BUCKET, _TOKENIZER_KEY)
 MIXTURE_SEQ_LEN = 262_144
 MIXTURE_BATCH_SIZE = 256
 
@@ -103,7 +106,7 @@ _SFT_FORMAT = {
 }
 
 
-def _publish_data_manifest(*, output: str, sha256: str) -> None:
+def _publish_data_manifest(*, output: str, sha256: str, bucket: str = _DATA_BUCKET) -> None:
     sources = Path(__file__).with_name("snowball_sft_data")
     data = yaml.safe_load((sources / "sft-data.yaml").read_text())["data"]
     data["components"] = json.loads((sources / "sft-components.json").read_text())
@@ -117,6 +120,10 @@ def _publish_data_manifest(*, output: str, sha256: str) -> None:
     contents = (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if hashlib.sha256(contents).hexdigest() != sha256:
         raise ValueError(f"{_MIXTURE_NAME} data manifest does not match its SHA-256 pin")
+    # A regional copy keeps every object path and changes only the bucket.
+    if bucket.endswith("/"):
+        raise ValueError(f"bucket must not end with '/': {bucket}")
+    contents = contents.replace(f"{_DATA_BUCKET}/".encode(), f"{bucket}/".encode())
     directory = StoragePath(output)
     directory.mkdirs()
     (directory / _MANIFEST).write_bytes(contents)
@@ -144,7 +151,33 @@ MIXTURE_SPEC = replace(
     per_device_parallelism=1,
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
-MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
+# The same mixture on cw-rno2a, reading a copy of its caches and tokenizer in that region's bucket.
+_RNO_CLUSTER = "cw-rno2a"
+_RNO_BUCKET = "s3://marin-us-east-08a"
+_RNO_NAME = f"{_MIXTURE_NAME}-rno2a"
+_RNO_TOKENIZER = prefix_join(_RNO_BUCKET, _TOKENIZER_KEY)
+_RNO_DATA = apply(
+    f"documents/snowball/{_RNO_NAME}",
+    _publish_data_manifest,
+    version="2026.11.20.1",
+    output=OUT,
+    sha256=_MANIFEST_SHA256,
+    bucket=_RNO_BUCKET,
+)
+_MIXTURE_RNO2A = SFTPreset(
+    _MIXTURE_NAME,
+    replace(
+        MIXTURE_SPEC,
+        name=f"checkpoints/snowball/{_RNO_NAME}",
+        version="2026.11.20.1",
+        model=replace(MIXTURE_SPEC.model, tokenizer_path=_RNO_TOKENIZER),
+        prepared_data=PreparedData(_RNO_DATA, _MANIFEST, _RNO_TOKENIZER),
+    ),
+    replace(MIXTURE_RESOURCES, regions=("RNO2A",), target_cluster=_RNO_CLUSTER),
+)
+MIXTURE_262K_32NODE = SFTPreset(
+    _MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES, regional=MappingProxyType({_RNO_CLUSTER: _MIXTURE_RNO2A})
+)
 SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
 
 

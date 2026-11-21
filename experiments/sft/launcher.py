@@ -673,9 +673,18 @@ class SFTPreset[RecipeT: SFTRecipe]:
     name: str
     recipe: RecipeT
     resources: ResourceConfig
+    regional: Mapping[str, SFTPreset] = field(default_factory=dict)
+    """The same preset bound to another cluster's data copy and resources, keyed by cluster.
+
+    An RL coordinator on one of these clusters trains that binding, so ``--sft`` follows the RL layout.
+    """
 
     def model(self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None) -> ArtifactHfModel:
-        """Build the model export using the preset's fixed allocation."""
+        """Build the model export on the coordinator's cluster binding, or the preset's own allocation."""
+        if coordinator_cluster in self.regional:
+            return self.regional[coordinator_cluster].model(
+                coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
+            )
         return self.recipe.trained(
             self.resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
         )

@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.selection import (
 )
 
 SEED = 20261020
+RNO_CLUSTER = "cw-rno2a"
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -301,7 +302,7 @@ _AGENTIC_LAYOUT = replace(
     name="h100x256",
     workload=Training(_AGENTIC_PLAN),
     megatron=replace(P40.megatron, context_parallel_size=5),
-    cluster="cw-rno2a",
+    cluster=RNO_CLUSTER,
     priority="production",
     # Each job has a 12-hour allocation and resumes from its committed checkpoint.
     job_timeout_seconds=12 * 3600,
@@ -439,6 +440,11 @@ _PRESETS = (
         data_settings=frozenset(),
     ),
     _TRAIN_LONG,
+    replace(
+        _TRAIN_LONG,
+        name="train-long-rno2a",
+        recipe=replace(_TRAIN_LONG.recipe, layout=replace(P40, name="p40-rno2a", cluster=RNO_CLUSTER)),
+    ),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
     replace(
