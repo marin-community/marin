@@ -119,7 +119,8 @@ def step_is_built(step: StepSpec) -> bool:
     same condition the launcher uses to skip a step, evaluated here at scheduling
     time so an already-built node's dependencies are pruned from the schedule
     instead of rebuilt; the launcher re-checks authoritatively before serving the
-    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    node. A mutable (``dev``) artifact always rebuilds. A read-only input always
+    checks that its source exists. Both are excluded from cache pruning.
     """
     if step.read_only:
         return False
