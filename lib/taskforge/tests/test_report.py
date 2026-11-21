@@ -222,7 +222,7 @@ async def test_a_root_in_another_journal_format_is_named_and_the_report_complete
 async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred_it(
     tmp_path: Path, proposal: TaskProposal, review_first: bool
 ) -> None:
-    """Review 2026-11-21 (n11 P2): an adversary request resolved while the solve-review's scope was open was counted
+    """Review 2026-11-21: an adversary request resolved while the solve-review's scope was open was counted
     as solve-review usage; a request's own tools name its role, whatever else is open."""
     index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
     tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())

@@ -509,7 +509,7 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
 
     The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
     grades and the adversary's hydration replay; only the adversary's model turns are new. Its solver fake recorded no
-    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence (n11)."""
+    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence."""
     recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
     served = [
         r.event.request
@@ -557,8 +557,9 @@ LATER_SETTINGS = frozenset(
         "author.review",
     }
 )
-"""The entries the default policy gained after this fixture was recorded (n9, n10, then n11); none enters a replay key
-of a recorded effect: the n10 ones while ``decision_model.model`` is empty, the n11 ones only the solve-review's own."""
+"""The entries the default policy gained after this fixture was recorded (by the solver batch, the decision model, then
+the solve-review); none enters a replay key of a recorded effect: the decision-model ones while
+``decision_model.model`` is empty, the solve-review ones only the solve-review's own."""
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record
