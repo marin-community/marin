@@ -30,7 +30,7 @@ from taskcompendium.models import ProviderRequirement, TaskSpec, TextMessage
 from rolloutengine.agents.environment import ExecResult, MachineEnvironment
 from rolloutengine.agents.model_relay import ModelRelay, PromptTokenizer, serve_model_relay, tokenize_url
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.harness.external import AgentCompletion, AgentHarness, LengthStopPolicy
+from rolloutengine.harness.external import AgentCompletion, AgentHarness, LengthStopPolicy, ReplyMatch
 from rolloutengine.models import ContextRecovery, RolloutLimits
 
 logger = logging.getLogger(__name__)
@@ -411,7 +411,7 @@ def pi_harness(options: PiOptions, tokenize: PromptTokenizer) -> PiHarness:
     async def run(context: HarnessContext, complete: AgentCompletion) -> None:
         await run_pi(options, tokenize, context, complete)
 
-    return PiHarness(AgentHarness(run, length_stop=LengthStopPolicy.NEW_CONVERSATION))
+    return PiHarness(AgentHarness(run, length_stop=LengthStopPolicy.NEW_CONVERSATION, reply_match=ReplyMatch.EXACT))
 
 
 def task_instruction(task: TaskSpec) -> str:

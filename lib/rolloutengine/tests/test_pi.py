@@ -31,7 +31,7 @@ from rolloutengine.agents.pi.agent import (
     mcp_servers,
     pi_harness,
 )
-from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
+from rolloutengine.harness.external import AgentHarness, LengthStopPolicy, ReplyMatch
 from rolloutengine.models import (
     ContextWindowExceeded,
     ModelRequest,
@@ -150,7 +150,7 @@ async def test_relay_serves_pis_requests_as_harbors_relay_does(scenario):
                 body = json.dumps(request["body"]).encode()
                 answers.append(await relay.handle(HttpRequest(request["method"], request["path"], body)))
 
-        return AgentHarness(relay_requests, length_stop=LengthStopPolicy.NEW_CONVERSATION)
+        return AgentHarness(relay_requests, length_stop=LengthStopPolicy.NEW_CONVERSATION, reply_match=ReplyMatch.EXACT)
 
     try:
         await replay_rollout(relay_harness, recorded["instruction"], vllm)
