@@ -4,6 +4,7 @@
 """Exercise the Iris backend with a local subprocess exec provider and a scripted controller."""
 
 import asyncio
+import contextlib
 import json
 import math
 import os
@@ -1263,10 +1264,17 @@ def test_ordinary_timeout_needs_only_the_timer(tmp_path) -> None:
 
 # Review follow-up 2026-11-21: argv that is a shell builtin ran in the status shell itself, so `exit` and `exec`
 # ended it before it wrote the command's record. At the base the argv was joined into the script and they worked.
+def timer_version() -> str:
+    """The first ``timeout --version`` line, such as ``timeout (GNU coreutils) 9.4``, or empty without one."""
+    if (timeout_path := shutil.which("timeout")) is None:
+        return ""
+    return subprocess.run([timeout_path, "--version"], capture_output=True, text=True).stdout.partition("\n")[0]
+
+
 def guest_timer(shell: str) -> tuple[str, str]:
-    """The coreutils ``timeout`` and ``shell`` paths a guest probe would report, or a skip when either is absent."""
+    """The ``timeout`` and ``shell`` paths the guest probe would accept, or a skip when either is absent."""
     timeout_path, shell_path = shutil.which("timeout"), shutil.which(shell)
-    if timeout_path is None or shell_path is None:
+    if timeout_path is None or shell_path is None or "coreutils" not in timer_version():
         pytest.skip(f"{shell} or a coreutils timeout is not installed")
     return timeout_path, shell_path
 
@@ -1324,10 +1332,12 @@ def wait_until_gone(pid: int, seconds: float) -> bool:
     return False
 
 
-# The status shell outlives the timer's TERM, so `timeout` keeps watching and KILLs a command that ignores TERM
-# instead of reporting a clean timeout while the command keeps running on the kept machine.
+# The status shell outlives the timer's TERM, so `timeout` keeps watching until its KILL instead of reporting a clean
+# timeout while the command keeps running on the kept machine. Every accepted timer then closes the machine, which on
+# Iris cancels the job and ends the container. GNU sends that KILL to the whole group; uutils (Ubuntu 26.04's default)
+# sends it to the status shell only, so the command outlives the KILL until the container goes.
 @pytest.mark.parametrize("shell", ["dash", "bash"])
-def test_command_ignoring_term_is_killed_at_the_grace_and_closes_the_machine(tmp_path, shell, monkeypatch) -> None:
+def test_command_ignoring_term_closes_the_machine_at_the_kill(tmp_path, shell, monkeypatch) -> None:
     timer = guest_timer(shell)
     monkeypatch.setattr(iris_backend, "GUEST_KILL_GRACE_SECONDS", 1)
 
@@ -1341,10 +1351,18 @@ def test_command_ignoring_term_is_killed_at_the_grace_and_closes_the_machine(tmp
         with pytest.raises(MachineTerminated, match=r"no completion record \(timer 137\)"):
             await machine.run(Command(("true",)))
 
-    asyncio.run(scenario())
-    # The KILL reached the command's shell, so the file it would write after its sleep can never appear.
-    assert wait_until_gone(int((tmp_path / "pid.txt").read_text()), seconds=5)
-    assert not (tmp_path / "late.txt").exists()
+    pid_file = tmp_path / "pid.txt"
+    try:
+        asyncio.run(scenario())
+        if "GNU coreutils" in timer_version():
+            # The group KILL reached the command's shell, so the file it would write after its sleep never appears.
+            assert wait_until_gone(int(pid_file.read_text()), seconds=5)
+            assert not (tmp_path / "late.txt").exists()
+    finally:
+        # The local harness has no container to end with the job, so it ends a survivor itself.
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
 
 
 # Only the timer exits 124: after its TERM the status shell records the command's status and exits with echo's.

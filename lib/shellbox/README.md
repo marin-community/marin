@@ -48,8 +48,10 @@ whose parent reports its exit status, so `exit` and `exec` behave as usual; that
 outer shell reports `timeout`'s own exit. A command with neither record, such as one whose exec stream the controller
 cut, is an unknown outcome and the machine closes. A `timeout` exit of 124 returns `TIMED_OUT` with the output so far
 and keeps the machine, including when the command handled the TERM and exited within the grace. A command that ignores
-TERM is killed with its group at the grace and closes the machine: `timeout` then exits 137, and 137 alone cannot tell
-the timer's KILL from an independent one. One status read then reports the task's terminal or OOM cause, or an unknown
+TERM closes the machine at the grace: `timeout` then exits 137, and 137 alone cannot tell the timer's KILL from an
+independent one. GNU `timeout` sends that KILL to the whole group; uutils `timeout`, the default in Ubuntu 26.04,
+sends it to the status shell only, so the command runs on until closing the machine cancels the job and ends its
+container. One status read then reports the task's terminal or OOM cause, or an unknown
 outcome, and later calls name the timer's exit, such as `timer 137`, in their `Machine is closed` reason. As on Docker,
 Daytona and ShellSim, a kept machine is not swept for survivors: a process that left the group, or a background
 descendant that ignores TERM, can survive a timeout, as it can survive a normal exit.
