@@ -11,6 +11,8 @@ from transformers import PreTrainedTokenizerBase
 
 
 SINGLE_TOOL_CALL_TEMPLATE_ERROR = "This template expects exactly one tool call per assistant turn."
+# Stands in for the content of an assistant prefix that holds only whitespace.
+CONTENT_STAND_IN = "x"
 
 
 def assistant_prefix_token_ids(
@@ -29,7 +31,6 @@ def assistant_prefix_token_ids(
         raise ValueError(f"Unsupported assistant prefix rendering fields: {sorted(template)}")
     render = partial(
         tokenizer.apply_chat_template,
-        messages,
         tools=options.get("tools"),
         return_dict=False,
         add_generation_prompt=False,
@@ -39,15 +40,21 @@ def assistant_prefix_token_ids(
     prefix = messages[-1]["content"]
     trailing_whitespace = prefix[len(prefix.rstrip()) :]
     if not trailing_whitespace:
-        return cast(list[int], render(tokenize=True))
+        return cast(list[int], render(messages, tokenize=True))
+    if not prefix.strip():
+        # The template trims a prefix of whitespace alone to nothing, and Hugging Face's continuation then also cuts
+        # whitespace that the template puts after the message header. A stand-in marks where the content starts.
+        stand_in = [*messages[:-1], {**messages[-1], "content": CONTENT_STAND_IN}]
+        marked = cast(str, render(stand_in, tokenize=False))
+        if not marked.endswith(CONTENT_STAND_IN):
+            raise ValueError("The chat template changed the assistant prefix beyond trimming its whitespace")
+        return tokenizer.encode(marked.removesuffix(CONTENT_STAND_IN) + prefix, add_special_tokens=False)
     # Hugging Face drops the prefix's trailing whitespace when the template trims message content. Tokenize the
     # restored text as a whole: the whitespace can merge with the preceding characters into one token.
-    text = cast(str, render(tokenize=False))
+    text = cast(str, render(messages, tokenize=False))
     if not text.endswith(prefix):
-        # Leading whitespace may stay trimmed; it does not border the continuation. A prefix of whitespace alone
-        # is trimmed away entirely, and the text then ends at the message header.
-        stripped = prefix.strip()
-        if stripped and not text.endswith(stripped):
+        # Leading whitespace may stay trimmed; it does not border the continuation.
+        if not text.endswith(prefix.strip()):
             raise ValueError("The chat template changed the assistant prefix beyond trimming its whitespace")
         text += trailing_whitespace
     return tokenizer.encode(text, add_special_tokens=False)
