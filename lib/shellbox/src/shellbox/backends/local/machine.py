@@ -1110,6 +1110,13 @@ def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | 
     return spec.source
 
 
+def local_process_capabilities(cgroup_parent: Path | None) -> frozenset[str]:
+    capabilities = LINUX_PROCESS_CAPABILITIES
+    if cgroup_parent is not None:
+        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
+    return capabilities
+
+
 def check_local_environment(
     requirements: ExecutionRequirements, spec: MachineSpec, *, cgroup_parent: Path | None = None
 ) -> None:
@@ -1117,15 +1124,13 @@ def check_local_environment(
     source = _check_spec(spec)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None
-    capabilities = LINUX_PROCESS_CAPABILITIES
     if cgroup_parent is not None:
         check_cgroup_parent(cgroup_parent)
-        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
     check_execution_requirements(
         requirements,
         spec,
         semantics=CommandSemantics.LINUX_PROCESS,
-        capabilities=capabilities,
+        capabilities=local_process_capabilities(cgroup_parent),
         image_reference=reference,
     )
 

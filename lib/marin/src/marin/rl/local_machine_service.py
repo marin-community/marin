@@ -22,7 +22,8 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.timing import Duration
 from shellbox.backends.iris.local_images import LocalMachineSettings, local_machine_factory
 from shellbox.backends.iris.machine_service import MachineService, MachineServiceBinding, MachineServiceContract
-from shellbox.machine import LINUX_PROCESS_CAPABILITIES, Backend, CommandSemantics
+from shellbox.backends.local.machine import local_process_capabilities
+from shellbox.machine import Backend, CommandSemantics
 
 from marin.rl.services import cpu_service
 
@@ -58,19 +59,16 @@ def run_local_machine_service(config: LocalMachineServiceConfig) -> None:
         raise ValueError("LOCAL service requires an attested Iris worker region")
     if platform.machine() != "x86_64":
         raise ValueError("LOCAL service requires an x86 CPU worker for the original image")
-    if config.local.region is None or info.worker_region.casefold() != config.local.region.casefold():
-        raise ValueError("LOCAL service worker differs from its run region")
+    if config.local.region is None:
+        raise ValueError("LOCAL service requires a run region")
     if not config.local.image_mirrors:
         raise ValueError("LOCAL service requires explicit prepared regional images")
     configure_coreweave_s3()
     factory = local_machine_factory(config.local)
-    capabilities = LINUX_PROCESS_CAPABILITIES
-    if factory.cgroup_parent is not None:
-        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
     contract = MachineServiceContract(
         backend=Backend.LOCAL,
         semantics=CommandSemantics.LINUX_PROCESS,
-        capabilities=capabilities,
+        capabilities=local_process_capabilities(factory.cgroup_parent),
         images=tuple(mirror.image for mirror in config.local.image_mirrors),
         cpus=config.cpus_per_machine,
         memory_mb=config.memory_mb_per_machine,
