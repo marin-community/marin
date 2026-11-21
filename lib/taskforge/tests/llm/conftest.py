@@ -4,30 +4,21 @@
 """Fixtures for the GLM transport tests.
 
 ``fake_glm`` and ``other_fake_glm`` are independent scripted GLM routers (``fake_glm.FakeGlm``), the
-second for an endpoint that moves. ``fast_provider`` is a provider config whose backoff is a
-millisecond, so retries and holds are quick.
+second for an endpoint that moves. ``fast_retry`` is a retry policy whose backoff is a millisecond, so
+retries and holds are quick.
 """
 
 from collections.abc import Iterator
 
 import pytest
-from lib.taskforge.tests.llm.fake_glm import GLM_MODEL, FakeGlm, serving
+from lib.taskforge.tests.llm.fake_glm import FakeGlm, serving
 
-from taskforge.llm.policy import LLMProviderConfig
+from taskforge.llm.policy import RetryPolicy
 
 
 @pytest.fixture
-def fast_provider() -> LLMProviderConfig:
-    return LLMProviderConfig(
-        model=GLM_MODEL,
-        max_attempts=8,
-        hold_timeout=60.0,
-        backoff_initial=0.001,
-        backoff_maximum=0.001,
-        backoff_factor=1.0,
-        stall_timeout=600.0,
-        max_connections=8,
-    )
+def fast_retry() -> RetryPolicy:
+    return RetryPolicy(unavailable_wait=60.0, backoff_initial=0.001, backoff_maximum=0.001, backoff_factor=1.0)
 
 
 @pytest.fixture

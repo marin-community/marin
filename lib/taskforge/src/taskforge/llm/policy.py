@@ -1,16 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sampling and continuation settings for GLM-5.3 calls, and the settings for calling the provider.
+"""What a call samples, what its model needs, and how long the model client waits for an unavailable provider.
 
-``LLMPolicy`` sets how a logical call samples. ``LLMProviderConfig`` sets how the client calls the
-provider: the model, the retries and their backoff, the infrastructure hold, the stall timeout and
-the connection pool.
-
-``max_tokens`` defaults to the model's output limit. The client sends it unchanged with the whole
-prompt, so a prompt too long for that budget to fit the context window raises ``ContextExhausted``.
-A prompt that long usually means its parts belong in files, for a model in an agentic environment
-to read.
+``LLMPolicy`` sets how a logical call samples; it is part of every recorded request's replay key.
+``ModelProfile`` holds what one model needs whoever serves it: sampling defaults, its context window, its output
+limit and how a replayed tool call's arguments are repaired. ``GLM_5_3`` is the library default for every role.
+``RetryPolicy`` is the one retry owner's budget (``taskforge.llm.client.ModelClient``).
 
 When a reply stops with ``finish_reason == "length"``, the client saves the partial output and
 continues, up to ``max_continuations`` times. The continuation depends on where the cut fell, as
@@ -26,11 +22,15 @@ measured live on GLM-5.3:
   and loops. Carrying the reasoning as ``reasoning_content`` leaves that loop in place.
 """
 
-from collections.abc import Sequence
+import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
 GLM_MAX_OUTPUT_TOKENS = 131_072
+GLM_CONTEXT_TOKENS = 262_144
+MAX_STALLS = 2
+"""Consecutive stalls inside an open tool call after which a call returns as degenerate output."""
 
 CONTINUE_PROMPT = (
     "Your previous reply was cut off by the output limit. Continue exactly where it stopped, "
@@ -38,6 +38,7 @@ CONTINUE_PROMPT = (
 )
 THINK_OPEN = "<think>"
 CONTINUE_FINAL_MESSAGE_FIELDS: dict[str, object] = {"continue_final_message": True, "add_generation_prompt": False}
+INVALID_ARGUMENTS_KEY = "invalid_arguments"
 
 Message = dict[str, object]
 
@@ -56,7 +57,7 @@ class LLMPolicy:
     (temperature 1.0, top_p 0.95, no top_k), so an unset policy samples as the model publishes.
 
     Attributes:
-        max_tokens: Output budget per request. Defaults to the model maximum.
+        max_tokens: Output budget per request, sent only when the model profile limits output.
         reasoning_effort: Passed to the chat template as ``reasoning_effort``.
         temperature: Sampling temperature.
         top_p: Nucleus-sampling probability mass.
@@ -78,30 +79,51 @@ class LLMPolicy:
         return {"temperature": self.temperature, "top_p": self.top_p}
 
 
-@dataclass(frozen=True)
-class LLMProviderConfig:
-    """How the client calls the LLM provider.
+def replay_arguments(arguments: str) -> str:
+    """GLM's chat template rejects a replayed call whose arguments are not a JSON object, so wrap anything else.
 
-    Attributes:
-        model: The model id sent with each request; it must match the endpoint's model.
-        max_attempts: Attempts per request, with each continuation a separate request. When the last
-            attempt fails, the call raises ``ModelUnavailable``. Only failures outside a hold count.
-        hold_timeout: Seconds an infrastructure hold may last before ``ModelUnavailable``.
-        backoff_initial: First delay, in seconds, between attempts and between health polls.
-        backoff_maximum: Largest delay, in seconds.
-        backoff_factor: Growth of the delay after each wait.
-        stall_timeout: Seconds without a streamed token before the client abandons an attempt.
-        max_connections: httpx connection-pool size; sized for hundreds of concurrent calls.
+    The arguments come back unchanged when they parse to an object, else as ``{"invalid_arguments": <raw text>}``.
+    """
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return arguments
+    return json.dumps({INVALID_ARGUMENTS_KEY: arguments})
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProfile:
+    """What a model needs from its requests, wherever it is served.
+
+    ``sampling`` sits under the policy's ``sampling.*`` keys; ``<role>.context_tokens`` may not exceed
+    ``context_tokens``. With ``max_output_tokens`` the client sends ``min(max_tokens, max_output_tokens)`` and reports a
+    tool call that used the whole budget as ``length``; None leaves output to the endpoint. ``replay_arguments`` repairs
+    a sampled tool call's arguments so that the conversation replays.
     """
 
-    model: str
-    max_attempts: int
-    hold_timeout: float
+    sampling: LLMPolicy
+    context_tokens: int
+    max_output_tokens: int | None
+    replay_arguments: Callable[[str], str]
+
+
+GLM_5_3 = ModelProfile(LLMPolicy(), GLM_CONTEXT_TOKENS, None, replay_arguments)
+"""The default for every role: the router's GLM-5.3 and DeepSeek V4.1 Flash share its chat-template conventions."""
+
+
+@dataclass(frozen=True, slots=True)
+class RetryPolicy:
+    """How long the model client waits out an unavailable provider, and how long a call that has not failed may
+    generate (``generation_timeout``; None is unbounded). The backoff spaces attempts and availability polls."""
+
+    unavailable_wait: float
     backoff_initial: float
     backoff_maximum: float
     backoff_factor: float
-    stall_timeout: float
-    max_connections: int
+    max_stalls: int = MAX_STALLS
+    generation_timeout: float | None = None
 
 
 def continuation_messages(messages: Sequence[Message], partial: str) -> list[Message]:

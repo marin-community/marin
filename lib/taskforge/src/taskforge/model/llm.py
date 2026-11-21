@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Provider-independent values exchanged by harnesses and inference resources."""
+"""Provider-independent values exchanged by harnesses, inference resources and the model transport."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -15,6 +15,7 @@ class FinishReason(StrEnum):
     LENGTH = "length"
     TOOL_CALLS = "tool_calls"
     ABORT = "abort"
+    """vLLM aborted the request, for example while draining a worker; the model client retries it."""
 
 
 class Role(StrEnum):
@@ -53,6 +54,14 @@ class Usage:
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     cached_tokens: int = 0
+
+    def __add__(self, other: "Usage") -> "Usage":
+        return Usage(
+            self.prompt_tokens + other.prompt_tokens,
+            self.completion_tokens + other.completion_tokens,
+            self.reasoning_tokens + other.reasoning_tokens,
+            self.cached_tokens + other.cached_tokens,
+        )
 
 
 @dataclass(frozen=True, slots=True)

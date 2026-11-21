@@ -3,34 +3,19 @@
 
 """Completions as replayed messages and as RolloutEngine turns.
 
-``replay_arguments`` keeps tool-call arguments replayable: GLM's chat template rejects a replayed
-call whose arguments are not a JSON object, so anything else is wrapped as
-``{"invalid_arguments": <raw text>}``. ``model_turn`` is one completion as a messages-trace
-``ModelTurn``: the reply as a chat message and the call's usage, with empty token ids and no
-logprobs, so the engine charges its usage against the attempt's budget and never trains on it.
+``model_turn`` is one completion as a messages-trace ``ModelTurn``: the reply as a chat message and the call's usage,
+with empty token ids and no logprobs, so the engine charges its usage against the attempt's budget and never trains on
+it.
 """
 
-import json
 from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
 from rolloutengine.models import LENGTH_STOP_REASON, ModelTurn, TokenUsage
 
-from taskforge.llm.client import Attempt, Completion, FinishReason, ToolCall
-
-INVALID_ARGUMENTS_KEY = "invalid_arguments"
-
-
-def replay_arguments(arguments: str) -> str:
-    """The arguments to replay: unchanged if they parse to a JSON object, else wrapped in one."""
-    try:
-        parsed = json.loads(arguments)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict):
-        return arguments
-    return json.dumps({INVALID_ARGUMENTS_KEY: arguments})
+from taskforge.llm.client import Attempt, Completion
+from taskforge.model.llm import FinishReason, ToolCall
 
 
 def wire_message(content: str, reasoning: str, tool_calls: Sequence[ToolCall]) -> dict[str, Any]:

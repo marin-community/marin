@@ -60,7 +60,7 @@ from taskforge.effects.issues import (
 )
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
-from taskforge.llm.glm_client import EndpointSource
+from taskforge.llm.glm_provider import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal

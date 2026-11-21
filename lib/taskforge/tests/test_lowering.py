@@ -9,7 +9,7 @@ from typing import override
 
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeWeb
-from lib.taskforge.tests.resources.inference_fakes import Backend as ScriptedBackend
+from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -194,6 +194,9 @@ def test_shellsim_output_budget_is_declared_and_resolved_without_changing_shared
     assert ShellSimMachineFactory().output == 128 * 1024 * 1024
 
 
+ROLES = ("author", "solver", "adversary")
+
+
 @pytest.mark.parametrize(
     "overlay, reruns",
     [
@@ -210,9 +213,8 @@ async def test_a_completed_solver_trial_replays_unless_its_model_sampling_or_out
     """A tighter ShellSim output budget can exhaust a trial that passed under a generous one."""
 
     def rollouts(policy: Policy) -> RolloutResource:
-        clients = {role: ScriptedBackend(()) for role in ("author", "solver", "adversary")}
-        clients["solver"].model = policy.setting("solver.model", str)
-        return build_resources(policy, clients, {}, FakeWeb({}, {})).rollouts
+        providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in ROLES}
+        return build_resources(policy, providers, {}, FakeWeb({}, {})).rollouts
 
     declared = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
     spec = lower_with_settings(arithmetic_task(), lowering_settings(declared), {})
@@ -231,8 +233,8 @@ async def test_a_cached_candidate_grade_replays_unless_the_output_cap_changes(
     """Candidate grading runs on the solver's machines, so a tighter ShellSim cap must regrade a control."""
 
     def grading(policy: Policy) -> GradingResource:
-        clients = {role: ScriptedBackend(()) for role in ("author", "solver", "adversary")}
-        return build_resources(policy, clients, {}, FakeWeb({}, {})).grading
+        providers = {role: ScriptedProvider(()) for role in ROLES}
+        return build_resources(policy, providers, {}, FakeWeb({}, {})).grading
 
     declared = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
     spec = lower_with_settings(arithmetic_task(), lowering_settings(declared), {})

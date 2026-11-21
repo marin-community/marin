@@ -8,7 +8,7 @@ which otherwise ends through an exit tool or repeated empty or degenerate comple
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import PurePosixPath
@@ -30,7 +30,6 @@ from taskforge.harness.protocol import (
     ToolResult,
 )
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.wire import replay_arguments
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import FinishReason, Message, Role
 from taskforge.model.stage import Exit
@@ -49,6 +48,8 @@ class AgenticHarness(Harness):
     sampling: LLMPolicy
     nudge: str
     output_chars: int
+    replay_arguments: Callable[[str], str]
+    """The model profile's repair of sampled tool-call arguments, applied before they enter the conversation."""
 
     def __post_init__(self) -> None:
         if self.output_chars < 1:
@@ -97,7 +98,9 @@ class AgenticHarness(Harness):
                 degenerate_completions = 0
                 # Provider prompt_tokens already includes the cached portion.
                 prompt_tokens = result.usage.prompt_tokens + result.usage.completion_tokens
-                calls = tuple(replace(call, arguments=replay_arguments(call.arguments)) for call in result.tool_calls)
+                calls = tuple(
+                    replace(call, arguments=self.replay_arguments(call.arguments)) for call in result.tool_calls
+                )
                 message = Message(Role.ASSISTANT, result.content, calls, reasoning=result.reasoning)
                 session = replace(session, messages=(*session.messages, message))
                 empty_completions = empty_completions + 1 if not result.content and not result.tool_calls else 0

@@ -44,7 +44,7 @@ from taskforge.harness.tools.grade import GradeTool
 from taskforge.harness.tools.shell import ShellTool
 from taskforge.harness.tools.submit import SubmitTool
 from taskforge.harness.tools.web import WebFetchTool, WebSearchTool
-from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.policy import LLMPolicy, replay_arguments
 from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall, Usage
@@ -125,7 +125,7 @@ async def test_malformed_report_and_schema_errors_recover_with_replayable_histor
     client = FakeInference(script)
     env = environment(ctx)
     async with opened(ctx, env):
-        result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
+        result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000, replay_arguments).run(
             ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task())}
         )
     await ctx.drain()
@@ -227,7 +227,7 @@ async def test_tool_output_spill_slices_and_persisted_replay(
             "web_fetch": WebFetchTool(),
             "finish": FinishTool(),
         }
-        harness, initial = AgenticHarness(1000, LLMPolicy(), "continue", 8), Conversation((), ())
+        harness, initial = AgenticHarness(1000, LLMPolicy(), "continue", 8, replay_arguments), Conversation((), ())
         client = FakeInference((call(name, args, "../../escape"), call("finish", {"reason": "done"}, "done")))
         result = await harness.run(ctx, initial, client, tools)
         [(path, data)] = [
@@ -322,7 +322,7 @@ async def test_empty_turns_nudge_until_finish_or_three_consecutive_failures(fail
     script = (Completion("first"), Completion(""), Completion("second"), Completion(""), Completion(""))
     client = FakeInference((*script, Completion("") if fails else call("finish", {"reason": "done"}, "finish")))
     ctx = Context(log=EventLog())
-    harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000)
+    harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000, replay_arguments)
     if fails:
         with pytest.raises(Hold, match="provider returned 3 empty completions"):
             await harness.run(ctx, Conversation((), ()), client, {"finish": FinishTool()})
@@ -346,7 +346,7 @@ async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(
     sink = JsonlSink(str(tmp_path / "session.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     initial = Conversation((Message(Role.USER, "build"),), ())
-    harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000)
+    harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000, replay_arguments)
     tools = {"finish": FinishTool()}
     result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
@@ -415,7 +415,7 @@ async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overf
     env = environment(ctx)
     async with opened(ctx, env):
         client = FakeInference((first, second))
-        result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
+        result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000, replay_arguments).run(
             ctx, initial, client, {"shell": ShellTool(30, 120)}
         )
     await ctx.drain()
@@ -605,7 +605,7 @@ async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(
             "submit": SubmitTool(accept, *DRAFT),
             "shell": ShellTool(30, 120),
         }
-        harness, initial = AgenticHarness(262144, LLMPolicy(), "continue", 20000), Conversation((), ())
+        harness, initial = AgenticHarness(262144, LLMPolicy(), "continue", 20000, replay_arguments), Conversation((), ())
         result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
     assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)

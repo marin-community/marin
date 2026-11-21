@@ -28,6 +28,7 @@ from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
+from taskforge.llm.policy import LLMPolicy, replay_arguments
 from taskforge.lowering import lowering_settings, machine_backend, requirements
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, Message, Role, Usage
@@ -686,7 +687,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
 ) -> None:
     assert workpiece.submission is not None
     setup = config()
-    harness = AgenticHarness(32, sampling(setup.policy), "report findings", 20000)
+    harness = AgenticHarness(32, sampling(setup.policy, LLMPolicy()), "report findings", 20000, replay_arguments)
     setup = replace(setup, adversaries={"finder": harness}, tools={"finder": {}})
     client = FakeInference(
         (
