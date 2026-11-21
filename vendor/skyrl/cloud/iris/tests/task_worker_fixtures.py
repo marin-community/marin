@@ -7,7 +7,7 @@ from skyrl_train.trajectory_runners.types import TokenProvenance
 class WorkerTokenizer:
     eos_token_id = 99
 
-    def decode(self, token_ids, **kwargs):
+    def decode(self, _token_ids, **_kwargs):
         return "Working"
 
 

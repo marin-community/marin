@@ -1,7 +1,6 @@
 """Training treatment for terminal task failures."""
 
 from dataclasses import dataclass, field
-from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -14,12 +13,6 @@ PASSTHROUGH_WITHOUT_LOGPROBS_ERROR = "PassthroughWithoutLogprobs"
 
 
 DEFAULT_ERROR_TREATMENT = ErrorTreatment.ZERO
-
-
-def _exception_names(value: str | Iterable[str]) -> frozenset[str]:
-    if isinstance(value, str):
-        return frozenset(name.strip() for name in value.split(",") if name.strip())
-    return frozenset(value)
 
 
 @dataclass(frozen=True)
@@ -35,17 +28,17 @@ class ErrorHandlingConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ErrorHandlingConfig":
-        """Read a schema-validated mapping at the terminal-bench boundary."""
+        """Apply supplied training policy fields over the default policy."""
         defaults = DEFAULT_ERROR_HANDLING_CONFIG
         return cls(
             enable_error_classification=bool(
                 config.get("enable_error_classification", defaults.enable_error_classification)
             ),
-            passthrough_exceptions=_exception_names(
+            passthrough_exceptions=frozenset(
                 config.get("passthrough_exceptions", defaults.passthrough_exceptions)
             ),
-            mask_exceptions=_exception_names(config.get("mask_exceptions", defaults.mask_exceptions)),
-            zero_exceptions=_exception_names(config.get("zero_exceptions", defaults.zero_exceptions)),
+            mask_exceptions=frozenset(config.get("mask_exceptions", defaults.mask_exceptions)),
+            zero_exceptions=frozenset(config.get("zero_exceptions", defaults.zero_exceptions)),
             default_error_treatment=ErrorTreatment(
                 config.get("default_error_treatment", defaults.default_error_treatment)
             ),

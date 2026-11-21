@@ -80,7 +80,7 @@ class ResettingFactory:
         return ResettingMachine(await ShellSimMachineFactory().create(spec), reset=fails, operation=self.reset)
 
 
-async def rollout(
+async def rollout_evidence(
     worker_config,
     factory,
     *,
@@ -137,7 +137,7 @@ async def rollout(
 )
 async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_config, failures, recovers):
     factory = ResettingFactory(failures)
-    result, waits, _ = await rollout(worker_config, factory)
+    result, waits, _ = await rollout_evidence(worker_config, factory)
     assert factory.creations == RETRY_SETTINGS.max_retries + 1
     assert (result.failure is None) == recovers
     # Each restart waits first, because the resets arrive in bursts.
@@ -148,7 +148,7 @@ async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_conf
 @pytest.mark.asyncio
 async def test_lost_connection_in_the_setup_command_restarts_the_rollout(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.COMMAND)
-    result, _, _ = await rollout(worker_config, factory, environment=SETUP_ENVIRONMENT)
+    result, _, _ = await rollout_evidence(worker_config, factory, environment=SETUP_ENVIRONMENT)
     assert factory.creations == 2
     assert result.failure is None
 
@@ -157,7 +157,7 @@ async def test_lost_connection_in_the_setup_command_restarts_the_rollout(worker_
 async def test_lost_connection_in_a_model_command_keeps_the_failure(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.COMMAND)
     replies = [sampled_reply(None, tool_calls=shell_call("true")["tool_calls"])]
-    result, waits, batch = await rollout(worker_config, factory, replies=replies)
+    result, waits, batch = await rollout_evidence(worker_config, factory, replies=replies)
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
@@ -170,7 +170,7 @@ async def test_lost_connection_in_a_model_command_keeps_the_failure(worker_confi
 async def test_harbor_task_obeys_the_same_zero_retry_budget(worker_config):
     factory = ResettingFactory(failures=1)
     harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {}}))
-    result, waits, _ = await rollout(worker_config, factory, harbor=harbor, retry=RetrySettings())
+    result, waits, _ = await rollout_evidence(worker_config, factory, harbor=harbor, retry=RetrySettings())
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
@@ -185,7 +185,7 @@ async def test_permanent_provider_failure_does_not_restart_the_machine(worker_co
             raise DaytonaError("unauthorized", status_code=401)
 
     factory = UnauthorizedFactory(failures=1)
-    result, waits, _ = await rollout(worker_config, factory)
+    result, waits, _ = await rollout_evidence(worker_config, factory)
     assert factory.creations == 1
     assert waits == []
     assert result.failure.cause_type == "DaytonaError"
@@ -196,7 +196,7 @@ async def test_permanent_provider_failure_does_not_restart_the_machine(worker_co
 async def test_lost_connection_during_resource_upload_restarts_before_the_model_turn(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.UPLOAD)
     resources = ResourceGroups(worker=(inline_resource("input.txt", b"task input"),))
-    result, waits, _ = await rollout(worker_config, factory, resources=resources)
+    result, waits, _ = await rollout_evidence(worker_config, factory, resources=resources)
     assert factory.creations == 2
     assert len(waits) == 1
     assert result.failure is None
@@ -210,7 +210,7 @@ async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_c
 
     factory = ResettingFactory(failures=0)
     grader = ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT)
-    result, waits, batch = await rollout(worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier())
+    result, waits, batch = await rollout_evidence(worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier())
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
@@ -221,10 +221,14 @@ async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_c
     assert not any(batch["loss_masks"][0])
 
 
-def test_harbor_preset_preserves_its_budget_in_the_common_task_settings():
+@pytest.mark.asyncio
+async def test_harbor_preset_applies_two_retries_to_other_task_kinds(worker_config):
     directory = Path(__file__).resolve().parents[3] / "skyrl-train/skyrl_train/config"
     with initialize_config_dir(config_dir=str(directory), version_base=None):
         config = compose(config_name="ppo_base_config", overrides=["+terminal_bench_config=terminal_bench"])
     settings = RetrySettings.model_validate(OmegaConf.to_container(config.environment.task_sessions.retry, resolve=True))
-    assert (settings.max_retries, settings.wait_multiplier) == (2, 2)
-    assert "max_retries" not in config.terminal_bench_config.harbor
+    factory = ResettingFactory(failures=2)
+    result, waits, _ = await rollout_evidence(worker_config, factory, retry=settings)
+    assert result.failure is None
+    assert factory.creations == 3
+    assert waits == [1, 2]

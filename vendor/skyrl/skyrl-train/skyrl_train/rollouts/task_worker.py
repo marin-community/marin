@@ -11,7 +11,21 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rigging.task_errors import ErrorIdentity, RetryDisposition, RetrySettings, error_category, exception_identity, retry_delay
+from rigging.task_errors import (
+    AGENT_SETUP_TIMEOUT_ERROR,
+    AGENT_TIMEOUT_ERROR,
+    CONTEXT_LENGTH_EXCEEDED_ERROR,
+    ENVIRONMENT_START_TIMEOUT_ERROR,
+    TRIAL_TIMEOUT_ERROR,
+    VERIFIER_RUNTIME_ERROR,
+    VERIFIER_TIMEOUT_ERROR,
+    ErrorIdentity,
+    RetryDisposition,
+    RetrySettings,
+    error_category,
+    exception_identity,
+    retry_delay,
+)
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -45,7 +59,6 @@ from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
-from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -287,30 +300,30 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         diagnostics.update(_machine_diagnostics(error, failure.provider_status_code))
     if isinstance(error, TimeoutError):
         exception_type = {
-            RolloutOperation.ATTEMPT: "TrialTimeoutError",
-            RolloutOperation.START: "EnvironmentStartTimeoutError",
-            RolloutOperation.PREPARE: "AgentSetupTimeoutError",
-            RolloutOperation.GRADE: "VerifierTimeoutError",
-        }.get(interruption.operation, "AgentTimeoutError")
+            RolloutOperation.ATTEMPT: TRIAL_TIMEOUT_ERROR,
+            RolloutOperation.START: ENVIRONMENT_START_TIMEOUT_ERROR,
+            RolloutOperation.PREPARE: AGENT_SETUP_TIMEOUT_ERROR,
+            RolloutOperation.GRADE: VERIFIER_TIMEOUT_ERROR,
+        }.get(interruption.operation, AGENT_TIMEOUT_ERROR)
     elif isinstance(error, TemplateError):
         exception_type = TEMPLATE_ERROR
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
         exception_type = TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
-        exception_type = "ContextLengthExceededError"
+        exception_type = CONTEXT_LENGTH_EXCEEDED_ERROR
         diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
         exception_type = VERIFIER_RUNTIME_ERROR
         diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
-            exception_type = "ContextLengthExceededError"
+            exception_type = CONTEXT_LENGTH_EXCEEDED_ERROR
         diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
-        exception_type = "VerifierTimeoutError"
+        exception_type = VERIFIER_TIMEOUT_ERROR
     if isinstance(error, TaskMachineError) and interruption.operation not in {
         RolloutOperation.START,
         RolloutOperation.PREPARE,
@@ -327,7 +340,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             "retry_disposition": failure.retry_disposition
             if failure.retry_disposition is RetryDisposition.PERMANENT
             or exception_type == failure.exception_type
-            or exception_type in {"EnvironmentStartTimeoutError", "AgentSetupTimeoutError", "TrialTimeoutError"}
+            or exception_type in {ENVIRONMENT_START_TIMEOUT_ERROR, AGENT_SETUP_TIMEOUT_ERROR, TRIAL_TIMEOUT_ERROR}
             else RetryDisposition.UNKNOWN,
         }
     )
