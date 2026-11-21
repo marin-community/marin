@@ -13,6 +13,7 @@ from argparse import Namespace
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from lib.taskforge.tests.effect_fakes import local_records
@@ -380,7 +381,7 @@ def test_a_resumed_read_that_fails_holds_after_its_siblings_settle_and_recovery_
     reads slot 0 once more and buys only the five confirmation trials."""
     assert probed("sibling-record", tmp_path)["exit"] == 75
     held = dict(probed(f"sibling-{failure}", tmp_path))
-    [why] = held.pop("reasons")
+    [why] = cast(list[str], held.pop("reasons"))
     assert held == {"exit": 0, "solves": 1, "reads": ["a dozen", "thirteen"], "terminal": "held", "awaits": None}
     assert reason in why  # the ordinary hold, never a bug, keeps the gateway's diagnostic
     recovered = probed("sibling-recover", tmp_path)
