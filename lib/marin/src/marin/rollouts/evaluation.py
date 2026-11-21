@@ -6,7 +6,8 @@
 import asyncio
 import dataclasses
 import json
-from collections.abc import Mapping
+import logging
+from collections.abc import Collection, Mapping
 from functools import partial
 from typing import Any
 
@@ -77,6 +78,12 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
+logger = logging.getLogger(__name__)
+
+# Raw evidence and turn metadata key naming the root, run identity and evidence blob of a reused model response.
+REUSED_FROM_RUN = "reused_response_from_run"
+# Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
+RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
 
@@ -121,6 +128,15 @@ class EvaluationRunConfig(RunModel):
 def saved_task_fields(task: TaskSpec, mode: TaskEvidence) -> dict[str, Any]:
     """The task fields saved with an attempt; the item always names the task in its corpus."""
     return {"task": task.model_dump(mode="json")} if mode is TaskEvidence.EMBEDDED else {}
+
+
+def run_identity(run: Mapping[str, Any]) -> str:
+    """Identify a stored run descriptor, leaving out what a resume may change.
+
+    Request concurrency and the sources of reused model responses are not part of the identity.
+    """
+    described = {key: value for key, value in run.items() if key != RESPONSE_SOURCES}
+    return canonical_sha256({**described, "config": scoring_settings(run["config"])})
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:
@@ -215,18 +231,10 @@ def _attempt_key(dataset: str, source_row: str, trial: int) -> tuple[str, str, i
     return dataset, source_row, trial
 
 
-def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | None:
-    """Reuse one completed generation when its verifier, rather than the model, failed."""
-    if old is None or old.phase is not AttemptPhase.FINISHED or old.outcome is not Outcome.INFRA_ERROR:
-        return None
-    assert old.result_blob is not None
-    saved = reader.read_blob(old.result_blob)
-    assert saved is not None
-    raw = json.loads(saved)
+def _completed_turn(raw: Mapping[str, Any]) -> ModelTurn | None:
+    """The model turn of a single-turn generation attempt that failed, if at all, only while grading."""
     failure = raw["failure"]
     if failure is not None and failure["diagnostics"]["operation"] != RolloutOperation.GRADE:
-        return None
-    if failure is None and raw["grade"]["status"] not in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
         return None
     conversations = raw["conversations"]
     if len(conversations) != 1 or len(conversations[0]["steps"]) != 1:
@@ -245,8 +253,100 @@ def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | No
     )
 
 
+def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | None:
+    """Reuse one completed generation when its verifier, rather than the model, failed."""
+    if old is None or old.phase is not AttemptPhase.FINISHED or old.outcome is not Outcome.INFRA_ERROR:
+        return None
+    assert old.result_blob is not None
+    saved = reader.read_blob(old.result_blob)
+    assert saved is not None
+    raw = json.loads(saved)
+    if raw["failure"] is None and raw["grade"]["status"] not in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
+        return None
+    return _completed_turn(raw)
+
+
+@dataclasses.dataclass(frozen=True)
+class ResponseSource:
+    """A run whose stored model responses another run reused."""
+
+    root: str
+    run: str
+    """The run identity of the source."""
+    driver_revision: str
+
+
+class _StoredResponses:
+    """Completed model responses that another run of the same model stored, by benchmark, source row and trial."""
+
+    def __init__(self, root: str, benchmarks: Collection[str], model: ModelIdentity):
+        self._reader = ReadView(root)
+        saved = self._reader.read_blob(RUN_OBJECT)
+        if saved is None:
+            raise ValueError(f"No evaluation run is stored in {root}")
+        run = json.loads(saved)
+        if run["config"]["model"] != model.model_dump(mode="json"):
+            raise ValueError(f"Reused model responses require the same model identity as {root}")
+        self.source = ResponseSource(root, run_identity(run), run["driver_revision"])
+        datasets: dict[str, str] = {}
+        for entry in run["datasets"]:
+            benchmark = entry["protocol"]["benchmark"]
+            if benchmark in benchmarks:
+                if benchmark in datasets.values():
+                    raise ValueError(f"{root} holds more than one {benchmark} corpus")
+                datasets[entry["dataset"]] = benchmark
+        for benchmark in sorted(set(benchmarks) - set(datasets.values())):
+            logger.warning("%s stored no %s responses to reuse", root, benchmark)
+        self._attempts: dict[tuple[str, str, int], list[Attempt]] = {}
+        for row in self._reader.iter_rows(ATTEMPTS_TABLE):
+            attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
+            if attempt.phase is AttemptPhase.FINISHED and attempt.dataset in datasets:
+                key = (datasets[attempt.dataset], attempt.source_row, attempt.trial)
+                self._attempts.setdefault(key, []).append(attempt)
+
+    def response(self, benchmark: str, source_row: str, trial: int) -> tuple[dict[str, str], ModelTurn] | None:
+        """The latest completed model response of that attempt, with the run and evidence blob it came from."""
+        for attempt in sorted(self._attempts.get((benchmark, source_row, trial), ()), key=lambda old: -old.retry):
+            assert attempt.result_blob is not None
+            saved = self._reader.read_blob(attempt.result_blob)
+            assert saved is not None
+            raw = json.loads(saved)
+            turn = _completed_turn(raw) if "conversations" in raw else None
+            if turn is not None:
+                provenance = {"root": self.source.root, "run": self.source.run, "result_blob": attempt.result_blob}
+                return provenance, turn
+        return None
+
+
+def _response_sources(
+    previous_run: Mapping[str, Any] | None, responses: _StoredResponses | None
+) -> list[dict[str, str]]:
+    """The sources a result root has reused: those its run descriptor lists, then this invocation's."""
+    sources = list(previous_run.get(RESPONSE_SOURCES, ())) if previous_run is not None else []
+    if responses is not None and (source := dataclasses.asdict(responses.source)) not in sources:
+        sources.append(source)
+    return sources
+
+
 async def _saved_model_turn(_request: ModelRequest, turn: ModelTurn) -> ModelTurn:
     return turn
+
+
+async def _stored_or_model_turn(
+    request: ModelRequest, *, stored: ModelTurn, source: dict[str, str], model: Model
+) -> ModelTurn:
+    """Return the stored model response if this attempt sends the request that produced it, else ask the model."""
+    metadata = dict(stored.metadata)
+    raw_message = metadata.pop("evaluation_raw_message", None)
+    recorded = metadata.pop("evaluation_request", None)
+    if raw_message is None or recorded is None:
+        return await model(request)
+    if canonical_sha256(recorded) != canonical_sha256(dataclasses.asdict(request)):
+        return await model(request)
+    if metadata.get("reasoning"):
+        # Restore the transport's message: generation_turn copied metadata["reasoning"] into the raw message.
+        raw_message = {key: value for key, value in raw_message.items() if key != "reasoning"}
+    return dataclasses.replace(stored, message=raw_message, metadata={**metadata, REUSED_FROM_RUN: source})
 
 
 async def generation_turn(
@@ -419,6 +519,7 @@ async def _score_generation(
     machine_factories: Mapping[str, MachineFactory],
     judge_connection: JudgeConnection | None,
     retry_turn: ModelTurn | None,
+    stored: tuple[dict[str, str], ModelTurn] | None,
 ) -> Outcome:
     task = case.task
     options = generation_options(protocol, config, attempt.trial)
@@ -450,10 +551,13 @@ async def _score_generation(
     operation = case.item.operation
     assert isinstance(operation, ChatGeneration | TextGeneration)
 
+    transport = (
+        model if stored is None else partial(_stored_or_model_turn, stored=stored[1], source=stored[0], model=model)
+    )
     policy_model = (
         partial(_saved_model_turn, turn=retry_turn)
         if retry_turn is not None
-        else partial(generation_turn, model=model, operation=operation)
+        else partial(generation_turn, model=transport, operation=operation)
     )
 
     failure_evidence = None
@@ -479,6 +583,7 @@ async def _score_generation(
         outcome = grade.status
     sample = _sample(case, protocol, task, rollout, grade)
     turns = [step.turn for conversation in rollout.conversations for step in conversation.steps]
+    reused_from_run = next((turn.metadata[REUSED_FROM_RUN] for turn in turns if REUSED_FROM_RUN in turn.metadata), None)
     raw = {
         **saved_task_fields(task, config.task_evidence),
         "item": case.item.model_dump(mode="json"),
@@ -489,6 +594,7 @@ async def _score_generation(
         "failure_evidence": failure_evidence,
         "options": options,
         "reused_response_from_retry": attempt.retry - 1 if retry_turn is not None else None,
+        REUSED_FROM_RUN: reused_from_run,
     }
     prompt_tokens = (
         sum(turn.usage.prompt_tokens if turn.usage else len(turn.prompt_token_ids) for turn in turns) if turns else None
@@ -498,7 +604,7 @@ async def _score_generation(
         if turns
         else None
     )
-    if retry_turn is not None:
+    if retry_turn is not None or reused_from_run is not None:
         prompt_tokens = completion_tokens = 0
     _save_attempt(
         store,
@@ -552,12 +658,19 @@ async def run_evaluation(
     judge_connection: JudgeConnection | None = None,
     completion_model: Model | None = None,
     likelihood: LikelihoodScorer | None = None,
+    reuse_from: str | None = None,
 ) -> None:
     """Stream selected source rows through RolloutEngine; resume without resampling completed trials.
 
     Every physical attempt has an append-only start and finish. Its sample, terminal state and raw
     evidence commit together. Infrastructure failures remain retryable on a later invocation with the
     same run identity and seed. Summaries belong to the consumer of these raw results.
+
+    With ``reuse_from``, a generation attempt takes the latest completed model response that result root
+    stored for the same benchmark, source row and trial when it sends the identical request; any other
+    attempt asks the model. That root must hold a run of the same model identity, and it is not part of
+    this run's identity. The run descriptor lists every such root with its run identity and driver
+    revision, since responses stored under another driver revision are graded by this one.
     """
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
@@ -576,7 +689,12 @@ async def run_evaluation(
             raise ValueError(f"Likelihood scoring requires an explicit scorer: {protocol.benchmark}")
         if protocol.operation == "text_generation" and completion_model is None:
             raise ValueError(f"Text generation requires an explicit completion transport: {protocol.benchmark}")
-    run = {
+    responses = (
+        _StoredResponses(reuse_from, {protocol.benchmark for _, protocol, _ in corpora}, config.model)
+        if reuse_from
+        else None
+    )
+    run: dict[str, Any] = {
         "schema_version": 1,
         "driver_revision": EVALUATION_EXECUTION_REVISION,
         "config": config.model_dump(mode="json"),
@@ -590,14 +708,13 @@ async def run_evaluation(
             for root, protocol, manifest in corpora
         ],
     }
-    identity = canonical_sha256({**run, "config": scoring_settings(run["config"])})
+    identity = run_identity(run)
     previous = ReadView(output).read_blob(RUN_OBJECT)
     previous_run = json.loads(previous) if previous is not None else None
-    if (
-        previous_run is not None
-        and canonical_sha256({**previous_run, "config": scoring_settings(previous_run["config"])}) != identity
-    ):
+    if previous_run is not None and run_identity(previous_run) != identity:
         raise ValueError("Resume requires the identical model, corpora, protocol, selection and run settings")
+    if sources := _response_sources(previous_run, responses):
+        run[RESPONSE_SOURCES] = sources
     with DataStore.open(output) as store:
         EvaluationStore(store)
         store.table(
@@ -617,9 +734,18 @@ async def run_evaluation(
         with store.transaction() as transaction:
             transaction.write_object(RUN_OBJECT, json.dumps(run, allow_nan=False).encode())
 
-        queue: asyncio.Queue[tuple[EvaluationCase, EvaluationProtocol, Selection, int, int, ModelTurn | None] | None] = (
-            asyncio.Queue(maxsize=config.concurrency * 2)
-        )
+        queue: asyncio.Queue[
+            tuple[
+                EvaluationCase,
+                EvaluationProtocol,
+                Selection,
+                int,
+                int,
+                ModelTurn | None,
+                tuple[dict[str, str], ModelTurn] | None,
+            ]
+            | None
+        ] = asyncio.Queue(maxsize=config.concurrency * 2)
         failures = 0
 
         async def produce() -> None:
@@ -660,6 +786,13 @@ async def run_evaluation(
                             and old.outcome in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE, Outcome.INVALID_TASK)
                         ):
                             continue
+                        generation = isinstance(case.item.operation, ChatGeneration | TextGeneration)
+                        retry_turn = _grading_retry_turn(reader, old) if generation else None
+                        stored = (
+                            responses.response(protocol.benchmark, case.item.source_row, trial)
+                            if responses is not None and generation and retry_turn is None
+                            else None
+                        )
                         await queue.put(
                             (
                                 case,
@@ -667,11 +800,8 @@ async def run_evaluation(
                                 decision.record,
                                 trial,
                                 0 if old is None else old.retry + 1,
-                                (
-                                    _grading_retry_turn(reader, old)
-                                    if isinstance(case.item.operation, ChatGeneration | TextGeneration)
-                                    else None
-                                ),
+                                retry_turn,
+                                stored,
                             )
                         )
                 if records:
@@ -685,7 +815,7 @@ async def run_evaluation(
         async def consume() -> None:
             nonlocal failures
             while (work := await queue.get()) is not None:
-                case, protocol, selection, trial, retry, retry_turn = work
+                case, protocol, selection, trial, retry, retry_turn, stored = work
                 task = case.task
                 seed = protocol.trials.seed_for(trial) if config.seed is None else config.seed + trial
                 attempt = Attempt(
@@ -724,6 +854,7 @@ async def run_evaluation(
                     machine_factories=machine_factories,
                     judge_connection=judge_connection,
                     retry_turn=retry_turn,
+                    stored=stored,
                 )
                 failures += outcome is Outcome.INFRA_ERROR
 

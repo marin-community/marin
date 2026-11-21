@@ -46,14 +46,19 @@ def submit_evaluation(
     timeout: int,
     secrets: dict[str, str],
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    responses_from: str | None = None,
 ) -> Job:
     """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
-    if any(not StoragePath(root).is_remote for root in (*datasets, output)):
+    roots = (*datasets, output, *((responses_from,) if responses_from else ()))
+    if any(not StoragePath(root).is_remote for root in roots):
         raise ValueError(
-            "Iris evaluation requires shared object-storage corpus and output roots; use --local for local files"
+            "Iris evaluation requires shared object-storage corpus, output and --responses-from roots; "
+            "use --local for local files"
         )
     return client.submit(
-        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, execution_config(config), max_attempts),
+        entrypoint=Entrypoint.from_callable(
+            run_worker, datasets, output, execution_config(config), max_attempts, responses_from
+        ),
         name=name,
         resources=resources,
         environment=EnvironmentSpec(
@@ -74,6 +79,10 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="FineStore archive root, including an existing run to resume.")
     parser.add_argument(
         "--config", required=True, help="EvaluationRunConfig JSON, including immutable model/tokenizer IDs."
+    )
+    parser.add_argument(
+        "--responses-from",
+        help="Result root whose stored model responses answer identical requests, as when regrading a corrected corpus.",
     )
     endpoint = parser.add_mutually_exclusive_group(required=True)
     endpoint.add_argument("--endpoint", help="OpenAI-compatible base URL.")
@@ -117,7 +126,14 @@ def main() -> None:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
         execute_with_retries(
-            datasets, arguments.output, config, base_url, api_key, judge, max_attempts=arguments.max_attempts
+            datasets,
+            arguments.output,
+            config,
+            base_url,
+            api_key,
+            judge,
+            max_attempts=arguments.max_attempts,
+            responses_from=arguments.responses_from,
         )
         return
     secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key}
@@ -135,6 +151,7 @@ def main() -> None:
             timeout=arguments.timeout,
             secrets=secrets,
             max_attempts=arguments.max_attempts,
+            responses_from=arguments.responses_from,
         )
         print(job.job_id)
         if not arguments.no_wait:
