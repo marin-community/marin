@@ -261,16 +261,20 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   stop) for a workflow that continues an exhausted search; the default workflow does not.
 - **Solve-review**: once a round's solver trials and controls are clean and its placement is
   reviewable, one session with no machine reads the recorded trials and the task's files through
-  `list_evidence` (resumable from a source number), `read_evidence` (pages addressed by source, part and
-  character offset) and `search_evidence`, and calls `report`. Sources have their own namespaces:
-  `trial/<n>` (each message, an interruption's marker, then the grade), `task/task.json`, `task/prompt.md`,
-  `task/controls.json`, and `resource/<group>/<path>` for each resource, whose summary names the sha256 of
-  its bytes (bytes that are not UTF-8 are named opaque, with no parts). Every reply, diagnostics included,
-  fits in `tools.output_chars` with its headers and continuation line, so nothing spills to a file; a visit
-  without a machine refuses a tool that does not bound its replies. Evidence renders canonically (sorted
-  JSON, integral floats as integers, tool-call ids kept), and the opening always ends with the index's
-  digest outside the editable template, so a resumed round, cold or warm, replays its review only when the
-  evidence is unchanged. Findings have one of four kinds (`ambiguous_prompt`, `grader_defect`,
+  `list_evidence` (resumable from a source number and a character offset into its summary, so a long
+  address is never cut off), `read_evidence` (pages addressed by source, part and character offset) and
+  `search_evidence`, and calls `report`. Sources have their own namespaces: `trial/<n>` (each message, an
+  interruption's marker, then the grade), `task/task.json`, `task/prompt.md`, `task/controls.json`, and
+  `resource/<role>/<path>` for every file the task carries, unresolved build inputs (`actor_build`,
+  `grader_build`) included; a file's summary is the signature TaskCompendium's task review signs (role,
+  path, mode, mtime, sha256 and size), so a mode change or an equal-length edit changes the evidence (bytes
+  that are not UTF-8 are named opaque, with no parts). A reply to a session without a machine, a loop
+  diagnostic as much as a tool's output, is clipped to `tools.output_chars` where the harness delivers it,
+  so nothing spills to a file it cannot read; a cap below one evidence page (240) is refused when the
+  config is built. Everything the reviewer sees, the opening's task manifest and the trial summaries
+  included, renders canonically (sorted JSON, integral floats as integers, tool-call ids kept), and the
+  opening always ends with the index's digest outside the editable template, so a resumed round, cold or
+  warm, replays its review only when the evidence is unchanged. Findings have one of four kinds (`ambiguous_prompt`, `grader_defect`,
   `answer_leak`, `environment_problem`), a description and edit with text beyond whitespace, and citations
   `{source, start, end, quote}`. A finding is kept only when every quote occurs, whitespace collapsed, in
   the parts it addresses; any other is recorded as dropped with its reason. The report must account for
@@ -291,8 +295,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`. The run refuses a
   `solver.turn_timeout` shorter than the window plus a stall, or too short for a first attempt to reach its
   first token inside the solver's generation bound (the turn less 60 s).
-- **Tools**: `tools.output_chars`; longer output is saved to `.tool-output/<digest>.txt` in the
-  workspace and the model gets the head plus the path.
+- **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
+  the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 
 Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the live
 `TaskSpec` and control schemas, and the adversary's user prompt renders its brief and the task without
