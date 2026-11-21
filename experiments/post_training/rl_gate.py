@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
@@ -41,6 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
+from skyrlrecipe.model_staging import model_metadata_subpath
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
@@ -422,6 +423,13 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
+def _matches_staged_metadata(value: object, subpath: PurePosixPath | None) -> bool:
+    if subpath is None or not isinstance(value, str):
+        return False
+    path = PurePosixPath(value)
+    return path.is_absolute() and path.parts[-len(subpath.parts) :] == subpath.parts
+
+
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
     """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
@@ -484,6 +492,31 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                 )
 
     aliases = [recorded.model_uri, recorded.model_local_path]
+    model_metadata = (
+        model_metadata_subpath(recorded.model_uri, recorded.model_identity)
+        if StoragePath(recorded.model_uri).scheme in {"gs", "gcs", "s3"}
+        else None
+    )
+    model_input = inputs["model"]
+    tokenizer_uri = model_input.get("tokenizer_uri")
+    tokenizer_metadata = (
+        model_metadata_subpath(tokenizer_uri, model_input.get("tokenizer_revision") or "main")
+        if tokenizer_uri
+        else model_metadata
+    )
+    for role in ("policy", "ref"):
+        base = f"skyrl.trainer.{role}.model"
+        path = f"{base}.path"
+        if _matches_staged_metadata(get_path(config, path), model_metadata):
+            set_path(config, path, recorded.model_local_path)
+        path = f"{base}.tokenizer_path"
+        if _matches_staged_metadata(get_path(config, path), tokenizer_metadata):
+            revision = f"{base}.tokenizer_revision"
+            if get_path(config, revision) is not None:
+                raise InvalidComparison(f"native staged tokenizer has a local revision: {revision}")
+            set_path(config, path, recorded.model_local_path)
+            set_path(config, revision, recorded.model_identity)
+
     config["inputs"]["model"]["local_path"] = "<model-staging>"
     for path in (
         "skyrl.trainer.policy.model.path",
