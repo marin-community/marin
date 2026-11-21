@@ -1355,7 +1355,8 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     assert result.exit_code == 0, result.output
     assert archive_sample_count(results) == 1
     assert legacy_file.exists()
-    summary = json.loads(result.output.splitlines()[-1])
+    # Log records go to stderr, which CliRunner interleaves into `output`; the summary is the last stdout line.
+    summary = json.loads(result.stdout.splitlines()[-1])
     assert summary["migrated_runs"] == 1
     assert summary["skipped_runs"] == 1
 
