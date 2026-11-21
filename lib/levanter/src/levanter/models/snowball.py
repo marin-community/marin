@@ -1159,6 +1159,14 @@ def snowball_final_from_state_dict(
     return m
 
 
+def _expert_import_spec(weight: jax.Array | jax.ShapeDtypeStruct, fallback: P) -> P:
+    # HF loading can supply a shape-only template with optional concrete placement.
+    if isinstance(weight, jax.ShapeDtypeStruct):
+        return weight.sharding.spec if isinstance(weight.sharding, NamedSharding) else fallback
+    spec = partition_spec_of(weight)
+    return fallback if spec is None else spec
+
+
 def snowball_block_from_state_dict(
     template: SnowballBlock, state_dict: StateDict, layer_index: int, prefix: Optional[str] = None
 ) -> SnowballBlock:
@@ -1198,17 +1206,26 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_gate) or P()),
+        _reshard(
+            _T(g(f"{p}.mlp.experts.gate_proj.weight")),
+            _expert_import_spec(template.mlp.expert_mlp.w_gate, _EXPERT_GATE_UP_SPEC),
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_up) or P()),
+        _reshard(
+            _T(g(f"{p}.mlp.experts.up_proj.weight")),
+            _expert_import_spec(template.mlp.expert_mlp.w_up, _EXPERT_GATE_UP_SPEC),
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_down) or P()),
+        _reshard(
+            _T(g(f"{p}.mlp.experts.down_proj.weight")),
+            _expert_import_spec(template.mlp.expert_mlp.w_down, _EXPERT_DOWN_SPEC),
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
@@ -1246,6 +1263,10 @@ def snowball_from_state_dict(
         snowball_block_from_state_dict(block, state_dict, index, prefix) for index, block in enumerate(model.blocks)
     )
     return eqx.tree_at(lambda model: model.blocks, model, blocks)
+
+
+_EXPERT_GATE_UP_SPEC = P("expert", _FSDP_AXES, "model")
+_EXPERT_DOWN_SPEC = P("expert", "model", _FSDP_AXES)
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:

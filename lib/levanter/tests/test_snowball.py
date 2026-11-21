@@ -1215,7 +1215,8 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
 
 
 @pytest.mark.multidevice
-def test_expert_weight_import_preserves_template_partitioning():
+@pytest.mark.parametrize("template_kind", ["concrete", "abstract-placed", "abstract-unplaced"])
+def test_expert_weight_import_preserves_template_partitioning(template_kind):
     with use_test_devices(8) as devices:
         mesh = Mesh(
             np.asarray(devices).reshape(1, 2, 1, 4, 1),
@@ -1239,11 +1240,28 @@ def test_expert_weight_import_preserves_template_partitioning():
                         template,
                         jax.reshard(weight, spec),
                     )
-            restored = snowball_from_state_dict(template, snowball_to_state_dict(template))
+            state_dict = snowball_to_state_dict(template)
+            import_template = template
+            if template_kind != "concrete":
+                import_template = jax.tree.map(
+                    lambda array: jax.ShapeDtypeStruct(
+                        array.shape,
+                        array.dtype,
+                        sharding=array.sharding if template_kind == "abstract-placed" else None,
+                    ),
+                    template,
+                )
+            restored = snowball_from_state_dict(import_template, state_dict)
             for original, loaded in zip(template.blocks, restored.blocks, strict=True):
                 for field in ("w_gate", "w_up", "w_down"):
                     expected = getattr(original.mlp.expert_mlp, field)
                     actual = getattr(loaded.mlp.expert_mlp, field)
-                    assert actual.sharding.spec == expected.sharding.spec
-                    assert actual.sharding.shard_shape(actual.shape) == expected.sharding.shard_shape(expected.shape)
+                    if template_kind != "abstract-unplaced":
+                        assert actual.sharding.spec == expected.sharding.spec
+                        assert actual.sharding.shard_shape(actual.shape) == expected.sharding.shard_shape(
+                            expected.shape
+                        )
+                    else:
+                        expected_shape = (8, 16, 4) if field == "w_down" else (8, 4, 16)
+                        assert actual.sharding.shard_shape(actual.shape) == expected_shape
                     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
