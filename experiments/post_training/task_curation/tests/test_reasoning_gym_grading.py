@@ -23,11 +23,8 @@ from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.test_reasoning_gym import (
-    GENERATED_ROW,
-    RECIPES,
-    time_intervals_entry,
-)
+from experiments.post_training.task_curation.tests.test_reasoning_gym import GENERATED_ROW, RECIPES
+from experiments.post_training.task_curation.tests.time_intervals_entries import time_intervals_entry
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(300)]
 

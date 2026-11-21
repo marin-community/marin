@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+from experiments.post_training.task_curation.tests.time_intervals_entries import time_intervals_entry
 
 RECIPES = {source.name: cast(CurationRecipe, source.config) for source in declarations.sources()}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
@@ -110,19 +111,6 @@ def test_generator_transport_keeps_symbolic_integers_exact():
     transported = generate.encoded(entry)
     assert type(transported["metadata"]["output_data"]) is int
     assert dataset.score_answer(entry["answer"], transported) == dataset.score_answer(entry["answer"], entry) == 1.0
-
-
-def time_intervals_entry(index: int, day: str | None = None) -> dict:
-    """An encoded ``time_intervals`` entry, with its start and end moved to ``day`` when one is given."""
-    seed = generate.task_seed("time_intervals")
-    entry = generate.encoded(
-        reasoning_gym.create_dataset("time_intervals", size=generate.ROWS_PER_TASK, seed=seed)[index]
-    )
-    if day is None:
-        return entry
-    metadata = entry["metadata"]
-    start, end = (f"{day} {metadata[key].split()[1]}" for key in ("start_time", "end_time"))
-    return {**entry, "metadata": {**metadata, "start_time": start, "end_time": end}}
 
 
 def test_time_only_entry_matches_its_record_from_another_day():
