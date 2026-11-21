@@ -182,8 +182,9 @@ class DecisionModel:
 
 @dataclass(slots=True)
 class Flight:
-    """A paid read, findable until a waiter takes its result (recorded before any other task runs) or a failure; the
-    last waiter to leave early cancels and joins it."""
+    """A paid read, findable until a waiter takes its result (recorded before any other task runs) or a failure, or
+    until its last waiter leaves; a waiter cancelled meanwhile only leaves, and the last to leave early cancels and
+    joins it."""
 
     task: asyncio.Task[float]
     waiters: int = 0
@@ -199,7 +200,8 @@ async def read_level(event: DecisionModelRead, model: DecisionModel, *, notify: 
         return await asyncio.shield(flight.task)
     finally:
         flight.waiters -= 1
-        if (flight.task.done() or not flight.waiters) and model.reading.get(key) is flight:
+        taken = flight.task.done() and not cast(asyncio.Task[float], asyncio.current_task()).cancelling()
+        if (taken or not flight.waiters) and model.reading.get(key) is flight:
             del model.reading[key]
         if not flight.task.done() and not flight.waiters:
             flight.task.cancel()

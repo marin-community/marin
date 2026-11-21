@@ -363,6 +363,36 @@ async def test_an_equal_request_around_a_reads_completion_shares_its_one_recorde
     assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
 
 
+# Review 2026-11-21 (n10 follow-up 2, finding 1): a waiter cancelled after the read completed evicted it while another
+# waiter had yet to record the level; an equal request then paid again, and the two recorded 1 and 4 for one key. A
+# cancelled waiter only leaves: the read stays shared until its last waiter leaves or one records it.
+@pytest.mark.parametrize("steps", range(6))
+@pytest.mark.parametrize("gap", range(3))
+async def test_a_waiter_cancelled_after_the_read_completes_leaves_it_to_the_waiter_that_records_it(
+    steps: int, gap: int
+) -> None:
+    reader, ctx = Answers(4.0, 1.0), Context(log=EventLog())
+    installed(overlaid(), reader, ScriptedProvider(()), ctx, VirtualTime())
+    cancelled, kept = (asyncio.create_task(ctx.emit(DecisionModelRead(request("12")))) for _ in range(2))
+    while not reader.reads:
+        await asyncio.sleep(0)
+    for _ in range(20):  # both wait on the one read
+        await asyncio.sleep(0)
+    reader.release.set()
+    for _ in range(steps):
+        await asyncio.sleep(0)
+    cancelled.cancel()
+    for _ in range(gap):
+        await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    late = asyncio.Task(ctx.emit(DecisionModelRead(request("12"))), loop=loop, eager_start=True)  # asks at this step
+    levels = (await kept, await late)
+    await asyncio.gather(cancelled, return_exceptions=True)
+    await ctx.drain()
+    recorded = {r.event.value for r in ctx._log.records if isinstance(r.event, Resolved)}
+    assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
+
+
 # Review 2026-11-21 (n10 follow-up 1, finding 1): with every waiter cancelled, the shared read kept retrying after the
 # drain. The last waiter to leave cancels and joins it: nothing runs on, and nothing is recorded resolved.
 async def test_a_read_every_waiter_left_stops_before_the_drain_and_records_nothing() -> None:
