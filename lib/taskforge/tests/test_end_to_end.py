@@ -248,7 +248,7 @@ class FirstRoundSolves(Engine):
         return GradedRollout(Rollout(run_id, (), "stop"), grade)
 
 
-# Review 2026-11-21 (follow-up 1): a faulted revision resubmitted the same task and controls with new notes; review
+# Review 2026-11-21: a faulted revision resubmitted the same task and controls with new notes; review
 # chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
 # the faulted round's notes shipped as a clean acceptance.
 async def test_a_faulted_resubmission_with_the_same_digest_restores_the_stored_submission(
@@ -2064,7 +2064,7 @@ N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restore
 # Review 2026-11-21: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
 # a round-0 Accept without the author repair, dropping the finding both verifier grades had confirmed and the Modify
 # it caused.
-# Review 2026-11-21 (n9): a format-4 root held in author revision re-held forever at its first positional write, and
+# Review 2026-11-21: a format-4 root held in author revision re-held forever at its first positional write, and
 # an accepted one lost its restoration provenance on read.
 @pytest.mark.parametrize("resume_held", [True, False])
 @pytest.mark.parametrize(
@@ -2075,9 +2075,9 @@ N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restore
 async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool, fixture: Path, found: int
 ) -> None:
-    """Each fixture is a whole published root. The n6 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
+    """Each fixture is a whole published root. The format-3 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
     holds a finding both verifier grades confirmed, Modify, and the author held in round 1 (73 rows); format 4
-    changed what an adversary finding means. The n8 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
+    changed what an adversary finding means. The format-4 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
     trial solved and every later one failed) are 58 rows held at the round-1 author's first model call and 96 rows
     accepted on the restored too-easy baseline; format 5 changed what a decision, a fallback and a solver slot
     mean."""
@@ -2093,7 +2093,8 @@ async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_unt
 
 
 def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(proposal: TaskProposal) -> None:
-    """Adding an optional persisted field changes no existing bytes: the n8 author hydrated these exact bytes."""
+    """Adding an optional persisted field changes no existing bytes: the author that recorded ``N8_AUTHOR_HELD``
+    hydrated these exact bytes."""
     root = json.loads(gzip.decompress(N8_AUTHOR_HELD.read_bytes()))
     records = decode("".join(root[f"chunks/{name}"] for name in json.loads(root[HEAD])["chunks"]).encode())
     (written,) = {
@@ -2109,7 +2110,7 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert "fallback" not in snapshot and not {"restore", "fallback"} & {key for d in snapshot["decisions"] for key in d}
 
 
-# Review 2026-11-21 (follow-up 1): an empty restore and None serialised alike, so an invalid direct restore became an
+# Review 2026-11-21: an empty restore and None serialised alike, so an invalid direct restore became an
 # ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
 def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
     stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY)
@@ -2138,7 +2139,7 @@ def restoring_bundle(engine: Engine) -> Resources:
     return replace(bundle, rollouts=replace(bundle.rollouts, engine=engine))
 
 
-# Review 2026-11-21 (follow-up 2): after the coordinator returned the accepted fallback, an OSError on runtime exit
+# Review 2026-11-21: after the coordinator returned the accepted fallback, an OSError on runtime exit
 # published HELD with the faulted revision's notes and [Modify, Incomplete], though the journal recorded the Accept.
 async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpiece(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -2188,7 +2189,7 @@ async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
     assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
 
 
-# Review 2026-11-21 (follow-up 1): a disk-full error persisting the final review held the run from the initial
+# Review 2026-11-21: a disk-full error persisting the final review held the run from the initial
 # workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch

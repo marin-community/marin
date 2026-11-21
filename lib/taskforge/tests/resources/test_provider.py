@@ -315,7 +315,7 @@ async def test_a_solver_request_the_server_rejects_holds_its_slot_at_once_with_i
     assert f"HTTP 400: {reason}" in (result.grade.error or "") and len(provider.bodies) == 1
 
 
-# Review 2026-11-21 (follow-up 1): a refusal on turn two recorded an empty rollout, dropping the paid first step.
+# Review 2026-11-21: a refusal on turn two recorded an empty rollout, dropping the paid first step.
 async def test_a_later_turn_refusal_keeps_the_paid_rollout_prefix_and_its_usage() -> None:
     shell = ToolCall("c1", "shell", json.dumps({"command": "echo hi"}))
     provider = ScriptedProvider(
@@ -335,7 +335,7 @@ async def test_a_later_turn_refusal_keeps_the_paid_rollout_prefix_and_its_usage(
     assert step.turn.metadata["usage"]["prompt_tokens"] == 10 and step.turn.metadata["usage"]["completion_tokens"] == 5
 
 
-# Review 2026-11-21 (follow-up 1): a model whose stop text was "held" and whose answer graded 1.0 was a missing slot.
+# Review 2026-11-21: a model whose stop text was "held" and whose answer graded 1.0 was a missing slot.
 def test_no_model_output_reads_as_a_recorded_refusal() -> None:
     answered = GradedRollout(Rollout("arithmetic:0:0", (), "held"), GradeResult(Outcome.GRADED, 1.0))
     assert trial_cause(answered, SPEC.task) is None

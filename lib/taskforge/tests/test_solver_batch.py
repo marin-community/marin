@@ -136,7 +136,7 @@ async def test_new_slots_number_past_every_occupied_one_and_fill_the_eligible_ta
     )
 
 
-# Review 2026-11-21 (Romain): lowering concurrency on resume must keep completed shards.
+# Review 2026-11-21: lowering concurrency on resume must keep completed shards.
 async def test_a_resumed_batch_executes_only_its_unfinished_slot_under_other_scheduling() -> None:
     gate = asyncio.Event()
     first = Slots(gates={2: gate})
@@ -252,7 +252,7 @@ async def test_a_held_slot_survives_a_sibling_restart_and_replays_without_runnin
     assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
 
 
-# Review 2026-11-21 (N12 finding 2): generation reaching its limit before the first response is a completed, failed
+# Review 2026-11-21: generation reaching its limit before the first response is a completed, failed
 # trial whose grade is UNAVAILABLE. The replay rule took it for unavailable grading and ran the slot again whenever a
 # sibling restarted or a held root resumed, and the reviewer was left a grade-only stub without the transcript.
 PROMPT = ({"role": "system", "content": "solve"}, {"role": "user", "content": "what is 6 + 6?"})
@@ -299,7 +299,7 @@ async def test_a_generation_limited_slot_replays_with_its_transcript_beside_an_i
     assert not cold.executed and kept(rebuilt_log, 0).conversations[0].messages == PROMPT
 
 
-# Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded; when its grader failed for
+# Review 2026-11-21: an answer cut at its length limit is still graded; when its grader failed for
 # infrastructure (here the host judge's incomplete completion), the exemption above replayed the failure forever.
 @pytest.mark.parametrize("resume", [False, True])
 async def test_a_length_stopped_answer_whose_grader_failed_is_graded_again(resume: bool) -> None:
