@@ -3,6 +3,7 @@
 
 """An Iris machine whose controller runs each exec as a local subprocess, with scripted faults."""
 
+import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from enum import StrEnum
@@ -17,6 +18,9 @@ from iris.resources.state import TaskState
 from shellbox.backends.iris.machine import EXEC_SETUP_FAILURE, IrisMachine
 from shellbox.image import RegistryImage
 from shellbox.machine import MachineSpec
+
+# Guest images' /bin/sh is a POSIX shell such as dash; macOS's sh is bash, which tolerates more.
+GUEST_SH = shutil.which("dash") or "sh"
 
 
 class Fault(StrEnum):
@@ -45,7 +49,9 @@ class LocalController:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error=EXEC_SETUP_FAILURE)
         if fault is not None and fault[1] is Fault.CONNECT_REFUSED:
             raise ConnectError(Code.UNAVAILABLE, "connection refused") from httpx.ConnectError("refused")
-        result = subprocess.run([*shell, self.prelude + script], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [GUEST_SH, *shell[1:], self.prelude + script], capture_output=True, text=True, timeout=30
+        )
         if fault is not None:
             raise ConnectError(Code.UNAVAILABLE, "reply lost after the controller ran the exec")
         return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
