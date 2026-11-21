@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator admission last checked November 20, 2026 around 9:00 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 9:04 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -17,9 +17,9 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks are scheduling-gated. Kueue reported a shortfall of nine GPUs and nine InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks are scheduling-gated. At 9:00 p.m., Kueue reported a shortfall of nine GPUs and nine InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native online loop on current `main` | The local prototype completed both updates on one and four CPU devices. Each run consumed eight binary frames and sampled 128 tokens. The second rollout used the exact first published weight fingerprint. The maximum sampled-to-learner logprob difference was `4.06e-6`. | Run the four-TPUv4 gate and compare the current scorer to the prior bitwise fixture. |
+| Native online loop on current `main` | The local prototype completed both updates on one and four CPU devices. Each run consumed eight binary frames and sampled 128 tokens. The second rollout used the exact first published weight fingerprint. The maximum sampled-to-learner logprob difference was `4.06e-6`. The four-TPUv4 run failed the first score comparison. | Match the serving and learner arithmetic on TPU and complete both updates. |
 | Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
 | Typed binary protocol | The local native loop uses protobuf metadata and binary tensor buffers end to end between generation and learner batching. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Qualify cross-process native transport with bounded flow control, then migrate the learner pipe after learner acceptance. |
 
@@ -234,13 +234,20 @@ Snowball attention, model and loss changes with the learner branch. The
 snapshot is 766 commits behind the `main` used for this design, and includes
 unrelated Hero and Iris changes. [Source comparison][snowball-compare]
 
-The bounded native job was submitted on source `158bd86404` as one BATCH
-`v4-8` slice with four TPUv4 chips. It was pending at the last admission
-check. On completion its Iris task output should contain the binary
-trajectory frames and update receipts. A later local scheduler slice
-also passed heterogeneous queue and slot-reuse replay on one and four CPU
-devices. The TPU job uses the earlier frozen source.
+The bounded run on source `158bd86404` generated the first group and
+scored its replay on four TPUv4 chips. At the first raw logprob comparison,
+51 of 64 scores exceeded `rtol=1e-5` and `atol=1e-5`. The largest
+absolute difference was `7.13e-5`. The assertion fired before the first
+optimizer update, so the run produced no step or publication receipt.
 [Native TPUv4 fixture][iris-native]
+
+The failing source uses the current paged and fused scoring paths. The
+earlier bitwise fixture used an opt-in fixed-schedule model and a shared
+batch-invariant normalizer for the sampler and unfused learner loss.
+Check the normalization and model-logit differences independently while
+preserving the existing score tolerance. A later local scheduler slice
+passed heterogeneous queue and slot-reuse replay on one and four CPU
+devices. [Earlier Snowball qualification][snowball-status]
 
 Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
 and a deterministic grader with mixed rewards within a group. Submit four
