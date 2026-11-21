@@ -24,7 +24,7 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge import checkpoint, driver
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, run_workpiece
-from taskforge.effects.events import StageCompleted
+from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, fold
 from taskforge.harness.protocol import Stopped, StopReason
@@ -416,13 +416,18 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
     assert len(resource.inference.requests) == len(script("S"))
 
 
+# Pilot 2026-11-21 (d09): the causes of the replayed attempts before a hold reached only the driver log.
 async def test_stage_restart_stops_after_three_attempts_with_cause(proposal: TaskProposal) -> None:
     envs = Envs(fail=True)
     resource = resources(envs, script("S"))
-    result = await run_workpiece(proposal, config("S"), resource, EventLog(), install=install)
+    log = EventLog()
+    result = await run_workpiece(proposal, config("S"), resource, log, install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
+    notes = [record.event.msg for record in log.records if isinstance(record.event, Note)]
+    assert [note.split(":")[0] for note in notes] == [f"Stage author round 0 attempt {n} of 3" for n in (1, 2, 3)]
+    assert all("fake machine died" in note for note in notes)
 
 
 @pytest.mark.parametrize("command", ["one", "run"])
