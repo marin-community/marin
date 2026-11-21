@@ -40,6 +40,7 @@ from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
+    cache_native_compositions,
     controls,
     copy_evaluations,
     edit_receipt,
@@ -72,7 +73,19 @@ def test_preset_table_rejects_duplicate_names():
         replace(table, presets=(*table.presets, table.by_name["eval-short"]))
 
 
-def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
+def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monkeypatch):
+    compose_configs = gate.compose_configs
+    launch_paths = []
+
+    def collect_plans(paths, **_):
+        # A CLI plan discards the composed config. Validate the emitted documents in one native process.
+        for path in paths:
+            copy = tmp_path / f"plan-{len(launch_paths)}.yaml"
+            shutil.copyfile(path, copy)
+            launch_paths.append(str(copy))
+        return []
+
+    monkeypatch.setattr(gate, "compose_configs", collect_plans)
     table = snowball_model.SNOWBALL
     name, version = "tests/evaluation-init", "2026.11.17"
     initializer = f"{name}@{version}"
@@ -93,6 +106,9 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
             invalid = [*arguments, "--init", initializer]
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
+
+    assert launch_paths
+    compose_configs(launch_paths, validate_driver=True)
 
     preset = next(preset for preset in table.presets if preset.gated)
     arguments = ["--preset", preset.name, "--version", preset.revision]
@@ -801,6 +817,8 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
 def test_submission_exit_codes_and_publication_retries(
     recorded_runs, selection, tmp_path, monkeypatch, preset_table, case, expected
 ):
+    if case in {"mixed-native-failed", "partial-retry"}:
+        cache_native_compositions(monkeypatch)
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     publication_case = case in {
