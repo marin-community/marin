@@ -28,17 +28,17 @@ class ErrorCategory(StrEnum):
 
 API_CONNECTION_ERROR = "APIConnectionError"
 API_TIMEOUT_ERROR = "APITimeoutError"
-INTERNAL_SERVER_ERROR = "InternalServerError"
-AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
-VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
-REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
-REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
-VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
-VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
-ENVIRONMENT_START_TIMEOUT_ERROR = "EnvironmentStartTimeoutError"
 AGENT_SETUP_TIMEOUT_ERROR = "AgentSetupTimeoutError"
-TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
+AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
 CONTEXT_LENGTH_EXCEEDED_ERROR = "ContextLengthExceededError"
+ENVIRONMENT_START_TIMEOUT_ERROR = "EnvironmentStartTimeoutError"
+INTERNAL_SERVER_ERROR = "InternalServerError"
+REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
+REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
+TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
+VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
+VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
+VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
 
 
 SHARED_ERROR_CATEGORIES = MappingProxyType(

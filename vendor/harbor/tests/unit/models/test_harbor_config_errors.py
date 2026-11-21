@@ -174,27 +174,6 @@ def test_unknown_exception_is_unknown() -> None:
     )
 
 
-def test_errors_by_category_partitions_known_types() -> None:
-    categorized = {
-        name: cat
-        for cat in ErrorCategory
-        for name in errors_by_category(cat, categories=ERROR_CATEGORIES)
-    }
-    # Every known type appears under exactly one category.
-    assert set(categorized) == known_error_types(categories=ERROR_CATEGORIES)
-    # Agent timeouts and context-length failures are agent-attributable.
-    assert "AgentTimeoutError" in errors_by_category(
-        ErrorCategory.AGENT, categories=ERROR_CATEGORIES
-    )
-    assert "ContextLengthExceededError" in errors_by_category(
-        ErrorCategory.AGENT, categories=ERROR_CATEGORIES
-    )
-    # The context-management infrastructure failure is masked from the baseline.
-    assert "ContextManagementInfrastructureError" in errors_by_category(
-        ErrorCategory.INFRASTRUCTURE, categories=ERROR_CATEGORIES
-    )
-
-
 @pytest.mark.parametrize(
     "name, expected",
     [

@@ -7,16 +7,24 @@ from types import MappingProxyType
 
 from rigging.task_errors import SHARED_ERROR_CATEGORIES, ErrorCategory, compose_error_categories
 
+DAYTONA_CONFLICT_ERROR = "DaytonaConflictError"
+DAYTONA_CONNECTION_ERROR = "DaytonaConnectionError"
+DAYTONA_DOCKER_SETUP_ERROR = "DaytonaDockerSetupError"
+DAYTONA_OUTPUT_UNAVAILABLE = "DaytonaOutputUnavailable"
+DAYTONA_PROCESS_ERROR = "DaytonaProcessError"
+MACHINE_TERMINATED = "MachineTerminated"
+
+
 SHELLBOX_ERROR_CATEGORIES = MappingProxyType(
     {
-        "DaytonaConflictError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaConnectionError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaDockerSetupError": ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_CONFLICT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_DOCKER_SETUP_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DaytonaError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaOutputUnavailable": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_OUTPUT_UNAVAILABLE: ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_PROCESS_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
-        "MachineTerminated": ErrorCategory.INFRASTRUCTURE,
+        MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
     }
 )

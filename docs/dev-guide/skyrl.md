@@ -103,7 +103,8 @@ this identity with message and traceback details. TaskCompendium grades preserve
 the identity when a trial supplies one. Consumers use its stored category and
 disposition without loading the producer framework.
 
-Passthrough treatment prevents retrying a result with usable verifier output.
+SkyRL retains passthrough terminal results with usable verifier output. Native
+Harbor may retry when environment teardown is unconfirmed.
 
 ## Run records
 

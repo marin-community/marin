@@ -3,12 +3,45 @@
 from types import MappingProxyType
 
 from rigging.task_errors import (
-    SHARED_ERROR_CATEGORIES,
+    API_CONNECTION_ERROR,
+    API_TIMEOUT_ERROR,
     SHARED_RETRYABLE_ERROR_TYPES,
+    INTERNAL_SERVER_ERROR,
+    TRIAL_TIMEOUT_ERROR,
     ErrorCategory,
     compose_error_categories,
 )
-from shellbox.task_errors import SHELLBOX_ERROR_CATEGORIES
+from shellbox.task_errors import (
+    DAYTONA_CONFLICT_ERROR,
+    DAYTONA_CONNECTION_ERROR,
+    DAYTONA_DOCKER_SETUP_ERROR,
+    DAYTONA_OUTPUT_UNAVAILABLE,
+    DAYTONA_PROCESS_ERROR,
+    MACHINE_TERMINATED,
+)
+from shellbox.task_errors import (
+    ERROR_CATEGORIES as SHELLBOX_CATEGORIES,
+)
+
+ARTIFACT_PERSISTENCE_ERROR = "ArtifactPersistenceError"
+ARTIFACT_UPLOAD_TIMEOUT_ERROR = "ArtifactUploadTimeoutError"
+ARTIFACT_WRITE_TIMEOUT_ERROR = "ArtifactWriteTimeoutError"
+ARTIFACT_WRITER_BACKLOG_ERROR = "ArtifactWriterBacklogError"
+CONTAINER_REGISTRY_THROTTLED_ERROR = "ContainerRegistryThrottledError"
+CONTEXT_BUDGET_EXCEEDED_ERROR = "ContextBudgetExceededError"
+CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR = "ContextManagementInfrastructureError"
+ENVIRONMENT_STOP_ERROR = "EnvironmentStopError"
+LLM_REQUEST_TIMEOUT_ERROR = "LLMRequestTimeoutError"
+OPEN_AI_TRANSPORT_CONNECT_TIMEOUT_ERROR = "OpenAITransportConnectTimeoutError"
+PHASE_CANCELLATION_ERROR = "PhaseCancellationError"
+RUNTIME_LOG_COLLECTION_ERROR = "RuntimeLogCollectionError"
+RUNTIME_SERVICE_ERROR = "RuntimeServiceError"
+SANDBOX_BUILD_FAILED_ERROR = "SandboxBuildFailedError"
+TAU3_RUNTIME_INFRASTRUCTURE_ERROR = "Tau3RuntimeInfrastructureError"
+TMUX_BATCH_PROTOCOL_ERROR = "TmuxBatchProtocolError"
+TMUX_COMMAND_ERROR = "TmuxCommandError"
+TMUX_EXEC_TIMEOUT_ERROR = "TmuxExecTimeoutError"
+TMUX_SESSION_ENDED_ERROR = "TmuxSessionEndedError"
 
 HARBOR_ERROR_CATEGORIES = MappingProxyType(
     {
@@ -16,76 +49,77 @@ HARBOR_ERROR_CATEGORIES = MappingProxyType(
         "AgentCommandOutputLostError": ErrorCategory.AGENT,
         "AgentDiskFullError": ErrorCategory.AGENT,
         "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_PERSISTENCE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_UPLOAD_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_WRITE_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_WRITER_BACKLOG_ERROR: ErrorCategory.INFRASTRUCTURE,
         "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
-        "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
-        "ContextBudgetExceededError": ErrorCategory.INFRASTRUCTURE,
-        "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
+        CONTAINER_REGISTRY_THROTTLED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        CONTEXT_BUDGET_EXCEEDED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
         "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
-        "EnvironmentStopError": ErrorCategory.INFRASTRUCTURE,
+        ENVIRONMENT_STOP_ERROR: ErrorCategory.INFRASTRUCTURE,
         "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
-        "LLMRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        LLM_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
         "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
         "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
         "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
         "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
         "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
-        "OpenAITransportConnectTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        OPEN_AI_TRANSPORT_CONNECT_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
         "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
-        "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
-        "RuntimeLogCollectionError": ErrorCategory.INFRASTRUCTURE,
-        "RuntimeServiceError": ErrorCategory.INFRASTRUCTURE,
-        "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
+        PHASE_CANCELLATION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        RUNTIME_LOG_COLLECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        RUNTIME_SERVICE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        SANDBOX_BUILD_FAILED_ERROR: ErrorCategory.INFRASTRUCTURE,
         "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
-        "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxBatchProtocolError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxCommandError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxExecTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxSessionEndedError": ErrorCategory.INFRASTRUCTURE,
+        TAU3_RUNTIME_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_BATCH_PROTOCOL_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_COMMAND_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_EXEC_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_SESSION_ENDED_ERROR: ErrorCategory.INFRASTRUCTURE,
         "TrialNotScoredError": ErrorCategory.UNKNOWN,
         "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
         "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
     }
 )
 
-ERROR_CATEGORIES = compose_error_categories(SHARED_ERROR_CATEGORIES, SHELLBOX_ERROR_CATEGORIES, HARBOR_ERROR_CATEGORIES)
+ERROR_CATEGORIES = compose_error_categories(SHELLBOX_CATEGORIES, HARBOR_ERROR_CATEGORIES)
 
 RESUME_RETRYABLE_ERROR_TYPES = frozenset(
     {
-        "APIConnectionError",
-        "APITimeoutError",
-        "ArtifactPersistenceError",
-        "ArtifactUploadTimeoutError",
-        "ArtifactWriteTimeoutError",
-        "ArtifactWriterBacklogError",
+        API_CONNECTION_ERROR,
+        API_TIMEOUT_ERROR,
+    SHARED_RETRYABLE_ERROR_TYPES,
+        ARTIFACT_PERSISTENCE_ERROR,
+        ARTIFACT_UPLOAD_TIMEOUT_ERROR,
+        ARTIFACT_WRITE_TIMEOUT_ERROR,
+        ARTIFACT_WRITER_BACKLOG_ERROR,
         "CancelledError",
-        "ContainerRegistryThrottledError",
-        "ContextBudgetExceededError",
-        "ContextManagementInfrastructureError",
-        "DaytonaConflictError",
-        "DaytonaConnectionError",
-        "DaytonaDockerSetupError",
-        "DaytonaOutputUnavailable",
-        "DaytonaProcessError",
-        "EnvironmentStopError",
-        "InternalServerError",
-        "LLMRequestTimeoutError",
-        "MachineTerminated",
-        "OpenAITransportConnectTimeoutError",
-        "PhaseCancellationError",
-        "RuntimeLogCollectionError",
-        "RuntimeServiceError",
-        "SandboxBuildFailedError",
-        "Tau3RuntimeInfrastructureError",
-        "TmuxBatchProtocolError",
-        "TmuxCommandError",
-        "TmuxExecTimeoutError",
-        "TmuxSessionEndedError",
-        "TrialTimeoutError",
+        CONTAINER_REGISTRY_THROTTLED_ERROR,
+        CONTEXT_BUDGET_EXCEEDED_ERROR,
+        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR,
+        DAYTONA_CONFLICT_ERROR,
+        DAYTONA_CONNECTION_ERROR,
+        DAYTONA_DOCKER_SETUP_ERROR,
+        DAYTONA_OUTPUT_UNAVAILABLE,
+        DAYTONA_PROCESS_ERROR,
+        ENVIRONMENT_STOP_ERROR,
+        INTERNAL_SERVER_ERROR,
+        LLM_REQUEST_TIMEOUT_ERROR,
+        MACHINE_TERMINATED,
+        OPEN_AI_TRANSPORT_CONNECT_TIMEOUT_ERROR,
+        PHASE_CANCELLATION_ERROR,
+        RUNTIME_LOG_COLLECTION_ERROR,
+        RUNTIME_SERVICE_ERROR,
+        SANDBOX_BUILD_FAILED_ERROR,
+        TAU3_RUNTIME_INFRASTRUCTURE_ERROR,
+        TMUX_BATCH_PROTOCOL_ERROR,
+        TMUX_COMMAND_ERROR,
+        TMUX_EXEC_TIMEOUT_ERROR,
+        TMUX_SESSION_ENDED_ERROR,
+        TRIAL_TIMEOUT_ERROR,
     }
 )
 
