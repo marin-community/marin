@@ -61,6 +61,7 @@ pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(
 
 
 def printed_status(output):
+    # CliRunner merges stderr into result.output; status is on result.stdout.
     marker = output.rfind("\npreset:")
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
@@ -1053,7 +1054,7 @@ def test_submission_exit_codes_and_publication_retries(
         return
     if not publication_case:
         return
-    snapshot = printed_status(result.output)
+    snapshot = printed_status(result.stdout)
     if case == "data-short":
         assert "publication" not in snapshot and published == []
         return
@@ -1094,7 +1095,7 @@ def test_submission_exit_codes_and_publication_retries(
         repeated.output,
         repeated.exception,
     )
-    recovered = printed_status(repeated.output)
+    recovered = printed_status(repeated.stdout)
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
     assert {row["attempt_id"]: row["issue"] for row in recovered["runs"]} == (
         {"native-retry": 74, "native-1": 73} if case == "mixed-native-failed" else {attempt: 73 for _, attempt in paths}
@@ -1418,7 +1419,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         planning_args,
     )
     assert result.exit_code == 1, (result.output, result.exception)
-    [status] = printed_status(result.output)["runs"]
+    [status] = printed_status(result.stdout)["runs"]
     assert status["best_checkpoint_step"] == "none eligible"
     facts = {fact["name"]: fact for fact in status["evaluation_invariants"]}
     assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
@@ -1446,7 +1447,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     )
     assert result.exit_code == 1, (result.output, result.exception)
     facts = {
-        fact["name"]: fact for row in printed_status(result.output)["runs"] for fact in row["evaluation_invariants"]
+        fact["name"]: fact for row in printed_status(result.stdout)["runs"] for fact in row["evaluation_invariants"]
     }
     assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
 
