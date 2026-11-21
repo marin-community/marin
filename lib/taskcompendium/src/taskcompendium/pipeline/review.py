@@ -32,7 +32,13 @@ from taskcompendium.pipeline.review_requests import (
     batch_output,
     typed_batch_records,
 )
-from taskcompendium.runtime.resources import build_environments, resource_bytes, resource_inventory, resource_signature
+from taskcompendium.runtime.resources import (
+    GRADER_BUILD_ROLE,
+    build_environments,
+    resource_bytes,
+    resource_inventory,
+    resource_signature,
+)
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -316,7 +322,7 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
     for role, environment in build_environments(task):
         if environment.docker_build is not None:
             projected = (
-                payload["grader"]["environment"] if role == "grader_build" else payload["environment_requirements"]
+                payload["grader"]["environment"] if role == GRADER_BUILD_ROLE else payload["environment_requirements"]
             )
             projected["docker_build"] = {"resource_role": role, "status": "unresolved"}
     manifest = []

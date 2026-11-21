@@ -81,6 +81,6 @@ def test_a_signature_names_role_path_mode_mtime_size_and_hash() -> None:
 
 
 def test_the_task_review_payload_is_unchanged_by_the_shared_inventory() -> None:
-    """Pinned at origin/main cb991a5a5c, before the inventory moved out of the review."""
+    """The digest pins the reviewer's evidence; a change to it must be deliberate."""
     payload = json.dumps(review_payload(task_with_files()), sort_keys=True).encode()
     assert hashlib.sha256(payload).hexdigest() == "c3128d91d9ebcfefb82343db4c4092060af1e910637e21ab3fcba6f12c3ae948"

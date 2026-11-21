@@ -16,6 +16,9 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 
+ACTOR_BUILD_ROLE = "actor_build"
+GRADER_BUILD_ROLE = "grader_build"
+
 
 def inline_resource(path: str, data: bytes) -> TaskResource:
     """Build an inline resource at a relative workspace path."""
@@ -29,9 +32,9 @@ def resource_bytes(resource: TaskResource) -> bytes:
 
 def build_environments(task: TaskSpec) -> list[tuple[str, EnvironmentRequirements]]:
     """The task's environments that can carry unresolved build inputs, by the role their files take."""
-    environments = [("actor_build", task.environment_requirements)]
+    environments = [(ACTOR_BUILD_ROLE, task.environment_requirements)]
     if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
-        environments.append(("grader_build", task.grader.environment))
+        environments.append((GRADER_BUILD_ROLE, task.grader.environment))
     return environments
 
 
@@ -54,7 +57,7 @@ def resource_inventory(task: TaskSpec) -> list[tuple[str, TaskResource]]:
 
 
 def resource_signature(role: str, resource: TaskResource, data: bytes) -> dict[str, Any]:
-    """A file's role, path, metadata and bytes (``data``, already decoded), as the task review signs them."""
+    """A file's role, path, declared mode and mtime, and the sha256 and size of its decoded bytes ``data``."""
     return {
         "role": role,
         **resource.model_dump(mode="json", exclude={"source"}),
