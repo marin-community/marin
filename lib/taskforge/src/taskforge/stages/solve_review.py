@@ -21,6 +21,7 @@ from taskcompendium.runtime.resources import resource_bytes, resource_inventory,
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.effects.log import Billing
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, Tool
 from taskforge.harness.role import Fresh, Visit, sitting
@@ -29,10 +30,7 @@ from taskforge.harness.tools.evidence import (
     TASK,
     TRIAL,
     Evidence,
-    ListTool,
-    ReadTool,
     ReportTool,
-    SearchTool,
     Source,
     consolidated,
     evidence_tools,
@@ -53,7 +51,6 @@ from taskforge.model.review import (
 )
 from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.resources.bundle import Resources
-from taskforge.resources.inference import InferenceRequest
 from taskforge.stages.rules import passed
 from taskforge.stages.summary import manifest
 
@@ -183,11 +180,6 @@ def evidence(
     return Evidence({source.name: source for source in sources}, unpassed, output_chars)
 
 
-def reviewing(request: InferenceRequest) -> bool:
-    """Whether ``request`` is the reviewer's: only it is offered the evidence tools."""
-    return {tool.name for tool in request.tools} >= {ListTool.name, ReadTool.name, SearchTool.name}
-
-
 def finding_lines(findings: Sequence[ReviewFinding], start: int = 0) -> str:
     """Findings numbered from ``start`` with their quoted evidence, for the author."""
     return "\n".join(
@@ -207,9 +199,11 @@ async def solve_review(
     prompts: str = "solve_review",
     report: Callable[[Evidence], Tool[object]] = ReportTool,
     previous: str = "",
+    bills: Billing = Billing.SOLVE_REVIEW,
 ) -> SolveReview:
     """Review ``trials`` of ``submission``; emits only the reviewer's inference effects. The final review passes its
-    own prompts, its report tool and the earlier reports (``earlier_reports``) as the template's ``{previous}``.
+    own prompts, its report tool, the earlier reports (``earlier_reports``) as the template's ``{previous}`` and the
+    role its calls bill; it shares the round reviewer's model, profile and replay keys.
 
     The opening ends with the index's version whatever the policy's template renders, so changed evidence never
     replays a recorded review.
@@ -240,7 +234,7 @@ async def solve_review(
     async with sitting(
         ctx,
         role,
-        Visit(prompts, prompts, None, tools=evidence_tools(index, report)),
+        Visit(prompts, prompts, None, bills, tools=evidence_tools(index, report)),
         resources,
     ) as session:
         outcome = await session(opening)

@@ -26,7 +26,7 @@ from taskforge.effects.events import (
     ScopeExited,
     StageCompleted,
 )
-from taskforge.effects.log import EventLog, Opened, Record, Status
+from taskforge.effects.log import Billing, EventLog, Opened, Record, Status
 from taskforge.harness.tools.evidence import ReportTool, evidence_tools
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
@@ -285,3 +285,38 @@ async def test_a_judge_call_inside_the_confirmation_is_charged_to_the_judge(
     lines = await report(str(tmp_path / "root"))
     assert "tokens role=judge prompt=37 cached=0 completion=5" in lines
     assert "tokens role=final_review prompt=11 cached=0 completion=3" in lines
+
+
+# Review 2026-11-21: while a judge call was in flight, an adversary call of 37 prompt tokens completed, then the judge's
+# of 11; the cold report charged 48 to the judge and none to the adversary.
+async def test_overlapping_scopes_charge_each_call_to_the_role_its_scope_bills(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    (tmp_path / "root").mkdir()
+    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink.claim(None)
+    ctx = Context(log=EventLog(sink=sink))
+    judging, answered = asyncio.Event(), asyncio.Event()
+
+    async def answer(_event: InferenceRequest, profile: Profile) -> Completion:
+        if profile.name == "judge":
+            judging.set()
+            await answered.wait()
+            return Completion("", usage=Usage(prompt_tokens=11))
+        await judging.wait()
+        answered.set()
+        return Completion("", usage=Usage(prompt_tokens=37))
+
+    async def visit(name: str, bills: Billing) -> None:
+        async with ctx.scope(name, bills=bills):
+            ctx.handle(InferenceRequest, answer, Profile(bills))
+            await ctx.emit(InferenceRequest((), (), LLMPolicy()))
+
+    async with sink.running():
+        async with ctx.scope("workpiece"):
+            await asyncio.gather(visit("adversary:a", Billing.ADVERSARY), visit("judge", Billing.JUDGE))
+        await ctx.drain()
+    await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
+    lines = await report(str(tmp_path / "root"))
+    assert "tokens role=adversary prompt=37 cached=0 completion=0" in lines
+    assert "tokens role=judge prompt=11 cached=0 completion=0" in lines

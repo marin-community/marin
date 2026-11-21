@@ -8,6 +8,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
+from enum import StrEnum
 from itertools import islice
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol, cast, override
@@ -54,10 +55,25 @@ class Opened:
     definition: str
 
 
+class Billing(StrEnum):
+    """The role a physical cached resolution is charged to: the innermost scope that declares one when it resolved.
+    ``SOLVER`` and ``CONFIRMATION`` are the validation and confirmation stages' own work outside their visits."""
+
+    AUTHOR = "author"
+    SOLVER = "solver"
+    ADVERSARY = "adversary"
+    SOLVE_REVIEW = "solve_review"
+    JUDGE = "judge"
+    CONFIRMATION = "confirmation"
+    FINAL_REVIEW = "final_review"
+
+
 @dataclass(frozen=True, slots=True)
 class Record:
     """A journal row. Its envelope, outside the event's identity, links sandbox rows: ``opened`` on an environment-open
-    row, whose sequence names the attempt; ``attempt`` on a request, naming that row; ``answers`` on an outcome."""
+    row, whose sequence names the attempt; ``attempt`` on a request, naming that row; ``answers`` on an outcome.
+    ``billed``, also outside it, names who paid for a plain row's physical resolution; rows from before format 10 and
+    replayed or sandbox resolutions have none."""
 
     sequence: int
     wall_time: float
@@ -65,6 +81,7 @@ class Record:
     opened: Opened | None = None
     attempt: int | None = None
     answers: int | None = None
+    billed: Billing | None = None
 
 
 ENVELOPE = ("opened", "attempt", "answers")
@@ -80,6 +97,7 @@ class _Row:
     opened: Opened | None = None
     attempt: int | None = None
     answers: int | None = None
+    billed: Billing | None = None
 
 
 ROW = TypeAdapter(_Row)
@@ -189,7 +207,9 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
             roles = [name for name in ENVELOPE if getattr(row, name) is not None]
             if len(roles) > 1 or not ROLES[roles[0] if roles else None](event):
                 raise LogFailure(f"Row {row.sequence} carries {event.kind} as a {'/'.join(roles) or 'plain'} row")
-            decoded.append(Record(row.sequence, row.wall_time, event, row.opened, row.attempt, row.answers))
+            if row.billed is not None and (roles or not isinstance(event, Resolved) or event.replayed):
+                raise LogFailure(f"Row {row.sequence} bills {event.kind}, which is no physical cached resolution")
+            decoded.append(Record(row.sequence, row.wall_time, event, row.opened, row.attempt, row.answers, row.billed))
     except (TypeError, ValueError, KeyError) as error:
         raise LogFailure("Cannot decode the event stream") from error
     if any(record.sequence != index for index, record in enumerate(decoded, 1)):
@@ -215,7 +235,7 @@ class JsonlSink(Sink):
             raise LogFailure("Cannot encode the event stream") from error
 
     def _line(self, record: Record) -> bytes:
-        row = {name: value for name in ENVELOPE if (value := getattr(record, name)) is not None}
+        row = {name: value for name in (*ENVELOPE, "billed") if (value := getattr(record, name)) is not None}
         row.update(sequence=record.sequence, wall_time=record.wall_time)
         row["event"] = _encode(record.event, record.sequence, self._known)
         return (json.dumps(row, sort_keys=True, allow_nan=True, default=asdict) + "\n").encode()
@@ -372,6 +392,7 @@ class EventLog:
         opened: Opened | None = None,
         attempt: int | None = None,
         answers: int | None = None,
+        billed: Billing | None = None,
     ) -> Record:
         """Number and place ``event`` at dispatch, for ``persist`` to write; an owner reopened on another sandbox
         definition is ``Unreproducible``."""
@@ -381,7 +402,7 @@ class EventLog:
             raise LogFailure("Cannot encode the event") from error
         if opened is not None and self._owners.definitions.get(opened.owner, opened.definition) != opened.definition:
             raise Unreproducible(f"{opened.owner} was recorded on another sandbox definition")
-        record = Record(len(self._records) + 1, time.time(), event, opened, attempt, answers)
+        record = Record(len(self._records) + 1, time.time(), event, opened, attempt, answers, billed)
         self._owners.add(record)
         self._records.append(record)
         self._fold(event)

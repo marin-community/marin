@@ -2097,8 +2097,9 @@ N4_JOURNAL = Path(__file__).parent / "fixtures" / "n4-held-drift.jsonl.gz"
 
 
 def rows(records: Sequence[Record]) -> list[Record]:
-    """Records without their wall times: events and the envelopes that link sandbox rows."""
-    return [replace(record, wall_time=0.0) for record in records]
+    """Records without their wall times or payers: events and the envelopes that link sandbox rows. The fixtures
+    predate format 10, whose rows name the role that paid for each physical resolution."""
+    return [replace(record, wall_time=0.0, billed=None) for record in records]
 
 
 FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"

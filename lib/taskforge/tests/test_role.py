@@ -17,7 +17,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import ScopeEntered
-from taskforge.effects.log import EventLog
+from taskforge.effects.log import Billing, EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Exit, Harness, Stopped, StopReason, Tool, ToolResult
 from taskforge.harness.role import Answer, Fresh, Visit, sitting
@@ -41,13 +41,18 @@ async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() 
     client = FakeInference((finish("f"),))
     bundle = replace(resources(ctx), role_inference={"adversary": client})
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
-    async with sitting(ctx, role, Visit("review", "unused", None), bundle) as session:
+    async with sitting(ctx, role, Visit("review", "unused", None, Billing.SOLVE_REVIEW), bundle) as session:
         outcome = await session(Fresh("system", "user"))
     assert isinstance(bundle.envs, Environments) and not bundle.envs.created
     assert [m.content for m in client.requests[0].conversation] == ["system", "user"]
     assert isinstance(outcome, Stopped) and outcome.detail == "done"
     with pytest.raises(ValueError, match="has no machine"):
-        async with sitting(ctx, role, Visit("review", "unused", None, lambda: ((PurePosixPath("/x"), b""),)), bundle):
+        async with sitting(
+            ctx,
+            role,
+            Visit("review", "unused", None, Billing.SOLVE_REVIEW, lambda: ((PurePosixPath("/x"), b""),)),
+            bundle,
+        ):
             pass
 
 
@@ -59,7 +64,7 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     pending = Message(Role.ASSISTANT, "", (ToolCall("report-1", "report", "{}"),))
     saved = Conversation((Message(Role.SYSTEM, "s"), Message(Role.USER, "u"), pending), ())
-    visit = Visit("adversary:finder", "validate/0/0/adversary:finder/0/0", None)
+    visit = Visit("adversary:finder", "validate/0/0/adversary:finder/0/0", None, Billing.ADVERSARY)
     async with sitting(ctx, role, visit, bundle) as session:
         await session(Answer(saved, "did not reproduce"))
     (request,) = client.requests
@@ -68,7 +73,7 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     assert [s.name for s in request.tools] == [*role.tools]
     assert any(isinstance(r.event, ScopeEntered) and r.event.name == "adversary:finder" for r in log.records)
     with pytest.raises(ValueError, match="pending tool call"):
-        async with sitting(ctx, role, Visit("x", "y", None), bundle) as session:
+        async with sitting(ctx, role, Visit("x", "y", None, Billing.AUTHOR), bundle) as session:
             await session(Answer(Conversation(saved.messages[:2], ()), "late"))
 
 
@@ -99,7 +104,9 @@ async def test_a_machine_less_session_gets_every_reply_clipped_and_never_a_spill
     bundle = replace(resources(ctx), role_inference={"adversary": client})
     role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     chars = load_policy(DEFAULTS_DIR).setting("tools.output_chars", int)
-    async with sitting(ctx, role, Visit("review", "unused", None, tools={"loud": Loud()}), bundle) as session:
+    async with sitting(
+        ctx, role, Visit("review", "unused", None, Billing.SOLVE_REVIEW, tools={"loud": Loud()}), bundle
+    ) as session:
         await session(Fresh("system", "user"))
     replies = [m.content for m in client.requests[-1].conversation if m.role == "tool"]
     assert len(replies) == 2 and all(len(reply) <= chars for reply in replies)
@@ -130,7 +137,7 @@ async def test_an_injected_four_argument_harness_runs_unchanged(machine: Environ
     bundle = replace(resources(ctx), role_inference={"adversary": FakeInference(())})
     harness = FourArguments()
     role = replace(build_config(load_policy(DEFAULTS_DIR), {}).adversary, harness=harness)
-    async with sitting(ctx, role, Visit("review", "visit", machine), bundle) as session:
+    async with sitting(ctx, role, Visit("review", "visit", machine, Billing.SOLVE_REVIEW), bundle) as session:
         outcome = await session(Fresh("system", "user"))
     assert isinstance(outcome, Stopped) and outcome.detail == "done" and len(harness.sessions) == 1
 
@@ -157,6 +164,6 @@ async def test_an_injected_stock_harness_subclass_runs_unchanged(machine: Enviro
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": FakeInference(())})
     role = replace(build_config(load_policy(DEFAULTS_DIR), {}).adversary, harness=Constructed("its own"))
-    async with sitting(ctx, role, Visit("review", "visit", machine), bundle) as session:
+    async with sitting(ctx, role, Visit("review", "visit", machine, Billing.SOLVE_REVIEW), bundle) as session:
         outcome = await session(Fresh("system", "user"))
     assert isinstance(outcome, Stopped) and outcome.detail == "its own"

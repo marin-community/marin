@@ -368,8 +368,8 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
 
 
 # Review 2026-11-21: a gateway refusing a resumed read (HTTP 400), or answering it with all-zero probabilities or
-# without a level's probability, or with one too large for a float, escaped its slot as a bug, cancelled the read of a sibling slot's fresh answer, failed
-# the child, and so made recovery buy that answer again: six solvers, not five.
+# without a level's probability, or with one too large for a float, escaped its slot as a bug, cancelled the read of a
+# sibling slot's fresh answer, failed the child, and so made recovery buy that answer again: six solvers, not five.
 @pytest.mark.parametrize(
     "failure, reason",
     [
@@ -403,7 +403,7 @@ def test_a_resumed_read_that_fails_holds_after_its_siblings_settle_and_recovery_
 
 # The checkpoint row is new at format 9, and every format-8 row means the same at 9: a format-8 root, written before
 # this change, resumes with its completed slots and author calls replayed, and its claim fences it from format-8 readers.
-async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_format_9(
+async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_the_current_format(
     driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -426,5 +426,5 @@ async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_form
     assert engine.started[0] == "arithmetic:4:1" and not {r for r in before.started if r != "arithmetic:4:1"} & set(
         engine.started
     )
-    assert published(destination).head.format == JOURNAL_FORMAT == 9
+    assert published(destination).head.format == JOURNAL_FORMAT == 10
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED

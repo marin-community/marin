@@ -11,6 +11,7 @@ from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from verifyit.modes.grade_judge import JudgeCompletion, JudgeRequest
 
 from taskforge.effects.context import Context
+from taskforge.effects.log import Billing
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
 from taskforge.model.llm import Completion, Message, Role
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
@@ -56,7 +57,7 @@ class JudgeEngine:
             messages = tuple(Message(Role(message.role), message.content) for message in request.messages)
             effort = ReasoningEffort(request.reasoning_effort or ReasoningEffort.HIGH)
             sampling = LLMPolicy(request.max_output_tokens, effort, temperature=0.0, max_continuations=0)
-            async with self.ctx.scope("judge"):
+            async with self.ctx.scope("judge", bills=Billing.JUDGE):
                 self.ctx.handle(InferenceRequest, execute, self.client)
                 return await self.ctx.emit(InferenceRequest(messages, (), sampling, sample=sample))
 

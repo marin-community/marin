@@ -11,6 +11,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.effects.log import Billing
 from taskforge.harness.protocol import Tool
 from taskforge.harness.role import Files, Fresh, Visit, sitting
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
@@ -128,7 +129,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
         submit = config.author.tools["submit"]
         assert isinstance(submit, SubmitTool)
         tools = {"submit": RevisedSubmitTool(submit, sent)}
-    visit = Visit("author", f"author/{workpiece.round}", machine, workspace, tools)
+    visit = Visit("author", f"author/{workpiece.round}", machine, Billing.AUTHOR, workspace, tools)
     async with sitting(ctx, config.author, visit, resources) as session:
         if workpiece.session is not None:
             return await session(workpiece.session)
