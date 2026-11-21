@@ -46,7 +46,8 @@ from taskforge.model.review import (
     Continuation,
     Defect,
     DefectClaim,
-    Incomplete,
+    EvidenceKind,
+    MissingEvidence,
     Modify,
     Observation,
     ObservedStatus,
@@ -507,7 +508,7 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
 
     The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
     grades and the adversary's hydration replay; only the adversary's model turns are new. Its solver fake recorded no
-    transcripts, so the solve-review holds on that missing evidence without a call (n11)."""
+    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence (n11)."""
     recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
     served = [
         r.event.request
@@ -526,9 +527,11 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
     resumed = replace(resources(Envs(), ()), inference=ServedOnce((), served), role_inference=roles)
     log = EventLog(replay_from=recorded, replayable=replayable_grade)
     workpiece = await run_workpiece(proposal, build_config(policy, {}), resumed, log, install=install)
-    assert workpiece.terminal is Terminal.HELD and not reviewer.requests
-    assert isinstance(held := workpiece.decisions[-1], Incomplete)
-    assert "EvidenceMissing: solver trials [0, 1] have no complete transcript" in held.reasons[0]
+    assert workpiece.terminal is Terminal.ACCEPTED and not reviewer.requests
+    assert isinstance(accept := workpiece.decisions[-1], Accept)
+    assert accept.missing == (
+        MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [0, 1] have no complete transcript"),
+    )
     assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.requests
     assert executions(resumed) == (0, 0) and len(adversary.requests) == 2
     assert adversary.requests[0].conversation[1].content.startswith("Review strategy: adversary\n\n")

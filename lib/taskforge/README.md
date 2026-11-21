@@ -1,9 +1,9 @@
 # taskforge
 
 `taskforge` builds verified tasks from proposals. One agentic **author** session writes a `TaskSpec`
-and its controls, **validation** runs solver trials, control replays and adversarial review
-against the lowered task, and a pure **review** rule turns that evidence into accept, modify or
-abandon. Every effect (model call, shell command, file read, grade) is recorded in an event log,
+and its controls, **validation** runs solver trials, control replays, adversarial review and a
+machine-less **solve-review** of the recorded trials against the lowered task, and a pure **review**
+rule turns that evidence into accept, modify or abandon. Every effect (model call, shell command, file read, grade) is recorded in an event log,
 so a crashed workpiece resumes by replay: model calls come back from the log, commands are
 re-executed on a fresh machine.
 
@@ -121,7 +121,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 4); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 6); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -141,10 +141,11 @@ head; the first then fails with `Superseded` at its next checkpoint and publishe
 Readers follow only the chunks the head names. A root in any other journal format, including the
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
 replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
-defect direction with observed and deserved grades) and format 4 (trials hydrated without a detail, a too-easy
-baseline in place of a digest-bound fallback), fails with an error naming both formats and exits 4
+defect direction with observed and deserved grades), format 4 (trials hydrated without a detail, a too-easy
+baseline in place of a digest-bound fallback) and format 5 (no solve-review: its acceptances name no missing
+evidence although none ran, and a resumed format-5 round would buy a review its recorded history lacks), fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 5` and reports the
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 6` and reports the
 rest. Such roots are converted once by a separate migration, or rebuilt. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
@@ -215,12 +216,13 @@ fail instead of silently producing an incomplete tally.
 
 The keys in `defaults/policy.json`, by group. Override any of them in the overlay.
 
-- **Models**: `author.model` (DeepSeek V4.1 Flash), `solver.model` and `adversary.model` (GLM-5.3),
-  with `author.context_tokens` and `adversary.context_tokens` as their prompt limits. There is no output cap;
+- **Models**: `author.model` (DeepSeek V4.1 Flash), `solver.model`, `adversary.model` and
+  `solve_review.model` (GLM-5.3), with `author.context_tokens`, `adversary.context_tokens` and
+  `solve_review.context_tokens` as their prompt limits. There is no output cap;
   the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
-  that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
-  reverting to the earlier submission if the hardening broke something.
+  out of band gets one revision round and is then accepted at its own placement, tagged
+  `accepted_with: <band>`; only a fault (or the author stopping) reverts to the earlier submission.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
@@ -244,6 +246,22 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   never that it validated the task. Each result carries a `continuation` (the search's sandbox owner,
   why it stopped: `reported`, `budget_exhausted` or `held`, and the digest of its conversation at the
   stop) for a workflow that continues an exhausted search; the default workflow does not.
+- **Solve-review**: once a round's solver trials and controls are clean and its placement is
+  reviewable, one session with no machine reads the recorded trials (each conversation, then its grade)
+  and the task's files through `list_evidence`, `read_evidence` (bounded pages addressed by source, part
+  and character offset) and `search_evidence`, and calls `report` with findings of four kinds
+  (`ambiguous_prompt`, `grader_defect`, `answer_leak`, `environment_problem`), each with a proposed edit and
+  citations `{source, start, end, quote}`. A finding is kept only when every quote occurs, whitespace
+  collapsed, in the parts it addresses; any other is recorded as dropped with its reason. The report must
+  account for every trial that did not pass. The opening names the index's digest, so a resumed round
+  replays its review only when the evidence is unchanged. While a round is left, kept findings send the
+  task back for one revision (the author may decline a finding by number, with a reason, on `submit`),
+  which is validated again and restores the reviewed version through the fallback on a fault; after that
+  they are the acceptance's `notes`. An acceptance names what it went without in `missing`: no review ran
+  (`solve_review`), the review ended without a report (`solve_review`), or trials had no transcript
+  (`transcripts`; with none at all the review is skipped). Missing evidence never holds a task. The
+  confirmation step's final review is the same reviewer over any trials, shown earlier reports
+  (`prompts/solve_review/final/`).
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

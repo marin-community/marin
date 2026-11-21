@@ -15,11 +15,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import override
 
+from pydantic import TypeAdapter
+
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ReturnRequest, Tool, ToolResult
 from taskforge.harness.tools.base import ValidatedTool
 from taskforge.model.content_hash import digest
-from taskforge.model.review import Citation, Dropped, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
+from taskforge.model.llm import ToolSchema
+from taskforge.model.review import Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
 
 PAGE_ROOM = 200
 """Characters each reply keeps free for its headers and its continuation line."""
@@ -168,12 +171,14 @@ def citation_problem(evidence: Evidence, citation: Citation) -> str | None:
     return None
 
 
-def checked(evidence: Evidence, findings: Sequence[ReviewFinding]) -> tuple[list[ReviewFinding], list[Dropped]]:
+def checked(
+    evidence: Evidence, findings: Sequence[ReviewFinding]
+) -> tuple[list[ReviewFinding], list[tuple[ReviewFinding, str]]]:
     kept, dropped = [], []
     for finding in findings:
         problems = [problem for c in finding.citations if (problem := citation_problem(evidence, c)) is not None]
         if problems:
-            dropped.append(Dropped(finding, "; ".join(problems)))
+            dropped.append((finding, "; ".join(problems)))
         else:
             kept.append(finding)
     return kept, dropped
@@ -208,49 +213,51 @@ FINDING_FIELDS = (
     "trial that did not pass one {trial, attribution, reason}: solver (the outcome reflects the solver's own work), "
     "defect (a finding you report produced it) or uninformative (it ended for reasons that say nothing about the task)."
 )
+ROUND_GUIDE = f"Finish the review. `findings` is empty when the trials show no task defect. {FINDING_FIELDS}"
+FINAL_GUIDE = (
+    "Finish the review with NEW findings only (none an earlier report gave): `findings` lists those that should send "
+    "the task back to its author, `note` those it can be accepted with; both are empty when nothing is new. "
+    f"{FINDING_FIELDS}"
+)
 
 
 @dataclass(frozen=True, slots=True)
-class RoundArgs:
+class ReportArgs:
     findings: tuple[ReviewFinding, ...]
     accounts: tuple[TrialAccount, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class RoundReport(ValidatedTool[RoundArgs]):
+class FinalArgs(ReportArgs):
+    note: tuple[ReviewFinding, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ReportTool(ValidatedTool[ReportArgs]):
+    """The review's exit, in its kind's schema: a round's ``ReportArgs``, or a final review's ``FinalArgs``, which
+    also sorts out the findings the task may be accepted with."""
+
     evidence: Evidence
+    guide: str
     name = "report"
-    description = f"Finish the review. `findings` is empty when the trials show no task defect. {FINDING_FIELDS}"
-    args_type = RoundArgs
+    args_type = ReportArgs
+
+    @property
+    @override
+    def schema(self) -> ToolSchema:
+        return ToolSchema(self.name, self.guide, TypeAdapter(self.args_type).json_schema())
 
     @override
-    async def run(self, ctx: Context, args: RoundArgs) -> ToolResult | ReturnRequest[SolveReview]:
-        return report(self.evidence, args.findings, (), args.accounts)
+    async def run(self, ctx: Context, args: ReportArgs) -> ToolResult | ReturnRequest[SolveReview]:
+        notes = args.note if isinstance(args, FinalArgs) else ()
+        return report(self.evidence, args.findings, notes, args.accounts)
 
 
 @dataclass(frozen=True, slots=True)
-class FinalArgs:
-    revise: tuple[ReviewFinding, ...]
-    note: tuple[ReviewFinding, ...]
-    accounts: tuple[TrialAccount, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class FinalReport(ValidatedTool[FinalArgs]):
-    evidence: Evidence
-    name = "report"
-    description = (
-        "Finish the review with NEW findings only (none an earlier report gave): `revise` lists those that should send "
-        "the task back to its author, `note` those it can be accepted with; both are empty when nothing is new. "
-        f"{FINDING_FIELDS}"
-    )
+class FinalReportTool(ReportTool):
     args_type = FinalArgs
 
-    @override
-    async def run(self, ctx: Context, args: FinalArgs) -> ToolResult | ReturnRequest[SolveReview]:
-        return report(self.evidence, args.revise, args.note, args.accounts)
 
-
-def evidence_tools(evidence: Evidence, report: type[RoundReport | FinalReport]) -> Mapping[str, Tool[object]]:
-    tools = (ListTool(evidence), ReadTool(evidence), SearchTool(evidence), report(evidence))
+def evidence_tools(evidence: Evidence, report_tool: type[ReportTool], guide: str) -> Mapping[str, Tool[object]]:
+    tools = (ListTool(evidence), ReadTool(evidence), SearchTool(evidence), report_tool(evidence, guide))
     return {tool.schema.name: tool for tool in tools}

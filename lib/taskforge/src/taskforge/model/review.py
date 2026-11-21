@@ -88,14 +88,6 @@ class ReviewFinding:
     citations: Annotated[tuple[Citation, ...], Field(min_length=1)]
 
 
-@dataclass(frozen=True, slots=True)
-class Dropped:
-    """A reported finding that failed its citation check against the evidence the reviewer was shown, and why."""
-
-    finding: ReviewFinding
-    reason: str
-
-
 class Attribution(StrEnum):
     """What a trial that did not pass reflects."""
 
@@ -128,19 +120,21 @@ class ReviewEnd(StrEnum):
     REPORTED = "reported"
     NO_REPORT = "no_report"
     """The session ended without a report (window or output exhausted): missing evidence, named on acceptance."""
+    SKIPPED = "skipped"
+    """No trial had a transcript to review: missing evidence, named on acceptance."""
 
 
 @dataclass(frozen=True, slots=True)
 class SolveReview:
     """One solve-review of the evidence index whose digest is ``evidence``. ``findings`` passed their citation checks
-    and ``dropped`` did not; a final review's ``notes`` are the findings the task may be accepted with, and
-    ``missing`` the evidence it went without (its own report, or complete transcripts)."""
+    and ``dropped`` did not, each beside why; a final review's ``notes`` are the findings the task may be accepted
+    with, and ``missing`` the evidence it went without (its own report, or complete transcripts)."""
 
     evidence: str
     end: ReviewEnd
     findings: tuple[ReviewFinding, ...] = ()
     notes: tuple[ReviewFinding, ...] = ()
-    dropped: tuple[Dropped, ...] = ()
+    dropped: tuple[tuple[ReviewFinding, str], ...] = ()
     accounts: tuple[TrialAccount, ...] = ()
     reasons: tuple[str, ...] = ()
     missing: tuple[MissingEvidence, ...] = ()

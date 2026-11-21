@@ -21,10 +21,17 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.effects.issues import EvidenceMissing
 from taskforge.harness.protocol import Returned, Stopped
 from taskforge.harness.role import Fresh, Visit, sitting
-from taskforge.harness.tools.evidence import Evidence, FinalReport, RoundReport, Source, evidence_tools
+from taskforge.harness.tools.evidence import (
+    FINAL_GUIDE,
+    ROUND_GUIDE,
+    Evidence,
+    FinalReportTool,
+    ReportTool,
+    Source,
+    evidence_tools,
+)
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import TaskProposal, render
 from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
@@ -37,10 +44,11 @@ from taskforge.stages.summary import task_manifest
 @dataclass(frozen=True, slots=True)
 class Kind:
     prompts: str
-    report: type[RoundReport | FinalReport]
+    report: type[ReportTool]
+    guide: str
 
 
-ROUND, FINAL = Kind("solve_review", RoundReport), Kind("solve_review.final", FinalReport)
+ROUND, FINAL = Kind("solve_review", ReportTool, ROUND_GUIDE), Kind("solve_review.final", FinalReportTool, FINAL_GUIDE)
 
 
 def render_message(message: Mapping[str, object]) -> str:
@@ -57,7 +65,8 @@ def render_message(message: Mapping[str, object]) -> str:
 
 
 def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
-    """A trial's messages, every conversation in order, then its grade; how the recording ended is in its summary."""
+    """A trial's messages, every conversation in order, then its grade; how the recording ended, or why there is no
+    transcript, is in its summary."""
     messages = (
         ()
         if rollout is None
@@ -68,8 +77,11 @@ def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
         *messages,
         "grader:\n" + json.dumps({"cause": trial.cause, "detail": trial.detail, "grade": grade}, default=str),
     )
-    if rollout is None:
-        ended = "no transcript was recorded; the grade is all there is"
+    if rollout is None or not messages:
+        why = (
+            "its recording holds no messages" if rollout else trial.detail or (trial.grade.error if trial.grade else "")
+        )
+        ended = f"no transcript ({why or trial.cause}); the grade is all there is"
     else:
         failure = rollout.rollout.failure
         ended = f"stop={rollout.rollout.stop_reason}" + (
@@ -111,12 +123,8 @@ def transcribed(rollout: GradedRollout | None) -> bool:
 def evidence(
     submission: Submission,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]],
-    max_missing: int,
     output_chars: int,
 ) -> Evidence:
-    """The index; more trials without a complete transcript than ``max_missing`` hold, as missing solver slots do."""
-    if len(cut := [trial.trial for trial, rollout in trials if not transcribed(rollout)]) > max_missing:
-        raise EvidenceMissing(f"solver trials {cut} have no complete transcript for the solve-review")
     sources = (*(trial_source(*pair) for pair in trials), *task_sources(submission))
     if len({source.name for source in sources}) != len(sources):
         raise ValueError("A task file is named like a solver trial")
@@ -157,7 +165,13 @@ async def solve_review(
     The opening names the index's version, so changed evidence never replays a recorded review.
     """
     policy = config.policy
-    index = evidence(submission, trials, config.budget.max_missing_trials, policy.setting("tools.output_chars", int))
+    index = evidence(submission, trials, policy.setting("tools.output_chars", int))
+    cut = [trial.trial for trial, rollout in trials if not transcribed(rollout)]
+    missing = (MissingEvidence(EvidenceKind.TRANSCRIPTS, f"solver trials {cut} have no complete transcript"),) * bool(
+        cut
+    )
+    if len(cut) == len(trials):  # owner's ruling: missing evidence is named on acceptance, never a hold
+        return SolveReview(index.version, ReviewEnd.SKIPPED, missing=missing)
     listing = "\n".join(source.summary for source in index.sources.values())
     opening = Fresh(
         policy.prompt(f"{kind.prompts}.system").template,
@@ -170,13 +184,12 @@ async def solve_review(
         ),
     )
     async with sitting(
-        ctx, config.solve_review, Visit(visit, visit, None, tools=evidence_tools(index, kind.report)), resources
+        ctx,
+        config.solve_review,
+        Visit(visit, visit, None, tools=evidence_tools(index, kind.report, kind.guide)),
+        resources,
     ) as session:
         outcome = await session(opening)
-    cut = [trial.trial for trial, rollout in trials if not transcribed(rollout)]
-    missing = (MissingEvidence(EvidenceKind.TRANSCRIPTS, f"solver trials {cut} have no complete transcript"),) * bool(
-        cut
-    )
     if isinstance(outcome, Returned) and isinstance(outcome.payload, SolveReview):
         return replace(outcome.payload, missing=missing)
     reason = outcome.summary if isinstance(outcome, Stopped) else f"expected report, got {type(outcome).__name__}"

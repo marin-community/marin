@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 4; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 6; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.

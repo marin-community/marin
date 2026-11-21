@@ -46,14 +46,6 @@ class Unreproducible(Hold):
     """
 
 
-class EvidenceMissing(Hold):
-    """More solver trials lack a recorded transcript than ``budget.max_missing_trials`` allows the solve-review.
-
-    Rationale: the review's findings, and so the acceptance, may rest only on evidence the reviewer could read, and a
-    lost transcript cannot be rebuilt without buying the trial again; the workpiece holds for a person.
-    """
-
-
 class DecisionModelUnavailable(Hold):
     """The decision model answered no read for ``decision_model.unavailable_wait``; defer until it answers again.
 
