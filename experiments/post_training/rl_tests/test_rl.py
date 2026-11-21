@@ -111,13 +111,13 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
             "--plan",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
-            "lcm_dp_size=16",
+            "lcm_dp_size=8",
         ),
         (
             "--run",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
-            "lcm_dp_size=16",
+            "lcm_dp_size=8",
         ),
         (
             "--plan",
