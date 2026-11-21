@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 7:27 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 7:43 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ protocol for internal rollout and learner traffic.
 | 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. | Submit the staged rerun once the inventory task service credentials are authorized for the CoreWeave job. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The standalone probe loaded the pinned 67B model on eight H100s. Query tiling passed CPU parity tests and reduced the failed H100 prefill allocation from 44.01 GiB to 35.50 GiB. Both held-learner plans with the tiled kernel render locally. | Verify full generation and fused replay on H100, then run the held-learner serving comparison. |
+| Native inventory backend | The standalone probe loaded the pinned 67B model on eight H100s, completed prefill for four 16,384-token prompts, and entered decode with query tiling and dedicated 90% GPU preallocation. Both held-learner plans for that serving configuration render locally. | Verify full generation and fused replay on H100, then run the held-learner serving comparison after the priority learner jobs. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -662,13 +662,22 @@ allocation to 35.50 GiB. The allocator reported 24.66 GiB resident and a
 71.26 GiB limit immediately before prefill. A dedicated preallocation
 trial uses the same context and records a focused XLA memory report to
 test whether the allocator's growth behavior contributes to the failure.
-The trial reached execution of the tiled prefill, whose compiler report
-records 59.95 GiB per GPU including arguments and workspace. Generation
-and fused scoring at the full shape remain open on H100.
+The tiled prefill compiler report records 59.95 GiB per GPU including
+arguments and workspace. Dedicated preallocation let the probe finish
+prefill on all four 16,384-token prompts and enter decode. Early iterations
+logged 128 new tokens at about 16.34 tokens/s aggregate. Full generation
+and FA4 scoring at the full shape remain open on H100.
 [67B model-load and prefill attempt][iris-native-67b-router] ·
 [90% allocator attempt][iris-native-67b-cap90] ·
 [Tiled H100 attempt][iris-native-67b-tiled] ·
 [Dedicated preallocation trial][iris-native-67b-prealloc]
+
+The next attention candidate skips padding-only query tiles and bounds the
+scan to visible KV pages while preserving the accumulation order. The
+candidate passed 26 focused checks on JAX 0.11.0 CPU. For the qualification
+shape, the page-loop count falls from 119,808 to 14,456 per prefill and from
+40.9 million to 11.8 million across four responses. Those counts describe
+attention work. GPU latency and peak memory still need measurement.
 
 The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
 the 524K-parameter fixture on one four-chip TPUv4 host. Each run used
@@ -874,9 +883,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   and cost, time per admitted group and optimizer update, and fixed-panel
   reward. Both two-update plans at `4fbb38e286` resolved their regional
   inputs for artifact version `2026.11.21.2`. The conditional tiled pair
-  renders at `d7dbf0fc47` with artifact version `2026.11.21.3` and the same
-  learner, checkpoint, training tasks and evaluation settings. The primary
-  fixed panel is `eval-lite@2026.11.17.1`. The published 100-task Parquet has SHA-256
+  renders locally at `bef1b7e267` with artifact version `2026.11.21.4` and
+  the same learner, checkpoint, training tasks and evaluation settings.
+  Only the dedicated native serving subprocess preallocates 90% GPU memory.
+  Submit after the full-shape qualification and priority learner gates.
+  The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
+  Parquet has SHA-256
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
   Require all four attempt-scoped panels at steps 0 and 2, with each task
   ID, prompt token sequence and score reconciled against the successful
