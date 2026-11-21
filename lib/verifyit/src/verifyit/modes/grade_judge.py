@@ -36,7 +36,6 @@ from typing import Any, TypeVar, cast
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
-from pydantic.json_schema import SkipJsonSchema
 
 from verifyit.file_ops.read import read_text
 from verifyit.grade import (
@@ -167,8 +166,8 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
-    callback: SkipJsonSchema[JudgeCallback] | None = field(default=None, kw_only=True, repr=False, compare=False)
-    """Runtime-only, like the credentials; validated as a callable but left out of JSON Schema."""
+    callback: Any = field(default=None, kw_only=True, repr=False, compare=False)
+    """A ``JudgeCallback``; runtime-only, like the credentials."""
 
 
 _Client = openai.OpenAI | JudgeCallback
@@ -825,7 +824,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[_Clien
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     if callback is not None:
-        return callback, model
+        if not callable(callback):
+            raise TypeError(f"Judge callback must be callable, got {type(callback).__name__}")
+        return cast(JudgeCallback, callback), model
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) else {}
     return (
