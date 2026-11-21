@@ -214,6 +214,7 @@ class LocalIrisFactory:
     def __init__(self, root: Path, faults: Sequence[Injection] = ()) -> None:
         self.root, self.faults = root, faults
         self.created: list[Path] = []
+        self.controllers: list[RootedController] = []
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         pass
@@ -222,4 +223,5 @@ class LocalIrisFactory:
         root = self.root / f"machine-{len(self.created)}"
         (root / "workspace").mkdir(parents=True)
         self.created.append(root)
-        return local_iris_machine(root / "workspace", RootedController(root, self.faults))
+        self.controllers.append(controller := RootedController(root, self.faults))
+        return local_iris_machine(root / "workspace", controller)

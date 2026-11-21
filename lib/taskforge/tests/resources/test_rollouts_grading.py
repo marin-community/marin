@@ -324,6 +324,8 @@ async def test_control_grade_on_iris_survives_a_first_copy_queued_past_its_timeo
     events: list[Event[None]] = []
     result = await grade(GradeCandidate(iris_spec(), candidate), grader, notify=events.append)
     assert (result.status, result.reward) == (Outcome.GRADED, 1)
-    (root,) = factory.created
+    (root,), (controller,) = factory.created, factory.controllers
     assert [(root / "workspace" / name).read_bytes() for name in ("a.txt", "b.txt")] == [b"first", b"second"]
+    # Both refusals hit the first copy, which was admitted on its third send.
+    assert (controller.faults, controller.sent("first-copy")) == ([], 3)
     assert not events
