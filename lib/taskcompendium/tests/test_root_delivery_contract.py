@@ -179,9 +179,16 @@ def test_root_delivery_task_exports_through_the_harbor_adapter(tmp_path) -> None
     exported = TaskSpec.model_validate_json((tmp_path / "packet" / "task-spec.json").read_text())
     assert exported.integrity_contract == contract
 
-    # A shared task without the delivery contract stays rejected.
-    unbacked = task.model_copy(update={"integrity_contract": None})
+    # A shared task without the delivery contract and without any declared bridge stays rejected.
+    unbacked = task.model_copy(
+        update={"integrity_contract": None, "grader": grader.model_copy(update={"artifacts": ()})}
+    )
     assert unsupported_harbor_contract(unbacked) == "task_spec_shared_executor_required"
+
+    # A shared task whose grader declares its collect commands or artifact copies exports without
+    # a contract: those declarations are the file-transfer boundary the grading reads through.
+    bridged = task.model_copy(update={"integrity_contract": None})
+    assert unsupported_harbor_contract(bridged) is None
 
     # A UID-demotion shared contract stays rejected: it needs a different executor.
     demotion = task.model_copy(
@@ -242,10 +249,15 @@ def test_declared_build_opt_in_exports_root_delivery_tasks_with_their_original_c
 
     # Generic unsupported builds stay rejected even with the DECLARATIVE opt-in:
     # permission comes from the explicit enum for the caller's own task, and the
-    # shared-executor gate still requires the delivery contract.
+    # shared-executor gate still requires the delivery contract when no bridge is
+    # declared. The grader's artifact copy is a declared bridge, so it exports.
     unbacked = task.model_copy(update={"integrity_contract": None})
+    assert unsupported_harbor_contract(unbacked, docker_build=DockerBuildExecution.DECLARATIVE) is None
+    unbridged = task.model_copy(
+        update={"integrity_contract": None, "grader": grader.model_copy(update={"artifacts": ()})}
+    )
     assert (
-        unsupported_harbor_contract(unbacked, docker_build=DockerBuildExecution.DECLARATIVE)
+        unsupported_harbor_contract(unbridged, docker_build=DockerBuildExecution.DECLARATIVE)
         == "task_spec_shared_executor_required"
     )
 

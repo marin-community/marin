@@ -21,6 +21,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExecutionRequirements,
     NoGrader,
+    ScriptGrader,
     TaskResource,
     TaskSpec,
 )
@@ -127,11 +128,16 @@ def unsupported_harbor_contract(
     # deliver the private verifier files and run the source's verifier verbatim)
     # and copies the reward to the grading machine.
     shared_required = assess_grading_environment(task).required == GradingEnvironmentMode.SHARED
+    # A script grader that declares its collect commands and artifact copies has a
+    # declared file-transfer boundary: the grader runs in its own environment and
+    # reads exactly the inputs those declarations bridge from the agent workspace,
+    # so the mutable-state concern the shared assessment flags does not apply.
+    declared_bridge = isinstance(task.grader, ScriptGrader) and bool(task.grader.collect or task.grader.artifacts)
     if task.integrity_contract is not None and not isinstance(
         task.integrity_contract, (RootDeliveryContract, MultiSweDeliveryContract)
     ):
         return "task_spec_shared_executor_required"
-    if task.integrity_contract is None and shared_required:
+    if task.integrity_contract is None and shared_required and not declared_bridge:
         return "task_spec_shared_executor_required"
     environments = [task.environment_requirements]
     if task.grader.environment is not None:
