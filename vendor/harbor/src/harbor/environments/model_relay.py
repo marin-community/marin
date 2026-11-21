@@ -143,7 +143,9 @@ class ModelRelay:
             )
             url = self.endpoint.rstrip("/") + route
         try:
-            async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
+            # serve_http bounds each request with the guest listener's deadline; a
+            # shorter client timeout here failed long generations the guest still awaited.
+            async with httpx.AsyncClient(follow_redirects=False, timeout=None) as client:
                 async with client.stream(
                     "POST",
                     url,

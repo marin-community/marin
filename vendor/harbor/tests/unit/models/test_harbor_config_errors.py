@@ -54,8 +54,9 @@ def test_context_management_infrastructure_error_is_infrastructure() -> None:
     )
 
 
-def test_daytona_sdk_error_is_infrastructure() -> None:
+def test_daytona_sdk_errors_are_infrastructure() -> None:
     assert error_category("DaytonaError") is ErrorCategory.INFRASTRUCTURE
+    assert error_category("DaytonaTimeoutError") is ErrorCategory.INFRASTRUCTURE
 
 
 def test_llm_request_timeout_is_retryable_infrastructure() -> None:
@@ -160,6 +161,7 @@ def test_errors_by_category_partitions_known_types() -> None:
         ("ContextBudgetExceededError", True),
         ("ContextManagementInfrastructureError", True),
         ("DaytonaProcessError", True),
+        ("DaytonaTimeoutError", True),
         ("AgentTimeoutError", False),
         ("TurnCapExhaustedError", False),
         ("BadRequestError", False),
