@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 from argparse import Namespace
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -31,6 +31,7 @@ from lib.taskforge.tests.test_end_to_end import (
     published_workpiece,
     resources,
     script,
+    serve,
     unexpected_runtime,
 )
 from pydantic import TypeAdapter
@@ -43,6 +44,8 @@ from taskcompendium.models import (
     ConversationToolCall,
     DockerBuildContext,
     EnvironmentRequirements,
+    JsonAnswer,
+    TaskSpec,
 )
 from taskcompendium.models import ToolResult as ConversationToolResult
 from taskcompendium.runtime.resources import inline_resource
@@ -53,7 +56,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
-from taskforge.effects.issues import ContextExceeded, LogFailure
+from taskforge.effects.issues import ContextExceeded, Hold, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
@@ -1071,3 +1074,49 @@ def test_a_restore_for_an_unaccepted_placement_labels_it_a_placement(proposal: T
     line = f"3 of 3 trials solved: too_easy. {INSTRUCTIONS[BandOutcome.TOO_EASY]}"
     assert f"Revision placement: {line}" in decision.reasons
     assert not any(reason.startswith("Revision fault:") for reason in decision.reasons)
+
+
+@pytest.fixture
+def reword() -> Iterator[Callable[[], None]]:
+    """A sibling release that rewords ``JsonAnswer``'s description and nothing else, applied when called."""
+    original = JsonAnswer.__doc__
+
+    def apply() -> None:
+        before = TaskSpec.model_json_schema()
+        JsonAnswer.__doc__ = "Reworded by a sibling release, with the same fields."
+        JsonAnswer.model_rebuild(force=True)
+        TaskSpec.model_rebuild(force=True)
+        assert TaskSpec.model_json_schema() != before  # the live schema really changed
+
+    yield apply
+    JsonAnswer.__doc__ = original
+    JsonAnswer.model_rebuild(force=True)
+    TaskSpec.model_rebuild(force=True)
+
+
+@pytest.mark.parametrize("reworded", [False, True], ids=["installed wording", "reworded sibling"])
+async def test_a_held_format_7_root_resumes_only_its_unfinished_turns(
+    driver_args: Namespace,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    reword: Callable[[], None],
+    reworded: bool,
+) -> None:
+    """Review 2026-11-21 (n11 follow-up 3, P1): a format-7 root this driver held after three author calls re-bought
+    them on resume once main reworded ``JsonAnswer`` (five calls where the earlier reader made two). With the pinned
+    author reference only the unfinished turns reach inference: the author's submit and the never-run review,
+    whatever the installed library's descriptions say between the hold and the resume."""
+    held = FakeInference((*script()[:3], Hold("relay unavailable")))
+    first = replace(resources(Envs(), ()), inference=held, role_inference={"solve_review": CleanReviewer()})
+    author, reviewer = FakeInference(script()[3:]), CleanReviewer()
+    resumed = replace(resources(Envs(), ()), inference=author, role_inference={"solve_review": reviewer})
+    serve(monkeypatch, first, resumed)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    head = published(destination).head
+    assert (head.status.terminal, head.format, len(held.requests)) == (Terminal.HELD, checkpoint.JOURNAL_FORMAT, 4)
+    if reworded:
+        reword()
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    await driver.one(driver_args)
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert (len(author.requests), len(reviewer.requests)) == (1, 1)
