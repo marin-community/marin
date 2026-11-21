@@ -839,7 +839,7 @@ def test_a_second_process_replays_a_provider_context_refusal_without_asking_agai
         assert done.stdout.strip() == f"{mode}: abandoned, {stop}, {calls} provider call(s)"
 
 
-# Review 2026-11-21 (n12 follow-up 3): a driver from before this revision cannot decode a context-refusal row; resumed
+# Review 2026-11-21: a driver from before this revision cannot decode a context-refusal row; resumed
 # on such a held root it publishes a held workpiece describing its decode error over workpiece.json and status.json
 # and leaves events.jsonl as it was. This revision recovers from the untouched stream only under --resume-held.
 async def test_an_older_drivers_decode_error_snapshot_is_rebuilt_from_the_stream_only_on_resume_held(
