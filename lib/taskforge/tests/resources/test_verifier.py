@@ -271,11 +271,12 @@ class QueueLock(asyncio.Lock):
         return await super().acquire()
 
 
-async def test_queued_grades_wait_outside_the_verifier_deadline(monkeypatch) -> None:
+async def test_queued_grades_wait_outside_the_verifier_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier_timeout = 30
     factory = CountedFactory()
     pool, resource = setup(factory)
     candidate = event()
-    limits = candidate.spec.limits.model_copy(update={"verifier_timeout": 30})
+    limits = candidate.spec.limits.model_copy(update={"verifier_timeout": verifier_timeout})
     candidate = replace(candidate, spec=candidate.spec.model_copy(update={"limits": limits}))
     lock = pool.lock = QueueLock(callers=5)  # This test's own hold, then four grades.
     await lock.acquire()
@@ -286,7 +287,7 @@ async def test_queued_grades_wait_outside_the_verifier_deadline(monkeypatch) -> 
         # started before the lease would expire now; one started when the lease is held has its full budget.
         loop = asyncio.get_running_loop()
         clock = loop.time
-        monkeypatch.setattr(loop, "time", lambda: clock() + 2 * limits.verifier_timeout)
+        monkeypatch.setattr(loop, "time", lambda: clock() + 2 * verifier_timeout)
         lock.release()
         results = await asyncio.gather(*grades)
         assert [result.reward for result in results] == [1, 1, 1, 1]
