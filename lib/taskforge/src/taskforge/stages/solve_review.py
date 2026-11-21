@@ -16,7 +16,7 @@ from dataclasses import replace
 from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import TaskResource, format_conversation
+from taskcompendium.models import AssistantToolCalls, TaskResource, TaskSpec, format_conversation
 from taskcompendium.runtime.resources import resource_bytes, resource_inventory, resource_signature
 
 from taskforge.config import TaskforgeConfig
@@ -126,6 +126,22 @@ def resource_source(role: str, resource: TaskResource) -> Source:
         return Source(name, f"{name}: {about}binary (not UTF-8), not readable as text", ())
 
 
+def task_prompt(task: TaskSpec) -> str:
+    """The task's conversation with each historical tool call's arguments rendered canonically, as the journal reloads
+    them (sorted, integral floats as integers), keeping the call and reply ids."""
+    events = tuple(
+        (
+            event.model_copy(
+                update={"calls": tuple(c.model_copy(update={"arguments": canonical(c.arguments)}) for c in event.calls)}
+            )
+            if isinstance(event, AssistantToolCalls)
+            else event
+        )
+        for event in task.context.events
+    )
+    return format_conversation(events)
+
+
 def task_document(submission: Submission) -> str:
     """The task manifest the reviewer sees, in the opening and as ``task/task.json`` alike, rendered canonically."""
     return canonical(manifest(submission.task.model_dump(mode="json")))
@@ -137,7 +153,7 @@ def task_sources(submission: Submission) -> tuple[Source, ...]:
     task = submission.task
     return (
         text_source(f"{TASK}task.json", task_document(submission)),
-        text_source(f"{TASK}prompt.md", format_conversation(task.context.events)),
+        text_source(f"{TASK}prompt.md", task_prompt(task)),
         text_source(f"{TASK}controls.json", CONTROLS.dump_json(submission.controls, indent=1).decode()),
         *(resource_source(role, resource) for role, resource in resource_inventory(task)),
     )

@@ -5,6 +5,8 @@
 
 import json
 import re
+import subprocess
+import sys
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -35,7 +37,14 @@ from pydantic import TypeAdapter
 from rolloutengine.models import ConversationRecord, GradedRollout, Model, Rollout, RolloutFailure, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import CommandSemantics, DockerBuildContext, EnvironmentRequirements
+from taskcompendium.models import (
+    AssistantToolCalls,
+    CommandSemantics,
+    ConversationToolCall,
+    DockerBuildContext,
+    EnvironmentRequirements,
+)
+from taskcompendium.models import ToolResult as ConversationToolResult
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge import checkpoint, driver
@@ -45,7 +54,7 @@ from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
 from taskforge.effects.issues import ContextExceeded, LogFailure
-from taskforge.effects.log import EventLog, JsonlSink
+from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
 from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ListTool, ReadTool, SearchTool, Source
@@ -131,11 +140,12 @@ async def reviewed(
     trials: Sequence[tuple[TrialResult, GradedRollout | None]] = TRIALS,
     log: EventLog | None = None,
     settings: Mapping[str, object] | None = None,
+    submission: Submission = SUBMISSION,
 ) -> SolveReview:
     ctx = Context(log=log or EventLog())
     policy = load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": OUTPUT_CHARS, **(settings or {})})
     bundle = replace(stage_resources(ctx), envs=NoMachines(), role_inference={"solve_review": reviewer})
-    return await solve_review(ctx, build_config(policy, {}), bundle, sample_proposal(), SUBMISSION, trials)
+    return await solve_review(ctx, build_config(policy, {}), bundle, sample_proposal(), submission, trials)
 
 
 def text(outcome: ToolOutcome) -> str:
@@ -890,3 +900,68 @@ def test_a_clean_changed_band_after_a_reviewed_round_ships_and_a_defect_round_le
     assert isinstance(first, Modify) and first.review == (FOUND,) and first.placement is BandOutcome.TOO_EASY
     decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
     assert isinstance(decision, Modify) and not decision.review and decision.placement is BandOutcome.TOO_EASY
+
+
+def recorded_task() -> Submission:
+    """A task whose prompt carries a historical tool call with unsorted, integral-float arguments, unsorted labels, and
+    a verifier file with a declared mode and mtime: everything a JSONL reload reorders or retypes."""
+    task = arithmetic_task()
+    call = ConversationToolCall(call_id="c1", name="lookup", arguments={"z": 3.0, "a": 5})
+    events = (
+        task.context.events[0],
+        AssistantToolCalls(calls=(call,)),
+        ConversationToolResult(call_id="c1", content="8"),
+        *task.context.events[1:],
+    )
+    check = inline_resource("check.sh", b"exit 0\n").model_copy(update={"mode": "0755", "mtime_ns": 1_700_000_000_123})
+    task = task.model_copy(
+        update={
+            "context": task.context.model_copy(update={"events": events}),
+            "labels": {"z": "last", "a": "first"},
+            "resources": task.resources.model_copy(update={"verifier": (check,)}),
+        }
+    )
+    return replace(SUBMISSION, task=task)
+
+
+def journalled(submission: Submission, rollout: GradedRollout) -> Resolved[GradedRollout]:
+    spec = lower_with_settings(submission.task, lowering_settings(load_policy(DEFAULTS_DIR)), {})
+    return Resolved(SolverRollout(spec, 1, 0), (Fingerprint("rollouts", "d", ReplayPolicy.CACHE),), rollout)
+
+
+def reloaded(records: Sequence[Record]) -> tuple[Submission, GradedRollout]:
+    """The task and trial a resumed process holds: as the journal reloads the solver rollout that ran them."""
+    event = next(
+        r.event for r in records if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)
+    )
+    assert isinstance(event.request, SolverRollout)
+    return replace(SUBMISSION, task=event.request.spec.task), event.value
+
+
+@pytest.mark.parametrize("variant", ["plain", "recorded"])
+async def test_evidence_is_the_same_before_and_after_a_journal_round_trip(variant: str, tmp_path: Path) -> None:
+    """Review 2026-11-21 (n11 follow-up 2, P1): for a task and trial before and after a JSONL round trip, every source
+    and the version are identical."""
+    submission = recorded_task() if variant == "recorded" else SUBMISSION
+    grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2.0}})
+    rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    log = EventLog(sink=sink)
+    await log.record(journalled(submission, rollout))
+    await log.persist()
+    task, trial = reloaded(local_records(sink))
+    live = evidence(submission, (TRIALS[0], (TrialResult(1, grade), rollout)), OUTPUT_CHARS)
+    cold = evidence(task, (TRIALS[0], (TrialResult(1, trial.grade), trial)), OUTPUT_CHARS)
+    assert live.sources == cold.sources and live.version == cold.version
+
+
+async def test_a_second_process_replays_the_review_of_a_recorded_task_with_zero_calls(tmp_path: Path) -> None:
+    """Review 2026-11-21 (n11 follow-up 2, P1): across two processes, a historical tool call in ``task/prompt.md``
+    rendered ``lookup({'z': 3.0, 'a': 5})`` fresh and ``lookup({'a': 5, 'z': 3})`` after the reload, and the second
+    process paid the reviewer again. The verifier file's declared mtime is the same in both, as on any machine."""
+    probe = [sys.executable, "-m", "lib.taskforge.tests.review_replay_probe"]
+    root = Path(__file__).parents[3]
+    for mode in ("record", "replay"):
+        done = subprocess.run([*probe, mode, str(tmp_path)], cwd=root, capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr[-3000:]
+        assert done.stdout.strip() == f"{mode}: {1 if mode == 'record' else 0} reviewer call(s)"
