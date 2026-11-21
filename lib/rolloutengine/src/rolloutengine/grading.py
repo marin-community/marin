@@ -79,16 +79,14 @@ async def _grade_rollout(
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
+    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
     if isinstance(grader, DecisionModelGrader):
         assert spec.decision_model is not None
-        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
         return await grade_decision_model_answer(task, attempt, spec.decision_model)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
-        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
         return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
-    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = spec.verifier_machine
     assert selection is not None

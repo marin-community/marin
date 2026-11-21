@@ -299,9 +299,9 @@ def judge_task(answer_type: AnswerType = AnswerType.TEXT, *, model: str = "fixtu
     return arithmetic_task(answer_type=answer_type, grader=verifyit_package(spec, environment=GRADER_ENVIRONMENT).grader)
 
 
-def decision_model_task(answer_type: AnswerType = AnswerType.TEXT) -> TaskSpec:
+def decision_model_task(answer_type: AnswerType = AnswerType.TEXT, **update) -> TaskSpec:
     grader = DecisionModelGrader(deliverable="Six plus six.", rubric="Any numeral.", reference="12", cut=3.0)
-    return arithmetic_task(answer_type=answer_type, grader=grader)
+    return arithmetic_task(answer_type=answer_type, grader=grader, **update)
 
 
 def decision_model_spec(task: TaskSpec, connection: DecisionModelConnection | None) -> TaskRolloutSpec:
@@ -1514,6 +1514,14 @@ DECISION_MODEL = DecisionModelConnection("fixture-decision-model", _unused_read)
             NotImplementedError,
             "conversation answer",
             id="decision-model-file-answer",
+        ),
+        pytest.param(
+            lambda: decision_model_spec(
+                decision_model_task(AnswerType.JSON, answer_format=JsonValueAnswer()), DECISION_MODEL
+            ),
+            ValueError,
+            "A decision model reads a text or action answer",
+            id="decision-model-json-answer",
         ),
         pytest.param(
             lambda: rollout_spec(judge_task(model=""), judge_connection=JUDGE_CONNECTION),
@@ -3206,11 +3214,68 @@ async def test_a_decision_model_task_grades_on_the_host_through_the_callers_read
     assert [(request.reference, request.candidate) for request in requests] == [("12", "twelve")]
 
 
+async def test_a_decision_model_outage_reaches_the_caller_as_the_grading_cause():
+    class Outage(Exception):
+        pass
+
+    async def read(request: DecisionModelRequest) -> float:
+        raise Outage("decision model unavailable")
+
+    spec = decision_model_spec(decision_model_task(), DecisionModelConnection("fixture-decision-model", read))
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(ReplayModel([{"role": "assistant", "content": "twelve"}])).run_task(spec)
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert isinstance(caught.value.__cause__, Outage)
+
+
+async def test_a_waiting_decision_model_read_ends_at_the_verifier_deadline_or_on_cancellation():
+    entered, released = asyncio.Event(), asyncio.Event()
+
+    async def read(request: DecisionModelRequest) -> float:
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            released.set()
+        raise AssertionError("unreachable")
+
+    connection = DecisionModelConnection("fixture-decision-model", read)
+    timed = rollout_spec(decision_model_task(), verifier_timeout=0.1).model_copy(update={"decision_model": connection})
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(ReplayModel([{"role": "assistant", "content": "twelve"}])).run_task(timed)
+    assert (caught.value.grade.failure, released.is_set()) == (GradingFailure.TIMEOUT, True)
+    entered.clear()
+    released.clear()
+    pending = asyncio.create_task(
+        engine(ReplayModel([{"role": "assistant", "content": "twelve"}])).run_task(
+            decision_model_spec(decision_model_task(), connection)
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert released.is_set()
+
+
 def test_a_decision_model_connection_never_reaches_the_serialized_spec():
     spec = decision_model_spec(decision_model_task(), DECISION_MODEL)
     assert TaskRolloutSpec.model_validate_json(spec.model_dump_json()).decision_model is None
     restored = pickle.loads(pickle.dumps(spec))
     assert (restored.decision_model, restored.task) == (None, spec.task)
+    assert "decision_model" not in TaskRolloutSpec.model_json_schema()["properties"]
+
+
+def test_a_spec_pickled_before_decision_models_restores_without_one(monkeypatch):
+    spec = rollout_spec(arithmetic_task())
+    state = spec.__getstate__()
+    # The state shape of a spec pickled before TaskRolloutSpec.decision_model existed.
+    old = {**state, "__dict__": {k: v for k, v in state["__dict__"].items() if k != "decision_model"}}
+    monkeypatch.setattr(TaskRolloutSpec, "__getstate__", lambda self: old)
+    pickled = pickle.dumps(spec)
+    monkeypatch.undo()
+    restored = pickle.loads(pickled)
+    assert (restored.decision_model, restored.task, restored.limits) == (None, spec.task, spec.limits)
 
 
 async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_loop():

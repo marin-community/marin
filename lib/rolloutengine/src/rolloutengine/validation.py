@@ -20,6 +20,7 @@ from taskcompendium.models import (
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
+from taskcompendium.submission import require_submission_compatibility
 
 from rolloutengine.grading import judge_connection
 from rolloutengine.machines import _machine_spec
@@ -66,6 +67,7 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
             raise NotImplementedError(
                 f"The engine grades a decision model only on a conversation answer, not {task.answer_type}"
             )
+        require_submission_compatibility(task)
     if judge:
         judge_connection(spec)
         if task.answer_type not in CONVERSATION_ANSWERS:

@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 from shellbox.machine import NetworkPolicy
 from taskcompendium.decision_model import DecisionModelConnection
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -520,7 +521,7 @@ class TaskRolloutSpec(BaseModel):
     """The service of a judge grader, which grades on the host. ``model_dump``, JSON, and pickle leave it out,
     so a spec loaded from them has none. Without it, the engine reads ``VERIFYIT_JUDGE_BASE_URL`` and
     ``VERIFYIT_JUDGE_API_KEY``."""
-    decision_model: DecisionModelConnection | None = Field(default=None, exclude=True)
+    decision_model: SkipJsonSchema[DecisionModelConnection | None] = Field(default=None, exclude=True)
     """The caller's decision model, which grades a decision_model grader; serialized like ``judge_connection``."""
     limits: RolloutLimits
     trace: TraceMode = TraceMode.EXACT_TOKENS
@@ -531,3 +532,7 @@ class TaskRolloutSpec(BaseModel):
         fields = {**state["__dict__"], "judge_connection": None, "decision_model": None}
         fields_set = state["__pydantic_fields_set__"] - {"judge_connection", "decision_model"}
         return {**state, "__dict__": fields, "__pydantic_fields_set__": fields_set}
+
+    def __setstate__(self, state: dict[Any, Any]) -> None:
+        # A spec pickled before ``decision_model`` existed restores without one.
+        super().__setstate__({**state, "__dict__": {"decision_model": None, **state["__dict__"]}})
