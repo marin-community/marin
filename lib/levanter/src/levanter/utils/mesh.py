@@ -129,6 +129,17 @@ class MeshConfig:
         return axes, dcn_axes
 
 
+def mesh_slice_count(devices: Sequence[jax.Device]) -> int:
+    """Count TPU slices; CPU and GPU devices form one global mesh.
+
+    GPU PJRT also exposes slice_index for hosts. Those host indices do not
+    split Levanter's global GPU ICI axes into TPU-style DCN slices.
+    """
+    if devices[0].platform != "tpu":
+        return 1
+    return max(getattr(device, "slice_index", 0) for device in devices) + 1
+
+
 def create_mesh_from_axis_specs(
     *,
     ici_axes: Mapping[str, int],
@@ -156,7 +167,7 @@ def create_mesh_from_axis_specs(
     ici_mesh_shape = tuple(ici_axes.get(name, 1) for name in axis_names)
     dcn_mesh_shape = tuple(dcn_axes.get(name, 1) for name in axis_names)
 
-    is_multislice = hasattr(devices[0], "slice_index")
+    is_multislice = mesh_slice_count(devices) > 1
     if is_multislice:
         device_mesh = mesh_utils.create_hybrid_device_mesh(
             mesh_shape=ici_mesh_shape,

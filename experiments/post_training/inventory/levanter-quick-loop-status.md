@@ -1,15 +1,15 @@
 # Levanter quick-loop status
 
-November 20, 2026 (PST).
+November 21, 2026 (PST).
 
-The learner-only integration and CPU proofs are ready. The first 40-H100 smoke,
-from `646ccb48641442cf3d9b3223f06c1bca0c5a2e0a`, failed before model loading:
-the GPU learner inherited `JAX_PLATFORMS=cpu` from its CPU coordinator.
-`fc9a60939b4bc40b34b4dce7ffdf3e3d33f47d70` fixes platform selection and checkpoint
-locality. Current-source GPU acceptance remains pending. The replacement smoke
-is submitted at BATCH priority from `6936528c55df0212ec8ccd1fa619361863b4c420`.
-At 16:03 PST, all five GPU tasks are still waiting for gang admission.
-The matched comparison remains gated on smoke acceptance.
+The learner-only integration and CPU proofs are ready; H100 acceptance remains
+blocked. The latest 40-H100 smoke, version `2026.11.20.5` from
+`6936528c55df0212ec8ccd1fa619361863b4c420`, failed during native trainer mesh
+setup before model loading or updates. Its configured DCN (inter-host) axis
+product was one, while mesh validation required four slices. A source repair
+keeps GPU hosts in one global mesh and preserves TPU slice meshes; local
+topology regressions pass. No replacement run or matched comparison has been
+submitted; the comparison remains gated on smoke acceptance.
 
 ## Scope and fixed recipe
 
@@ -20,7 +20,8 @@ one isolated JAX process per learner host. It consumes finalized SkyRL batches,
 including failure masks and fractional loss weights. Full native RolloutEngine
 orchestration migration remains outside this integration.
 
-Both arms preserve these inputs and settings:
+The instrumented Megatron control and native Levanter candidate preserve these
+inputs and settings:
 
 - Selection: `s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04`
   ([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04)).
@@ -50,7 +51,8 @@ Both arms preserve these inputs and settings:
 Rendered recipe comparison against main
 `fda7484bbfe957c89d08b7d58dbaac3396d2f4bc` found only `trainer.strategy`,
 `trainer.batch_builder`, and `trainer.policy.levanter_config` differ between the
-instrumented control and native candidate. Both verify publication. The native
+instrumented control and native candidate. Both are configured with publication
+verification enabled. The native
 profile keeps FA4 attention, ring-gather/combine MoE, FP32 routing and selective
 attention operations, and BF16 projection logits with FP32 softmax. The platform
 and storage fixes change no kernels, objective math, precision settings, or
@@ -60,23 +62,24 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
-| Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes, all eight child exits zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | First 40-H100 smoke started all five GPU tasks, then failed the learner device-count guard before model loading. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
+| Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
+| Actual H100 | Smoke `.1` failed the device-count guard. Smoke `.5` ran all five GPU tasks for about 6m50s, then failed native trainer mesh validation. Both failed before model loading. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
 | Publication and resume | CPU Gloo replay and fresh-process native checkpoint transactions passed, including exact model, Adam, RNG, step, and model-averaging fingerprints. Four native child/host restart cases passed. | H100 NCCL/vLLM receiver replay with zero byte mismatches, subsequent nonempty generation stamped with the updated policy, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
 qualify this current 32-GPU full-MoE learner source.
 
-The failed smoke was version `2026.11.20.1`, coordinator
+The first failed smoke was version `2026.11.20.1`, source
+`646ccb48641442cf3d9b3223f06c1bca0c5a2e0a`, coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.1-coordinator-96655281`,
 with GPU child suffix `users-dlwh-checkpoints-snowball-inventory-2026.11.20.1-a02f6689f4d1`.
 [W&B run](https://wandb.ai/marin-community/marin-snowball-curriculum/runs/uzjtcvcc).
-It failed at 12:28:12 PST; the actual child configuration confirmed the CPU
-selector. No successful model update, publication, generation, or checkpoint
+It failed on November 20 at 12:28:12 PST; the actual child configuration confirmed
+inherited `JAX_PLATFORMS=cpu`. No successful model update, publication, generation, or checkpoint
 continuation receipt resulted. Previous GPU pods were confirmed gone.
 
-The source fixes explicitly select `JAX_PLATFORMS=cuda,cpu`, preserve Ray's
+The fixes in `fc9a60939b` explicitly select `JAX_PLATFORMS=cuda,cpu`, preserve Ray's
 `CUDA_VISIBLE_DEVICES`, and require the actual GPU backend before loading
 weights. Bootstrap checks CUDA in the isolated learner environment before Ray
 starts. Both Megatron and Levanter now place recovery checkpoints, Ray logs,
@@ -93,21 +96,34 @@ independent source review passed for these fixes. The earlier broad suite had
 17 failures: six sandbox and ten router failures reproduced on clean main;
 one nested-launcher setup failure remained unclassified.
 
-## Current run and reproduction
+## Latest terminal run and planned reproduction
 
-The active smoke is version `2026.11.20.5`, coordinator
+Smoke `2026.11.20.5` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2`,
-with current GPU child suffix `users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-af5857383fd5`.
-Both accepted source bundles match the frozen `6936528c55` contents, and both
-jobs have actual BATCH priority. The coordinator was preempted once before GPU
-execution; Iris killed its first child and submitted the current replacement.
-The current gang remains scheduling-gated. Failure retries are zero; Iris
-preemption retries retain their defaults of 100 for the coordinator and 1,000
-for the child. These are separate retry budgets.
+with final GPU child suffix `users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a8ae164919e7`.
+Both jobs ran at BATCH priority from frozen source `6936528c55`. After six CPU
+coordinator preemptions, the GPU gang ran for 6m49.7s and failed on November 21
+at `2026-11-21T12:50:15.820Z` (04:50:15.820 PST):
+`ValueError: DCN product 1 must equal num_slices 4.` The preserved traceback
+locates the failure in native trainer mesh setup, before weights loaded.
+No update, publication, generation, or checkpoint-continuation acceptance passed.
+The [preserved exception record](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D14d%2Fskyrl%2Fmarin%2Fusers%2Fdlwh%2Fcheckpoints%2Fsnowball-inventory%2F2026.11.20.5%2Fattempts%2Frendezvous%2Fdebug_artifacts%2Frank0-g73a62a%2Foutcomes%2Fskyrl-entrypoint-driver.g73a62a.12655.1795265415820256921.exception.json)
+is in `s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/dlwh/checkpoints/snowball-inventory/2026.11.20.5/attempts/rendezvous/debug_artifacts/rank0-g73a62a/outcomes/skyrl-entrypoint-driver.g73a62a.12655.1795265415820256921.exception.json`.
+Failure retries were zero; preemption retry budgets were 100 for the coordinator
+and 1,000 for the child. These are separate retry budgets.
+
+The mesh repair uses TPU slice counts only for TPU devices. GPU PJRT's host
+`slice_index` metadata no longer splits the configured global GPU mesh.
+The data4/expert8 geometry is unchanged. A 32-device topology regression checks
+exact batch and expert shard ownership for GPU descriptors, and checks that
+TPU expert groups stay within each slice. These are local topology checks;
+the repaired source still requires accelerator acceptance.
 
 Run from the repository with the required storage, evaluation, and judge
-credentials loaded. The commands below record the submitted smoke and planned
-comparison arms; choose a fresh unused artifact version for another attempt.
+credentials loaded. All three versions below are planned and not submitted.
+Local topology checks, four real CPU update/checkpoint/restart cases, lint,
+types, strict docs, and independent mesh review pass. The next smoke requires
+a new source freeze. No successful rerun is established by this record.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
@@ -116,7 +132,7 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.20.5 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.1 \
   --learner levanter --steps 2 --verify-publication \
   --validate-native-checkpoint --coordinator-route regional --run
 ```
@@ -126,10 +142,10 @@ checkpoint continuation gates in the table, submit the matched arms:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.20.6 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.2 \
   --learner megatron --steps 25 --verify-publication --coordinator-route regional --run
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.20.7 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.3 \
   --learner levanter --steps 25 --verify-publication --coordinator-route regional --run
 ```
 

@@ -91,7 +91,7 @@ from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_trainin
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import zeros_like_tree
-from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
+from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs, mesh_slice_count
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
 
@@ -1070,8 +1070,8 @@ class TrainerConfig:
 
     @cached_property
     def num_slices(self):
-        """number of nodes"""
-        return max(getattr(device, "slice_index", 0) for device in jax.devices()) + 1
+        """Number of TPU slices; GPU hosts share one global mesh."""
+        return mesh_slice_count(jax.devices())
 
     @cached_property
     def mesh_axis_specs(self) -> List[str]:
