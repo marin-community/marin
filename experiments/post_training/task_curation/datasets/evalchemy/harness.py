@@ -39,7 +39,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 from experiments.post_training.task_curation.datasets.evalchemy.likelihood import choice_source
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 
 def sources() -> list[RlDataSource[EvalDataset]]:
@@ -146,6 +146,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 family="likelihood-continuation",
                 tags=("eval", "source:evalchemy", "benchmark"),
                 count=5153,
+                task_format=TaskFormat.NATIVE_TASKSPEC,
             ),
             config=EvalDataset(
                 recipe=CurationRecipe(
@@ -266,6 +267,7 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
                     family="short-answer",
                     tags=("eval", "source:evalchemy", "benchmark", "family:short-answer", "task:" + profile),
                     count=population,
+                    task_format=TaskFormat.NATIVE_TASKSPEC,
                 ),
                 config=EvalDataset(
                     recipe=CurationRecipe(

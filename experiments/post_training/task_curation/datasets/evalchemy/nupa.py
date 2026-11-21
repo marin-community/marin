@@ -23,7 +23,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 NUPA_REVISION = "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
 PANEL_SHA256 = "27f122972d76dc2a1170a3d105a9856b55beedabe037f697c1a1aa2baeb67036"
@@ -59,6 +59,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     family="numeric-representation",
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
                     count=rows,
+                    task_format=TaskFormat.NATIVE_TASKSPEC,
                 ),
                 config=EvalDataset(
                     recipe=CurationRecipe(

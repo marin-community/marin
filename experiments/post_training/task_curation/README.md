@@ -24,6 +24,15 @@ multi-turn and similar) on a source. A late-stage ingestion step derives them fr
 the final TaskSpecs and QA records, and a contradicting declaration fails
 ingestion. Declarations carry only license, family and upstream provenance tags.
 
+Every source declares its task layout through [TaskFormat](../../../lib/finestore/src/finestore/rl/curation.py):
+`TASKCOMPENDIUM` or `HARBOR` task directories for agentic sources, the
+grandfathered `MARINSKYRL` blend rows, or `NATIVE_TASKSPEC` for non-agentic
+sources whose recipe or evaluation-harness pipeline converts raw rows straight to
+TaskSpecs. A catalog declaration without exactly one declared value fails at
+construction, and the Atlas Format column projects the value from the frozen
+declaration. A published private-release binding overwrites the construction-time
+value with the release's declared format.
+
 ## Pinned registry receipts
 
 Generated census, lexical, retention, deduplication and fingerprint-index JSON is

@@ -16,8 +16,10 @@ from finestore.rl.curation import (
     QualifiedSourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
+    TaskFormat,
 )
 from finestore.rl.status_taxonomy import DataRestriction
+from pydantic import ValidationError
 
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
@@ -54,6 +56,15 @@ def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
         replace(info, title="Math dataset converted from elsewhere")
     with pytest.raises(ValueError, match="Source title"):
         QualifiedSourceDeclaration.model_validate({**declaration.model_dump(), "display_name": "hand-set title"})
+
+
+def test_task_format_resolves_once_and_rejects_unknown_values(tmp_path):
+    source = number_source(tmp_path / "input")
+    source = replace(source, info=replace(source.info, task_format=TaskFormat.NATIVE_TASKSPEC))
+    declaration = QualifiedSourceDeclaration.model_validate_json(source.declaration.model_dump_json())
+    assert declaration.task_format is TaskFormat.NATIVE_TASKSPEC
+    with pytest.raises(ValidationError):
+        QualifiedSourceDeclaration.model_validate({**declaration.model_dump(), "task_format": "spreadsheet"})
 
 
 def test_repaired_release_pin_is_separate_from_upstream_url(tmp_path):

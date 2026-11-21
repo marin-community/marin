@@ -61,11 +61,22 @@ def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -
     [
         (TaskFormat.MARINSKYRL, "Marin:a-new-blend", "not grandfathered"),
         (None, "Marin:agentic", "declares no task format"),
+        (TaskFormat.NATIVE_TASKSPEC, "Marin:agentic-native", "declares no task directory"),
     ],
 )
 def test_unaccepted_agentic_formats_are_rejected(task_format, source_id, error):
     with pytest.raises(ValueError, match=error):
         require_accepted_task_format(_agentic(task_format, source_id))
+
+
+@pytest.mark.data_integration
+def test_every_catalog_declaration_resolves_to_exactly_one_task_format():
+    """The served catalog only carries declarations whose task layout resolves to one enum value."""
+    for source in all_sources().values():
+        declaration = source.catalog_declaration
+        if declaration is None:
+            continue
+        assert isinstance(declaration.task_format, TaskFormat)
 
 
 def test_pipeline_less_pointers_are_rejected():

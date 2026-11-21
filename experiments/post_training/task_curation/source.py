@@ -4,7 +4,6 @@
 """Source declarations and their curation pipeline interfaces."""
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Annotated, Protocol
 
 from finestore.rl.curation import (
@@ -36,6 +35,7 @@ from finestore.rl.curation import (
     SourceOrigin,
     SourceQualityResult,
     SourceUse,
+    TaskFormat,
     WithinSourceDedupEvidence,
     consumer_blockers,
     consumer_decision_status,
@@ -159,21 +159,6 @@ class CatalogConfig(Protocol):
 
     @property
     def intended_use(self) -> IntendedUse: ...
-
-
-class TaskFormat(StrEnum):
-    """The ingested task layout of a source's pinned payload.
-
-    Only task-directory layouts are accepted for agentic sources: a task is a
-    directory with ``task.toml``, its environment and its verifier, in either
-    TaskCompendium's or Harbor's variant. ``MARINSKYRL`` marks a Marin-internal
-    blend whose rows are not task directories; it is accepted only for the
-    sources listed in ``GRANDFATHERED_MARINSKYRL_SOURCES``.
-    """
-
-    TASKCOMPENDIUM = "taskcompendium"
-    HARBOR = "harbor"
-    MARINSKYRL = "marinskyrl"
 
 
 @dataclass(frozen=True)
@@ -391,6 +376,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
         filtered_to_zero = self.info.oracle_filtration is not None and self.info.oracle_filtration.admitted_count == 0
         if not self.is_grandfathered_blend and not self.has_actor_census and not filtered_to_zero:
             return None
+        if self.info.task_format is None:
+            raise ValueError(
+                f"Source {self.info.id} requires a declared task format: "
+                "every catalog declaration resolves to exactly one TaskFormat value"
+            )
         return self.declaration
 
     @property
@@ -776,6 +766,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             dataset_id=dataset.name if dataset else None,
             dataset_revision=dataset.revision if dataset else None,
             url=info.upstream_url or (dataset.url if dataset else None),
+            task_format=info.task_format,
             type=next(
                 (
                     label

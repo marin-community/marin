@@ -24,7 +24,7 @@ from verifyit.modes.extract import extract_boxed
 from verifyit.modes.grade_math import parses_reference
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -385,6 +385,7 @@ SOURCES = (
             origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
     ),
     MathSource(
@@ -408,6 +409,7 @@ SOURCES = (
             origin=SourceOrigin.DI_ZHANG_FDU,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
     ),
     MathSource(
@@ -524,6 +526,7 @@ SOURCES = (
             origin=SourceOrigin.PAFITIS,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
     ),
     MathSource(
@@ -590,6 +593,7 @@ SOURCES = (
             origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
     ),
     MathSource(

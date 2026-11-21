@@ -127,6 +127,7 @@ TABLE_SOURCE_FIELDS = frozenset(
         "difficulty",
         "intended_use",
         "method_tags",
+        "task_format",
         "data_restriction",
         "backend_capabilities",
         "partial_overlaps",

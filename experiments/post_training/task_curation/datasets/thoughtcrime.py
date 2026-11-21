@@ -17,7 +17,7 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Controls, IntendedUse, Reply
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 REPOSITORY = "open-athena/Marin-Thoughtcrime"
 REVISION = "5ebd362eec2a6beab7898ea7a717a32a55d164bd"
@@ -55,6 +55,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("eval", "tool-calling", "reasoning-markup", "pi", "bixbench", "bfcl"),
                 count=328,
                 notes="One prefix per benchmark task; prefixes stop at pi's first compaction and 12,288 prompt tokens.",
+                task_format=TaskFormat.NATIVE_TASKSPEC,
             ),
             config=CurationRecipe(
                 name="thoughtcrime",

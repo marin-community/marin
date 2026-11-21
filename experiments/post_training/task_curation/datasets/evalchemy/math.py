@@ -19,7 +19,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, MATH_JUDGE_GRADER
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 MATH500_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
 MARIN_SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"
@@ -68,6 +68,7 @@ def math_dataset(
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math"),
             count=rows,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=EvalDataset(
             recipe,
@@ -116,6 +117,7 @@ def olympiad_source(protocol: OlympiadProtocol) -> RlDataSource[EvalDataset]:
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math", "legacy-subset"),
             count=30,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

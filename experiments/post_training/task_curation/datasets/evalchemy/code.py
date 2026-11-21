@@ -24,7 +24,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.post_training.task_curation.datasets.evalchemy.environments import PYTHON_GRADER
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 
 def python_source(
@@ -48,6 +48,7 @@ def python_source(
             family="python-code",
             tags=("eval", "source:evalchemy", "benchmark", "code", "single-turn"),
             count=rows,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=EvalDataset(
             recipe=CurationRecipe(

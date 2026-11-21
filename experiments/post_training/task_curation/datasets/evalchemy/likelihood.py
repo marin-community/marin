@@ -28,7 +28,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 
 def choice_source(
@@ -80,6 +80,7 @@ def choice_source(
                 "task:" + original_task_name(template),
             ),
             count=population,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=EvalDataset(
             recipe=recipe,

@@ -1800,6 +1800,15 @@ an agentic source that declares no format, and rejects MarinSkyRL's internal
 blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
 frozen list of Nemotron Ultra components admitted before the requirement. A new
 internal-format source therefore fails at selection instead of shipping.
+Non-agentic sources whose payload is TaskSpec rows produced directly by their own
+recipe or evaluation-harness pipeline declare `TaskFormat.NATIVE_TASKSPEC`; they
+never package task directories. Every catalog declaration resolves to exactly one
+`TaskFormat` value at construction: a source entering the catalog without a
+declared format fails, and the Atlas Format column projects that value from the
+frozen declaration. A source whose payload moves into a published private release
+adopts the release's declared format (`TaskFormat.HARBOR` or
+`TaskFormat.TASKCOMPENDIUM`) through its release binding, which overwrites the
+construction-time value.
 `independent_qc` records quality checks performed outside curation. Quality Result
 is computed from recorded SAMPLE/FULL issue counts and remains separate from
 mechanical exclusions and spec fidelity. Daytona is a required measured enum:

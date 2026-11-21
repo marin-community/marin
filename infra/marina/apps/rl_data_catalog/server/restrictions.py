@@ -168,6 +168,7 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "dataset_id",
         "dataset_revision",
         "url",
+        "task_format",
         "type",
         "turns",
         "is_benchmark",

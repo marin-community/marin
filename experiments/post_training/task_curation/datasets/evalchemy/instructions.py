@@ -27,7 +27,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 )
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 IFEVAL_REVISION = "966cd89545d6b6acfd7638bc708b98261ca58e84"
 IFBENCH_REVISION = "2e8a48de45ff3bf41242f927254ca81b59ca3ae2"
@@ -66,6 +66,7 @@ def instruction_source(
             family="instruction-following",
             tags=("eval", "source:evalchemy", "benchmark", "single-turn", "instruction-following"),
             count=population,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

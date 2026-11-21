@@ -20,7 +20,7 @@ from taskcompendium.pipeline.models import Converter, IntendedUse
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 GPQA_REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
 MMLU_PRO_REVISION = "b189ec765aa7ed75c8acfea42df31fdae71f97be"
@@ -49,6 +49,7 @@ def choice_dataset(
             family="generated-choice",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),
             count=rows,
+            task_format=TaskFormat.NATIVE_TASKSPEC,
         ),
         config=EvalDataset(
             CurationRecipe(

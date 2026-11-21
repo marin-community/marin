@@ -311,6 +311,11 @@ def require_accepted_task_format(source: RlDataSource) -> None:
             f"Agentic source {source.info.id} declares no task format; "
             "declare TaskFormat.TASKCOMPENDIUM or TaskFormat.HARBOR"
         )
+    if task_format is TaskFormat.NATIVE_TASKSPEC:
+        raise ValueError(
+            f"Agentic source {source.info.id} declares no task directory: "
+            "agentic sources ingest TaskCompendium or Harbor task directories"
+        )
     if task_format is TaskFormat.MARINSKYRL and source.info.id not in GRANDFATHERED_MARINSKYRL_SOURCES:
         raise ValueError(
             f"Agentic source {source.info.id} ingests MarinSkyRL's internal format and is not grandfathered"

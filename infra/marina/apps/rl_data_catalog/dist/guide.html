@@ -70,6 +70,18 @@
     <p>Conversion is a separate workflow. It creates a new variant and a lineage receipt from pinned prompts and pinned existing responses or teacher outputs. The child must then pass the Datakit preparation and registration steps. Conversion and Atlas loading do not grant SFT or alter the parent variant. See the <a href="https://github.com/marin-community/marin/blob/main/experiments/datakit/README.md#sft-registration-receipt">Datakit registration procedure</a>.</p>
   </section>
 
+  <section id="formats" aria-labelledby="formats-title">
+    <h2 id="formats-title">Task formats</h2>
+    <p>The Format column shows the task layout each source's served payload is currently in, derived from the source's frozen declaration and receipts; no value is entered by hand. Every source resolves to exactly one value.</p>
+    <dl>
+      <dt><span class="chip">TaskCompendium</span></dt><dd>The source's tasks are TaskCompendium task directories: each task is a directory with <code>task.toml</code>, its environment and its verifier, in TaskCompendium's variant.</dd>
+      <dt><span class="chip">Harbor</span></dt><dd>The source's tasks are Harbor task directories: the same directory layout in Harbor's variant.</dd>
+      <dt><span class="chip">MarinSkyRL</span></dt><dd>A small frozen set of Marin-internal blend sources whose payload rows predate the task-directory format. New sources cannot use this layout.</dd>
+      <dt><span class="chip">Native TaskSpec</span></dt><dd>The source's payload is TaskSpec rows produced directly by its own recipe or evaluation-harness pipeline, never packaged as task directories. These are non-agentic sources: single-turn benchmarks and evaluation-harness tasks.</dd>
+    </dl>
+    <p>Agentic sources always ingest TaskCompendium or Harbor task directories. A source whose payload moves into a published private release adopts that release's layout; the column always reflects the current pin.</p>
+  </section>
+
   <section id="workflows" aria-labelledby="flow-title">
     <h2 id="flow-title">Source workflows</h2>
     <p>Choose the flow that matches the change. Source status is <a href="#term-status">Pending, Available, Excluded or Deprecated</a>; difficulty, Quality and publication have separate states. The letters a–j refer to the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#ingestion-stage-map">ingestion stage map</a>. Follow solid arrows for the required path and dashed arrows for a conditional route; advance only when the applicable gate passes.</p>

@@ -972,6 +972,25 @@ class WithinSourceDedupEvidence(CatalogRecord):
         return self
 
 
+class TaskFormat(StrEnum):
+    """The ingested task layout of a source's pinned payload.
+
+    Only task-directory layouts are accepted for agentic sources: a task is a
+    directory with ``task.toml``, its environment and its verifier, in either
+    TaskCompendium's or Harbor's variant. ``MARINSKYRL`` marks a Marin-internal
+    blend whose rows are not task directories; it is accepted only for the
+    grandfathered sources listed in the producer's ``GRANDFATHERED_MARINSKYRL_SOURCES``.
+    ``NATIVE_TASKSPEC`` marks a source whose payload is TaskSpec rows produced
+    directly by its own recipe or evaluation-harness pipeline, never packaged as
+    task directories; it is accepted only for non-agentic sources.
+    """
+
+    TASKCOMPENDIUM = "taskcompendium"
+    HARBOR = "harbor"
+    MARINSKYRL = "marinskyrl"
+    NATIVE_TASKSPEC = "native_taskspec"
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -987,6 +1006,15 @@ class SourceDeclaration(CatalogRecord):
     dataset_id: str | None
     dataset_revision: str | None
     url: str | None
+    task_format: TaskFormat | None = None
+    """The task layout the source's served payload is currently in.
+
+    Every catalog declaration resolves to exactly one value: task-directory
+    sources carry their declared ``TaskCompendium``/``Harbor`` layout,
+    grandfathered blends carry ``MarinSkyRL``, and recipe- or harness-served
+    sources carry ``NATIVE_TASKSPEC``. An undeclared value never enters the
+    catalog.
+    """
     type: str
     turns: str
     is_benchmark: bool

@@ -14,7 +14,7 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 GPQA_CHOICES = ("Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
 OPTION_LABEL = re.compile(r"(?m)^([A-Z]):")
@@ -95,6 +95,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.GPQA,
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
+                task_format=TaskFormat.NATIVE_TASKSPEC,
             ),
             config=CurationRecipe(
                 name="gpqa",
