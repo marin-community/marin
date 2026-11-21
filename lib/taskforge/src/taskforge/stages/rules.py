@@ -34,6 +34,8 @@ from taskforge.model.review import (
     SolveReview,
     TrialResult,
     ValidationResult,
+    same,
+    unique,
 )
 from taskforge.model.workpiece import Fallback, Workpiece
 from taskforge.stages.classify import CAUSE_DECISIONS
@@ -235,15 +237,15 @@ def confirmation_review(workpiece: Workpiece, band: BandRules) -> Decision:
 
     The final review's NEW revise findings, or a fault, buy its one revision outside the shared budget (``Revise``,
     decision d); a finding an earlier review gave counts again only as a failed fix, after the author revised for it.
-    After that revision they are notes. The acceptance keeps the pending one's notes, each finding once (decision f),
-    and its missing evidence, each item once: missing evidence is named, never a hold."""
+    After that revision they are notes. The acceptance ships the record's notes (decision f: every earlier and new
+    note its trials still support, each once) and its missing evidence, each item once: never a hold."""
     result, pending = workpiece.evidence[-1], workpiece.decisions[-1]
     assert isinstance(pending, Accept), "a confirmation follows the acceptance it confirms"
     review, revise = result.review, final_revision(workpiece)
     decision = assess(result, band, len(result.solver))  # every unscored slot excluded; held ones held in the batch
     if isinstance(decision, Reject | Incomplete):
         return decision
-    fixed = {same(r.finding) for r in workpiece.responses if r.response is Response.REVISED}
+    fixed = failed_fixes(workpiece, result.confirms)
     known = {same(f) for earlier in workpiece.evidence[:-1] if earlier.review for f in earlier_findings(earlier.review)}
     asked = () if review is None else review.findings
     fresh = tuple(f for f in asked if same(f) not in known or same(f) in fixed)
@@ -253,7 +255,7 @@ def confirmation_review(workpiece: Workpiece, band: BandRules) -> Decision:
         return unrevised(revise, "its confirmation has a fault", faults)
     if (faults or fresh) and not revise:
         notes = (*(f for f in asked if f not in fresh), *(() if review is None else review.notes))
-        return Revise(faults or (line,), None if faults else place, fresh, notes=unique(notes))
+        return Revise(faults or (line,), fresh, notes=unique(notes), placement=None if faults else place)
     reasons = (*tagged(place), f"Confirmation: {line.split('. ')[0]}", *unscored(result))
     reasons += ("The final review's revision is used: its revise findings are recorded as notes",) * bool(
         revise and asked
@@ -262,26 +264,23 @@ def confirmation_review(workpiece: Workpiece, band: BandRules) -> Decision:
     found = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no final review ran"),) if review is None else review.missing
     found += (MissingEvidence(EvidenceKind.CONFIRMATION_TRIALS, f"solver trials {absent} have no score"),) * bool(absent)
     kept = tuple(reason for reason in pending.reasons if reason not in tagged(pending.band))
-    carried = () if revise is None else revise.notes  # the optional notes the author saw beside the revision
-    notes = unique((*pending.notes, *carried, *(() if review is None else review.notes), *asked))
-    return Accept(place, (*reasons, *kept), missing=tuple(dict.fromkeys((*pending.missing, *found))), notes=notes)
+    return Accept(place, (*reasons, *kept), missing=tuple(dict.fromkeys((*pending.missing, *found))), notes=result.notes)
+
+
+def failed_fixes(workpiece: Workpiece, shipped: int | None) -> set[tuple[str, str, str]]:
+    """The findings (``same``) whose latest response on the history leading to evidence record ``shipped`` says the
+    author revised for them: a repeat of one is evidence the fix failed. A response to that record or later, or one a
+    restore discarded, belongs to another history; a later decline overrides an earlier revision."""
+    latest = {
+        same(r.finding): r.response
+        for r in workpiece.responses
+        if shipped is not None and r.review < shipped and not r.discarded
+    }
+    return {key for key, response in latest.items() if response is Response.REVISED}
 
 
 def earlier_findings(review: SolveReview) -> tuple[ReviewFinding, ...]:
     return (*review.findings, *review.notes)
-
-
-def same(finding: ReviewFinding) -> tuple[str, str, str]:
-    """A finding's identity across reports: what it says is wrong and the edit, not the trials it quotes."""
-    return finding.kind, finding.description, finding.edit
-
-
-def unique(findings: Sequence[ReviewFinding]) -> tuple[ReviewFinding, ...]:
-    """``findings`` with each (``same``) finding once, at its first occurrence."""
-    first: dict[tuple[str, str, str], ReviewFinding] = {}
-    for finding in findings:
-        first.setdefault(same(finding), finding)
-    return tuple(first.values())
 
 
 def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decision:

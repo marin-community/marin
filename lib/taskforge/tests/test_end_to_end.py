@@ -234,7 +234,9 @@ SETTINGS: Mapping[str, object] = {
 ordinary accept, partial-validation resume, confirmation-outage recovery and restored-fallback cases at the shipped
 default, and ``test_confirmation.py`` the step itself."""
 
-CONFIRMING: Mapping[str, object] = {**SETTINGS, "solver.confirmation_k": 5}
+CONFIRMING: Mapping[str, object] = {key: value for key, value in SETTINGS.items() if key != "solver.confirmation_k"}
+SHIPPED_K = load_policy(DEFAULTS_DIR).setting("solver.confirmation_k", int)
+"""The confirmation count ``CONFIRMING`` inherits from the shipped policy."""
 
 
 def config(settings: Mapping[str, object] = SETTINGS) -> TaskforgeConfig:
@@ -244,18 +246,20 @@ def config(settings: Mapping[str, object] = SETTINGS) -> TaskforgeConfig:
 def confirming(driver_args: Namespace) -> None:
     """Run the driver at the shipped confirmation default."""
     overlay = Path(driver_args.policy)
-    overlay.write_text(json.dumps({**json.loads(overlay.read_text()), **CONFIRMING}))
+    settings = {key: value for key, value in json.loads(overlay.read_text()).items() if key != "solver.confirmation_k"}
+    overlay.write_text(json.dumps(settings))
 
 
 def confirmed_by(wp: Workpiece, reviewer: InferenceClient, started: Sequence[str], round_: int = 0) -> None:
-    """``wp`` accepted on the confirmation record of evidence index ``round_``: its two scored slots, then slots 2..6
-    under the confirmation's attempt (``started`` the engine's run ids), read by a final review that reported."""
+    """``wp`` accepted on the confirmation record of evidence index ``round_``: its two scored slots, then the shipped
+    ``SHIPPED_K`` slots under the confirmation's attempt (``started`` the engine's run ids), read by a final review
+    that reported."""
     record, final = wp.evidence[-1], wp.decisions[-1]
     assert wp.terminal is Terminal.ACCEPTED and isinstance(final, Accept) and record.confirms == round_
-    assert [trial.trial for trial in record.solver] == list(range(7))
+    assert SHIPPED_K > 0 and [trial.trial for trial in record.solver] == list(range(2 + SHIPPED_K))
     attempt = len(wp.evidence) - 1
     assert sorted(run for run in started if run.endswith(f":{attempt}")) == [
-        f"arithmetic:{t}:{attempt}" for t in range(2, 7)
+        f"arithmetic:{t}:{attempt}" for t in range(2, 2 + SHIPPED_K)
     ]
     assert record.review is not None and record.review.end is ReviewEnd.REPORTED
     assert isinstance(reviewer, CleanReviewer) and "Earlier solve-review reports" in str(

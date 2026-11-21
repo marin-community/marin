@@ -122,7 +122,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 7); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 8); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -302,29 +302,36 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Confirmation**: `solver.confirmation_k` (5) more solver trials of the submission an acceptance ships,
   then a final review over all of them; 0 makes the acceptance final at its validation round. The shipped
   round is the one the acceptance chose (a restored fallback's included), and its scored trials and
-  transcripts are read from the journal, never bought again; the new slots number past that round's
+  transcripts are read from the journal, never bought again. That holds for completed slots whose results the
+  journal can reuse: an answer generated in full whose grading then failed is generated again today, so a grading
+  outage can repeat a fully generated answer (a follow-up will checkpoint the generation). The new slots number past that round's
   indices under their own attempt, through the same solver batch, concurrency, heartbeat and
   `budget.max_missing_trials` allowance (a refused slot beyond it holds). The batch and its grade observers
   settle as validation's do, so an outage beside another hold is a manual hold, and only a pure
   decision-model outage parks for automatic relaunch. Controls and adversaries do not run again. The
-  confirmation record is assessed as a validation round first: an invalid task or a grader fault in the new
-  trials is the author's to repair and an exhausted trial budget rejects, never a denominator entry. Only
+  confirmation record is assessed as a validation round first, before the final reviewer is asked: an invalid
+  task or a grader fault in the new trials is the author's to repair and an exhausted trial budget rejects, never a
+  denominator entry, and a record that rejects or is incomplete is decided without the final review. Only
   valid scores and generation limits are placed: a generation limit is an unsolved trial, and any other
   slot without a score is named (`confirmation_trials`) and excluded. The final review
   (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
   checks and replay identity, is shown every earlier report with what became of each finding (the
   author's response recorded against the review that gave it: revised, declined with its reason, stopped,
   a note, or not acted on), and sorts its new findings into `revise` and `note`. An account may blame a
-  trial on an earlier finding without repeating it while that finding's quotes still occur in the trial.
+  trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A
+  finding given both dispositions is refused, and one repeated within a list is kept once.
   As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
   `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
-  finding (or one an earlier review gave that the author said was fixed) or a fault buys one revision
+  finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:
+  a restore discards the revisions after the round it restores, and a later decline overrides) or a fault buys
+  one revision
   outside the shared modification budget, validated as any round; the final review's notes go to the
   author beside it as optional. A finding repeated from an earlier report buys nothing and is kept once.
   That revision keeps no fallback: a clean revision is accepted at its placement whatever the band and
   confirmed again, its round findings are notes, and a fault or an author stop abandons the task
   (`Confirmation revision failed`, naming the unresolved finding). After it any `revise` finding is a note,
-  and the acceptance keeps the earlier notes, the revision's optional ones and the new ones, each once.
+  and the acceptance ships every earlier note, optional note and new note the shipped trials still support,
+  each once, in a version whose quotes occur in them (the confirmation record's `notes`).
   `accepted_with` is published only on a final acceptance. Missing confirmation evidence
   (`confirmation_trials`, `transcripts`, `solve_review`) is named once, never a hold.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,

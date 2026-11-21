@@ -34,6 +34,7 @@ from taskforge.harness.tools.evidence import (
     ReportTool,
     SearchTool,
     Source,
+    checked,
     evidence_tools,
     source_listing,
 )
@@ -48,6 +49,8 @@ from taskforge.model.review import (
     ReviewFinding,
     SolveReview,
     TrialResult,
+    same,
+    unique,
 )
 from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.resources.bundle import Resources
@@ -269,6 +272,15 @@ def earlier_reports(workpiece: Workpiece) -> str:
         ]
         blocks.append("\n".join((head, *lines)) if lines else f"{head} no findings.")
     return "\n\n".join(blocks) or "No earlier solve-review reports."
+
+
+def shipped_notes(index: Evidence, findings: Sequence[ReviewFinding]) -> tuple[ReviewFinding, ...]:
+    """Each (``same``) finding of ``findings`` once, at its first occurrence, in its first version whose citations all
+    check against ``index``: a version quoting text the shipped trials lack is never published, and a finding no
+    version of which checks is not carried."""
+    valid = unique(checked(index, findings)[0])
+    chosen = {same(finding): finding for finding in valid}
+    return tuple(chosen[key] for key in dict.fromkeys(map(same, findings)) if key in chosen)
 
 
 FATES = {

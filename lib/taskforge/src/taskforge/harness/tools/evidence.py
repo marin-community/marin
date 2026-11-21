@@ -19,7 +19,16 @@ from taskforge.effects.context import Context
 from taskforge.harness.protocol import ReturnRequest, Tool, ToolResult
 from taskforge.harness.tools.base import ValidatedTool
 from taskforge.model.content_hash import digest
-from taskforge.model.review import Attribution, Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
+from taskforge.model.review import (
+    Attribution,
+    Citation,
+    ReviewEnd,
+    ReviewFinding,
+    SolveReview,
+    TrialAccount,
+    same,
+    unique,
+)
 
 PAGE_ROOM = 120
 """Characters each reply keeps free for its continuation line; headers are counted against the page itself."""
@@ -296,6 +305,10 @@ class FinalReportTool(ValidatedTool[FinalReportArgs]):
 
     @override
     async def run(self, ctx: Context, args: FinalReportArgs) -> ToolResult | ReturnRequest[SolveReview]:
+        if both := {same(f) for f in args.revise} & {same(f) for f in args.note}:
+            named = "; ".join(description for _, description, _ in sorted(both))
+            return ToolResult(f"Invalid report: give each finding one disposition, revise or note ({named}).")
+        args = replace(args, revise=unique(args.revise), note=unique(args.note))  # each record answers one number
         outcome = report(self.evidence, (*args.revise, *args.note), args.accounts, self.earlier)
         if isinstance(outcome, ToolResult):
             return outcome
