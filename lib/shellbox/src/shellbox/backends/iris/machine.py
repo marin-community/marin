@@ -166,6 +166,14 @@ def _exec_status_detail(status: str) -> str:
     return decoded if isinstance(decoded, str) else quoted
 
 
+def _command_failure(response: controller_pb2.Controller.ExecInContainerResponse) -> str | None:
+    """Why an exec reply carries no exit status of the command, or ``None`` when it does."""
+    lines = (response.error or (response.stderr if response.exit_code else "")).splitlines()
+    if lines and lines[-1].startswith(UNKNOWN_EXEC_STATUS):
+        return _exec_status_detail(lines[-1])
+    return response.error or None
+
+
 # Kills processes started since the baseline and empties task roots, keeping mount points and
 # ``/tmp/.shellbox*`` capture files. Prints the baseline for the next reset.
 RESET = """
@@ -243,7 +251,8 @@ class IrisMachine:
         self._admission = threading.Condition()
         self._in_flight: dict[str, list[str]] = {}
 
-    def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
+    def _send(self, argv: list[str], timeout: float | None) -> controller_pb2.Controller.ExecInContainerResponse:
+        """Send one exec, retrying only a full pool; a reply saying it was never sent raises ``ExecSetupFailed``."""
         seconds = math.ceil(timeout) if timeout is not None else -1
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
@@ -264,15 +273,22 @@ class IrisMachine:
                     del self._in_flight[attempt_id]
                     self._admission.notify_all()
 
+        response = retry_with_backoff(
+            attempt,
+            retryable=_exec_was_shed,
+            max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
+            max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
+            backoff=EXEC_SHED_BACKOFF,
+            operation=f"Iris exec in {self.task.task_id}",
+        )
+        if response.error == EXEC_SETUP_FAILURE:
+            raise ExecSetupFailed(f"Iris exec failed: {response.error}")
+        return response
+
+    def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
+        """Run a helper exec; ``run`` classifies its own command's exec separately."""
         try:
-            response = retry_with_backoff(
-                attempt,
-                retryable=_exec_was_shed,
-                max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
-                max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
-                backoff=EXEC_SHED_BACKOFF,
-                operation=f"Iris exec in {self.task.task_id}",
-            )
+            response = self._send(argv, timeout)
         except Exception as error:
             _raise_if_unreachable(error)
             if isinstance(error, ConnectError):
@@ -290,25 +306,46 @@ class IrisMachine:
             self._raise_if_terminated(error)
             if any(marker in response.error for marker in DEAD_CONTAINER_MARKERS):
                 raise MachineTerminated(str(error)) from error
-            if response.error == EXEC_SETUP_FAILURE:
-                raise ExecSetupFailed(str(error)) from error
             raise error
         return ExecOutput(exit_code=response.exit_code, stdout=response.stdout, stderr=response.stderr)
+
+    def _termination(self, cause: object) -> MachineTerminated | None:
+        """The error for a sandbox task that is no longer running, or ``None`` while it runs."""
+        status = self.task.status()
+        if status.state == TaskState.RUNNING:
+            return None
+        detail = str(status.error_message or cause)
+        kind = MachineTerminated
+        if "oomkilled" in detail.lower():
+            kind = MachineResourceExhausted
+            detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
+        return kind(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}")
 
     def _raise_if_terminated(self, cause: Exception) -> None:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
         try:
-            status = self.task.status()
+            termination = self._termination(cause)
         except Exception as error:
             _raise_if_unreachable(error)
             raise
-        if status.state != TaskState.RUNNING:
-            detail = str(status.error_message or cause)
-            kind = MachineTerminated
-            if "oomkilled" in detail.lower():
-                kind = MachineResourceExhausted
-                detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
-            raise kind(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}") from cause
+        if termination is not None:
+            raise termination from cause
+
+    def _unattributed_outcome(self, failure: str, container_gone: bool) -> MachineTerminated | CommandOutcomeUnknown:
+        """The outcome of a command whose exec was attempted but returned no exit status. Never raises.
+
+        The command may have run, so no outcome is retried on this machine. The status lookup can only report the
+        machine gone, so a dead sandbox restarts as terminated, or holds when OOM-killed; its own failure is detail.
+        """
+        try:
+            termination = self._termination(failure)
+        except Exception as error:
+            termination, failure = None, f"{failure} (sandbox status lookup failed: {error!r})"
+        if termination is not None:
+            return termination
+        if container_gone:
+            return MachineTerminated(f"Iris exec failed: {failure}")
+        return CommandOutcomeUnknown(f"The command may have run; its result was lost: {failure}")
 
     async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
         return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
@@ -396,25 +433,37 @@ class IrisMachine:
             f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
-        # Only the command's own exec can fail as never sent. Once it may have run, a lost capture is an unknown
-        # outcome, and cleanup is logged so it never replaces the result or the command's failure.
+        # Only the dispatch's own proof that the command was never sent may be retried on this machine:
+        #   dispatch  setup failed, pool full, or never connected  -> ExecSetupFailed / MachineUnavailable (retry)
+        #             deadline                                     -> TIMED_OUT, machine closed
+        #             any other error                              -> unattributed outcome
+        #   decide    reply without the command's exit status      -> unattributed outcome
+        #   capture   any error                                    -> CommandOutcomeUnknown
+        #   cleanup   any error or nonzero exit                    -> logged; outcome unchanged
+        # An unattributed outcome is CommandOutcomeUnknown, or MachineTerminated once the sandbox is gone.
         try:
             try:
                 # An exec without a positive deadline falls back to the controller's short Kubernetes default.
-                response = await asyncio.wait_for(self._script(script, command.timeout), timeout=command.timeout)
-            except MachineUnavailable as error:
-                if isinstance(error, CommandOutcomeUnknown) or _never_connected(error):
-                    raise
-                raise CommandOutcomeUnknown(f"The command may have run; its result was lost: {error}") from error
+                sent = asyncio.to_thread(self._send, ["sh", "-c", script], command.timeout)
+                response = await asyncio.wait_for(sent, timeout=command.timeout)
+            except TimeoutError:
+                await self.close()
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            except (ExecSetupFailed, MachineTerminated):
+                raise  # Never sent: setup failed, or the machine closed before admitting the exec.
+            except Exception as error:
+                if _exec_was_shed(error) or _never_connected(error):
+                    raise MachineUnavailable(f"Iris exec was never sent: {error}") from error
+                raise await asyncio.to_thread(self._unattributed_outcome, repr(error), False) from error
+            if (failure := _command_failure(response)) is not None:
+                gone = any(marker in response.error for marker in DEAD_CONTAINER_MARKERS)
+                raise await asyncio.to_thread(self._unattributed_outcome, failure, gone)
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-            except (ExecSetupFailed, MachineUnavailable) as error:
-                raise CommandOutcomeUnknown(f"The command ran; its output was lost: {error}") from error
+            except Exception as error:
+                raise CommandOutcomeUnknown(f"The command ran; its output was lost: {error!r}") from error
             return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
-        except TimeoutError:
-            await self.close()
-            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError:
             await self.close()
             raise
@@ -422,9 +471,13 @@ class IrisMachine:
             if not self._closed:
                 paths = shlex.join((stdin_path, stdout_path, stderr_path))
                 try:
-                    await self._script(f"rm -f {paths}")
+                    removed = await self._script(f"rm -f {paths}")
                 except Exception as error:
                     logger.warning("Could not remove Iris command capture files %s: %s", paths, error)
+                else:
+                    if removed.exit_code:
+                        detail = f"(exit {removed.exit_code}): {removed.stderr or removed.stdout}"
+                        logger.warning("Could not remove Iris command capture files %s %s", paths, detail)
 
     async def reset(self) -> None:
         """Exclusively clear task roots and non-runtime processes; preserve mount points."""
