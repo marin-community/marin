@@ -10,12 +10,18 @@ while parsing it scores 0.0, provided the scorer accepts the entry's own answer.
 library does not know, or an entry file that is missing or not an entry, is a task defect.
 """
 
+import ast
+import builtins
 import json
+import keyword
+import re
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import reasoning_gym
+import sympy
 from reasoning_gym.factory import DATASETS
 
 from verifyit.file_ops.read import read_text
@@ -31,6 +37,46 @@ PRIME_FACTORIZATION = "prime_factorization"
 # calendar_arithmetic and time_intervals, a number too large for a float), RecursionError
 # (propositional_logic, 5,000 nested parentheses) and ValueError (prime_factorization, prose).
 MALFORMED_REPLY_ERRORS = (AttributeError, KeyError, OverflowError, RecursionError, TypeError, ValueError)
+
+# The scorers of these tasks pass a reply that is not the exact answer to ``eval``, and give partial credit when it
+# is a Python list of the answer's cells. A reply reaches them only in the answer's own form or as a Python literal.
+LITERAL_FALLBACK_ANSWERS = {
+    "binary_matrix": re.compile(r"[0-9]+(?: [0-9]+)*(?:\n[0-9]+(?: [0-9]+)*)*"),
+    "n_queens": re.compile(r"[Q_](?: [Q_])*(?:\n[Q_](?: [Q_])*)*"),
+    "spiral_matrix": re.compile(r"[0-9]+(?: [0-9]+)*"),
+    "string_insertion": re.compile(r"[A-E]+"),
+}
+# The scorers of these tasks pass the reply to ``sympy.parse_expr``, which evaluates it as Python. A reply reaches
+# them only when it is an arithmetic expression over numbers, SymPy math and names that become new symbols.
+EXPRESSION_TASKS = frozenset(
+    {"countdown", "intermediate_integration", "polynomial_multiplication", "puzzle24", "simple_integration"}
+)
+EXPRESSION_TOKEN = re.compile(
+    r"\s+|(?P<number>(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)|(?P<name>[A-Za-z_][A-Za-z0-9_]*)|[-+*/^(),]"
+)
+
+
+def _is_sympy_math(value: object) -> bool:
+    if isinstance(value, sympy.Basic) or (isinstance(value, type) and issubclass(value, sympy.Basic)):
+        return True
+    return isinstance(value, types.FunctionType) and value.__module__.startswith("sympy.functions.")
+
+
+def _parse_expr_non_math_names() -> frozenset[str]:
+    """Names ``sympy.parse_expr`` binds to something other than SymPy math.
+
+    It evaluates a reply with SymPy's exports and Python's builtin functions in scope, ``max`` and ``min`` replaced by
+    ``Max`` and ``Min``; a name bound there keeps its binding, and any other name becomes a new ``Symbol`` or undefined
+    ``Function``. SymPy math is an expression class or value, or a function of ``sympy.functions`` such as ``sqrt``.
+    ``abs`` and ``pow`` stay allowed: on SymPy values they compute ``Abs`` and powers.
+    """
+    bound = {name: getattr(sympy, name) for name in sympy.__all__}
+    bound.update((name, value) for name, value in vars(builtins).items() if isinstance(value, types.BuiltinFunctionType))
+    bound.update(max=sympy.Max, min=sympy.Min)
+    return frozenset(name for name, value in bound.items() if not _is_sympy_math(value)) - {"abs", "pow"}
+
+
+PARSE_EXPR_NON_MATH_NAMES = _parse_expr_non_math_names()
 
 
 def load_entry(path: Path) -> dict:
@@ -109,7 +155,41 @@ def _validate_entry(spec: ReasoningGymSpec, entry: dict) -> None:
         raise InvalidTask("reasoning-gym entry requires an answer field containing a string or null")
 
 
+def _is_literal(answer: str) -> bool:
+    try:
+        ast.literal_eval(answer)
+    except (SyntaxError, ValueError, TypeError, MemoryError, RecursionError):
+        return False
+    return True
+
+
+def _is_expression(answer: str) -> bool:
+    position = 0
+    while position < len(answer):
+        token = EXPRESSION_TOKEN.match(answer, position)
+        if token is None:
+            return False
+        name = token["name"]
+        if name is not None and (keyword.iskeyword(name) or name in PARSE_EXPR_NON_MATH_NAMES):
+            return False
+        position = token.end()
+    return True
+
+
+def _evaluates_only_data(dataset: str, answer: str) -> bool:
+    """Whether the task's scorer can receive ``answer`` without running any of it as code."""
+    if dataset in LITERAL_FALLBACK_ANSWERS:
+        return LITERAL_FALLBACK_ANSWERS[dataset].fullmatch(answer) is not None or _is_literal(answer)
+    if dataset in EXPRESSION_TASKS:
+        return _is_expression(answer)
+    return True
+
+
 def _score_candidate(dataset: str, entry: dict, answer: str, score_answer: Callable[[str, dict], float]) -> float:
+    if not _evaluates_only_data(dataset, answer):
+        # Scored as the empty reply, which none of these scorers parses: 0.0, or the 0.01 that countdown and
+        # puzzle24 give any reply they cannot parse.
+        answer = ""
     if dataset == PRIME_FACTORIZATION:
         reference = entry["answer"]
         if not isinstance(reference, str):
