@@ -3,6 +3,9 @@
 
 """Strict import of historical gap spellings into the reconciler vocabulary."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from finestore.rl.difficulty import (
     LEGACY_DIFFICULTY_GAP_REASONS,
     QUALIFICATION_RECEIPT_PREFIX,
@@ -139,11 +142,21 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
     return ordered_gaps(gaps)
 
 
-def ordered_gaps(gaps: list[Gap]) -> tuple[Gap, ...]:
-    priority = {
+GAP_PRIORITY: Mapping[GapReason, int] = MappingProxyType(
+    {
         GapReason.NETWORK_POLICY_VIOLATION: 0,
         GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED: 1,
         GapReason.PROVIDER_CAPACITY_WAIT: 3,
         GapReason.COVERAGE_SHORTFALL: 4,
     }
-    return tuple(sorted(set(gaps), key=lambda gap: (priority.get(gap.reason, 2), gap.reason, gap.artifact_uri or "")))
+)
+"""The planning order of typed gaps; unmapped reasons (repairs, admissions, infra) plan at 2."""
+
+
+def gap_priority(reason: GapReason) -> int:
+    """The typed planning priority of one gap reason."""
+    return GAP_PRIORITY.get(reason, 2)
+
+
+def ordered_gaps(gaps: list[Gap]) -> tuple[Gap, ...]:
+    return tuple(sorted(set(gaps), key=lambda gap: (gap_priority(gap.reason), gap.reason, gap.artifact_uri or "")))

@@ -13,6 +13,7 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
 
 from experiments.post_training.task_curation.difficulty.ledger import digest
+from experiments.post_training.task_curation.difficulty.legacy import gap_priority
 from experiments.post_training.task_curation.difficulty.state import (
     CatalogSource,
     CellState,
@@ -412,7 +413,7 @@ def plan(
         )
         for gap in hard or remaining or (Gap(GapReason.COVERAGE_SHORTFALL),):
             grouped.setdefault(gap.reason, []).append(cell)
-    actions = {}
+    actions: dict[str, tuple[GapReason, Action]] = {}
     for reason, selected in sorted(grouped.items()):
         remediation = REMEDIATIONS[reason]
         if isinstance(remediation, ProviderRemediation):
@@ -420,8 +421,11 @@ def plan(
         for action in remediation.plan(selected):
             key = action_id(action)
             if key not in recorded:
-                actions[key] = action
-    return [actions[key] for key in sorted(actions)]
+                actions[key] = (reason, action)
+    # Typed priority outranks digest order: a gap's repair verification plans before the
+    # coverage-shortfall backlog regardless of where its action id sorts.
+    ordered = sorted(actions.items(), key=lambda item: (gap_priority(item[1][0]), item[1][0], item[0]))
+    return [action for _, (_, action) in ordered]
 
 
 def source_attempts_from_payload(value: dict) -> SourceAttempts:
