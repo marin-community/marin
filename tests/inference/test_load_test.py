@@ -114,6 +114,7 @@ def test_replay_never_includes_the_answer_being_regenerated():
         {
             "uid": "42",
             "data_source": "micro210",
+            "output_response": "secret final answer",
             "messages": [
                 {"role": "user", "content": "Repair the fixture"},
                 {"role": "assistant", "content": "call a tool"},
@@ -122,12 +123,12 @@ def test_replay_never_includes_the_answer_being_regenerated():
             ],
         }
     ]
-    requests = replay_requests(rows, output_tokens=64)
-    assert len(requests) == 1
-    assert requests[0].body["messages"] == [{"role": "user", "content": "Repair the fixture"}]
+    with pytest.raises(ValueError, match="No replayable model requests"):
+        replay_requests(rows, output_tokens=64)
     rows[0]["tools"] = [{"type": "function", "function": {"name": "inspect"}}]
     requests = replay_requests(rows, output_tokens=64)
-    assert len(requests) == 2
+    assert len(requests) == 1
+    assert requests[0].body["messages"][1]["content"] == "call a tool"
     assert requests[-1].body["messages"][-1]["role"] == "tool"
     assert "secret final answer" not in json.dumps([request.body for request in requests])
 

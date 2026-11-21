@@ -47,7 +47,7 @@ def synthetic_requests(*, seed: int, context_repetitions: int, output_tokens: in
 
 
 def replay_requests(rows: Sequence[dict], *, output_tokens: int) -> list[LoadRequest]:
-    """Recover each recorded assistant-turn prefix, excluding its answer and all later messages."""
+    """Recover the final generated turn's prompt; historical assistant messages remain context."""
     requests = []
     for row_index, row in enumerate(rows):
         if "body" in row and "path" in row:
@@ -60,21 +60,20 @@ def replay_requests(rows: Sequence[dict], *, output_tokens: int) -> list[LoadReq
             requests.append(LoadRequest(str(row.get("id", row_index)), path, body))
             continue
         messages = row.get("messages")
-        if not isinstance(messages, list):
+        if not isinstance(messages, list) or not messages or not row.get("output_response"):
             continue
-        for index, message in enumerate(messages):
-            if message["role"] != "assistant" or index == 0:
-                continue
-            prefix = messages[:index]
-            # Native summaries omit tool declarations. Do not fabricate an agentic request from them.
-            needs_tools = any(item["role"] == "tool" or item.get("tool_calls") for item in prefix)
-            if needs_tools and not row.get("tools"):
-                continue
-            body = {"messages": prefix, "max_tokens": output_tokens, "temperature": 0.7, "top_p": 1.0}
-            if row.get("tools"):
-                body["tools"] = row["tools"]
-            source = row.get("data_source", "micro210")
-            requests.append(LoadRequest(f"{source}:{row.get('uid', row_index)}:turn{index}", "chat/completions", body))
+        if messages[-1]["role"] != "assistant" or len(messages) == 1:
+            continue
+        prefix = messages[:-1]
+        # Native summaries omit tool declarations. Do not fabricate an agentic request from them.
+        needs_tools = any(item["role"] == "tool" or item.get("tool_calls") for item in prefix)
+        if needs_tools and not row.get("tools"):
+            continue
+        body = {"messages": prefix, "max_tokens": output_tokens, "temperature": 0.7, "top_p": 1.0}
+        if row.get("tools"):
+            body["tools"] = row["tools"]
+        source = row.get("data_source", "micro210")
+        requests.append(LoadRequest(f"{source}:{row.get('uid', row_index)}", "chat/completions", body))
     if not requests:
         raise ValueError("No replayable model requests; supply retained messages or canonical path/body records")
     identities = [request.identity for request in requests]
