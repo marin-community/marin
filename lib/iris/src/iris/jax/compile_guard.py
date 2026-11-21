@@ -1,16 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check distributed GPU compile identities before XLA's autotuner rendezvous."""
+"""Check distributed GPU compile inputs and executables before execution."""
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import logging
+import os
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import wraps
 from typing import Protocol
 
@@ -19,6 +22,10 @@ logger = logging.getLogger(__name__)
 # Large checkpoint loads can leave healthy ranks minutes apart at their first compile.
 _COMPILE_FINGERPRINT_TIMEOUT_MS = 30 * 60_000
 _COMPILE_FINGERPRINT_PREFIX = "iris/compile-fingerprint/v1"
+_EXECUTABLE_TEXT_PREFIX = "iris/compile-executable-hash/v1"
+_XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir="
+_unsupported_text_warning_lock = threading.Lock()
+_unsupported_text_warned = False
 
 
 class _Coordinator(Protocol):
@@ -67,6 +74,124 @@ def _observed_fingerprints(client: _Coordinator, prefix: str) -> dict[int, str]:
     return {int(key.removeprefix(prefix)): value for key, value in client.key_value_dir_get(prefix)}
 
 
+@dataclass(frozen=True)
+class _ExecutableRecord:
+    text_sha256: str | None
+    autotune_dir: str
+    autotune_file_count: int
+
+
+def check_distributed_executable_text(
+    client: _Coordinator,
+    process_ids: tuple[int, ...],
+    process_id: int,
+    sequence: int,
+    cache_key: str,
+    executable_text: str | None,
+    autotune_dir: str,
+    autotune_file_count: int,
+    timeout_ms: int = _COMPILE_FINGERPRINT_TIMEOUT_MS,
+) -> None:
+    """Fail before execution if participating ranks compiled different optimized HLO."""
+    group = "-".join(map(str, process_ids))
+    prefix = f"{_EXECUTABLE_TEXT_PREFIX}/{group}/{sequence}/"
+    text_sha256 = hashlib.sha256(executable_text.encode("utf-8")).hexdigest() if executable_text is not None else None
+    record = _ExecutableRecord(text_sha256, autotune_dir, autotune_file_count)
+    client.key_value_set(f"{prefix}{process_id}", json.dumps(asdict(record)))
+
+    try:
+        client.wait_at_barrier(f"{prefix}ready", timeout_ms, process_ids)
+    except Exception as exc:
+        observed = _observed_executables(client, prefix)
+        raise RuntimeError(
+            f"GPU executable text rendezvous failed on process {process_id}; "
+            f"cache key {cache_key}; expected processes {process_ids}; observed {observed}"
+        ) from exc
+
+    observed = _observed_executables(client, prefix)
+    if set(observed) != set(process_ids):
+        raise RuntimeError(
+            f"GPU executable text rendezvous incomplete on process {process_id}; "
+            f"cache key {cache_key}; expected processes {process_ids}; observed {observed}"
+        )
+
+    hashes: dict[str, list[int]] = defaultdict(list)
+    for rank, peer_record in sorted(observed.items()):
+        if peer_record.text_sha256 is not None:
+            hashes[peer_record.text_sha256].append(rank)
+
+    if any(peer_record.text_sha256 is None for peer_record in observed.values()):
+        _warn_unsupported_text()
+    elif len(hashes) > 1:
+        groups = ", ".join(f"{digest}: {ranks}" for digest, ranks in sorted(hashes.items()))
+        metadata = ", ".join(
+            f"{rank}: {peer_record.autotune_dir!r} file_count={peer_record.autotune_file_count}"
+            for rank, peer_record in sorted(observed.items())
+        )
+        raise RuntimeError(
+            f"GPU executable text mismatch on process {process_id}; cache key {cache_key}; "
+            f"{len(hashes)} distinct executable_text_sha256 values: {groups}; autotune inputs: {metadata}"
+        )
+
+    client.wait_at_barrier(f"{prefix}read", timeout_ms, process_ids)
+    if process_id == process_ids[0]:
+        for peer in process_ids:
+            client.key_value_delete(f"{prefix}{peer}")
+
+
+def _observed_executables(client: _Coordinator, prefix: str) -> dict[int, _ExecutableRecord]:
+    return {
+        int(key.removeprefix(prefix)): _ExecutableRecord(**json.loads(value))
+        for key, value in client.key_value_dir_get(prefix)
+    }
+
+
+def _warn_unsupported_text() -> None:
+    global _unsupported_text_warned
+    with _unsupported_text_warning_lock:
+        if not _unsupported_text_warned:
+            logger.warning("Optimized HLO text is unavailable; skipping distributed GPU executable comparison")
+            _unsupported_text_warned = True
+
+
+def _optimized_hlo_text(loaded: object, runtime_error_type: type[Exception]) -> str | None:
+    get_hlo_text = getattr(loaded, "get_hlo_text", None)
+    if get_hlo_text is not None:
+        try:
+            return get_hlo_text()
+        except (NotImplementedError, runtime_error_type) as exc:
+            if not isinstance(exc, NotImplementedError) and not str(exc).startswith("UNIMPLEMENTED"):
+                raise
+
+    hlo_modules = getattr(loaded, "hlo_modules", None)
+    if hlo_modules is not None:
+        try:
+            return "\n\n".join(module.to_string() for module in hlo_modules())
+        except (NotImplementedError, runtime_error_type) as exc:
+            if not isinstance(exc, NotImplementedError) and not str(exc).startswith("UNIMPLEMENTED"):
+                raise
+    return None
+
+
+def _autotune_cache_metadata() -> tuple[str, int]:
+    flags = os.environ.get("XLA_FLAGS", "").split()
+    autotune_dir = next(
+        (
+            flag.removeprefix(_XLA_AUTOTUNE_CACHE_DIR_FLAG)
+            for flag in reversed(flags)
+            if flag.startswith(_XLA_AUTOTUNE_CACHE_DIR_FLAG)
+        ),
+        "",
+    )
+    if not autotune_dir:
+        return "", 0
+    try:
+        with os.scandir(autotune_dir) as entries:
+            return autotune_dir, sum(entry.is_file() for entry in entries)
+    except OSError:
+        return autotune_dir, 0
+
+
 @dataclass
 class _CompileGuardState:
     client: _Coordinator | None = None
@@ -74,7 +199,7 @@ class _CompileGuardState:
     sequences: dict[tuple[int, ...], itertools.count] = field(default_factory=lambda: defaultdict(itertools.count))
     mutex: threading.Lock = field(default_factory=threading.Lock)
 
-    def check(self, client: _Coordinator, process_ids: tuple[int, ...], process_id: int, fingerprint: str) -> None:
+    def check(self, client: _Coordinator, process_ids: tuple[int, ...], process_id: int, fingerprint: str) -> int:
         with self.mutex:
             if client is not self.client:
                 self.client = client
@@ -84,6 +209,7 @@ class _CompileGuardState:
         with lock:
             sequence = next(self.sequences[process_ids])
             check_distributed_compile_fingerprint(client, process_ids, process_id, sequence, fingerprint)
+            return sequence
 
 
 def install_gpu_compile_guard() -> None:
@@ -98,6 +224,7 @@ def install_gpu_compile_guard() -> None:
     )
     from jax._src.lib import xla_client as xc  # noqa: PLC0415 - optional Iris dependency
     from jax._src.lib.mlir import ir  # noqa: PLC0415 - optional Iris dependency
+    from jax.errors import JaxRuntimeError  # noqa: PLC0415 - optional Iris dependency
 
     original = compiler.compile_or_get_cached
     if getattr(original, "_iris_compile_guard", False):
@@ -127,12 +254,28 @@ def install_gpu_compile_guard() -> None:
                 backend,
                 config.remove_custom_partitioning_ptr_from_cache_key.value,
             )
-            state.check(client, process_ids, process_id, fingerprint)
+            sequence = state.check(client, process_ids, process_id, fingerprint)
             logger.debug("GPU compile fingerprint matched across processes %s: %s", process_ids, fingerprint)
 
-        return original(
+        loaded = original(
             backend, computation, devices, compile_options, host_callbacks, executable_devices, pgle_profiler
         )
+        if backend.platform == "gpu" and len(process_ids) > 1:
+            # Persistent cache hits load process 0's executable on every rank, so equality
+            # here does not establish that every rank had identical compile inputs.
+            executable_text = _optimized_hlo_text(loaded, JaxRuntimeError)
+            autotune_dir, autotune_file_count = _autotune_cache_metadata()
+            check_distributed_executable_text(
+                client,
+                process_ids,
+                process_id,
+                sequence,
+                fingerprint,
+                executable_text,
+                autotune_dir,
+                autotune_file_count,
+            )
+        return loaded
 
     guarded_compile_or_get_cached._iris_compile_guard = True
     compiler.compile_or_get_cached = guarded_compile_or_get_cached
