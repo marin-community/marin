@@ -100,6 +100,8 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             # The main-only GitHub deployment identity publishes reviewed app packages.
                             deploy_account,
                             loom_account,
+                            # The main-only belay-intake workflow pushes each #9514 comment to the Belay app.
+                            f"serviceAccount:belay-intake@{project}.iam.gserviceaccount.com",
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
                             principals["human-014"],
