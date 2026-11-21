@@ -9,6 +9,7 @@ import importlib
 import json
 import logging
 import threading
+import time
 from argparse import Namespace
 from collections.abc import Callable
 from functools import lru_cache
@@ -118,6 +119,7 @@ class RetrievalServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], concurrency: int):
         self.slots = threading.BoundedSemaphore(concurrency)
+        self.request_queue_size = concurrency
         super().__init__(address, handler)
 
     def process_request(self, request, client_address) -> None:
@@ -129,9 +131,12 @@ class RetrievalServer(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request, client_address) -> None:
+        started = time.monotonic()
+        logger.info("Retrieval request started: client=%s", client_address)
         try:
             super().process_request_thread(request, client_address)
         finally:
+            logger.info("Retrieval request finished: client=%s elapsed=%.3f", client_address, time.monotonic() - started)
             self.slots.release()
 
 
