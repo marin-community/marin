@@ -111,7 +111,13 @@ identity.
 
 - TaskCompendium installs task resources at `/<path>` rather than under the task's working directory;
   forge observed this on 33 of 33 sampled tool tasks. Instructions that name files relative to the
-  working directory can disagree with where the files land. Not fixed.
+  working directory can disagree with where the files land. Fixed in the fourth revision: every
+  workspace resource of the 850 tasks that declare a working directory other than `/` (6,855 files) is
+  re-rooted at that directory, so the runtime's root install lands each file where its author declared
+  it. Verifier resources are unchanged; they install under `/tests`. A setup command that copies a
+  resource from the container root now finds it already in place or no longer finds the source it
+  named; a task whose recorded behavior depends on that copy is excluded by the replay with its own
+  reason rather than silently kept.
 
 ## License
 
@@ -130,4 +136,6 @@ Revision history: the first revision (`b1b06874…`) kept the ids and `source` f
 which dropped the zero padding from slots and gave two pairs of distinct tasks the same id. The second
 (`5d18615f…`) replaced only `id` and `source`; instructions, files, graders and machines are unchanged.
 The third adds the OpenMDW 1.1 license and omits the optional `integrity_contract` field when it is
-unset, so rows also load with TaskCompendium versions that predate it.
+unset, so rows also load with TaskCompendium versions that predate it. The fourth (converter version
+`2026.11.21.1`) re-roots the workspace resources described under Known issues; every other field of
+every row is unchanged.
