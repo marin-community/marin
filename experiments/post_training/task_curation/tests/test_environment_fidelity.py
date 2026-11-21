@@ -34,6 +34,21 @@ def test_an_agentic_task_without_an_environment_is_rejected():
     assert missing_environment({"environment_requirements": {"docker_image": AGENT}}) is None
 
 
+def test_a_shell_simulator_task_declares_its_environment():
+    simulated = {
+        "environment_requirements": {
+            "capabilities": ["shell"],
+            "command_semantics": "shell_simulator",
+            "working_directory": "/app",
+        }
+    }
+    assert missing_environment(simulated) is None
+    # A Linux process with no image still refuses: its runtime would resolve to an arbitrary host.
+    assert missing_environment(
+        {"environment_requirements": {"command_semantics": "linux_process", "working_directory": "/app"}}
+    )
+
+
 def test_a_recipe_lowers_onto_its_pinned_base():
     recipe = (
         "FROM ubuntu:24.04\n"

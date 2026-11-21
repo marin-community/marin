@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
-from taskcompendium.models import missing_environment as missing_environment
+from taskcompendium.models import missing_environment as declared_environment_missing
 
 from experiments.post_training.task_curation.environment import dockerfile_lines
 
@@ -252,3 +252,20 @@ def archive_environment(files: Mapping[str, str], bases: Mapping[str, str] | Non
         setup_commands=lowered.setup_commands,
         environment_variables=lowered.environment_variables,
     )
+
+
+def missing_environment(spec: Mapping) -> str | None:
+    """The cohort gate's environment check, accepting the simulator's own hosting.
+
+    A shell-simulator task runs on the simulator its semantics name, not on a host
+    image, so its declared semantics are its environment. Every other agentic task
+    that declares no environment still refuses: running it would resolve to an
+    arbitrary host image the task never specified.
+    """
+    reason = declared_environment_missing(spec)
+    if reason is None:
+        return None
+    requirements = spec.get("environment_requirements") or {}
+    if requirements.get("command_semantics") == CommandSemantics.SHELL_SIMULATOR:
+        return None
+    return reason
