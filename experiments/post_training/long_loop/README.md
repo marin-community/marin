@@ -40,15 +40,23 @@ until OpenResearcher's runtime is admitted; its reserved share is not redistribu
 Run the same command without `--run` first to validate the SFT graph and record
 the resolved plan. This check does not qualify the downstream RL stages.
 
-SFT uses Exp1/R1's context-8 mesh across 32 nodes, with an explicit size-one
-expert axis for native Snowball. The declared special-token multiplier is
-`5.656854249492381`. FP32 master parameters and BF16 compute are retained;
-R1's frozen spec used BF16 parameters. Native Snowball recomputes each scanned
-layer under `jax.checkpoint` (`recompute_all`). GPU memory fit is unmeasured.
-The corrected hero-EP optimizer grouping (#11639) is retained: stacked expert
-matrices use MuonH, RMSNorm scales use Adam, and `lm_head`/`output_proj` use AdamH.
-This differs from R1's generic-file grouping (experts on Adam, stacked norm
-scales on MuonH).
+SFT uses the parameter mesh verified in R1's run: context-8 within each node, data-32
+across nodes, and size-one expert and replica axes. Expert storage partitions
+experts over `(expert, context)` and hidden dimensions over `data`. This keeps
+the cross-node parameter sharding used by R1. The earlier Exp5 port put the
+32-node axis in `replica_dcn`, which the expert parameter specs did not name;
+it replicated those parameters across nodes and made each local expert bank
+32 times larger per device than R1's sharding. Mesh qualification checks parameter shard shapes as well as
+token placement.
+
+Parameters and compute use BF16 after the approved pre-update OOM fallback.
+The special-token multiplier remains `5.656854249492381`. Native Snowball
+recomputes each scanned layer under `jax.checkpoint` (`recompute_all`). The
+corrected hero-EP optimizer grouping (#11639) is retained: expert matrices use
+MuonH, RMSNorm scales use Adam, and `lm_head`/`output_proj` use AdamH. R1's
+generic-file grouping instead put experts on Adam and stacked norm scales on
+MuonH. The production launch requires compiled CUDA memory statistics and buffer
+assignments to bound the complete device footprint at or below 72 GB. Compiler HLO and buffer assignments are enabled for that run.
 
 The 1,000-update limit is a safety cap. The 20-hour wall-clock budget terminates
 training, reserving 40 minutes for finalization and 10 minutes for an update.

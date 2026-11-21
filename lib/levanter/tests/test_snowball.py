@@ -20,6 +20,7 @@ import textwrap
 from dataclasses import replace
 from pathlib import Path
 
+import draccus
 import equinox as eqx
 import haliax as hax
 import jax
@@ -50,6 +51,9 @@ from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
+    ExpertWeightSharding,
+    snowball_to_state_dict,
+    snowball_from_state_dict,
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
     DenseMLP,
@@ -1075,3 +1079,30 @@ def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[0], reference[0], rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[2], reference[2], rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.multidevice
+def test_r1_expert_storage_shards_data_and_survives_weight_import():
+    with use_test_devices(8) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 2, 1, 4, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        config = replace(
+            _tiny_config(),
+            hidden_dim=32,
+            intermediate_dim=16,
+            num_experts=8,
+            expert_weight_sharding=ExpertWeightSharding(expert=("expert", "context"), hidden=("data",)),
+        )
+        config = draccus.decode(SnowballConfig, draccus.encode(config))
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=random.key(31))
+            state = snowball_to_state_dict(model.transformer)
+            restored = snowball_from_state_dict(model.transformer, state)
+            for original, loaded in zip(model.transformer.blocks, restored.blocks, strict=True):
+                bank = loaded.mlp.expert_mlp.w_gate
+                assert bank.sharding.shard_shape(bank.shape) == (2, 16, 16)
+                assert bank.sharding.spec == P(("expert", "context"), "data", "model")
+                np.testing.assert_array_equal(np.asarray(bank), np.asarray(original.mlp.expert_mlp.w_gate))

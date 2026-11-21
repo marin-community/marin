@@ -201,6 +201,23 @@ def rms_norm(x: jax.Array, eps: float = _QK_RMS_NORM_EPS) -> jax.Array:
 # --- Config ------------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ExpertWeightSharding:
+    """Named mesh axes that partition expert matrices in storage."""
+
+    expert: tuple[str, ...] = ("expert",)
+    hidden: tuple[str, ...] = _FSDP_AXES
+    intermediate: str = "model"
+
+    @property
+    def pspecs(self) -> MoEExpertMlpPspecs:
+        return MoEExpertMlpPspecs(
+            expert=self.expert[0] if len(self.expert) == 1 else self.expert,
+            hidden=self.hidden[0] if len(self.hidden) == 1 else self.hidden,
+            intermediate=self.intermediate,
+        )
+
+
 @LmConfig.register_subclass("snowball")
 @dataclass(frozen=True)
 class SnowballConfig(HFCompatConfig):
@@ -234,6 +251,8 @@ class SnowballConfig(HFCompatConfig):
     moe_implementation: Optional[MoeImplementation] = None
     router_dot_fp32: bool = False
     """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
+    expert_weight_sharding: ExpertWeightSharding = ExpertWeightSharding()
+    """Storage partitioning for expert matrices; preserved during HF weight import."""
     moe_capacity_factor: float = 1.0
     """Expert-parallel capacity: each expert shard keeps at most ``factor x assignments / shards`` routed
     assignments and silently drops the rest. At the expert-axis size it covers every assignment (dropless). A
@@ -644,7 +663,7 @@ class SnowballMoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=silu_fp32 if cfg.fp32_activations else ActivationFunctionEnum.silu,
                 capacity_factor=cfg.moe_capacity_factor,
-                pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
+                pspecs=cfg.expert_weight_sharding.pspecs,
             ),
             cfg=cfg,
         )
@@ -1193,17 +1212,17 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), m.mlp.cfg.expert_weight_sharding.pspecs.w_gate_up),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), m.mlp.cfg.expert_weight_sharding.pspecs.w_gate_up),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), m.mlp.cfg.expert_weight_sharding.pspecs.w_down),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
@@ -1241,10 +1260,6 @@ def snowball_from_state_dict(
         snowball_block_from_state_dict(block, state_dict, index, prefix) for index, block in enumerate(model.blocks)
     )
     return eqx.tree_at(lambda model: model.blocks, model, blocks)
-
-
-_EXPERT_GATE_UP_SPEC = P("expert", _FSDP_AXES, "model")
-_EXPERT_DOWN_SPEC = P("expert", "model", _FSDP_AXES)
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:

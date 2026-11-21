@@ -108,6 +108,8 @@ class RoundSft:
     warmup_steps: int = 0
     lr_schedule: str = "linear"
     mp: str | None = None
+    expert_weight_sharding: dict = dataclasses.field(default_factory=dict)
+    compiler_dumps: bool = False
     wall_clock_cooldown_fraction: float | None = None
 
 
@@ -515,6 +517,13 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     sft["mesh"] = round_spec.sft.mesh
     sft["trainer"]["mesh"] = round_spec.sft.mesh
     sft["resources"] = round_spec.sft.resources
+    if round_spec.sft.compiler_dumps:
+        sft["trainer"]["log_jaxprs"] = True
+        sft["trainer"]["log_xla_hlo"] = True
+        sft["trainer"]["xla_dump_upload"] = {"enabled": True, "ttl_days": 30}
+        sft["xla_flags"] = [*sft["xla_flags"], "--xla_dump_to=/tmp/long-loop-xla", "--xla_dump_hlo_as_text"]
+    if round_spec.sft.expert_weight_sharding:
+        sft["model"]["expert_weight_sharding"] = round_spec.sft.expert_weight_sharding
     updates = round_spec.sft.updates
     sft["stop_after_steps"] = updates
     sft["trainer"]["num_train_steps"] = updates
