@@ -294,7 +294,7 @@ def normalize_trajectory_batches(
             ]
 
     disposition_channels: dict[str, list[Any]] = {}
-    for key in ("exception_types", "error_treatments", "server_errors"):
+    for key in ("exception_types", "error_treatments", "server_errors", "error_identities"):
         if key in fields.present:
             disposition_channels[key] = [
                 value

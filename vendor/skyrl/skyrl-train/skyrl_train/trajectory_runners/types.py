@@ -3,6 +3,7 @@ from enum import StrEnum
 from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict, Union
 
 import numpy as np
+from rigging.task_errors import ErrorIdentity
 
 from skyrl_gym.verification import VerificationResult
 from taskcompendium.grading_result import Outcome
@@ -130,6 +131,7 @@ class TrajectoryBatch(TypedDict):
     verifier_tests: Optional[List[Optional[VerifierTestCollection]]]
     loss_masks: List[List[int]]
     stop_reasons: Optional[List[str]]
+    error_identities: NotRequired[list[ErrorIdentity | None]]
     exception_types: Optional[List[Optional[str]]]
     error_treatments: Optional[List[Optional[str]]]
     server_errors: Optional[List[Optional[Dict[str, Any]]]]

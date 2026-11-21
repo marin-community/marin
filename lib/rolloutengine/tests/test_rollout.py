@@ -674,7 +674,7 @@ async def test_agent_harness_failure_retains_the_generated_turn():
     failure_record = caught.value.rollout.failure
     assert failure_record is not None
     assert failure_record.exception_type == "RuntimeError"
-    assert failure_record.diagnostics["operation"] == "advance"
+    assert failure_record.operation == "advance"
     assert "cleanup_errors" not in caught.value.grade.diagnostics
     # A Zephyr or Ray worker sends the exception to another process, which still gets the record and the grade.
     restored = pickle.loads(pickle.dumps(caught.value))
@@ -710,7 +710,7 @@ async def test_an_agent_that_ends_cancelled_fails_its_attempt_instead_of_cancell
     failure_record = caught.value.rollout.failure
     assert failure_record is not None
     assert failure_record.exception_type == "RuntimeError"
-    assert failure_record.diagnostics["operation"] == "advance"
+    assert failure_record.operation == "advance"
     assert caught.value.rollout.conversations[-1].response_token_ids == (20,)
 
 
@@ -3871,7 +3871,7 @@ async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure()
     failure_record = caught.value.rollout.failure
     assert failure_record is not None
     assert failure_record.exception_type == "ConnectionError"
-    assert failure_record.diagnostics["operation"] == "model"
+    assert failure_record.operation == "model"
     assert failure_record.diagnostics["notes"] == [note]
 
 

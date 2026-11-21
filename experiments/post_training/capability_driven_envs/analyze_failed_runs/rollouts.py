@@ -14,8 +14,6 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec, TextMessage
 
 MAX_TASK_CHARS = 300
-FAILURE_OPERATION = "operation"
-"""The key of ``ErrorIdentity.diagnostics`` that names the interrupted operation, as rolloutengine records it."""
 POLICY_INTERRUPTIONS = frozenset({RolloutOperation.ATTEMPT, RolloutOperation.ADVANCE})
 """The interruptions that the policy can cause: a slow or looping policy runs past the attempt deadline, and a bad
 tool call can stop the harness after a model turn."""
@@ -29,7 +27,7 @@ def policy_failed(graded: GradedRollout, pass_threshold: float) -> bool:
     """
     failure = graded.rollout.failure
     if failure is not None:
-        return failure.diagnostics.get(FAILURE_OPERATION) in POLICY_INTERRUPTIONS
+        return failure.operation in POLICY_INTERRUPTIONS
     grade = graded.grade
     if grade.status == Outcome.SUBMISSION_FAILURE:
         return True
@@ -70,7 +68,7 @@ def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
-        "interrupted_during": rollout.failure.diagnostics.get(FAILURE_OPERATION) if rollout.failure else None,
+        "interrupted_during": rollout.failure.operation if rollout.failure else None,
         "turns": len(turns),
         "tool_calls": len(calls),
         "repeated_calls": sum(previous == call for previous, call in pairwise(calls)),
