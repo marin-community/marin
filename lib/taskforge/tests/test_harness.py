@@ -23,7 +23,7 @@ from verifyit.spec import NumericSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
-from taskforge.effects.issues import ContextExceeded, Hold, Transient
+from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Transient
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
@@ -286,6 +286,35 @@ async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructu
         await tool(ctx, {"reply": "12"})
 
 
+# Review 2026-11-20 (follow-up 1): the grading machine's output limit escaped the grade tool, and validation
+# credited the adversary with an exhausted search that reported nothing.
+async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session_continues() -> None:
+    ctx = Context(log=EventLog())
+    environment(ctx)
+
+    async def output_limited(event: GradeCandidate) -> GradeResult:
+        raise OutputBudgetExhausted("output budget exhausted")
+
+    ctx.handle(GradeCandidate, output_limited)
+    tools = {
+        "grade": GradeTool(
+            "/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        ),
+        "shell": ShellTool(30, 120),
+        "finish": FinishTool(),
+    }
+    script = (
+        call("shell", {"command": "task"}, "1"),
+        call("grade", {"reply": "12"}, "2"),
+        call("finish", {"reason": "done"}, "3"),
+    )
+    client = FakeInference(script)
+    result = await AgenticHarness(1000, LLMPolicy(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
+    await ctx.drain()
+    assert isinstance(result, Stopped) and result.reason is StopReason.FINISHED
+    assert client.requests[2].conversation[-1].content.startswith("Grading this candidate failed and produced no grade")
+
+
 async def test_grade_holds_when_the_host_cannot_lower_a_valid_draft() -> None:
     ctx = Context(log=EventLog())
     environment(ctx)
@@ -474,9 +503,16 @@ def iris_env(ctx: Context, workdir: Path, controller: LocalController) -> Shellb
     return env
 
 
-# Review 2026-11-20: Iris reported ENOENT below a regular file and below a directory it cannot search.
+# Review 2026-11-20: Iris reported ENOENT below a regular file and below a directory it cannot search, and
+# (follow-up 1) archived a directory read and held the workpiece.
 @pytest.mark.parametrize(
-    "path,code", [("grade.py", errno.ENOENT), ("present.txt/child", errno.ENOTDIR), ("locked/grade.py", errno.EACCES)]
+    "path,code",
+    [
+        ("grade.py", errno.ENOENT),
+        ("present.txt/child", errno.ENOTDIR),
+        ("locked/grade.py", errno.EACCES),
+        ("tree", errno.EISDIR),
+    ],
 )
 async def test_reading_a_refused_path_on_iris_is_tool_feedback_with_its_errno(
     tmp_path: Path, path: str, code: int
@@ -485,6 +521,7 @@ async def test_reading_a_refused_path_on_iris_is_tool_feedback_with_its_errno(
         pytest.skip("root searches every directory")
     (tmp_path / "present.txt").write_text("present")
     (tmp_path / "locked").mkdir(mode=0o600)
+    (tmp_path / "tree" / "nested").mkdir(parents=True)
     ctx = Context(log=EventLog())
     iris_env(ctx, tmp_path, LocalController())
     try:
@@ -495,7 +532,8 @@ async def test_reading_a_refused_path_on_iris_is_tool_feedback_with_its_errno(
     assert result == ToolResult(f"File operation failed: [Errno {code}] {os.strerror(code)}: '{path}'")
 
 
-# Review 2026-11-20: a missing transfer helper and a full host disk reached the model as path errors.
+# Review 2026-11-20: a missing transfer helper and a full host disk reached the model as path errors, and
+# (follow-up 1) the helper failure was a raw error the driver stored as a bug.
 @pytest.mark.parametrize("failure", ["guest helper", "host disk"])
 async def test_file_tool_infrastructure_failures_are_not_author_feedback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -504,7 +542,7 @@ async def test_file_tool_infrastructure_failures_are_not_author_feedback(
     ctx = Context(log=EventLog())
     iris_env(ctx, tmp_path, LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; "))
     if failure == "guest helper":
-        with pytest.raises(RuntimeError, match="wc: not found"):
+        with pytest.raises(Hold, match="wc: not found"):
             await ReadFileTool()(ctx, {"path": "present.txt"})
     else:
 
