@@ -380,6 +380,14 @@ def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
         build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept", "finder"]}), {})
 
 
+# Review 2026-11-21: an indexed or attribute {brief} field escaped the check and indexed the roster name instead.
+@pytest.mark.parametrize("field", ["{brief[0]}", "{brief.upper}"])
+def test_an_indexed_brief_field_still_needs_a_brief_at_wiring(field: str) -> None:
+    policy = load_policy(DEFAULTS_DIR).overlaid({"adversary.user": f"{field} {{task}}", "adversary.roster": ["finder"]})
+    with pytest.raises(ValueError, match=re.escape("adversary.roster names finder without a prompt")):
+        build_config(policy, {})
+
+
 NAMED_STRATEGY = "Review strategy: {name}\n\nTask manifest:\n{task}\n\nProposal:\n{proposal}\n\nWorkspace: {workdir}"
 """The earlier user prompt, whose strategy line is the roster name itself."""
 

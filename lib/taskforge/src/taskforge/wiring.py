@@ -287,7 +287,8 @@ def build_config(
 ) -> TaskforgeConfig:
     """The run's sessions and rules; ``profiles`` overrides the model profile per role, as in ``build_resources``."""
     # A user prompt that renders only {name} uses the roster name as its strategy; one that renders {brief} needs it.
-    fields = {field for _, field, _, _ in Formatter().parse(policy.prompt("adversary.user").template)}
+    template = policy.prompt("adversary.user").template  # {brief[0]} and {brief.x} need a brief as {brief} does
+    fields = {field.partition(".")[0].partition("[")[0] for _, field, _, _ in Formatter().parse(template) if field}
     roster = policy.setting("adversary.roster", tuple) if "brief" in fields else ()
     unbriefed = [name for name in roster if f"adversary.brief.{name}" not in policy.entries]
     if unbriefed:
