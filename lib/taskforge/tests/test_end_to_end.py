@@ -1536,6 +1536,18 @@ async def test_a_failing_dispatch_terminates_and_joins_every_held_child(
     assert "SUMMARY" not in capsys.readouterr().out
 
 
+async def test_a_malformed_first_input_starts_no_child(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dispatch reads each input before it starts that input's child, so a malformed first one starts none."""
+    held_children(driver_args, tmp_path, ("bad", "first", "second"))
+    children: list[HeldChild] = []
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: children.append(HeldChild(command)) or children[-1])
+    with pytest.raises(ValidationError):
+        await driver.run(driver_args)
+    assert children == []
+
+
 async def test_a_cancelled_run_terminates_and_joins_every_held_child(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
