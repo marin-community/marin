@@ -44,13 +44,11 @@ def calibrated_packages(calibrated_root: Path) -> dict[str, Path]:
     for task_dir in sorted(calibrated_root.iterdir()):
         if not task_dir.is_dir():
             continue
-        attempts = sorted(task_dir.glob("attempt-*"))
-        if not attempts:
-            continue
-        packages[task_dir.name] = max(
-            (package for attempt in attempts for package in attempt.iterdir() if package.is_dir()),
-            key=lambda package: package.name,
-        )
+        for attempt in sorted(task_dir.glob("attempt-*")):
+            # The consumed package is the attempt's task directory: it carries task.toml.
+            for package in attempt.iterdir():
+                if package.is_dir() and (package / "task.toml").is_file():
+                    packages[task_dir.name] = package
     return packages
 
 
