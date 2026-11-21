@@ -1,15 +1,15 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 10:57 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 11:13 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
 67B-A2B Snowball checkpoint on verifiable tasks from the Snowball 100k task
 selection. Once that combination passes the full-model smoke and the matched
-comparison, qualify Levanter's Snowball engine as the rollout backend. Develop
-and test the native backend in parallel. The single-host native probe can run
-when it can get H100 capacity without delaying the learner jobs. Use a typed
-binary protocol for internal rollout and learner traffic.
+comparison, qualify Levanter's Snowball engine as the rollout backend.
+The learner jobs have first claim on H100 capacity. Small TPU runs can
+qualify the native loop while the learner waits. Use a typed binary
+protocol for internal rollout and learner traffic.
 
 ## Status
 
@@ -18,9 +18,9 @@ binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. All five tasks were scheduling-gated at 10:57 p.m. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. Kueue still denied quota for the five-task gang at 11:13 p.m. It reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
-| Native online loop based on `main` | Two updates passed on four TPUv4 chips at `ff1fc5e833` with queued generation and local cache installation. A separate CPU proof installed both optimizer updates in a serving subprocess with fresh KV. | Verify the deployed handoff from four learner hosts to one serving host. |
+| Native online loop based on `main` | Two fused-scorer optimizer updates passed on four TPUv4 chips at `a5cfd7cbcc` with local cache installation. A separate CPU proof installed optimizer updates in a serving subprocess with fresh KV. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and mixed-precision serving. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Separate Snowball serving and learner processes exchanged protobuf and binary tensor frames through two updates. Native SkyRL trajectory rows carry those frame bytes. The existing learner pipe uses a binary pickle envelope, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the deployed native service boundary. Migrate the learner envelope after learner acceptance. |
 
@@ -364,6 +364,19 @@ The integrated proof archive is
 Its SHA-256 is `dfe5aadfd44f1d3c3111474cb5a8a528d0b55078df9b166b30dd8727c8e5d1c1`.
 [Integrated proof archive in Filer][native-install-archive]
 
+The follow-up at `a5cfd7cbcc` ran the same four-TPUv4 fixture on the
+combined local source and used fused scoring for both actual optimizer
+updates. Each group drew four independently seeded answers. The second
+group sampled from the first update's verified weights, and both updates
+changed the weight digest. An independent decode verified eight binary
+frames and all 128 sampled tokens. The maximum absolute raw-score
+difference was `4.29e-6`.
+[Fused TPUv4 run][iris-native-fused] · [Fused proof archive in Filer][native-fused-archive]
+
+The fused proof archive is
+`gs://marin-us-central2/users/dlwh/quick-loop-rl/native-proof/2026.11.20.05/outputs.tar.zst`.
+Its SHA-256 is `ef8261d13ab4e4a41a4860b24cffc83dd2a08ea519b41e4b4bc4dcfb2eb11136`.
+
 The maintained learner and native ports share the SPMD policy scorer and
 learner commit `d52fd47db5`. A local merge at `fe0bb85486` preserves the
 learner's explicit positions and attention precision alongside the native
@@ -551,5 +564,7 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
 [iris-native]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-01
 [iris-native-rerun]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-02
 [iris-native-install]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-03
+[iris-native-fused]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-fused-tpu-20261120-05
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
+[native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
