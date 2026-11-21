@@ -47,7 +47,7 @@ from taskforge.llm.policy import (
     continuation_messages,
     reasoning_continuation_messages,
 )
-from taskforge.model.llm import FinishReason, ToolCall, Usage
+from taskforge.model.llm import FinishReason, ToolCall, Usage, served
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +377,7 @@ class ModelClient:
             duration, events = time.monotonic() - started, tuple(progress.events)
             call.attempts.append(Attempt(segment, outcome, limit or 0, started_wall, duration, status, detail, events))
             if result is not None:
+                served(result.finish_reason)  # any provider, the stock one or an injected one
                 call.generated += progress.generated()
                 # vLLM's GLM tool parser reports a reply cut off inside a tool call as ``tool_calls`` (measured live).
                 if limit is not None and result.finish_reason is FinishReason.TOOL_CALLS:

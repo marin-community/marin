@@ -31,12 +31,12 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, StageCompleted
-from taskforge.effects.issues import OutputBudgetExhausted
+from taskforge.effects.issues import ContextExceeded, OutputBudgetExhausted
 from taskforge.effects.log import EventLog, decode
 from taskforge.llm.policy import replay_arguments
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, FinishReason, Message, Usage
+from taskforge.model.llm import Completion, Message, Usage
 from taskforge.model.llm import Role as Speaker
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
@@ -90,15 +90,11 @@ def finding(defect: Defect, reply: str, observed: float, deserved: float) -> dic
     }
 
 
-REFUSED = Completion("model window exceeded", finish_reason=FinishReason.CONTEXT_EXCEEDED)
-"""The inference resource's record of a provider refusing a request for a full context window."""
-
-
 class Briefed(InferenceClient):
-    """Each adversary reports the findings ``reports[<its brief>]`` on its first turn, or returns it when it is a
-    completion, and finishes on any later turn."""
+    """Each adversary reports the findings ``reports[<its brief>]`` on its first turn, or raises it, and finishes on
+    any later turn."""
 
-    def __init__(self, reports: Mapping[str, Sequence[Mapping[str, object]] | Completion]) -> None:
+    def __init__(self, reports: Mapping[str, Sequence[Mapping[str, object]] | Exception]) -> None:
         self.reports = reports
         self.requests: list[InferenceRequest] = []
 
@@ -113,8 +109,8 @@ class Briefed(InferenceClient):
             return call("finish", {"reason": "no second report"}, "finish")
         brief = next(name for name, phrase in BRIEFED.items() if phrase in request.conversation[1].content)
         report = self.reports[brief]
-        if isinstance(report, Completion):
-            return report
+        if isinstance(report, Exception):
+            raise report
         return call("report", {"findings": list(report)}, brief)
 
 
@@ -335,7 +331,7 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     ("revision", "stopped", "how", "turns"),
     [
         (
-            REFUSED,
+            ContextExceeded("model window exceeded"),
             SearchEnd.BUDGET_EXHAUSTED,
             "its context window ran out during revision 1",
             1,
@@ -356,7 +352,7 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     ids=["provider rejection", "local cutoff", "voluntary finish"],
 )
 async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_with_its_last_report(
-    workpiece: Workpiece, revision: Completion, stopped: SearchEnd, how: str, turns: int
+    workpiece: Workpiece, revision: Completion | ContextExceeded, stopped: SearchEnd, how: str, turns: int
 ) -> None:
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
     first = call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first")
@@ -371,7 +367,7 @@ async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_w
     assert reason == f"ran out of search budget without a finding ({how}); this is not a validation of the task"
     assert reject.continuation is not None and reject.continuation.stopped is stopped
     assert reject.continuation.turns == turns and reject.continuation.conversation is not None
-    if revision is REFUSED:  # the conversation the rejected request carried
+    if isinstance(revision, ContextExceeded):  # the conversation the rejected request carried
         held = Conversation(client.requests[1].conversation, client.requests[1].tools)
         assert reject.continuation.conversation == digest(held)
     assert isinstance(default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget), Accept)
@@ -570,7 +566,7 @@ async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with
     proposal: TaskProposal,
 ) -> None:
     policy = load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, "adversary.roster": ["false_accept", "false_reject"]})
-    client = Briefed({"false_accept": REFUSED, "false_reject": []})
+    client = Briefed({"false_accept": ContextExceeded("model window exceeded"), "false_reject": []})
     bundle = replace(resources(Envs(), script()), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     log = EventLog()
     finished = await run_workpiece(proposal, build_config(policy, {}), bundle, log, install=install)

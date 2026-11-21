@@ -37,7 +37,7 @@ from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
 
 from taskforge.llm.client import RETRYABLE_STATUSES, AttemptFailed, AttemptOutcome, Progress, Provider, Segment
-from taskforge.model.llm import FinishReason, ToolCall, Usage
+from taskforge.model.llm import FinishReason, ToolCall, Usage, served
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +370,7 @@ class GlmProvider(Provider):
             tool_calls=tuple(
                 ToolCall(call.id, call.function.name, call.function.arguments or "") for call in message.tool_calls or ()
             ),
-            finish_reason=FinishReason(choice.finish_reason),
+            finish_reason=served(FinishReason(choice.finish_reason)),
             usage=_usage(snapshot.usage),
             ttft=ttft,
             started=started,
