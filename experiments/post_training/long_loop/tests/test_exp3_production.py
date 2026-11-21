@@ -110,6 +110,7 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
         round_spec = load_round(Path(__file__).parents[1] / "rounds/exp5-setup.yaml")
         recipe["mesh"] = round_spec.sft.mesh
         recipe["trainer"]["mesh"] = round_spec.sft.mesh
+        recipe["model"]["expert_weight_sharding"] = round_spec.sft.expert_weight_sharding
     spec = exp3_sft_spec("exp3-production-test", "2026.11.16.48", recipe)
     resources = draccus.decode(ResourceConfig, recipe["resources"])
     step = sft_step(spec, resources)
@@ -122,7 +123,7 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     assert config.trainer.train_batch_size * config.train_seq_len == 67_108_864
     ici, dcn = config.trainer.mesh.axis_shapes(num_devices=256, num_slices=32)
     if warmup_steps:
-        assert ici["context"] == 8 and ici["data"] == 1 and dcn["replica_dcn"] == 32
+        assert ici["context"] == 8 and "data" not in ici and dcn == {"replica_dcn": 1, "data": 32}
         assert ici.get("expert", 1) == 1
     else:
         assert ici["expert"] == 8 and dcn["context"] == 32

@@ -60,6 +60,7 @@ from levanter.grug.sharding import (
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -1212,17 +1213,17 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), m.mlp.cfg.expert_weight_sharding.pspecs.w_gate_up),
+        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_gate) or P()),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), m.mlp.cfg.expert_weight_sharding.pspecs.w_gate_up),
+        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_up) or P()),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), m.mlp.cfg.expert_weight_sharding.pspecs.w_down),
+        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_down) or P()),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
