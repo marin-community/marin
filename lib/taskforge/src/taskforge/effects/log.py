@@ -351,11 +351,14 @@ class EventLog:
         self._replayable = replayable
         self._records = list(replay_from)
         self._pending: list[Record] = []
-        self._index: dict[Key, object] = {
-            (event_digest(record.event.request), record.event.fingerprints): record.event.value
-            for record in replay_from
-            if isinstance(record.event, Resolved) and cached(record.event.fingerprints) and replayable(record.event)
-        }
+        self._index: dict[Key, object] = {}
+        latest: dict[str, Key] = {}
+        for record in replay_from:  # in order: a request's later request row, executed and unfinished, supersedes it
+            if isinstance(event := record.event, Resolved) and cached(event.fingerprints) and replayable(event):
+                self._index[key := (event_digest(event.request), event.fingerprints)] = event.value
+                latest[key[0]] = key
+            elif record.attempt is None and (superseded := latest.pop(event_digest(event), None)):
+                del self._index[superseded]
         self._owners = Owners(replay_from)
         self._attempts = attempts
         self._lock = asyncio.Lock()
