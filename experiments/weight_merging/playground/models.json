@@ -1,0 +1,9 @@
+{
+  "anchor": {"repo": "Qwen/Qwen2.5-1.5B", "revision": "8faed761d45a263340a0528343f099c05c9a4323"},
+  "instruct": {"repo": "Qwen/Qwen2.5-1.5B-Instruct", "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"},
+  "coder": {"repo": "Qwen/Qwen2.5-Coder-1.5B-Instruct", "revision": "2e1fd397ee46e1388853d2af2c993145b0f1098a"},
+  "math": {"repo": "Qwen/Qwen2.5-Math-1.5B-Instruct", "revision": "aafeb0fc6f22cbf0eaeed126eff8be45b0360a35"},
+  "olmoe_anchor": {"repo": "allenai/OLMoE-1B-7B-0924", "revision": "6d84c48581ece794365f2b8e9cfb043c68ade9c5"},
+  "olmoe_sft": {"repo": "allenai/OLMoE-1B-7B-0924-SFT", "revision": "215cc4f73147dd68bd11e7a7dcc56bac397f4221"},
+  "olmoe_instruct": {"repo": "allenai/OLMoE-1B-7B-0924-Instruct", "revision": "7f1c97f440f06ce36705e4f2b843edb5925f4498"}
+}
