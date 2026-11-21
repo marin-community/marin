@@ -64,6 +64,7 @@ from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ListTool, Read
 from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TaskProposal
@@ -1123,3 +1124,17 @@ async def test_a_held_format_7_root_resumes_only_its_unfinished_turns(
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert (len(author.requests), len(reviewer.requests)) == (1, 1)
+
+
+async def test_the_first_reviewer_request_keeps_its_recorded_identity() -> None:
+    """Pins two rendered surfaces that stay on shared live code for v1: the task library's ``format_conversation`` (its
+    fixed labels become ``task/prompt.md`` and so the evidence version the opening names) and Taskforge's docstrings in
+    ``taskforge.model.review``, which become the report tool's schema. A change to either changes every recorded
+    review's first request, so it must be a deliberate prompt change."""
+    recorded = "33e49ad87349bd18ce57c1cb3f0421761277a01d30d34e55e61627b93c27f2a3"
+    reviewer = FakeInference((report(),))
+    await reviewed(reviewer, submission=recorded_task())  # a user turn, a tool call and its result: every label
+    assert digest(reviewer.requests[0].identity()) == recorded, (
+        "the solve-review's first request changed: a deliberate prompt change only. Update this recorded identity "
+        "knowingly; every recorded review will miss and buy its calls again"
+    )

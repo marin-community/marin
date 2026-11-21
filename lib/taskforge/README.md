@@ -185,8 +185,9 @@ enters it without the flag, and `run` parks such proposals until the decision mo
 or, on a gateway without that route, until a `one --probe` child exits 10 because its own reader's last physical
 outcome in that process was a valid answer. A hold that mixes the outage with any other cause stays manual. Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
-format-7 root resumes on its unfinished turns alone: the author's system prompt embeds the pinned reference, not
-the installed TaskCompendium's live schema, so a sibling release that rewords a description buys back no recorded call.
+format-7 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
+author's system prompt embeds the pinned reference, so a wording-only change in TaskCompendium's schema does not
+affect it.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
 its initial sandbox definition; each command or file operation it issues references that row, takes the
 next position in the owner's history, and its outcome references the request. A resumed attempt is
@@ -302,8 +303,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 
-Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the live
-`TaskSpec` and control schemas, and the adversary's user prompt renders its brief and the task without
+Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the pinned
+`TaskSpec` and control reference (`defaults/author-reference-v1.json`), and the adversary's user prompt renders its brief and the task without
 file payloads (they are in the workdir).
 
 ## Models and providers
