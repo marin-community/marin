@@ -23,15 +23,15 @@ DEFAULT_SHARED_MAPPING: Dict[str, str | Tuple[str, ...]] = {"mlp": "model", "hea
 class MeshConfig:
     """
     Defines mesh axes and logical-to-physical mappings.
-    axes: ICI sizes per axis (within a slice). -1 means absorb remaining ICI.
-    dcn_axes: DCN sizes per axis (across slices). -1 means absorb remaining DCN.
+    axes: ICI size overrides (within a slice). -1 means absorb remaining ICI.
+    dcn_axes: DCN size overrides (across slices). -1 means absorb remaining DCN.
     shared_mapping: common logical-axis defaults shared by both compute and parameter sharding.
     compute_mapping: logical -> physical axis (or axes) for compute (e.g., batch -> [replica_dcn, replica, data]).
     param_mapping: logical -> physical axis (or axes) for parameters and opt states
     """
 
-    axes: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_ICI_AXIS_SPEC))
-    dcn_axes: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_DCN_AXIS_SPEC))
+    axes: Mapping[str, int] = field(default_factory=dict)
+    dcn_axes: Mapping[str, int] = field(default_factory=dict)
 
     # Typically you should only set these fields in config, and only read the resolved_* properties.
     batch_axis_name: str | None = "batch"

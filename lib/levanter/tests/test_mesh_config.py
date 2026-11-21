@@ -106,3 +106,39 @@ def test_cross_node_data_axis_keeps_context_groups_inside_each_host():
         group = mesh.devices.take(node, axis=data_index).reshape(-1)
         assert {device.process_index for device in group} == {node}
         assert len(group) == devices_per_host
+
+
+@pytest.mark.parametrize(
+    "config,device_count,host_count,expected_ici,expected_dcn",
+    [
+        (
+            MeshConfig(dcn_axes={"data": -1}),
+            2,
+            2,
+            {"replica": 1, "model": 1},
+            {"replica_dcn": 1, "data": 2},
+        ),
+        (
+            MeshConfig(axes={"data": -1, "replica_dcn": 1}),
+            8,
+            1,
+            {"data": 8, "replica": 1, "model": 1, "replica_dcn": 1},
+            {},
+        ),
+    ],
+)
+def test_one_explicit_network_overrides_the_other_network_default(
+    config, device_count, host_count, expected_ici, expected_dcn
+):
+    ici, dcn = config.axis_shapes(device_count, host_count)
+    mesh = create_mesh_from_axis_specs(
+        ici_axes=ici,
+        dcn_axes=dcn,
+        devices=[
+            GpuDevice(i, i // (device_count // host_count), i // (device_count // host_count))
+            for i in range(device_count)
+        ],
+    )
+    assert ici == expected_ici
+    assert dcn == expected_dcn
+    assert mesh.size == device_count
