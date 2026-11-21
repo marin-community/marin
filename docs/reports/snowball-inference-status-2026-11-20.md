@@ -38,6 +38,8 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | [Native, expert-sharded KV and split expert weights](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v13) | 22 | 7,853 | 42.13 | 84.50 |
 | [Native, full-distribution sampler bypass](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v14) | 23 | 7,947 | 43.90 | 104.60 |
 | [Native, fused decode KV append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v15) | 25 | 8,311 | 46.17 | 114.22 |
+| [Native, larger prefix cache with per-token layer copies](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v17) | 18 | 6,461 | 33.31 | 59.04 |
+| [Native, per-layer buffers across each decode round](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v22) | 26 | 9,092 | 50.51 | 157.99 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -122,6 +124,16 @@ The 594-output-token turn took 8.14 seconds. Across the measured requests,
 native p90 time to first token was 2.37 seconds and vLLM was 0.56 seconds.
 [Sampler trace](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p-decode-profile-analysis-20261121-v14) · [Fused KV check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-fused-kv-decode-v5p-20261121-v2)
 
+The decode trace showed roughly 57 µs per layer per token to copy the layer's
+64 MiB KV shard out of the stacked buffer. The per-round layout splits the
+cache once, carries each layer's physical shard through the 32-token device
+loop, and repacks at the boundary. With 512 physical pages, native and vLLM
+each completed 26 requests and emitted 9,092 tokens. Native matched end-to-end
+throughput and measured 36% higher active decode throughput. The p90 time
+to first token was 2.14 seconds on native and 0.56 seconds on vLLM. The
+594-output-token turn took 6.40 seconds on native and 6.29 seconds on vLLM.
+[Matched native run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v22)
+
 ### Reproduce the native diagnostic
 
 Run from the inference branch and point `iris_client` and `iris_config` to
@@ -137,7 +149,7 @@ workload=gs://marin-us-central1/tmp/ttl=30d/agentx-workload/95f345f596f40f84b64c
   --cpu 32 --memory 340g --disk 80g --timeout 3600 --sync-package marin-core --extra tpu \
   -e JAX_PLATFORMS tpu -e LIBTPU_INIT_ARGS '--xla_tpu_scoped_vmem_limit_kib=50000' \
   -- uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
-  --weights "$weights" --workload "$workload" --attention tpu_v3 --decode-layers unrolled \
+  --weights "$weights" --workload "$workload" --attention tpu_v3 --decode-layers unrolled_split_cache \
   --prefill-buckets 4096 8192 16384 32768 --prefix-cache last_prompt \
   --kv-sharding expert --decode-experts split --kv-append fused
 ```
