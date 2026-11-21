@@ -141,7 +141,7 @@ class Profile:
         return Fingerprint("inference", self.name, ReplayPolicy.CACHE)
 
 
-# Review 2026-11-21 (n10 follow-up 3, finding 1): cold launches under author profiles A, then B, then A reported
+# Review 2026-11-21: cold launches under author profiles A, then B, then A reported
 # cumulative author tokens 40/20, 80/40 and 120/60: the third bought again what A had already paid. It reports 80/40.
 async def test_a_launch_under_a_profile_already_paid_adds_no_reported_tokens(
     tmp_path: Path, proposal: TaskProposal
@@ -222,7 +222,7 @@ async def test_a_root_in_another_journal_format_is_named_and_the_report_complete
 async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred_it(
     tmp_path: Path, proposal: TaskProposal, review_first: bool
 ) -> None:
-    """Review 2026-11-21 (n11 P2): an adversary request resolved while the solve-review's scope was open was counted
+    """Review 2026-11-21: an adversary request resolved while the solve-review's scope was open was counted
     as solve-review usage; a request's own tools name its role, whatever else is open."""
     index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
     tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())
@@ -255,7 +255,7 @@ async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred
 async def test_a_judge_call_inside_the_confirmation_is_charged_to_the_judge(
     tmp_path: Path, proposal: TaskProposal
 ) -> None:
-    """Review 2026-11-21 (n12 finding 8): a VerifyIt judge callback under the confirmation scope was reported as
+    """Review 2026-11-21: a VerifyIt judge callback under the confirmation scope was reported as
     final-review usage, though no final reviewer ran; the reviewer's own request there is the final review's."""
     index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
     tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())

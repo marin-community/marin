@@ -307,7 +307,7 @@ def test_stall_abandons_attempt_and_retries(fake_glm: FakeGlm, run: Run) -> None
     assert len(stalled.events) == 2
 
 
-# Review 2026-11-21 follow-up 1: tool-call frames with no generated text kept a stream alive past the stall timeout.
+# Review 2026-11-21: tool-call frames with no generated text kept a stream alive past the stall timeout.
 def test_tool_call_frames_without_generated_text_stall(fake_glm: FakeGlm, run: Run) -> None:
     frame = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0}]}, "finish_reason": None}]}
     fake_glm.responses.append(ScriptedStream([frame] * 8, True, None, 0.1))
@@ -317,7 +317,7 @@ def test_tool_call_frames_without_generated_text_stall(fake_glm: FakeGlm, run: R
     assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
 
 
-# Review 2026-11-21 follow-up 1: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
+# Review 2026-11-21: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
 def test_a_trickling_health_read_ends_with_the_availability_window(fake_glm: FakeGlm) -> None:
     fake_glm.health_trickle = 200
     fake_glm.status(503, "busy")
@@ -553,7 +553,7 @@ def test_a_call_waiting_for_a_local_connection_is_unavailable_not_a_generation(
 SHORT_WINDOW = RetryPolicy(1.0, 0.001, 0.001, 1.0)
 
 
-# Review 2026-11-21 follow-up 3: under a 300 ms stall timeout and one pooled connection, the second of two replies whose
+# Review 2026-11-21: under a 300 ms stall timeout and one pooled connection, the second of two replies whose
 # headers took 195 ms was abandoned after both requests reached the server.
 def test_a_request_queued_for_the_pool_keeps_the_read_timeout_for_its_own_reply(fake_glm: FakeGlm) -> None:
     for reply in ("first", "second"):
@@ -570,7 +570,7 @@ def test_a_request_queued_for_the_pool_keeps_the_read_timeout_for_its_own_reply(
     assert len(fake_glm.requests) == 2
 
 
-# Review 2026-11-21 follow-up 3: a 200 whose head arrived in fragments 110 ms apart under a 170 ms read timeout
+# Review 2026-11-21: a 200 whose head arrived in fragments 110 ms apart under a 170 ms read timeout
 # exhausted the client after 4 POSTs and 3 GETs; it had completed after 1 POST and 0 GETs.
 def test_a_reply_whose_head_arrives_in_fragments_within_the_read_timeout_completes(fake_glm: FakeGlm) -> None:
     fake_glm.stream(content="served", head_interval=0.11)
@@ -579,7 +579,7 @@ def test_a_reply_whose_head_arrives_in_fragments_within_the_read_timeout_complet
     assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 0)
 
 
-# Review 2026-11-21 follow-up 3: JSON false compared equal to zero workers.
+# Review 2026-11-21: JSON false compared equal to zero workers.
 @pytest.mark.parametrize(("workers", "empty"), [(0, True), (False, False), (None, False), ("0", False), (1, False)])
 def test_only_an_integer_zero_worker_count_reports_the_pool_empty(
     fake_glm: FakeGlm, workers: object, empty: bool
