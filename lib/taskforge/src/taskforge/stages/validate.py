@@ -108,13 +108,20 @@ async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClai
 
 
 async def reproduced(
-    ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim
+    ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim, index: int
 ) -> tuple[AdversaryFinding, tuple[str, ...]]:
-    """Reproduce one claim; an inconclusive reproduction keeps the claim and candidate ungraded, with why."""
+    """Reproduce one claim; an inconclusive reproduction keeps the claim and candidate ungraded, with why.
+
+    Its own scope collects observer holds on its grades, so a sibling claim's grade survives them.
+    """
+    finding, reasons = AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False), ()
     try:
-        return await claim_result(ctx, spec, claim), ()
-    except (OutputBudgetExhausted, Hold) as error:
-        return AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False), failure_reasons(error)
+        async with ctx.scope(f"claim:{index}"):
+            graded = await claim_result(ctx, spec, claim)
+        finding = graded
+    except* (OutputBudgetExhausted, Hold) as error:
+        reasons = failure_reasons(error)
+    return finding, reasons
 
 
 async def run_adversary(
@@ -184,7 +191,9 @@ async def run_adversary(
                 return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
             report = outcome.payload
             async with asyncio.TaskGroup() as group:
-                claims = [group.create_task(reproduced(ctx, spec, claim)) for claim in report.findings]
+                claims = [
+                    group.create_task(reproduced(ctx, spec, claim, index)) for index, claim in enumerate(report.findings)
+                ]
             results = [claim.result() for claim in claims]
             # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
             reasons = tuple(
