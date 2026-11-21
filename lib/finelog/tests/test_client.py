@@ -1141,6 +1141,41 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
     assert sent[0].column("worker_id").to_pylist() == ["w-1", "w-2"]
 
 
+def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refused_one(monkeypatch):
+    sent = []
+
+    class DeferredThread:
+        """Run the flush loop when the table closes, so the whole queue goes to one ``_send``."""
+
+        def __init__(self, target, name, daemon):
+            self._target = target
+
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            self._target()
+
+    monkeypatch.setattr(log_client_mod.threading, "Thread", DeferredThread)
+
+    def flusher(_namespace, batch):
+        workers = batch.column("worker_id").to_pylist()
+        if "refused-a" in workers:
+            raise ConnectError(Code.INVALID_ARGUMENT, "body too large")
+        sent.append(workers)
+
+    # Each row counts 9 bytes, so two rows fit in one request of 20 bytes.
+    monkeypatch.setattr(log_client_mod, "MAX_SEND_BYTES", 20)
+    schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
+    names = ["worker-01", "worker-02", "refused-a", "refused-b", "worker-05"]
+    table.write([SimpleNamespace(worker_id=name) for name in names])
+    table.close()
+
+    assert sent == [["worker-01", "worker-02"], ["worker-05"]]
+    assert table.flush() is FlushResult.DROPPED
+
+
 def test_schema_from_proto_consistency():
     s = schema_from_dataclass(WorkerStat)
     proto = schema_to_proto(s)

@@ -80,8 +80,13 @@ if not logger.handlers:
 LOG_NAMESPACE = "log"
 DEFAULT_FLUSH_INTERVAL = 1.0
 DEFAULT_BATCH_ROWS = 10_000
-# Per-Table queue cap in bytes. Matches WriteRows max body size.
+# Per-Table queue cap in bytes.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
+# Bounds of one WriteRows request. The server refuses a body above 160 MiB or 1,000,000 rows, and the rows of
+# a refused request are lost. A queued row counts one byte for each character of its strings, and a
+# character can take four bytes on the wire, so the byte bound is a quarter of what the limit allows.
+MAX_SEND_BYTES = 32 * 1024 * 1024
+MAX_SEND_ROWS = 500_000
 
 _FINELOG_ZSTD_LEVEL = 1
 _SEND_COMPRESSION = ZstdCompression(level=_FINELOG_ZSTD_LEVEL)
@@ -483,42 +488,48 @@ class Table:
     def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem], int]:
         """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent, dropped)``.
 
-        Builds the entire batch's RecordBatch in one pass on the bg thread,
-        amortizing Arrow construction across the whole queue rather than
-        per-row at write time.
+        Builds each request's RecordBatch in one pass on the bg thread, amortizing Arrow construction across
+        the rows rather than per-row at write time. Items past ``MAX_SEND_BYTES`` or ``MAX_SEND_ROWS`` go
+        out in order in further requests. A request that fails for a retryable reason leaves it and the
+        later items unsent; a request that the server refuses is dropped, and the later requests still go
+        out.
         """
-        if not items:
-            return 0, [], 0
-        rows = [item.payload for item in items]
-        try:
-            self._ensure_registered()
-            batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
-            self._flusher(self._namespace, batch)
-        except Exception as exc:
-            namespace_missing = self._registrar is not None and (
-                isinstance(exc, NamespaceNotFoundError) or (isinstance(exc, ConnectError) and exc.code == Code.NOT_FOUND)
-            )
-            if namespace_missing:
-                # Force _ensure_registered to run again before the retry.
-                with self._cond:
-                    self._registered_generation = -1
-            retryable = (
-                namespace_missing or is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
-            )
-            summary = _format_exc_summary(exc)
-            logger.warning(
-                "Table(%s) send failure (%d rows, retryable=%s): %s",
-                self._namespace,
-                len(items),
-                retryable,
-                summary,
-            )
-            if not retryable:
-                # Non-retryable failures drop the batch; rebuffering would
-                # back up the queue indefinitely.
-                return items[-1].seq, [], len(items)
-            return 0, items, 0
-        return items[-1].seq, [], 0
+        sent_seq = 0
+        dropped = 0
+        for start, end in _send_ranges(items):
+            chunk = items[start:end]
+            try:
+                self._ensure_registered()
+                batch = _rows_to_record_batch([item.payload for item in chunk], self._arrow_schema, self._schema)
+                self._flusher(self._namespace, batch)
+            except Exception as exc:
+                namespace_missing = self._registrar is not None and (
+                    isinstance(exc, NamespaceNotFoundError)
+                    or (isinstance(exc, ConnectError) and exc.code == Code.NOT_FOUND)
+                )
+                if namespace_missing:
+                    # Force _ensure_registered to run again before the retry.
+                    with self._cond:
+                        self._registered_generation = -1
+                retryable = (
+                    namespace_missing
+                    or is_retryable_error(exc)
+                    or isinstance(exc, (ConnectionError, OSError, TimeoutError))
+                )
+                summary = _format_exc_summary(exc)
+                logger.warning(
+                    "Table(%s) send failure (%d rows, retryable=%s): %s",
+                    self._namespace,
+                    len(chunk),
+                    retryable,
+                    summary,
+                )
+                if retryable:
+                    return sent_seq, items[start:], dropped
+                # Non-retryable failures drop the request; rebuffering would back up the queue indefinitely.
+                dropped += len(chunk)
+            sent_seq = chunk[-1].seq
+        return sent_seq, [], dropped
 
     def _update_registration(self, registration_key: RegistrationKey, registrar: Callable[[], Schema]) -> None:
         """Schedule a changed registration before this handle's next send."""
@@ -741,6 +752,8 @@ class LogClient:
         *,
         storage_policy: StoragePolicy = StoragePolicy(),
         table_spec: TableSpec | None = None,
+        max_buffer_rows: int = DEFAULT_BATCH_ROWS,
+        max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
     ) -> Table:
         """Return a Table handle for ``namespace``, registering it lazily.
 
@@ -760,6 +773,13 @@ class LogClient:
         ``table_spec`` opts the namespace into versioned layout management.
         The server accepts only the current version or ``current + 1``; a new
         version that changes source layout is migrated in the background.
+
+        ``max_buffer_rows`` and ``max_buffer_bytes`` bound the rows that wait for
+        the flush thread; past either bound the oldest rows are dropped. A
+        producer that writes bursts larger than the defaults raises them. A
+        buffer larger than one request goes out in several requests, and the
+        server acknowledges about one request each second for a table. Every
+        handle of a namespace must ask for the same bounds.
         """
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
@@ -776,6 +796,8 @@ class LogClient:
             existing = self._tables.get(namespace)
             registration_key = (requested, storage_policy, table_spec)
             if existing is not None:
+                if (existing._max_buffer_rows, existing._max_buffer_bytes) != (max_buffer_rows, max_buffer_bytes):
+                    raise ValueError(f"Table({namespace}) already has other buffer bounds")
                 existing._update_registration(
                     registration_key,
                     lambda: self._register_table(namespace, requested, storage_policy, table_spec),
@@ -788,6 +810,8 @@ class LogClient:
                 querier=self._stats_query,
                 registrar=lambda: self._register_table(namespace, requested, storage_policy, table_spec),
                 registration_key=registration_key,
+                max_buffer_rows=max_buffer_rows,
+                max_buffer_bytes=max_buffer_bytes,
             )
             self._tables[namespace] = table
             return table
@@ -970,6 +994,22 @@ class LogClient:
         except (ConnectionError, OSError, TimeoutError) as exc:
             self._invalidate(_format_exc_summary(exc))
             raise
+
+
+def _send_ranges(items: list[_PendingItem]) -> list[tuple[int, int]]:
+    """The index ranges of ``items`` that each go out in one request."""
+    ranges = []
+    start = 0
+    size = 0
+    for index, item in enumerate(items):
+        # An item larger than the byte bound goes out alone.
+        if index > start and (size + item.size_bytes > MAX_SEND_BYTES or index - start == MAX_SEND_ROWS):
+            ranges.append((start, index))
+            start, size = index, 0
+        size += item.size_bytes
+    if items:
+        ranges.append((start, len(items)))
+    return ranges
 
 
 # ---------------------------------------------------------------------------
