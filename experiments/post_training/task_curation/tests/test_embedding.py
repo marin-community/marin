@@ -386,10 +386,10 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
         built = run(stages.publication, max_concurrent=1)[0]
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
-    assert rows["source"]["basis"] == "matched"
-    assert rows["Pointer:release"]["basis"] == "declared"
-    assert rows["Pointer:release"]["task_count"] == 7
-    assert rows["Pointer:release"]["intended_use"] is None
+    assert rows["Marin:source"]["basis"] == "matched"
+    assert rows["Marin:release"]["basis"] == "declared"
+    assert rows["Marin:release"]["task_count"] == 7
+    assert rows["Marin:release"]["intended_use"] is None
     assert "Pointer:no-count" not in rows
     assert release["task_count"] == 1
 
@@ -448,7 +448,7 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert resumed.exit_code == 0, resumed.output
     releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
     sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
-    assert sources["OpenAI:aime24"]["basis"] == "matched"
+    assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
     assert any(row["source_id"] == "TaskTrove:smartie-calibforge-admitted" for row in declared)
