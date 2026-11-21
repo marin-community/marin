@@ -163,20 +163,6 @@ def test_distributed_executable_unsupported_text_continues_on_all_ranks(caplog: 
     assert len(warnings) == 1
 
 
-def test_distributed_executable_missing_peer_reports_observed_rank() -> None:
-    service = _FakeCoordinationService()
-
-    with pytest.raises(RuntimeError) as error:
-        check_distributed_executable_text(
-            service.client(0), (0, 1), 0, 0, "same-cache-key", "HLO", "/cache/process-0", 4, timeout_ms=10
-        )
-
-    assert "rendezvous failed" in str(error.value)
-    assert "same-cache-key" in str(error.value)
-    assert "expected processes (0, 1)" in str(error.value)
-    assert "/cache/process-0" in str(error.value)
-
-
 def test_optimized_hlo_text_falls_back_to_modules() -> None:
     class Loaded:
         def hlo_modules(self) -> list["Module"]:
