@@ -81,7 +81,7 @@ def specification() -> TaskSpec:
         (JsonAnswer(), '{"answer":"12"}', Outcome.GRADED, 1.0),
         (JsonAnswer(), '{"answer":"13"}', Outcome.GRADED, 0.0),
         (JsonAnswer(), '{"answer":"12"', Outcome.SUBMISSION_FAILURE, 0.0),
-        (JsonAnswer(), '{"answer":12}', Outcome.SUBMISSION_FAILURE, 0.0),
+        (JsonAnswer(), '{"answer":[12]}', Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
 def test_answer_formats_distinguish_wrong_and_malformed_submissions(
@@ -90,6 +90,55 @@ def test_answer_formats_distinguish_wrong_and_malformed_submissions(
     task = _revised(specification, answer_format=answer_format)
     result = grade_answer(task, _attempt(task, _reply(response)))
     assert (result.status, result.reward) == (status, reward)
+
+
+def test_json_answer_grades_fenced_numeric_reply(specification):
+    task = _revised(specification, answer_format=JsonAnswer())
+    reply = _reply('```json\n{"answer": 12}\n```')
+    result = grade_answer(task, _attempt(task, reply))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
+@pytest.mark.parametrize(
+    "response,reward",
+    [
+        ('{"answer": 12}', 1.0),
+        ('{"answer": 12.0}', 1.0),
+        ('{"answer": 13}', 0.0),
+    ],
+)
+def test_json_answer_grades_finite_numbers_on_number_tasks(specification, response, reward):
+    task = _revised(specification, answer_format=JsonAnswer())
+    result = grade_answer(task, _attempt(task, _reply(response)))
+    assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        'The answer is below.\n```json\n{"answer": 12}\n```',
+        '```json\n{"answer": 12}\n```\nMore text',
+        '{"answer": true}',
+        '{"answer": NaN}',
+        '{"answer": 1e400}',
+        '{"answer": 12, "answer": 13}',
+    ],
+)
+def test_json_answer_rejects_ambiguous_or_nonfinite_numeric_replies(specification, response):
+    task = _revised(specification, answer_format=JsonAnswer())
+    result = grade_answer(task, _attempt(task, _reply(response)))
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+def test_json_answer_rejects_numeric_answer_on_text_task(specification):
+    task = _revised(
+        specification,
+        answer_type=AnswerType.TEXT,
+        answer_format=JsonAnswer(),
+        grader=verifyit_package(ExactSpec(expected=("12",))).grader,
+    )
+    result = grade_answer(task, _attempt(task, _reply('{"answer": 12}')))
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
 @pytest.mark.parametrize(
@@ -192,6 +241,17 @@ def test_json_value_rejects_ambiguous_and_nonfinite_submissions(specification, c
     )
     result = grade_answer(task, _attempt(task, _reply(content)))
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+def test_json_value_grades_whole_reply_fence(specification):
+    task = _revised(
+        specification,
+        answer_type=AnswerType.JSON,
+        answer_format=JsonValueAnswer(),
+        grader=verifyit_package(StructuredExactSpec(expected={"value": 16})).grader,
+    )
+    result = grade_answer(task, _attempt(task, _reply('```json\n{"value": 16}\n```')))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
 def test_incompatible_answer_format_and_grader_cannot_form_chat_request(specification):
