@@ -15,6 +15,8 @@ class FinishReason(StrEnum):
     LENGTH = "length"
     TOOL_CALLS = "tool_calls"
     ABORT = "abort"
+    CONTEXT_EXCEEDED = "context_exceeded"
+    """The provider refused the conversation because its context window is full; ``content`` holds its reason."""
 
 
 class Role(StrEnum):
