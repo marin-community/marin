@@ -260,7 +260,7 @@ class ShellboxEnv(RecordedEnv):
             return
         remote = f"/tmp/forge-hydration-{uuid4().hex}"
         archive = remote + ".tar"
-        commands = [shlex.join(("mkdir", "-p", remote)), shlex.join(("tar", "-xf", archive, "-C", remote))]
+        commands = [shlex.join(("mkdir", "-p", remote)), shlex.join(("tar", "-xf", archive, "-C", remote)), "staged=1"]
         for index, (path, _) in enumerate(files):
             target = self.workdir / path
             commands.extend(
@@ -270,16 +270,23 @@ class ShellboxEnv(RecordedEnv):
                 )
             )
         # Ordered redirection retains duplicate-write, symlink and existing-mode semantics of Iris upload.
-        cleanup = shlex.join(("rm", "-rf", remote, archive))
-        script = " && ".join(commands) + f'; status=$?; {cleanup}; exit "$status"'
+        cleanup = shlex.join(("rm", "-rf", remote, archive)) + "; [ $staged = 1 ] || exit 125"  # 125: unpack failed
+        script = "staged=0; " + " && ".join(commands) + f'; status=$?; {cleanup}; exit "$status"'
         async with self._operation():
             with TemporaryDirectory() as directory:
                 source = Path(directory) / "files.tar"
                 write_archive(source, [StagedFile(str(index), data) for index, (_, data) in enumerate(files)], [])
-                await self.machine.upload(source, archive)
+                # Staging Taskforge's own scratch archive fails as a guest helper, never on the caller's paths.
+                try:
+                    await self.machine.upload(source, archive)
+                except GuestPathError as error:
+                    raise GuestHelperFailed(f"Could not stage hydration archive: {error}") from error
                 result = await self.machine.run(Command(("sh", "-c", script), cwd="/"))
+                stderr = result.stderr.decode(errors="replace")
+                if result.exit_code == 125:
+                    raise GuestHelperFailed(f"Could not unpack hydration archive: {stderr}")
                 if result.exit_code != 0:
-                    raise RuntimeError(f"Could not hydrate files: {result.stderr.decode(errors='replace')}")
+                    raise RuntimeError(f"Could not hydrate files: {stderr}")
 
     @override
     async def close(self) -> None:
