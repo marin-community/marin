@@ -7,9 +7,7 @@ from dataclasses import replace
 from fractions import Fraction
 
 from rigging.task_errors import (
-    ADD_TESTS_DIR_ERROR,
     DEFAULT_RETRY_EXCLUSIONS,
-    DOWNLOAD_VERIFIER_DIR_ERROR,
     VERIFIER_RUNTIME_ERROR,
 )
 from skyrlrecipe import RecipePatch, sections
@@ -30,7 +28,7 @@ _AGENTIC_RECIPE = RecipePatch(
                 "max_retries": 1,
                 "wait_multiplier": 2,
                 "exclude_exceptions": sorted(
-                    DEFAULT_RETRY_EXCLUSIONS | {ADD_TESTS_DIR_ERROR, DOWNLOAD_VERIFIER_DIR_ERROR, VERIFIER_RUNTIME_ERROR}
+                    DEFAULT_RETRY_EXCLUSIONS | {"AddTestsDirError", "DownloadVerifierDirError", VERIFIER_RUNTIME_ERROR}
                 ),
             },
         }

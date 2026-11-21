@@ -13,6 +13,7 @@ from typing import Any, NoReturn
 
 from rigging.task_errors import ErrorIdentity, exception_identity
 from shellbox.machine import Machine
+from shellbox.task_errors import ERROR_CATEGORIES
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
@@ -63,7 +64,9 @@ def _failure_record(operation: RolloutOperation, cause: BaseException) -> ErrorI
     notes = getattr(cause, "__notes__", ())
     if notes:
         diagnostics["notes"] = list(notes)
-    return exception_identity(cause, operation=operation.value).model_copy(update={"diagnostics": diagnostics})
+    return exception_identity(cause, operation=operation.value, categories=ERROR_CATEGORIES).model_copy(
+        update={"diagnostics": diagnostics}
+    )
 
 
 class _NoEvents:

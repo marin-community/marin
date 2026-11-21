@@ -78,7 +78,10 @@ def test_retry_budget_backoff_and_cause_filter_survive_serialization():
     )
     policy = RetrySettings.model_validate_json(policy.model_dump_json())
     failure = ErrorIdentity(
-        exception_type="TaskMachineError", cause_type="ConnectionError", retry_disposition=RetryDisposition.TRANSIENT
+        exception_type="TaskMachineError",
+        category=ErrorCategory.INFRASTRUCTURE,
+        cause_type="ConnectionError",
+        retry_disposition=RetryDisposition.TRANSIENT,
     )
     assert [retry_delay(failure, policy, attempt) for attempt in range(4)] == [2, 4, 5, None]
     excluded = policy.model_copy(update={"exclude_categories": {ErrorCategory.INFRASTRUCTURE}})

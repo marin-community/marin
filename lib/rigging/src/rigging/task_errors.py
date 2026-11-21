@@ -1,15 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared task failure categories and retry settings.
+"""Task error types and categories shared by multiple producers.
 
-Categories describe the source of a failure. Consumers choose training treatment
-separately from retry settings. Persisted exception names are stable identifiers.
-
-Producers register new persisted names here. Harbor's
-``test_every_persisted_harbor_exception_has_an_explicit_category`` checks its
-exception classes; SkyRL's ``test_terminal_error_treatment_contract`` freezes
-training treatment, including its TaskMachineError and TemplateError names.
+Frameworks own their remaining names. Compose their maps with this common map;
+no framework exception classes are imported here.
 """
 
 from collections.abc import Mapping
@@ -21,46 +16,6 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-ADD_TESTS_DIR_ERROR = "AddTestsDirError"
-DOWNLOAD_VERIFIER_DIR_ERROR = "DownloadVerifierDirError"
-AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
-VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
-REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
-REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
-VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
-VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
-API_CONNECTION_ERROR = "APIConnectionError"
-API_TIMEOUT_ERROR = "APITimeoutError"
-AGENT_SETUP_TIMEOUT_ERROR = "AgentSetupTimeoutError"
-ARTIFACT_PERSISTENCE_ERROR = "ArtifactPersistenceError"
-ARTIFACT_UPLOAD_TIMEOUT_ERROR = "ArtifactUploadTimeoutError"
-ARTIFACT_WRITE_TIMEOUT_ERROR = "ArtifactWriteTimeoutError"
-ARTIFACT_WRITER_BACKLOG_ERROR = "ArtifactWriterBacklogError"
-CONTAINER_REGISTRY_THROTTLED_ERROR = "ContainerRegistryThrottledError"
-CONTEXT_BUDGET_EXCEEDED_ERROR = "ContextBudgetExceededError"
-CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR = "ContextManagementInfrastructureError"
-DAYTONA_CONFLICT_ERROR = "DaytonaConflictError"
-DAYTONA_CONNECTION_ERROR = "DaytonaConnectionError"
-DAYTONA_DOCKER_SETUP_ERROR = "DaytonaDockerSetupError"
-DAYTONA_OUTPUT_UNAVAILABLE = "DaytonaOutputUnavailable"
-DAYTONA_PROCESS_ERROR = "DaytonaProcessError"
-ENVIRONMENT_START_TIMEOUT_ERROR = "EnvironmentStartTimeoutError"
-ENVIRONMENT_STOP_ERROR = "EnvironmentStopError"
-INTERNAL_SERVER_ERROR = "InternalServerError"
-LLM_REQUEST_TIMEOUT_ERROR = "LLMRequestTimeoutError"
-MACHINE_TERMINATED = "MachineTerminated"
-OPENAI_TRANSPORT_CONNECT_TIMEOUT_ERROR = "OpenAITransportConnectTimeoutError"
-PHASE_CANCELLATION_ERROR = "PhaseCancellationError"
-RUNTIME_LOG_COLLECTION_ERROR = "RuntimeLogCollectionError"
-RUNTIME_SERVICE_ERROR = "RuntimeServiceError"
-SANDBOX_BUILD_FAILED_ERROR = "SandboxBuildFailedError"
-TAU3_RUNTIME_INFRASTRUCTURE_ERROR = "Tau3RuntimeInfrastructureError"
-TMUX_BATCH_PROTOCOL_ERROR = "TmuxBatchProtocolError"
-TMUX_COMMAND_ERROR = "TmuxCommandError"
-TMUX_EXEC_TIMEOUT_ERROR = "TmuxExecTimeoutError"
-TMUX_SESSION_ENDED_ERROR = "TmuxSessionEndedError"
-TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
-
 
 class ErrorCategory(StrEnum):
     """Semantic category for a persisted task exception."""
@@ -71,143 +26,61 @@ class ErrorCategory(StrEnum):
     UNKNOWN = "unknown"  # Requires the consumer's configured fallback.
 
 
-_ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
+API_CONNECTION_ERROR = "APIConnectionError"
+API_TIMEOUT_ERROR = "APITimeoutError"
+AGENT_SETUP_TIMEOUT_ERROR = "AgentSetupTimeoutError"
+AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
+CONTEXT_LENGTH_EXCEEDED_ERROR = "ContextLengthExceededError"
+ENVIRONMENT_START_TIMEOUT_ERROR = "EnvironmentStartTimeoutError"
+INTERNAL_SERVER_ERROR = "InternalServerError"
+REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
+REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
+TRIAL_TIMEOUT_ERROR = "TrialTimeoutError"
+VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
+VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
+VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
+
+
+SHARED_ERROR_CATEGORIES = MappingProxyType(
     {
-        # --- Task and context-management infrastructure ---
-        "TaskMachineError": ErrorCategory.INFRASTRUCTURE,
-        "TemplateError": ErrorCategory.INFRASTRUCTURE,
-        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        # --- Artifact persistence infrastructure ---
-        ARTIFACT_PERSISTENCE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        ARTIFACT_UPLOAD_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        ARTIFACT_WRITE_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        ARTIFACT_WRITER_BACKLOG_ERROR: ErrorCategory.INFRASTRUCTURE,
-        # --- Environment / sandbox infrastructure ---
-        ENVIRONMENT_START_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        TRIAL_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        PHASE_CANCELLATION_ERROR: ErrorCategory.INFRASTRUCTURE,
-        RUNTIME_SERVICE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        RUNTIME_LOG_COLLECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
-        ENVIRONMENT_STOP_ERROR: ErrorCategory.INFRASTRUCTURE,
-        SANDBOX_BUILD_FAILED_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
-        CONTAINER_REGISTRY_THROTTLED_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
-        "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaError": ErrorCategory.INFRASTRUCTURE,
-        DAYTONA_CONFLICT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
-        DAYTONA_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
-        DAYTONA_OUTPUT_UNAVAILABLE: ErrorCategory.INFRASTRUCTURE,
-        DAYTONA_PROCESS_ERROR: ErrorCategory.INFRASTRUCTURE,
-        DAYTONA_DOCKER_SETUP_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
-        "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
-        "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
-        "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
-        # --- Agent lifecycle infrastructure (model never produced a real answer) ---
-        "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
-        AGENT_SETUP_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
-        CONTEXT_BUDGET_EXCEEDED_ERROR: ErrorCategory.INFRASTRUCTURE,
-        LLM_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        OPENAI_TRANSPORT_CONNECT_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        INTERNAL_SERVER_ERROR: ErrorCategory.INFRASTRUCTURE,
         API_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
         API_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        TMUX_BATCH_PROTOCOL_ERROR: ErrorCategory.INFRASTRUCTURE,
-        TMUX_COMMAND_ERROR: ErrorCategory.INFRASTRUCTURE,
-        TMUX_EXEC_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        TMUX_SESSION_ENDED_ERROR: ErrorCategory.INFRASTRUCTURE,
-        TAU3_RUNTIME_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        # --- Verifier infrastructure ---
-        DOWNLOAD_VERIFIER_DIR_ERROR: ErrorCategory.INFRASTRUCTURE,
-        REWARD_FILE_NOT_FOUND_ERROR: ErrorCategory.INFRASTRUCTURE,
-        REWARD_FILE_EMPTY_ERROR: ErrorCategory.INFRASTRUCTURE,
-        VERIFIER_RUNTIME_ERROR: ErrorCategory.INFRASTRUCTURE,
-        VERIFIER_OUTPUT_PARSE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        ADD_TESTS_DIR_ERROR: ErrorCategory.INFRASTRUCTURE,
-        # --- Agent-attributable failures (reward zero) ---
+        AGENT_SETUP_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
         AGENT_TIMEOUT_ERROR: ErrorCategory.AGENT,
-        "AgentDiskFullError": ErrorCategory.AGENT,
-        "AgentCommandOutputLostError": ErrorCategory.AGENT,
-        "ContextLengthExceededError": ErrorCategory.AGENT,
-        "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
-        "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
-        # --- Partial / real work; a verifier result may still be usable ---
-        "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
-        "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
-        "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
-        # --- No safe default; force an explicit consumer decision ---
-        "TrialNotScoredError": ErrorCategory.UNKNOWN,
-        "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
+        CONTEXT_LENGTH_EXCEEDED_ERROR: ErrorCategory.AGENT,
+        ENVIRONMENT_START_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        INTERNAL_SERVER_ERROR: ErrorCategory.INFRASTRUCTURE,
+        REWARD_FILE_EMPTY_ERROR: ErrorCategory.INFRASTRUCTURE,
+        REWARD_FILE_NOT_FOUND_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TRIAL_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_OUTPUT_PARSE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_RUNTIME_ERROR: ErrorCategory.INFRASTRUCTURE,
         VERIFIER_TIMEOUT_ERROR: ErrorCategory.UNKNOWN,
     }
 )
 
-# Exception types whose on-disk trial result should be RE-RUN on a fresh
-# ``harbor jobs resume`` (a whole new job invocation), rather than kept as a
-# terminal error result. This is the resume-level retry decision and is
-# deliberately DISTINCT from the in-trial retry classification: it is keyed on
-# the persisted exception name and covers only transient, job-level failures.
-_RESUME_RETRYABLE_ERROR_TYPES: frozenset[str] = frozenset(
-    {
-        "CancelledError",
-        ARTIFACT_PERSISTENCE_ERROR,
-        ARTIFACT_UPLOAD_TIMEOUT_ERROR,
-        ARTIFACT_WRITE_TIMEOUT_ERROR,
-        ARTIFACT_WRITER_BACKLOG_ERROR,
-        SANDBOX_BUILD_FAILED_ERROR,
-        CONTAINER_REGISTRY_THROTTLED_ERROR,
-        CONTEXT_BUDGET_EXCEEDED_ERROR,
-        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR,
-        DAYTONA_CONFLICT_ERROR,
-        DAYTONA_CONNECTION_ERROR,
-        DAYTONA_OUTPUT_UNAVAILABLE,
-        MACHINE_TERMINATED,
-        DAYTONA_PROCESS_ERROR,
-        DAYTONA_DOCKER_SETUP_ERROR,
-        LLM_REQUEST_TIMEOUT_ERROR,
-        OPENAI_TRANSPORT_CONNECT_TIMEOUT_ERROR,
-        INTERNAL_SERVER_ERROR,
-        API_CONNECTION_ERROR,
-        API_TIMEOUT_ERROR,
-        PHASE_CANCELLATION_ERROR,
-        RUNTIME_SERVICE_ERROR,
-        RUNTIME_LOG_COLLECTION_ERROR,
-        ENVIRONMENT_STOP_ERROR,
-        TMUX_BATCH_PROTOCOL_ERROR,
-        TMUX_COMMAND_ERROR,
-        TMUX_EXEC_TIMEOUT_ERROR,
-        TMUX_SESSION_ENDED_ERROR,
-        TAU3_RUNTIME_INFRASTRUCTURE_ERROR,
-        TRIAL_TIMEOUT_ERROR,
-    }
-)
+
+def compose_error_categories(*sources: Mapping[str, ErrorCategory]) -> Mapping[str, ErrorCategory]:
+    """Compose category maps, rejecting names owned by more than one source."""
+    categories: dict[str, ErrorCategory] = {}
+    for source in sources:
+        duplicates = categories.keys() & source.keys()
+        if duplicates:
+            raise ValueError(f"Task error names have multiple owners: {sorted(duplicates)}")
+        categories.update(source)
+    return MappingProxyType(categories)
 
 
-def error_category(exception_type: str) -> ErrorCategory:
-    """Return the semantic category for a persisted exception type name.
-
-    Unrecognized identifiers resolve to :attr:`ErrorCategory.UNKNOWN` so that
-    contract drift is observable rather than silently defaulted.
-    """
-    return _ERROR_CATEGORIES.get(exception_type, ErrorCategory.UNKNOWN)
+def error_category(exception_type: str, *, categories: Mapping[str, ErrorCategory]) -> ErrorCategory:
+    return categories.get(exception_type, ErrorCategory.UNKNOWN)
 
 
-def errors_by_category(category: ErrorCategory) -> frozenset[str]:
-    """Return the persisted exception names in a category."""
-    return frozenset(name for name, value in _ERROR_CATEGORIES.items() if value == category)
+def errors_by_category(category: ErrorCategory, *, categories: Mapping[str, ErrorCategory]) -> frozenset[str]:
+    return frozenset(name for name, value in categories.items() if value == category)
 
 
-def is_resume_retryable(exception_type: str) -> bool:
-    """Whether a persisted exception should be re-run on a fresh job resume."""
-    return exception_type in _RESUME_RETRYABLE_ERROR_TYPES
-
-
-def known_error_types() -> frozenset[str]:
-    """Return all persisted exception names with an explicit category decision."""
-    return frozenset(_ERROR_CATEGORIES)
+def known_error_types(*, categories: Mapping[str, ErrorCategory]) -> frozenset[str]:
+    return frozenset(categories)
 
 
 DEFAULT_RETRY_EXCLUSIONS = frozenset(
@@ -243,23 +116,6 @@ class RetryDisposition(StrEnum):
     UNKNOWN = "unknown"
 
 
-class ErrorIdentity(BaseModel):
-    """Persisted task failure identity, independent of training treatment."""
-
-    model_config = ConfigDict(frozen=True)
-
-    exception_type: str
-    diagnostics: dict[str, Any] = Field(default_factory=dict)
-    cause_type: str | None = None
-    operation: str | None = None
-    retry_disposition: RetryDisposition = RetryDisposition.UNKNOWN
-    provider_status_code: int | None = None
-
-    @property
-    def category(self) -> ErrorCategory:
-        return error_category(self.exception_type)
-
-
 _TRANSIENT_HTTP_STATUS = frozenset({408, 429, 502, 503, 504})
 _PERMANENT_HTTP_STATUS = frozenset({400, 401, 403, 405, 422})
 
@@ -273,6 +129,53 @@ def http_retry_disposition(status_code: int | None) -> RetryDisposition:
     return RetryDisposition.UNKNOWN
 
 
+SHARED_RETRYABLE_ERROR_TYPES = frozenset(
+    {
+        API_CONNECTION_ERROR,
+        API_TIMEOUT_ERROR,
+        INTERNAL_SERVER_ERROR,
+        ENVIRONMENT_START_TIMEOUT_ERROR,
+        AGENT_SETUP_TIMEOUT_ERROR,
+        TRIAL_TIMEOUT_ERROR,
+    }
+)
+
+
+def record_retry_disposition(
+    exception_type: str,
+    cause_type: str | None,
+    provider_status_code: int | None,
+    *,
+    retryable_error_types: frozenset[str] = SHARED_RETRYABLE_ERROR_TYPES,
+) -> RetryDisposition:
+    """Classify records without a disposition, honoring provider status and cause boundaries."""
+    if provider_status_code is not None:
+        return http_retry_disposition(provider_status_code)
+    if cause_type is None and exception_type in retryable_error_types:
+        return RetryDisposition.TRANSIENT
+    return RetryDisposition.UNKNOWN
+
+
+class ErrorIdentity(BaseModel):
+    """Persisted task failure identity, independent of training treatment."""
+
+    model_config = ConfigDict(frozen=True)
+
+    exception_type: str
+    category: ErrorCategory = Field(
+        default_factory=lambda data: error_category(data["exception_type"], categories=SHARED_ERROR_CATEGORIES)
+    )
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    cause_type: str | None = None
+    operation: str | None = None
+    provider_status_code: int | None = None
+    retry_disposition: RetryDisposition = Field(
+        default_factory=lambda data: record_retry_disposition(
+            data["exception_type"], data["cause_type"], data["provider_status_code"]
+        )
+    )
+
+
 @runtime_checkable
 class HttpStatusError(Protocol):
     """Provider exceptions that expose a response status independently of text."""
@@ -281,7 +184,13 @@ class HttpStatusError(Protocol):
     def status_code(self) -> int | None: ...
 
 
-def exception_identity(error: BaseException, *, operation: str | None = None) -> ErrorIdentity:
+def exception_identity(
+    error: BaseException,
+    *,
+    operation: str | None = None,
+    categories: Mapping[str, ErrorCategory] = SHARED_ERROR_CATEGORIES,
+    retryable_error_types: frozenset[str] = SHARED_RETRYABLE_ERROR_TYPES,
+) -> ErrorIdentity:
     """Capture safe exception names and retryability from provider causes."""
     cause = error.__cause__ or (error.__context__ if isinstance(error, HttpStatusError) else None)
     disposition = RetryDisposition.UNKNOWN
@@ -317,19 +226,20 @@ def exception_identity(error: BaseException, *, operation: str | None = None) ->
         ):
             disposition = RetryDisposition.TRANSIENT
         current = current.__cause__
+    exception_type = type(error).__name__
+    cause_type = None if cause is None else type(cause).__name__
+    if disposition is RetryDisposition.UNKNOWN:
+        disposition = record_retry_disposition(
+            exception_type, cause_type, status_code, retryable_error_types=retryable_error_types
+        )
     return ErrorIdentity(
-        exception_type=type(error).__name__,
-        cause_type=None if cause is None else type(cause).__name__,
+        exception_type=exception_type,
+        category=error_category(exception_type, categories=categories),
+        cause_type=cause_type,
         operation=operation,
         retry_disposition=disposition,
         provider_status_code=status_code,
     )
-
-
-_TASK_RETRYABLE_ERROR_TYPES = _RESUME_RETRYABLE_ERROR_TYPES | {
-    ENVIRONMENT_START_TIMEOUT_ERROR,
-    AGENT_SETUP_TIMEOUT_ERROR,
-}
 
 
 def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries: int) -> float | None:
@@ -349,13 +259,6 @@ def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries:
     disposition = failure.retry_disposition
     if disposition is RetryDisposition.PERMANENT:
         return None
-    if (
-        disposition is RetryDisposition.UNKNOWN
-        and failure.cause_type is None
-        and failure.provider_status_code is None
-        and names.intersection(_TASK_RETRYABLE_ERROR_TYPES)
-    ):
-        disposition = RetryDisposition.TRANSIENT
     selected = bool(names.intersection(settings.include_exceptions or ())) or category in (
         settings.include_categories or ()
     )

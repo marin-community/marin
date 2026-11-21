@@ -14,6 +14,7 @@ from finestore.reader import ReadView
 from harbor.archive import open_archive
 from harbor.environments.base import SandboxDiskFullError
 from rigging.task_errors import RetrySettings
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import (
@@ -37,7 +38,8 @@ from harbor.utils.artifact_writer import (
     ArtifactUploadTimeoutError,
     ArtifactWriter,
 )
-from rigging.task_errors import ErrorCategory, error_category, is_resume_retryable
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import is_resume_retryable
 from harbor_config.models.job.config import ArchiveConfig
 from shellbox.backends.daytona.machine import DaytonaOutputUnavailable
 from shellbox.machine import CommandOutputLost
@@ -243,7 +245,7 @@ async def test_agent_damage_to_its_sandbox_is_a_model_failure(
         )
 
     assert raised.value.__cause__ is original
-    assert error_category(type(raised.value).__name__) is ErrorCategory.AGENT
+    assert error_category(type(raised.value).__name__, categories=ERROR_CATEGORIES) is ErrorCategory.AGENT
     assert trial.result.agent_execution.finished_at is not None
 
 
@@ -458,7 +460,7 @@ async def test_finalization_waits_for_queued_trajectory_or_stays_incomplete(
             assert native.verifier_result is None
             error = native.exception_info.exception_type
             assert error == "ArtifactWriteTimeoutError"
-            assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+            assert error_category(error, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
             assert is_resume_retryable(error)
         else:
             assert native.completion is not None
@@ -566,7 +568,7 @@ async def test_cancelled_agent_final_upload_failure_leaves_native_result_incompl
         )
     else:
         assert error == "ArtifactPersistenceError"
-        assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+        assert error_category(error, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
     assert not trajectory_path.exists()
 
 
@@ -775,7 +777,7 @@ async def test_daytona_output_unavailable_retries_by_name(
     )
     assert first.completion is not None
     assert first.exception_info.exception_type == "DaytonaOutputUnavailable"
-    assert error_category(first.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+    assert error_category(first.exception_info.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
     assert result.trial_relpath == "daytona-command/attempts/001"
     assert result.verifier_result.rewards == {"reward": 1.0}
 

@@ -6,10 +6,9 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from loguru import logger
-from rigging.task_errors import ErrorCategory, error_category, errors_by_category
+from rigging.task_errors import ErrorCategory, ErrorIdentity
 
 from skyrl_train.error_treatment import ErrorTreatment
-
 
 PASSTHROUGH_WITHOUT_LOGPROBS_ERROR = "PassthroughWithoutLogprobs"
 
@@ -66,8 +65,9 @@ _CATEGORY_TREATMENTS = MappingProxyType({
 })
 
 
-def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) -> ErrorTreatment:
-    """Classify a persisted terminal exception name, honoring overrides."""
+def classify_failure(failure: ErrorIdentity, config: ErrorHandlingConfig) -> ErrorTreatment:
+    """Classify persisted failure metadata, honoring per-name training overrides."""
+    exception_type = failure.exception_type
     override_fields = (
         (config.passthrough_exceptions, ErrorTreatment.PASSTHROUGH),
         (config.mask_exceptions, ErrorTreatment.MASK),
@@ -77,9 +77,8 @@ def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) ->
         if exception_type in exception_types:
             return treatment
 
-    category = error_category(exception_type)
-    if category is not ErrorCategory.UNKNOWN:
-        return _CATEGORY_TREATMENTS[category]
+    if failure.category is not ErrorCategory.UNKNOWN:
+        return _CATEGORY_TREATMENTS[failure.category]
 
     logger.error(
         "Unknown terminal exception type {}; applying explicit default_error_treatment={}",

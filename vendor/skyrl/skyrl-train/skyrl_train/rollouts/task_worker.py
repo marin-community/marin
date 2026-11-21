@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rigging.task_errors import ErrorIdentity, RetryDisposition, RetrySettings, exception_identity, retry_delay
+from rigging.task_errors import ErrorIdentity, RetryDisposition, RetrySettings, error_category, exception_identity, retry_delay
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -85,8 +85,9 @@ from skyrl_train.rollouts.training_record import (
     training_rollout,
     rollout_with_verifier_failure,
 )
-from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_exception_type
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_failure
 from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.task_errors import ERROR_CATEGORIES
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -273,7 +274,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
     ):
         raise error
-    failure = exception_identity(error, operation=interruption.operation.value)
+    failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
     exception_type = type(error).__name__
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
@@ -319,6 +320,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
     return failure.model_copy(
         update={
             "exception_type": exception_type,
+            "category": error_category(exception_type, categories=ERROR_CATEGORIES),
             "diagnostics": diagnostics,
             "cause_type": failure.cause_type
             or (failure.exception_type if exception_type != failure.exception_type else None),
@@ -365,8 +367,8 @@ def _failed_rollout(
     if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
     detail = exception_type
-    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
-        # Diagnostics carry only allowlisted fields. Provider text can contain credentials, so log it redacted.
+    if isinstance(error, TaskMachineError) and error.__cause__ is not None:
+        # Diagnostics carry only allowlisted fields. The cause's text can contain credentials, so log it redacted.
         detail = f"{exception_type} ({type(error.__cause__).__name__}: {redact_string(str(error.__cause__))})"
     logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, detail)
     return replace(
@@ -600,7 +602,7 @@ class TaskRolloutWorker:
                     )
                 result = rollout_with_verifier_failure(result)
                 treatment = (
-                    classify_exception_type(result.failure.exception_type, policies[index]) if result.failure else None
+                    classify_failure(result.failure, policies[index]) if result.failure else None
                 )
                 delay = (
                     None if treatment is ErrorTreatment.PASSTHROUGH else retry_delay(result.failure, self.retry, retries)
