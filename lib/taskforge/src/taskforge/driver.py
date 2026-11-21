@@ -34,6 +34,7 @@ from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import (
     CorruptJournal,
+    DecisionModelUnavailable,
     Hold,
     LogFailure,
     PublicationFailed,
@@ -65,9 +66,10 @@ DEFERRED = 75
 
 
 def deferred(wp: Workpiece | None) -> bool:
-    """Whether ``wp`` is held only until a service recovers, so that a launch resumes it without ``--resume-held``."""
+    """Whether ``wp`` is held only until the decision model answers, so that a launch enters it unasked."""
     last = wp.decisions[-1] if wp is not None and wp.decisions else None
-    return wp is not None and wp.terminal is Terminal.HELD and isinstance(last, Incomplete) and last.awaits is not None
+    awaits = last.awaits if isinstance(last, Incomplete) else None
+    return wp is not None and wp.terminal is Terminal.HELD and awaits == DecisionModelUnavailable.awaits
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,13 +141,13 @@ async def one(args: argparse.Namespace) -> int:
     journal = await asyncio.to_thread(read_journal, destination)
     status = journal.head.status if journal else Status()
     held = status.terminal is Terminal.HELD
-    resume = args.resume_held or (held and journal is not None and deferred(await asyncio.to_thread(journal.workpiece)))
-    if status.finished or (held and not resume):
+    enter = args.resume_held or (held and journal is not None and deferred(await asyncio.to_thread(journal.workpiece)))
+    if status.finished or (held and not enter):
         logging.info("SKIP %s: published terminal=%s", identity, status.terminal)
         return 0
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, resume))
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
     wp = [Workpiece(proposal.header.id, proposal)]  # the current workpiece: each stage's start, then the returned one
     try:
         async with checkpoints.running():
@@ -290,12 +292,10 @@ async def run(args: argparse.Namespace) -> None:
         while active or not exhausted or deferrals.paths:
             await deferrals.advance()
             while len(active) < args.concurrency:
-                if (path := deferrals.take()) is not None:
-                    resume = True
-                elif exhausted or (path := next(proposals, None)) is None:
-                    exhausted = True
-                    break
-                else:
+                if (path := deferrals.take()) is None:
+                    if exhausted or (path := next(proposals, None)) is None:
+                        exhausted = True
+                        break
                     with open_url(path, "rt") as source:
                         proposal = TASK_PROPOSAL.validate_json(source.read())
                     if not eligible(proposal, policy):
@@ -304,14 +304,13 @@ async def run(args: argparse.Namespace) -> None:
                     if deferrals.down and proposal.header.verification is Verification.DECISION_MODEL:
                         deferrals.paths.append(path)
                         continue
-                    resume = args.resume_held
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
                 command += [
                     item
                     for name in ("output", "policy", "work_dir")
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
-                if resume:
+                if args.resume_held:  # never added for a deferred path: only the operator reopens a human hold
                     command.append("--resume-held")
                 process = subprocess.Popen(command)
                 submitted += 1

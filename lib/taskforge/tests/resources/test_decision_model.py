@@ -4,13 +4,12 @@
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import cast, override
 
 import httpx
 import pytest
-from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
 from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
@@ -19,11 +18,9 @@ from taskcompendium.decision_model import DecisionModelRequest
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import DECISION_LEVELS, DECISION_QUESTION, DecisionModelGrader
 
-from taskforge import coordinator
-from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, Retrying
-from taskforge.effects.issues import DecisionModelUnavailable, Hold
+from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.effects.log import EventLog, Record
 from taskforge.llm.client import Progress, Segment
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
@@ -31,9 +28,7 @@ from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_se
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import Incomplete
-from taskforge.model.stage import Stage
-from taskforge.model.workpiece import Submission, Terminal, Workpiece
+from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
@@ -46,7 +41,6 @@ from taskforge.resources.decision_model import (
 )
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages import STAGES
 from taskforge.stages.author import system_prompt, task_schema
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Validated
@@ -350,35 +344,6 @@ async def test_an_outage_in_a_solver_slot_starts_no_waiting_slot_and_resumes_onl
             await solver_batch(ctx, spec, "validation", 0, (), 0, 3, concurrency=1, heartbeat=3600.0)
     await ctx.drain()
     assert raised.group_contains(DecisionModelUnavailable) and len(solver.bodies) == 1
-
-
-def held_by(error: BaseException) -> Callable[..., Awaitable[object]]:
-    async def stage(*_: object) -> object:
-        raise error
-
-    return stage
-
-
-# A hold resumes without a person only when every leaf of it is a decision-model outage.
-@pytest.mark.parametrize(
-    "error, awaits",
-    [
-        (BaseExceptionGroup("validation", [DecisionModelUnavailable("down"), DecisionModelUnavailable("down")]), True),
-        (BaseExceptionGroup("validation", [DecisionModelUnavailable("down"), Hold("request rejected")]), False),
-        (Hold("relay unavailable"), False),
-    ],
-    ids=["outage", "outage beside another hold", "another hold"],
-)
-async def test_only_an_outage_hold_records_what_it_awaits(
-    proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch, error: BaseException, awaits: bool
-) -> None:
-    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: held_by(error)})
-    policy = overlaid("")
-    workpiece = await run_workpiece(
-        proposal, build_config(policy, {}), resources(Context(log=EventLog())), EventLog(), install=install
-    )
-    assert workpiece.terminal is Terminal.HELD and isinstance(last := workpiece.decisions[-1], Incomplete)
-    assert last.awaits == ("decision_model" if awaits else None)
 
 
 def gateway(handler: Callable[[httpx.Request], httpx.Response]) -> ClefReader:

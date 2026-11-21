@@ -174,7 +174,7 @@ async def run_workpiece(
         interrupted = True
         # Only a hold every leaf of which is a decision-model outage resumes without a person.
         awaits = DecisionModelUnavailable.awaits if error.split(DecisionModelUnavailable)[1] is None else None
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error), awaits)))
+        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error), awaits=awaits)))
     finally:
         try:
             await ctx.drain()

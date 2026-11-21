@@ -41,7 +41,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
-from taskforge import checkpoint, driver
+from taskforge import checkpoint, coordinator, driver
 from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal, read_journal
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
@@ -111,6 +111,7 @@ from taskforge.resources.ids import Ids, NewId
 from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
+from taskforge.stages import STAGES
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
@@ -3168,6 +3169,44 @@ async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_una
     assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2
 
 
+# Review 2026-11-21 (n10 finding 1): an ordinary launch entered a human hold and replayed its refusals as if an
+# operator had passed --resume-held. Only the exact typed marker that an outage-only hold records is entered again,
+# and the refusal replay rule always sees the operator's own flag.
+@pytest.mark.parametrize(
+    "error, enters",
+    [
+        (OUTAGE, True),
+        (Hold("waits for the decision model: an operator rejected clef@fixture-1's levels"), False),
+        (BaseExceptionGroup("validation", [OUTAGE, Hold("request rejected")]), False),
+    ],
+    ids=["outage", "human hold naming the decision model", "outage beside another hold"],
+)
+async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators_flag(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, error: BaseException, enters: bool
+) -> None:
+    async def held(*_: object) -> object:
+        raise error
+
+    entered: list[bool] = []
+
+    def rule(previous: Sequence[Record], resume: bool) -> Any:
+        entered.append(resume)
+        return replayable_grade
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: held})
+    monkeypatch.setattr(driver, "replay_rule", rule)
+    serve(monkeypatch, resources(Envs(), ()), resources(Envs(), ()))
+    deferred = driver.DEFERRED if enters else 0
+    assert await driver.one(driver_args) == deferred
+    assert await driver.one(driver_args) == deferred  # driver_args.resume_held stays False
+    assert entered == [False] * (1 + enters)
+    held_wp = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held_wp.terminal is Terminal.HELD and driver.deferred(held_wp) is enters
+    positional = Incomplete(("held",), "incomplete")  # the n9 constructor: the second argument is still the kind
+    assert (positional.kind, positional.awaits) == ("incomplete", None)
+    assert not driver.deferred(held_wp.with_(decisions=(*held_wp.decisions, positional)))
+
+
 @dataclass
 class TickingClock:
     """Each reading is ``step`` later, so every wait a run computes is already over: no test waits in real time."""
@@ -3218,7 +3257,8 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     monkeypatch.setattr(driver, "Deferrals", partial(driver.Deferrals, clock=TickingClock(step=1000.0)))
     monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
     await driver.run(driver_args)
-    assert launches == [("first", False), ("code", False), ("first", True), ("second", True)]
+    # A released proposal runs with the batch's own flags: the child itself enters only an outage-only hold.
+    assert launches == [("first", False), ("code", False), ("first", False), ("second", False)]
     assert given[:2] == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
     out = capsys.readouterr().out
     assert f"OUTCOME deferred exit={driver.DEFERRED} proposal={paths['first']}" in out

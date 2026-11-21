@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Final
+
 from taskforge.model.workpiece import Conversation
 
 
@@ -53,7 +55,7 @@ class DecisionModelUnavailable(Hold):
     effects stay journalled, and the hold names what it ``awaits`` so the driver resumes it once the model answers.
     """
 
-    awaits = "decision_model"
+    awaits: Final = "decision_model"
 
 
 class LogFailure(EffectIssue):
