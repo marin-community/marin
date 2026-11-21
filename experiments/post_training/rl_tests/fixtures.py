@@ -50,6 +50,7 @@ from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
@@ -65,7 +66,11 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
-from experiments.post_training.skyrl_test_support import selection_summary, with_current_control_revisions
+from experiments.post_training.skyrl_test_support import (
+    selection_summary,
+    with_current_control_revisions,
+    write_training_families,
+)
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
@@ -272,12 +277,15 @@ def selection(tmp_path, monkeypatch):
         write_json(Path(recipe.selection_artifact(binding).path()) / "summary.json", summary)
     candidate = recipe.selection_artifact(SELECTION_IDENTITY)
     candidate_summary = deepcopy(summary)
+    counts = {"agentic": 256, "nonagentic": 256}
+    candidate_summary["training_family_counts"] = counts
     candidate_summary["recipe"]["exclusions"] = [
         {"uri": str(Path(task_set.path()) / FULL_VALIDATION_FILENAME), "version": task_set.version}
         for binding in sorted(task_sets)
         for task_set in (recipe.selection_artifact(binding),)
     ]
     write_json(Path(candidate.path()) / "summary.json", candidate_summary)
+    write_training_families(StoragePath(candidate.path()), counts)
     for binding in task_sets:
         write_json(
             Path(recipe.selection_artifact(binding).path()) / "summary.json",

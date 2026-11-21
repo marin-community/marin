@@ -25,6 +25,13 @@ from harbor.models.trial.config import (
     VerifierConfig,
 )
 from harbor.models.trial.result import TrialResult
+from harbor.agents.terminus_2.tmux_session import TmuxCommandError
+from harbor.archive import open_archive
+from harbor.trial.errors import PhaseCancellationError
+from harbor.trial.hooks import TrialEvent, TrialHookEvent
+from harbor_config.models.job.config import ArchiveConfig
+from daytona import DaytonaError
+from finestore.reader import ReadView
 from harbor.job import Job
 from harbor.trial.trial import Trial
 
@@ -495,6 +502,76 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
     assert [
         error["exception_type"] for error in persisted["secondary_exception_info"]
     ] == ["UnicodeDecodeError"]
+
+
+@pytest.mark.parametrize(
+    "run_error",
+    [
+        PhaseCancellationError("Trial phase failed while stopping its commands"),
+        DaytonaError("Failed to execute command: "),
+        TmuxCommandError("tmux capture failed: return_code=2"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+async def test_failed_session_cleanup_after_a_confirmed_stop_completes_and_seals(
+    tmp_path: Path, monkeypatch, run_error: Exception
+) -> None:
+    """A trial whose agent failed and whose session cleanup then failed is still a
+    complete failed attempt once its environment stop succeeds, so the archive seals."""
+
+    class FailingAgent(QuickAgent):
+        async def run(self, instruction, environment, context) -> None:
+            raise run_error
+
+        async def cleanup(self, environment: BaseEnvironment) -> None:
+            raise RuntimeError("tmux kill-session failed")
+
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.CODEX, FailingAgent)
+    monkeypatch.setattr(
+        environment_factory, "_load_environment_class", lambda _: MountedEnvironment
+    )
+    task_dir = _create_task_dir(tmp_path)
+    trials_dir = tmp_path / "trials"
+    trials_dir.mkdir()
+    config = TrialConfig(
+        task=TaskConfig(path=task_dir),
+        trials_dir=trials_dir,
+        agent=AgentConfig(name=AgentName.CODEX),
+        environment=EnvironmentConfig(type=EnvironmentType.LOCAL, delete=True),
+        verifier=VerifierConfig(disable=True),
+    )
+    trial = await Trial.create(config)
+
+    result = await trial.run()
+
+    assert trial.agent_environment.stop_call_count == 1
+    assert result.exception_info is not None
+    assert result.exception_info.exception_type == type(run_error).__name__
+    assert [error.exception_message for error in result.secondary_exception_info] == [
+        "Could not confirm agent session cleanup"
+    ]
+    assert result.completion is not None
+    persisted = TrialResult.model_validate_json(trial.paths.result_path.read_text())
+    assert persisted.completion == result.completion
+
+    root = str(tmp_path / "archive")
+    archive = open_archive(
+        ArchiveConfig(root=root, dataset="mybench"), trials_dir=trials_dir
+    )
+    assert archive is not None
+    await archive.on_trial_end(
+        TrialHookEvent(
+            event=TrialEvent.END,
+            trial_id=result.trial_name,
+            task_name=result.task_name,
+            config=result.config,
+            result=result,
+        )
+    )
+    await archive.finalize([result])
+    archive.seal()
+    archive.close()
+    assert ReadView(root).is_sealed()
 
 
 @pytest.fixture(autouse=True)
