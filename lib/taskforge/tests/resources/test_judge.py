@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
-from lib.taskforge.tests.resource_doubles import FakeInference
-from rolloutengine.models import TraceMode
+from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
+from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
+from rolloutengine.models import GradedRollout, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
@@ -17,7 +20,9 @@ from verifyit.spec import JudgeSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import Restart
-from taskforge.effects.log import EventLog
+from taskforge.effects.log import EventLog, Record
+from taskforge.llm.client import Progress, Segment
+from taskforge.llm.policy import GLM_5_3, ModelProfile
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion
@@ -26,7 +31,8 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.judge import JudgeEngine
-from taskforge.wiring import install
+from taskforge.resources.rollouts import SolverRollout
+from taskforge.wiring import build_resources, install
 
 
 async def test_cancel_host_judge_cancels_recorded_inference() -> None:
@@ -129,3 +135,57 @@ def test_disabled_and_script_judges_return_actionable_authored_rejection(script:
     policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": ""})
     with pytest.raises(InvalidTaskSpec, match="host VerifyitGrader" if script else "policy judge.model"):
         lower_with_settings(arithmetic_task(grader=grader), lowering_settings(policy), {})
+
+
+JUDGE_CAP = 3
+CAPPED_JUDGE = replace(GLM_5_3, name="glm-5.3/output-3", max_output_tokens=JUDGE_CAP)
+
+
+class CapSensitiveJudge(ScriptedProvider):
+    """A host judge that passes an uncapped request and fails one capped at ``JUDGE_CAP`` tokens."""
+
+    async def stream(self, body: Mapping[str, Any], progress: Progress) -> Segment:
+        self.bodies.append(body)
+        return segment("SCORE: 0" if body.get("max_tokens", JUDGE_CAP + 1) <= JUDGE_CAP else "SCORE: 1")
+
+
+async def judged(
+    rollout: bool, judge: ModelProfile, history: Sequence[Record]
+) -> tuple[float | None, int, int, Sequence[Record]]:
+    """A solver rollout or a candidate grade through ``build_resources`` and ``install``, replaying ``history``."""
+    policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"})
+    task = arithmetic_task(grader=verifyit_package(JudgeSpec(references=("12",), exact_gate=False)).grader)
+    spec = lower_with_settings(task, lowering_settings(policy), {}).model_copy(update={"trace": TraceMode.MESSAGES})
+    solver, host_judge = ScriptedProvider((segment("12"),)), CapSensitiveJudge(())
+    providers = {
+        "author": ScriptedProvider(()),
+        "adversary": ScriptedProvider(()),
+        "solver": solver,
+        "judge": host_judge,
+    }
+    log = EventLog(replay_from=history)
+    ctx = Context(log=log)
+    install(ctx, build_resources(policy, providers, {}, FakeWeb({}, {}), {"judge": judge}))
+    if rollout:
+        reward = cast(GradedRollout, await ctx.emit(SolverRollout(spec, 0, 0))).grade.reward
+    else:
+        reward = (await ctx.emit(GradeCandidate(spec, Candidate("12")))).reward
+    await ctx.drain()
+    return reward, len(solver.bodies), len(host_judge.bodies), log.records
+
+
+# Review 2026-11-21: under a judge capped at three tokens, a grade and a rollout replayed 1.0 with zero calls.
+@pytest.mark.parametrize("rollout", [False, True], ids=["grade", "rollout"])
+@pytest.mark.parametrize(
+    ("recorded", "replayed"),
+    [(GLM_5_3, GLM_5_3), (GLM_5_3, CAPPED_JUDGE), (CAPPED_JUDGE, GLM_5_3), (CAPPED_JUDGE, CAPPED_JUDGE)],
+    ids=["default", "default-then-capped", "capped-then-default", "capped"],
+)
+async def test_an_outer_result_replays_only_under_the_judge_profile_that_shaped_it(
+    rollout: bool, recorded: ModelProfile, replayed: ModelProfile
+) -> None:
+    *_, history = await judged(rollout, recorded, ())
+    reward, solver_calls, judge_calls, _ = await judged(rollout, replayed, history)
+    clean = 0.0 if replayed is CAPPED_JUDGE else 1.0
+    calls = (0, 0) if recorded is replayed else (int(rollout), 1)
+    assert (reward, (solver_calls, judge_calls)) == (clean, calls)

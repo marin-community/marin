@@ -118,14 +118,8 @@ class LoopTime:
         await asyncio.sleep(0)
 
 
-def generated(payload: str) -> bool:
-    """Whether a payload carries generated text, as ``GlmProvider`` decides it."""
-    deltas = [choice.get("delta") or {} for choice in json.loads(payload).get("choices") or ()]
-    return any(delta.get("content") or delta.get("reasoning") or delta.get("tool_calls") for delta in deltas)
-
-
 def report(progress: Progress, payload: str) -> None:
-    progress.event(payload, generated(payload))
+    progress.event(payload)
 
 
 Act = Callable[[Progress], Awaitable[Segment]]

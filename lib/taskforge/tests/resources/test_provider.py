@@ -30,6 +30,7 @@ from taskforge import wiring
 from taskforge.effects.issues import Hold, Restart
 from taskforge.llm import glm_provider
 from taskforge.llm.client import (
+    CONFIRMATION_INTERVAL,
     AttemptOutcome,
     ContextExhausted,
     ModelClient,
@@ -150,9 +151,29 @@ async def test_stalls_inside_a_tool_call_are_waited_out_as_an_outage() -> None:
 
 
 # Review 2026-11-21: a role header and a close, eight times, kept a call alive past a 3 s availability window.
-async def test_a_stream_cut_before_generating_does_not_renew_the_availability_window() -> None:
-    header = unavailable(AttemptOutcome.INCOMPLETE_STREAM, chunk(role="assistant"))
+# Follow-up 1: a tool-call frame with only an index or empty arguments counted as generated text.
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        chunk(role="assistant"),
+        chunk(tool_calls=[{"index": 0}]),
+        chunk(tool_calls=[{"index": 0, "id": "c", "function": {"name": "", "arguments": ""}}]),
+    ],
+    ids=["role", "tool-index", "empty-tool-arguments"],
+)
+async def test_a_stream_cut_before_generating_does_not_renew_the_availability_window(envelope: str) -> None:
+    header = unavailable(AttemptOutcome.INCOMPLETE_STREAM, envelope)
     provider = ScriptedProvider((header,) * 8 + (segment("answer"),))
+    time = Time()
+    with pytest.raises(ModelUnavailable):
+        await client(provider, time, wait=3, backoff=(1, 1, 1)).complete((), LLMPolicy())
+    assert (time.now, len(provider.bodies)) == (3, 3)
+
+
+# Review 2026-11-21 follow-up 1: one generated character then EOF, repeated, renewed the window until 65 POSTs.
+async def test_a_call_renews_its_availability_window_once() -> None:
+    cut = unavailable(AttemptOutcome.INCOMPLETE_STREAM, chunk(content="1"))
+    provider = ScriptedProvider((cut,) * 64 + (segment("answer"),))
     time = Time()
     with pytest.raises(ModelUnavailable):
         await client(provider, time, wait=3, backoff=(1, 1, 1)).complete((), LLMPolicy())
@@ -234,14 +255,8 @@ async def test_a_generation_sustained_past_its_bound_is_an_unsolved_trial(before
     result = await rollout(bounded(provider, time), TURN)
     assert trial_cause(result, SPEC.task) is Cause.GENERATION_LIMIT
     assert len(provider.bodies) == len(before) + 1
-
-
-async def test_a_generation_at_its_bound_on_an_empty_pool_is_an_outage() -> None:
-    time = LoopTime()
-    provider = ScriptedProvider((generates(time, 10 * GENERATION_BOUND),), empty_pool=[True] * 100)
-    with pytest.raises(Restart, match="interrupted during model"):
-        await rollout(bounded(provider, time, wait=30), TURN)
-    assert provider.polls > 0
+    # The first token is at second 1; the first token past the bound is confirmed one interval later.
+    assert time.offset == len(before) + 1 + GENERATION_BOUND + CONFIRMATION_INTERVAL
 
 
 async def test_a_solver_transport_stall_is_retried_by_the_model_client() -> None:

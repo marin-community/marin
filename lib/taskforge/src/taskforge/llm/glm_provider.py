@@ -4,10 +4,10 @@
 """The library's default ``Provider``: the GLM router's chat completions through the ``openai`` SDK.
 
 Each ``stream`` call is one streamed request with the SDK's retries off; ``ModelClient`` owns every retry. A stream
-is abandoned after ``stall_timeout`` seconds without a token, never on wall-clock time, and a request that finds no
-free pooled connection within ``POOL_TIMEOUT`` is a transport failure. A 400 naming the context window (vLLM's and
-sglang's wordings, or the code ``context_length_exceeded``) is a context overflow; a 404 naming the route is a missing
-route; every 5xx is an outage.
+is abandoned after ``stall_timeout`` seconds without progress (``client.progressed``), never on wall-clock time, and a
+request that finds no free pooled connection within ``POOL_TIMEOUT`` is a transport failure. A 400 naming the context
+window (vLLM's and sglang's wordings, or the code ``context_length_exceeded``) is a context overflow; a 404 naming the
+route is a missing route; every 5xx is an outage.
 
 The endpoint resolves at the first request, and again after a refused connection or a missing route (a moved
 relay), so an unregistered relay is unavailability the client waits out. The lookup runs in a thread, because an
@@ -34,7 +34,6 @@ import httpx
 import openai
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
-from openai.types.chat import ChatCompletionChunk
 
 from taskforge.llm.client import RETRYABLE_STATUSES, AttemptFailed, AttemptOutcome, Progress, Provider, Segment
 from taskforge.model.llm import FinishReason, ToolCall, Usage
@@ -58,6 +57,7 @@ reused blindly; a stalled read also replaces the whole pool (``_reset_pool``).""
 POOL_RESET_INTERVAL = 30.0
 """Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
+"""Seconds one ``/health`` read may take in all; httpx's own timeouts bound only the gaps between bytes."""
 RERESOLVE = frozenset({AttemptOutcome.TRANSPORT_ERROR, AttemptOutcome.ROUTE_MISSING})
 """Failures after which the endpoint is resolved again: a relay that moved is refused or has no route."""
 
@@ -100,14 +100,6 @@ class FixedEndpoint:
 
     def current(self) -> GlmEndpoint:
         return self.endpoint
-
-
-def _carries_token(chunk: ChatCompletionChunk) -> bool:
-    """Whether a chunk carries generated text, including vLLM's ``delta.reasoning`` (absent from the SDK schema)."""
-    return any(
-        choice.delta.content or choice.delta.tool_calls or (choice.delta.model_extra or {}).get("reasoning")
-        for choice in chunk.choices
-    )
 
 
 def _usage(usage: CompletionUsage) -> Usage:
@@ -320,7 +312,7 @@ class GlmProvider(Provider):
                             chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
                         except StopAsyncIteration:
                             break
-                        progress.event(chunk.model_dump_json(), _carries_token(chunk))
+                        generated = progress.event(chunk.model_dump_json())
                         try:
                             state.handle_chunk(chunk)
                         except IndexError as error:
@@ -329,7 +321,7 @@ class GlmProvider(Provider):
                             raise AttemptFailed(
                                 AttemptOutcome.STREAM_ERROR, f"tool-call delta without its earlier deltas: {error}"
                             ) from error
-                        if _carries_token(chunk):
+                        if generated:
                             last_token = time.monotonic()
                             if ttft is None:
                                 ttft = last_token - started
@@ -380,17 +372,17 @@ class GlmProvider(Provider):
     async def no_workers(self) -> bool:
         """Whether ``/health`` answers 200 with zero workers in this endpoint's pool.
 
-        False, unknown, for an unresolvable endpoint, an unreachable ``/health``, a non-200 answer or a report that is
-        not JSON or lacks the pool.
+        False, unknown, for an unresolvable endpoint, an unreachable ``/health``, a read longer than ``HEALTH_TIMEOUT``,
+        a non-200 answer or a report that is not JSON or lacks the pool.
         """
         try:
-            async with self._leased() as (_, http, endpoint):
+            async with asyncio.timeout(HEALTH_TIMEOUT), self._leased() as (_, http, endpoint):
                 response = await http.get(
                     f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
                     headers={"Authorization": f"Bearer {endpoint.token}"},
                     timeout=HEALTH_TIMEOUT,
                 )
-        except (AttemptFailed, httpx.TransportError):
+        except (AttemptFailed, httpx.TransportError, TimeoutError):
             return False
         if response.status_code != 200:
             return False

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 GLM_MODEL = "glm-5.3"
+TRICKLE_INTERVAL = 0.005
 
 
 @dataclass
@@ -41,6 +42,8 @@ class FakeGlm:
     health_status: int = 200
     health_text: str | None = None
     """A raw ``/health`` body in place of the JSON worker report."""
+    health_trickle: int = 0
+    """Bytes of JSON whitespace sent ``TRICKLE_INTERVAL`` apart before the ``/health`` body."""
     released: threading.Event = field(default_factory=threading.Event)
 
     def stream(
@@ -118,7 +121,18 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             assert self.path == "/health"
             report = json.dumps({"status": "ok", "workers": fake.next_health()})
-            self._send(fake.health_status, report if fake.health_text is None else fake.health_text, {})
+            body = report if fake.health_text is None else fake.health_text
+            if not fake.health_trickle:
+                self._send(fake.health_status, body, {})
+                return
+            self.send_response(fake.health_status)
+            self.send_header("Content-Length", str(fake.health_trickle + len(body)))
+            self.end_headers()
+            for _ in range(fake.health_trickle):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+                time.sleep(TRICKLE_INTERVAL)
+            self.wfile.write(body.encode())
 
         def do_POST(self) -> None:
             assert self.path == "/v1/chat/completions", self.path

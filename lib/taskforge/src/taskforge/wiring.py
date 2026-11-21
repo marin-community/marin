@@ -225,18 +225,21 @@ def build_resources(
     solver = clients["solver"]
     sampling = policy_sampling(policy, solver.profile.sampling)
     # Provider settings (provider.*, pools) shape how a request is served, not what it returns, so replay keys carry
-    # the model, the role, what the request itself records and a non-default profile's identity.
+    # the model, the role, what the request itself records and a non-default profile's identity. A replayed rollout or
+    # grade skips the inference inside it, so its own key carries the non-default profiles of the roles that shaped it.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
     profile = solver.profile.replay_identity()
+    judge = clients["judge"].profile.replay_identity() if "judge" in clients else None
+    judged = () if judge is None else (("judge", judge),)
     return Resources(
         Environments(factories, settings),
         inference["author"],
         RolloutResource(
             verifiers.rollouts,
             partial(solver_turn, solver, sampling),
-            digest((solver.model, sampling, execution) + (() if profile is None else (profile,))),
+            digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + judged),
         ),
-        GradingResource(verifiers.grades, execution, base_engine),
+        GradingResource(verifiers.grades, digest((execution, *judged)) if judged else execution, base_engine),
         Ids(),
         factories,
         web,

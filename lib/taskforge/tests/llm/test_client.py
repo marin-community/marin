@@ -6,6 +6,7 @@ import json
 import pickle
 import socket
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from lib.taskforge.tests.llm.fake_glm import GLM_MODEL, FakeGlm
+from lib.taskforge.tests.llm.fake_glm import GLM_MODEL, TRICKLE_INTERVAL, FakeGlm, ScriptedStream
 from lib.taskforge.tests.resources.inference_fakes import request
 
 from taskforge import wiring
@@ -304,6 +305,28 @@ def test_stall_abandons_attempt_and_retries(fake_glm: FakeGlm, run: Run) -> None
     stalled = completion.attempts[0]
     assert stalled.outcome is AttemptOutcome.STALLED
     assert len(stalled.events) == 2
+
+
+# Review 2026-11-21 follow-up 1: tool-call frames with no generated text kept a stream alive past the stall timeout.
+def test_tool_call_frames_without_generated_text_stall(fake_glm: FakeGlm, run: Run) -> None:
+    frame = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0}]}, "finish_reason": None}]}
+    fake_glm.responses.append(ScriptedStream([frame] * 8, True, None, 0.1))
+    fake_glm.stream(content="second try")
+    completion = run(stall_timeout=0.3)
+    assert completion.content == "second try"
+    assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
+
+
+# Review 2026-11-21 follow-up 1: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
+def test_a_trickling_health_read_ends_with_the_availability_window(fake_glm: FakeGlm) -> None:
+    fake_glm.health_trickle = 200
+    fake_glm.status(503, "busy")
+    fake_glm.stream(content="never sent")
+    started = time.monotonic()
+    with pytest.raises(ModelUnavailable):
+        complete(FixedEndpoint(endpoint(fake_glm.base_url)), RetryPolicy(0.1, 0.001, 0.001, 1.0))
+    assert time.monotonic() - started < 200 * TRICKLE_INTERVAL / 2
+    assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 1)
 
 
 def test_stream_cut_before_finish_reason_is_retried(fake_glm: FakeGlm, run: Run) -> None:

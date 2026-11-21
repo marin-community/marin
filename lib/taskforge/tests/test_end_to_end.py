@@ -881,6 +881,37 @@ class Fleet(Provider):
         self.alive = False
         return await self.stall()
 
+    async def streams_empty_tool_deltas(self, progress: Progress) -> Segment:
+        """Eleven tool-call frames 415 seconds apart, carrying only an index or empty arguments: no generated text."""
+        await self.served.wait()
+        for frame in range(11):
+            if frame:
+                await self.time.sleep(415)
+            report(
+                progress, chunk(tool_calls=[{"index": 0, "function": {"arguments": ""}} if frame % 2 else {"index": 0}])
+            )
+        self.alive = False
+        return await self.stall()
+
+    async def aborts_past_the_bound(self, progress: Progress) -> Segment:
+        """Content every 10 seconds past the bound; at second 4,160 a chunk carries content and the server's abort."""
+        await self.served.wait()
+        await self.generate(progress, 4150)
+        await self.time.sleep(TOKEN_INTERVAL)
+        report(progress, json.dumps({"choices": [{"index": 0, "delta": {"content": "x"}, "finish_reason": "abort"}]}))
+        self.alive = False
+        raise AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
+
+    async def delivers_a_buffered_token_past_the_bound(self, progress: Progress) -> Segment:
+        """A token buffered at second 4,139.5 of the bound arrives at 4,140.5 from a worker that died meanwhile, while
+        another replica keeps ``/health`` positive; then the stream ends."""
+        await self.served.wait()
+        await self.generate(progress, 4140)
+        await self.time.sleep(TOKEN_INTERVAL + 0.5)
+        report(progress, chunk(content="x"))
+        self.alive = False
+        raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
+
     async def generates_past_the_bound(self, progress: Progress) -> Segment:
         await self.served.wait()
         await self.generate(progress, 8400)
@@ -894,6 +925,9 @@ FLEET_FAULTS = {
         fleet.answer,
         fleet.streams_a_tool_delta_then_loses_workers,
     ),
+    "empty-tool-deltas": lambda fleet: (fleet.streams_empty_tool_deltas, fleet.answer),
+    "abort-past-the-bound": lambda fleet: (fleet.aborts_past_the_bound, fleet.answer),
+    "buffered-token-past-the-bound": lambda fleet: (fleet.delivers_a_buffered_token_past_the_bound, fleet.answer),
 }
 
 
@@ -923,7 +957,8 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
     ]
 
 
-# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2.
+# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. Follow-up 1 added
+# empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str

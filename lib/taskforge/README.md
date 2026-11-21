@@ -245,12 +245,15 @@ relay, the transport or local admission may have caused is an outage, and no fai
 | Failure | Evidence checked | What happens |
 |---|---|---|
 | 400 context overflow (recognised wording or `context_length_exceeded`) | the rejection itself | `ContextExhausted`: a solver trial ends at the generation limit (counted, never solved); the author and adversary get `ContextExceeded` |
-| solver generation past `solver.turn_timeout` less 60 s | tokens still arriving at the bound, counted from each attempt's first token, and `/health` not reporting the pool empty then | the trial ends at the generation limit |
+| solver generation past `solver.turn_timeout` less 60 s | the same stream still generating: a second generated payload at least `CONFIRMATION_INTERVAL` (1 s) after its first one past the bound, with no finish, abort, cut or stall in between; counted from each attempt's first token | the trial ends at the generation limit |
 | other rejection (401, unknown 400 wording, ...) | the status | `ModelRequestRejected`, never retried; a solver rollout holds at once with the status and reason |
-| 408, 429, any 5xx, 404 `no route`, no endpoint, registry lookup failure, refused connection, full local pool, stall (also inside a tool call), cut or aborted stream | `/health` while waiting | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
+| 408, 429, any 5xx, 404 `no route`, no endpoint, registry lookup failure, refused connection, full local pool, stall (also inside a tool call), cut or aborted stream (also past the bound) | `/health` while waiting | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
 
-Only an attempt that generated text before a non-stall failure restarts the availability window. An
-undecodable `/health` reply counts as unknown availability.
+Generated text is nonempty content, reasoning, a function name or an argument fragment; a role, an index or
+an empty string is not (`progressed`), and the bound, stall detection and window renewal all use that one
+test. The first failure in a call after its attempt generated text, other than a stall, restarts the
+availability window; that happens once per call, and later failures count against the restarted window. A `/health` read that is undecodable, or
+that outlasts `HEALTH_TIMEOUT` or the remaining window, counts as unknown availability.
 
 The defaults are `GlmProvider` (the GLM router, `llm/glm_provider.py`) for every role and the
 `GLM_5_3` profile (`llm/policy.py`: sampling defaults, context window, no output limit, tool-call
@@ -272,8 +275,10 @@ same mappings when the caller builds the bindings itself. The policy's `<role>.m
 on top of the profile. A provider reports admission and every payload to `progress` and inherits a `no_workers()` that
 knows of no outage. The profile's output limit is a ceiling on any token-limit field a request sets. Replay keys carry
 the model, the role, the request, and for any profile but `GLM_5_3` its `name` and output limit, so a changed profile
-never replays a result it did not shape. A callable has no stable hash: a profile with its own `replay_arguments` needs
-its own name, and a new one when the formatter changes.
+never replays a result it did not shape. A solver rollout's and a candidate grade's own cache keys also
+carry a non-default solver or judge profile, since their replay skips the inference inside them. A callable
+has no stable hash: a profile with its own `replay_arguments` needs its own name, and a new one when the
+formatter changes.
 
 ## Environments
 

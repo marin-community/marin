@@ -3,7 +3,7 @@
 
 """The model client: the one owner of retries, holds and backoff, in front of any ``Provider``.
 
-A solver trial is charged as failed only on positive evidence that the model itself ran out: generation sustained up to
+A solver trial is charged as failed only on positive evidence that the model itself ran out: generation sustained past
 the bound, or a recognised context-limit rejection. Anything the fleet, the relay, the transport or local admission may
 have caused is unavailable evidence: no failed trial is recorded, and the stage waits, restarts or holds as for an
 outage. When in doubt it is not the model's fault, because a fleet fault scored against the model corrupts solve rates
@@ -14,15 +14,20 @@ A ``Provider`` streams one request, reporting admission and each payload to the 
 ``ModelRequestRejected`` for another rejection a retry cannot fix. Every other failure (408, 429, any 5xx, a 404 ``no
 route for model``, no endpoint, a refused connection or a full local pool, a stall, a cut, malformed or aborted
 stream) is waited out with backoff, polling while the provider reports no workers, for ``unavailable_wait``; then
-``ModelUnavailable``. A failure after the attempt generated text, other than a stall, restarts that window. Silence,
-including a stall inside an open tool call, is never evidence about the model.
+``ModelUnavailable``. The first failure of a call after its attempt generated text, other than a stall, restarts that
+window; later ones count against it, so repeated partial answers cannot hold a call open. A health read is bounded by
+the window and its expiry is unknown availability. Silence, including a stall inside an open tool call, is never
+evidence about the model.
 
-``generation_timeout`` bounds the seconds a call spends generating: from the first generated token of each attempt,
-adding the call's completed segments, so neither admission nor an earlier fault counts. A token past the bound ends the
-call as ``GenerationTimedOut`` unless the provider reports its pool empty at that moment.
+Progress is a payload carrying nonempty generated text (``progressed``); the bound, stall detection and the window
+renewal all use it. ``generation_timeout`` bounds the seconds a call spends generating: from the first generated token
+of each attempt, adding the call's completed segments, so neither admission nor an earlier fault counts. Crossing the
+bound is not itself evidence: the call ends as ``GenerationTimedOut`` only when the same stream delivers progress again
+``CONFIRMATION_INTERVAL`` after its first progress past the bound, with no finish, abort, cut or stall in between.
 """
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -49,6 +54,11 @@ RETRYABLE_STATUSES = frozenset({408, 429})
 """HTTP statuses below 500 that a retry can cure: a timeout or rate limiting. Every 5xx is an outage too."""
 TOKEN_LIMIT_FIELDS = ("max_tokens", "max_completion_tokens")
 REASON_LIMIT = 300
+CONFIRMATION_INTERVAL = 1.0
+"""Seconds after its first progress past the generation bound that a stream must progress again to end the call there.
+A dead worker produces nothing, and each hop forwards the bytes it holds at once, so a dead stream's buffered tail
+arrives as one burst within a few round trips and then ends, cuts or stalls. A live stream progresses every decode step
+(tens of milliseconds), so confirming costs about a second of the 60-second turn margin."""
 
 
 class AttemptOutcome(StrEnum):
@@ -164,10 +174,21 @@ class _BoundReached(Exception):
     pass
 
 
+def progressed(chunk: Mapping[str, Any]) -> bool:
+    """Whether a chat-completions chunk carries nonempty generated text: content, reasoning (vLLM's ``reasoning``), a
+    function name or an argument fragment. A role, an index, an id or an empty string is an envelope."""
+    deltas = [choice.get("delta") or {} for choice in chunk.get("choices") or ()]
+    calls = [call.get("function") or {} for delta in deltas for call in delta.get("tool_calls") or ()]
+    return any(delta.get("content") or delta.get("reasoning") for delta in deltas) or any(
+        function.get("name") or function.get("arguments") for function in calls
+    )
+
+
 class Progress:
     """One attempt as its provider reports it: ``admit`` when the server answers, ``event`` for each ``data:`` payload.
 
-    ``event`` raises past the call's generation bound; a provider lets that propagate and abandons the stream.
+    ``event`` raises once generation past the call's bound is confirmed; a provider lets that propagate and abandons the
+    stream.
     """
 
     def __init__(self, clock: Callable[[], float], remaining: float | None) -> None:
@@ -176,22 +197,32 @@ class Progress:
         self.admitted: float | None = None
         self.first_token: float | None = None
         self.last_token: float | None = None
+        self.past_bound: float | None = None
 
     def admit(self) -> None:
         if self.admitted is None:
             self.admitted = self.clock()
 
-    def event(self, payload: str, generated: bool) -> None:
-        """Record ``payload``; ``generated`` says it carries generated text, which is the only evidence of progress."""
+    def event(self, payload: str) -> bool:
+        """Record a JSON ``payload`` and return whether it is progress, the only evidence a stream is generating."""
         self.admit()
         self.events.append(payload)
-        if not generated:
-            return
+        chunk = json.loads(payload)
+        if not progressed(chunk):
+            return False
         self.last_token = now = self.clock()
         if self.first_token is None:
             self.first_token = now
-        if self.remaining is not None and now - self.first_token >= self.remaining:
+        if self.remaining is None or now - self.first_token < self.remaining:
+            return True
+        # A finishing chunk ends the stream: its finish reason, an abort included, decides the attempt, not the bound.
+        if any(choice.get("finish_reason") for choice in chunk.get("choices") or ()):
+            return True
+        if self.past_bound is None:
+            self.past_bound = now
+        elif now - self.past_bound >= CONFIRMATION_INTERVAL:
             raise _BoundReached
+        return True
 
     def generated(self) -> float:
         """Seconds from the attempt's first generated token to its last."""
@@ -203,9 +234,9 @@ class Progress:
 class Provider(Protocol):
     """Where and how a model is reached; ``GlmProvider`` is the library default. Subclass it.
 
-    ``stream`` sends one chat-completions ``body`` (every field but the streaming options), reports to ``progress`` and
-    raises ``AttemptFailed`` on failure. ``no_workers`` is True only on positive evidence that the service has no
-    workers for ``model``; the default has none.
+    ``stream`` sends one chat-completions ``body`` (every field but the streaming options), reports each payload to
+    ``progress``, times stalls by the payloads it says progressed, and raises ``AttemptFailed`` on failure.
+    ``no_workers`` is True only on positive evidence that the service has no workers for ``model``; the default has none.
     """
 
     @property
@@ -217,11 +248,12 @@ class Provider(Protocol):
 
 
 class _Call:
-    """A logical call's attempts, availability window and seconds generated by its completed segments."""
+    """A logical call's attempts, availability window (renewed once) and seconds its completed segments generated."""
 
     def __init__(self, retry: RetryPolicy, clock: Callable[[], float]) -> None:
         self.retry, self.clock, self.started, self.generated = retry, clock, clock(), 0.0
         self.attempts: list[Attempt] = []
+        self.renewable = True
         self.restart()
 
     def restart(self) -> None:
@@ -333,9 +365,7 @@ class ModelClient:
             try:
                 result = await self.provider.stream(body, progress)
             except _BoundReached as reached:
-                if not await self.provider.no_workers():
-                    raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
-                failure = AttemptFailed(AttemptOutcome.ABORTED, "generation bound reached on a pool with no workers")
+                raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
             except AttemptFailed as error:
                 failure = error
             outcome, status, detail = (
@@ -366,14 +396,21 @@ class ModelClient:
         Raises:
             ModelUnavailable: The window closed first.
         """
-        if progress.first_token is not None and failure.outcome is not AttemptOutcome.STALLED:
+        if call.renewable and progress.first_token is not None and failure.outcome is not AttemptOutcome.STALLED:
+            call.renewable = False
             call.restart()  # the attempt generated text before it was cut, so the provider was serving
         backoff = call.backoff
         delay = max(backoff.next_interval(), failure.retry_after)
         waited = False
         while (remaining := call.remaining()) > 0:
             if waited:
-                if not await self.provider.no_workers():
+                try:
+                    empty = await asyncio.wait_for(self.provider.no_workers(), remaining)
+                except TimeoutError:
+                    empty = False  # a health read that outlasts the window is unknown availability
+                if call.remaining() <= 0:
+                    break
+                if not empty:
                     return
                 delay = backoff.next_interval()
             wait = min(delay, remaining)
