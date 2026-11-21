@@ -79,7 +79,11 @@ def find_free_port() -> int:
 
 @contextmanager
 def reserve_free_port(start: int) -> Iterator[int]:
-    """Reserve a port in the sequential scan range until the context exits."""
+    """Hold an Iris lock for a free port until the context exits.
+
+    The probe socket closes before yielding so the tunnel can bind. The lock
+    coordinates Iris callers; it does not keep the port bound.
+    """
     for port in range(start, start + 1000):
         lock = Path(f"/tmp/iris/port_{port}")
         try:
