@@ -29,7 +29,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
-from taskforge.effects.log import JsonlSink, Record, Sink, Status
+from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
 JOURNAL_FORMAT = 2
@@ -230,6 +230,9 @@ class CheckpointSink(Sink):
         events = journal.events() if journal else b""
         try:
             records = self.local.start(events)
+            Owners(records)  # owner references, pairing and continuity, before anything is claimed
+        except UnsupportedFormat:
+            raise
         except LogFailure as error:
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)

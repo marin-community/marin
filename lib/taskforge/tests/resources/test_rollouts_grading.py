@@ -43,7 +43,7 @@ from verifyit.spec import NumericSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
-from taskforge.effects.log import EventLog
+from taskforge.effects.log import EventLog, Opened
 from taskforge.harness.protocol import ToolResult as ToolReply
 from taskforge.harness.tools.grade import GradeTool
 from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
@@ -232,14 +232,15 @@ print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/w
         requirements(image=None)
     )
     try:
-        install_env(ctx, env)
-        ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
-        await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))
-        await ctx.emit(WriteFile(PurePosixPath("/workspace/answer.py"), b"print(12)"))
-        await ctx.emit(WriteFile(PurePosixPath("/elsewhere/answer.py"), b"print(12)"))
-        settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-        tool = GradeTool("/workspace/task.json", {"shellsim": shellsim_factory()}, settings)
-        result = await tool(ctx, {"reply": "12", "files": [path]})
+        async with ctx.scope("author", Opened("author/0", env.fingerprint().digest)):
+            install_env(ctx, env)
+            ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
+            await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))
+            await ctx.emit(WriteFile(PurePosixPath("/workspace/answer.py"), b"print(12)"))
+            await ctx.emit(WriteFile(PurePosixPath("/elsewhere/answer.py"), b"print(12)"))
+            settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+            tool = GradeTool("/workspace/task.json", {"shellsim": shellsim_factory()}, settings)
+            result = await tool(ctx, {"reply": "12", "files": [path]})
         await ctx.drain()
     finally:
         await env.close()

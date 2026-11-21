@@ -8,8 +8,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from taskforge.effects.events import Event, Fingerprint, Resolved, ScopeEntered, ScopeExited
-from taskforge.effects.log import EventLog, Missing, cached
+from taskforge.effects.events import Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
+from taskforge.effects.issues import Unreproducible
+from taskforge.effects.log import Attempt, EventLog, Missing, Opened, Record, cached
 
 type Executor = Callable[..., Awaitable[object]]
 type Observer[E: Event[object]] = Callable[[E], Awaitable[None]]
@@ -32,6 +33,7 @@ class _Scope:
         self.observers: tuple[tuple[type[Event[object]], Observer[Event[object]]], ...] = ()
         self.observed: list[asyncio.Future[None]] = []
         """Observer runs this scope's events started; their failures are the scope's issues."""
+        self.attempt: Attempt | None = None
 
     def take(self) -> list[asyncio.Future[None]]:
         runs, self.observed = self.observed, []
@@ -63,8 +65,9 @@ class Context:
     def handle(self, etype: type[Event[object]], fn: Executor, resource: Resource | None = None) -> None:
         """Execute ``etype`` here as ``fn(event, resource)``, replayed under the resource's fingerprint.
 
-        An inner scope's handler wins. A re-executed resource's executor also receives ``recorded=``, the recorded
-        result or ``Missing``, and returns what the caller sees.
+        An inner scope's handler wins. A re-executed resource's executor also receives ``recorded=``, the outcome at
+        this request's position in the innermost opened scope's history (a result, ``Failed`` or ``Missing``), and
+        returns what the caller sees; an ``OSError`` it raises is recorded as ``Failed``.
         """
         self._chain.get()[-1].handlers += (_Handler(etype, fn, resource),)
 
@@ -73,37 +76,48 @@ class Context:
 
     def notify(self, event: Event[None]) -> None:
         """Record a diagnostic and start its observers without waiting for either."""
-        self._publish(event, self._chain.get())
+        self._publish(self._log.append(event), self._chain.get())
 
-    def _publish(self, event: Event[object], chain: tuple[_Scope, ...]) -> None:
-        # Starting eagerly numbers and indexes the record now, so the next emission already replays it. A task that
-        # publishes as it starts appends its own run first, so each run is appended to the live list once it exists.
-        recording = asyncio.Task(self._log.record(event), loop=asyncio.get_running_loop(), eager_start=True)
+    def _publish(self, record: Record, chain: tuple[_Scope, ...]) -> Record:
+        # The log numbered and indexed the record at dispatch. A task that publishes as it starts appends its own run
+        # first, so each run is appended to the live list once it exists.
+        recording = asyncio.Task(self._log.persist(), loop=asyncio.get_running_loop(), eager_start=True)
         self._recording.append(recording)
         for scope in chain:
             for etype, observer in scope.observers:
-                if isinstance(event, etype):
-                    run = asyncio.ensure_future(observer(event))
+                if isinstance(record.event, etype):
+                    run = asyncio.ensure_future(observer(record.event))
                     chain[-1].observed.append(run)
+        return record
 
     async def emit[T](self, event: Event[T]) -> T:
         chain = self._chain.get()
         handler = next((h for s in reversed(chain) for h in reversed(s.handlers) if isinstance(event, h.etype)), None)
         uses = () if handler is None or handler.resource is None else (handler.resource,)
         fingerprints = tuple(resource.fingerprint() for resource in uses)
-        self._publish(event, chain)
+        if handler is not None and not cached(fingerprints):
+            attempt = next((scope.attempt for scope in reversed(chain) if scope.attempt is not None), None)
+            if attempt is None:
+                raise RuntimeError(f"{type(event).__qualname__} is re-executed outside an opened environment scope")
+            request = self._publish(self._log.append(event, attempt=attempt.sequence), chain).sequence
+            try:
+                value = await handler.fn(event, *uses, recorded=self._log.recorded(request))
+            except OSError as error:
+                self._publish(self._log.append(failure(error), answers=request), chain)
+                raise
+            self._publish(self._log.append(Resolved(event, fingerprints, value), answers=request), chain)
+            return cast(T, value)
+        self._publish(self._log.append(event), chain)
         if handler is None:
             if event.result_type is not type(None):
                 raise RuntimeError(f"No executor for {type(event).__qualname__}")
             return cast(T, None)
         value = self._log.lookup(event, fingerprints)
-        replayed = cached(fingerprints) and not isinstance(value, Missing)
-        if not cached(fingerprints):
-            value = await handler.fn(event, *uses, recorded=value)
-        elif not replayed:
+        replayed = not isinstance(value, Missing)
+        if not replayed:
             value = await handler.fn(event, *uses)
         result = cast(T, value)
-        self._publish(Resolved(event, fingerprints, result, replayed), chain)
+        self._publish(self._log.append(Resolved(event, fingerprints, result, replayed)), chain)
         return result
 
     async def check(self) -> None:
@@ -111,15 +125,20 @@ class Context:
         await _join(self._chain.get()[-1].take)
 
     @asynccontextmanager
-    async def scope(self, name: str) -> AsyncIterator[None]:
+    async def scope(self, name: str, opens: Opened | None = None) -> AsyncIterator[None]:
+        """A task-local scope; with ``opens``, one physical attempt at that environment owner, whose clean exit before
+        the owner's recorded history ends is ``Unreproducible``."""
         owner = _Scope()
         chain = (*self._chain.get(), owner)
+        entered = self._publish(self._log.append(ScopeEntered(name), opened=opens), chain)
+        owner.attempt = None if opens is None else self._log.attempt(entered.sequence)
         token = self._chain.set(chain)
-        self._publish(ScopeEntered(name), chain)
         failed = True
         try:
             yield
             await _join(owner.take)
+            if owner.attempt is not None and owner.attempt.position < len(owner.attempt.history):
+                raise Unreproducible(f"{owner.attempt.owner} returned before its recorded history ended")
             failed = False
         finally:
             try:
@@ -127,7 +146,7 @@ class Context:
                 if failed:
                     for run in owner.observed:
                         run.cancel()
-                self._publish(ScopeExited(name, failed), chain)
+                self._publish(self._log.append(ScopeExited(name, failed)), chain)
                 await _join(owner.take, propagate=not failed)
             finally:
                 self._chain.reset(token)

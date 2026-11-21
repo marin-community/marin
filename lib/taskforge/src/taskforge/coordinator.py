@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.effects.events import LAUNCH_SCOPE, StageCompleted
+from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import Stopped, Submitted
@@ -123,7 +123,7 @@ async def run_workpiece(
     interrupted = False
     stage_attempts: dict[tuple[Stage, int], int] = {}
     try:
-        async with ctx.scope(LAUNCH_SCOPE):
+        async with ctx.scope("workpiece"):
             install(ctx, resources)
             wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
             while True:

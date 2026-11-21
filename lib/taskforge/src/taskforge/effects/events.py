@@ -10,6 +10,7 @@ occurrence. The kind, never the Python module or class name, is the recorded ``t
 the replay digest, so classes may move or be renamed freely. Changing a kind breaks every journal that recorded it.
 """
 
+import errno
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
@@ -116,8 +117,22 @@ class Retrying(Event[None]):
     cause: str
 
 
-LAUNCH_SCOPE = "workpiece"
-"""The root scope a launch enters first; its entry is where each launch begins in a recorded stream."""
+@dataclass(frozen=True, slots=True)
+class Failed(Event[None]):
+    """A re-executed request's handled failure: the ``OSError`` its caller saw, by errno name and text."""
+
+    kind = "effect.failed"
+    category: str
+    message: str
+
+    def error(self) -> OSError:
+        error = OSError(self.message)
+        error.errno = getattr(errno, self.category, None)
+        return error
+
+
+def failure(error: OSError) -> Failed:
+    return Failed(errno.errorcode.get(error.errno or 0, "OSError"), str(error))
 
 
 @dataclass(frozen=True, slots=True)

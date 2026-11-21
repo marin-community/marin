@@ -137,7 +137,7 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
         await env.close()
 
 
-async def test_environment_writes_binary_files_and_fingerprints_command_history(
+async def test_environment_writes_binary_files_and_runs_commands_under_its_definition(
     create_env: Callable[[], Awaitable[Env]],
 ) -> None:
     original = await create_env()
@@ -145,14 +145,12 @@ async def test_environment_writes_binary_files_and_fingerprints_command_history(
     path = PurePosixPath("/workspace/binary")
     data = b"\x00\xff\nquoted ' bytes"
     await write_file(WriteFile(path, data), original, notify=Notes())
-    after_write = original.fingerprint()
-    assert after_write != initial
     assert await read_file(ReadFile(path), original, notify=Notes()) == data
-    assert original.fingerprint() == after_write
     result = await run_command(RunCommand(COMMAND, 5), original, notify=Notes())
     assert (result.exit_code, result.stdout, result.stderr) == (7, "hello", "err")
     assert await original.read(OUTPUT) == b"changed"
-    assert original.fingerprint() != after_write
+    # Position in the owner's history, not a chain of effects, identifies what a replay reconstructs.
+    assert original.fingerprint() == initial
     await original.close()
     with pytest.raises(Restart):
         await original.run(COMMAND, timeout=5)
@@ -173,16 +171,14 @@ async def test_environment_writes_binary_files_and_fingerprints_command_history(
         (CommandOutcomeUnknown("reply lost"), Restart),
     ],
 )
-async def test_shellbox_failure_preserves_unresolved_history(
+async def test_shellbox_failure_is_classified_as_its_decision(
     failure: RuntimeError | TimeoutError, decision: type[Exception]
 ) -> None:
     machine = MemoryMachine()
     machine.failure = failure
     env = ShellboxEnv(machine, "image", AsyncExitStack())
-    before = env.fingerprint()
     with pytest.raises(decision):
         await env.run(COMMAND, timeout=5)
-    assert env.fingerprint() == before
 
 
 async def test_shellbox_unexpected_runtime_error_propagates_without_reclassification() -> None:
@@ -207,7 +203,6 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
     machine = MemoryMachine()
     machine.failure = failure
     env = ShellboxEnv(machine, "image", AsyncExitStack())
-    before = env.fingerprint()
     with pytest.raises(FileNotFoundError) as caught:
         if operation == "read":
             await read_file(ReadFile(OUTPUT), env, notify=Notes())
@@ -219,7 +214,6 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
     if operation != "run":
         assert caught.value.filename == str(OUTPUT)
     assert machine.calls == 1
-    assert env.fingerprint() == before
 
 
 async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:

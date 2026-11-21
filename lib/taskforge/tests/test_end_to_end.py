@@ -30,13 +30,14 @@ from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.runtime.resources import inline_resource
 
 from taskforge import checkpoint, driver
 from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal, read_journal
-from taskforge.config import TaskforgeConfig
+from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import Note, Resolved, StageCompleted, event_digest
+from taskforge.effects.events import Failed, Fingerprint, Note, ReplayPolicy, Resolved, StageCompleted, event_digest
 from taskforge.effects.issues import Hold, LogFailure, PublicationFailed, Restart, Superseded, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
@@ -89,8 +90,8 @@ def published_workpiece(destination: Path) -> Workpiece:
 
 
 class RecordingEnv(FakeEnv):
-    def __init__(self, commands: Mapping[str, FakeCommand], fail: bool) -> None:
-        super().__init__("workspace", commands)
+    def __init__(self, commands: Mapping[str, FakeCommand], fail: bool, image: str = "workspace") -> None:
+        super().__init__(image, commands)
         self.executed: list[str] = []
         self.fail = fail
 
@@ -103,8 +104,8 @@ class RecordingEnv(FakeEnv):
 
 
 class Envs(EnvFactory):
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
+    def __init__(self, *, fail: bool = False, image: str = "workspace") -> None:
+        self.fail, self.image = fail, image
         self.created: list[RecordingEnv] = []
         controls = (
             Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind.POSITIVE),
@@ -121,7 +122,7 @@ class Envs(EnvFactory):
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
-        env = RecordingEnv(self.commands, self.fail)
+        env = RecordingEnv(self.commands, self.fail, self.image)
         self.created.append(env)
         return env
 
@@ -723,15 +724,16 @@ async def test_a_collision_at_a_checkpoint_digest_exits_corrupt_and_publishes_no
     assert (head.chunks, head.status, head.workpiece) == ((), Status(), None)
 
 
-def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources) -> None:
-    """Each ``driver.one`` launch gets the next resources."""
+def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: WorkspaceHydration | None = None) -> None:
+    """Each ``driver.one`` launch gets the next resources, and ``workspace`` when given."""
     remaining = iter(attempts)
 
     @asynccontextmanager
     async def fake_runtime(
         policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield build_config(policy, {}), next(remaining)
+        config = build_config(policy, {})
+        yield (config if workspace is None else replace(config, workspace=workspace)), next(remaining)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
 
@@ -1342,8 +1344,8 @@ class DriftingEnvs(Envs):
     ``stamp`` is the given command result instead when one is scripted for the launch.
     """
 
-    def __init__(self, launch: int, stamp: FakeCommand | None = None) -> None:
-        super().__init__()
+    def __init__(self, launch: int, stamp: FakeCommand | None = None, *, image: str = "workspace") -> None:
+        super().__init__(image=image)
         self.launch, self.stamp = launch, stamp
 
     @override
@@ -1495,19 +1497,24 @@ async def test_resume_with_completed_solver_siblings_repeats_no_trial_or_model_c
     assert isinstance(resumed.rollouts.engine, SolverEngine) and resumed.rollouts.engine.started[0].endswith(":1:0")
 
 
-N3_JOURNAL = Path(__file__).parent / "fixtures" / "n3-held-drift.jsonl.gz"
+N4_JOURNAL = Path(__file__).parent / "fixtures" / "n4-held-drift.jsonl.gz"
 
 
-async def test_a_journal_written_by_the_n3_dispatch_resumes_without_repeated_model_calls(
+def rows(records: Sequence[Record]) -> list[Record]:
+    """Records without their wall times: events and the envelopes that link sandbox rows."""
+    return [replace(record, wall_time=0.0) for record in records]
+
+
+async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated_model_calls(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
-    """The fixture is the journal the n3 effect dispatch (e5ec5eba21) published for the held first launch of
-    ``held_after_stamp``. It pins the recorded events and replay keys across the dispatch rewrite. A deliberate change
-    to the author prompts, tool schemas or event identities invalidates it; delete it then rather than regenerate it."""
-    recorded = decode(gzip.decompress(N3_JOURNAL.read_bytes()))
+    """The fixture is the journal this dispatch published for the held first launch of ``held_after_stamp``. It pins
+    the recorded events, owner references and replay keys. A deliberate change to the author prompts, tool schemas,
+    event identities or envelopes invalidates it; regenerate it then from that first launch."""
+    recorded = decode(gzip.decompress(N4_JOURNAL.read_bytes()))
     await held_after_stamp(monkeypatch, driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert [record.event for record in history(destination)] == [record.event for record in recorded]
+    assert rows(history(destination)) == rows(recorded)
     served = [
         record.event.request
         for record in recorded
@@ -1522,31 +1529,66 @@ async def test_a_journal_written_by_the_n3_dispatch_resumes_without_repeated_mod
     assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
 
 
+N3_JOURNAL = Path(__file__).parent / "fixtures" / "n3-held-drift.jsonl.gz"
+
+
+async def test_a_journal_whose_sandbox_rows_name_no_owner_needs_migration_and_stays_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fixture is the journal the n3 dispatch (e5ec5eba21) published for the held first launch of
+    ``held_after_stamp``: its sandbox rows carry no owner references, so which machine owned each result is lost."""
+    events = gzip.decompress(N3_JOURNAL.read_bytes())
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    (destination / "chunks").mkdir(parents=True)
+    chunk = hashlib.sha256(events).hexdigest() + ".jsonl"
+    (destination / "chunks" / chunk).write_bytes(events)
+    workpiece = hashlib.sha256(b"{}").hexdigest() + ".json"
+    head = Head(2, "n3", (chunk,), len(events), Status(terminal=Terminal.HELD), workpiece, 0.0)
+    (destination / HEAD).write_bytes(HEAD_JSON.dump_json(head))
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    driver_args.resume_held = True
+    with pytest.raises(LogFailure, match="without an owner") as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
+    assert tree(destination) == before
+
+
 STATUS = PurePosixPath("/workspace/status.txt")
 TASK = PurePosixPath("/workspace/task.json")
 
 
 class ProducerEnv(RecordingEnv):
-    """A guest process rewrites ``path`` before each read of it: read ``n`` finds ``contents[n]`` there, and the last
-    content stays. ``physical`` holds the bytes each read of ``path`` returned from the machine."""
+    """A guest process rewrites ``path`` before each read of it: read ``n`` finds ``contents[n]`` there, or no file
+    for None, and the last content stays. ``physical`` holds what each read of ``path`` found (None: missing)."""
 
-    def __init__(self, commands: Mapping[str, FakeCommand], path: PurePosixPath, contents: Sequence[bytes]) -> None:
+    def __init__(
+        self, commands: Mapping[str, FakeCommand], path: PurePosixPath, contents: Sequence[bytes | None]
+    ) -> None:
         super().__init__(commands, fail=False)
         self.path, self.contents = path, contents
-        self.physical: list[bytes] = []
+        self.physical: list[bytes | None] = []
 
     @override
     async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes:
         if path == self.path and len(self.physical) < len(self.contents):
-            self.files[path] = self.contents[len(self.physical)]
-        data = await super().read(path, offset=offset, limit=limit)
+            if (content := self.contents[len(self.physical)]) is None:
+                self.files.pop(path, None)
+            else:
+                self.files[path] = content
+        try:
+            data = await super().read(path, offset=offset, limit=limit)
+        except FileNotFoundError:
+            if path == self.path:
+                self.physical.append(None)
+            raise
         if path == self.path:
             self.physical.append(data)
         return data
 
 
 class ProducerEnvs(Envs):
-    def __init__(self, path: PurePosixPath, contents: Sequence[bytes], draft: bytes | None = None) -> None:
+    def __init__(self, path: PurePosixPath, contents: Sequence[bytes | None], draft: bytes | None = None) -> None:
         super().__init__()
         self.path, self.contents = path, contents
         self.producers: list[ProducerEnv] = []
@@ -1562,10 +1604,10 @@ class ProducerEnvs(Envs):
         return env
 
 
-def polling_script() -> tuple[Completion, ...]:
-    """Read a status file twice, then continue the ordinary script."""
+def polling_script(polls: int = 2) -> tuple[Completion, ...]:
+    """Read a status file ``polls`` times, then continue the ordinary script."""
     poll = {"path": str(STATUS)}
-    return (call("read_file", poll, "poll-1"), call("read_file", poll, "poll-2"), *script()[1:])
+    return (*(call("read_file", poll, f"poll-{n}") for n in range(1, polls + 1)), *script()[1:])
 
 
 def last_message(request: InferenceRequest) -> str:
@@ -1591,26 +1633,33 @@ async def test_a_first_launch_returns_each_physical_read_of_a_file_that_changes(
     assert executions(first) == (len(polling_script()), 2)
 
 
-N3_POLLS = Path(__file__).parent / "fixtures" / "n3-held-polls.jsonl.gz"
+N4_POLLS = Path(__file__).parent / "fixtures" / "n4-held-polls.jsonl.gz"
+
+
+async def held_after_polls(
+    monkeypatch: pytest.MonkeyPatch, driver_args: Namespace, contents: Sequence[bytes | None]
+) -> list[InferenceRequest]:
+    """Hold the polling author on the call after its last poll; return the requests it was served."""
+    held = FakeInference((*polling_script(len(contents))[: len(contents)], Hold("relay unavailable")))
+    serve(monkeypatch, replace(resources(ProducerEnvs(STATUS, contents), ()), inference=held))
+    await driver.one(driver_args)
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    return held.requests[:-1]
 
 
 # Review 2026-11-20: a journal recording pending then done served done to both polls and paid for two turns again.
-async def test_a_journal_from_n3_with_two_polls_serves_each_poll_its_own_recording(
+async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The fixture is the journal the n3 dispatch (6675b2b38b) published for this test's held first launch: two
-    identical reads of a file a guest process changed, then a hold on the third model call. Delete it, rather than
-    regenerate it, when a deliberate change to the author prompts, tool schemas or event identities invalidates it."""
-    held = FakeInference((*polling_script()[:2], Hold("relay unavailable")))
-    serve(monkeypatch, replace(resources(ProducerEnvs(STATUS, (b"pending", b"done")), ()), inference=held))
-    await driver.one(driver_args)
+    """The fixture is the journal this dispatch published for this test's held first launch: two identical reads of a
+    file a guest process changed, then a hold on the third model call. Regenerate it from that launch when a
+    deliberate change to the author prompts, tool schemas, event identities or envelopes invalidates it."""
+    served = await held_after_polls(monkeypatch, driver_args, (b"pending", b"done"))
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    recorded = decode(gzip.decompress(N3_POLLS.read_bytes()))
-    assert [record.event for record in history(destination)] == [record.event for record in recorded]
+    assert rows(history(destination)) == rows(decode(gzip.decompress(N4_POLLS.read_bytes())))
     envs = ProducerEnvs(STATUS, (b"pending", b"done"))
-    resumed = replace(resources(envs, ()), inference=ServedOnce(polling_script()[2:], held.requests[:-1]))
+    resumed = replace(resources(envs, ()), inference=ServedOnce(polling_script()[2:], served))
     serve(monkeypatch, resumed)
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
     await driver.one(driver_args)
     workpiece = published_workpiece(destination)
     assert envs.producers[0].physical == [b"pending", b"done"]
@@ -1620,6 +1669,260 @@ async def test_a_journal_from_n3_with_two_polls_serves_each_poll_its_own_recordi
     assert last_message(resumed.inference.requests[0]) == "done"  # the first new turn read the second poll
     assert workpiece.terminal is Terminal.ACCEPTED and workpiece.submission is not None
     assert not [r for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
+
+
+MISSING = f"File operation failed: [Errno {errno.ENOENT}] No such file: '{STATUS}'"
+
+
+# Review 2026-11-20: a failed read had no recorded outcome, so a later success on the same path took its place.
+@pytest.mark.parametrize(
+    ("recorded", "resumed", "served"),
+    [
+        ((None, b"B"), (None, b"B"), [MISSING, "B"]),
+        ((None, b"B"), (b"B", b"B"), None),
+        ((None, b"B", b"C"), (None, b"B", b"C"), [MISSING, "B", "C"]),
+    ],
+    ids=["missing again", "present where it was missing", "missing, then two contents"],
+)
+async def test_a_handled_read_failure_is_verified_and_served_in_its_place(
+    driver_args: Namespace,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded: tuple[bytes | None, ...],
+    resumed: tuple[bytes | None, ...],
+    served: list[str] | None,
+) -> None:
+    paid = await held_after_polls(monkeypatch, driver_args, recorded)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert sum(isinstance(r.event, Failed) for r in history(destination)) == 1
+    envs = ProducerEnvs(STATUS, resumed)
+    resources_ = replace(resources(envs, ()), inference=ServedOnce(polling_script(len(recorded))[len(recorded) :], paid))
+    serve(monkeypatch, resources_)
+    await driver.one(driver_args)
+    workpiece = published_workpiece(destination)
+    assert isinstance(resources_.inference, ServedOnce) and not resources_.inference.repeated
+    polls = [f"poll-{n}" for n in range(1, len(recorded) + 1)]
+    if served is None:
+        assert workpiece.terminal is Terminal.HELD and "Unreproducible" in str(workpiece.decisions[-1])
+        assert "failed with ENOENT when recorded but succeeded here" in str(workpiece.decisions[-1])
+        assert envs.producers[0].physical == [b"B"] and not resources_.inference.requests
+        return
+    assert envs.producers[0].physical == list(resumed)
+    assert [tool_output(workpiece, poll) for poll in polls] == served
+    assert last_message(resources_.inference.requests[0]) == served[-1]
+    assert len(resources_.inference.requests) == len(script()) - 1
+    assert workpiece.terminal is Terminal.ACCEPTED
+    assert not [r for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
+
+
+class LosesWriteDraft(DriftingEnvs):
+    """The first machine loses the reply to ``write-draft``, as Shellbox's ``CommandOutcomeUnknown`` does."""
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        env = await super().create(requirements)
+        if len(self.created) == 1:
+            env.commands = {**env.commands, "write-draft": Restart("command outcome unknown: reply lost")}
+        return env
+
+
+# Review 2026-11-20: a stage restarted in-process rebuilt from the launch's history only, so a PID drifting earlier in
+# the stage changed the next requests and the two turns completed before the restart were paid for again (7 calls).
+async def test_an_in_process_stage_restart_replays_the_turns_its_first_attempt_completed(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envs = LosesWriteDraft(1)
+    first = resources(envs, drifting_script())
+    serve(monkeypatch, first)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert workpiece.terminal is Terminal.ACCEPTED
+    assert executions(first) == (len(drifting_script()), 2)
+    assert [env.executed for env in envs.created] == [["stamp", "write-draft"], ["stamp", "write-draft"]]
+    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"  # the first machine's PID
+    assert tool_output(workpiece, "read") == "ok"
+
+
+class DiesOnFirstStamp(DriftingEnvs):
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        env = await super().create(requirements)
+        if len(self.created) == 1:
+            env.commands = {**env.commands, "stamp": Restart("command outcome unknown: reply lost")}
+        return env
+
+
+# Design review 2026-11-20: an attempt that dies re-applying a known prefix must not shorten what the next one verifies.
+@pytest.mark.parametrize("stamp", [None, stamped(0, b"other")], ids=["same state", "other state"])
+async def test_a_reconstruction_that_dies_inside_the_known_prefix_leaves_the_rest_to_verify(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, stamp: FakeCommand | None
+) -> None:
+    served = await held_after_stamp(monkeypatch, driver_args)
+    envs = DiesOnFirstStamp(2, stamp)
+    resumed = replace(resources(envs, ()), inference=ServedOnce(drifting_script()[3:], served))
+    serve(monkeypatch, resumed)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
+    assert envs.created[0].executed == ["stamp"]
+    if stamp is not None:  # the third attempt still compared the read the first one recorded
+        assert workpiece.terminal is Terminal.HELD and "env.read_file read other bytes" in str(workpiece.decisions[-1])
+        assert envs.created[1].executed == ["stamp"] and executions(resumed) == (0, 0)
+        return
+    assert workpiece.terminal is Terminal.ACCEPTED and executions(resumed) == (2, 2)
+    assert envs.created[1].executed == ["stamp", "write-draft"]
+    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
+    assert tool_output(workpiece, "read") == "ok"
+
+
+# Design review 2026-11-20: a resumed session must reproduce its recorded requests in order and to their end.
+@pytest.mark.parametrize("change", ["hydration", "context window", "sandbox definition"])
+async def test_a_resumed_author_that_leaves_its_recorded_session_holds_without_new_work(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    served = await held_after_stamp(monkeypatch, driver_args)
+    envs = DriftingEnvs(2) if change != "sandbox definition" else DriftingEnvs(2, image="upgraded")
+    resumed = replace(resources(envs, ()), inference=ServedOnce(drifting_script()[3:], served))
+    if change == "hydration":  # a caller's rendered workspace that is not deterministic
+        serve(monkeypatch, resumed, workspace=WorkspaceHydration((inline_resource("notes.txt", b"launch 2"),)))
+    else:
+        serve(monkeypatch, resumed)
+    if change == "context window":  # the session now stops after its first command, before its recorded end
+        overlay = json.loads(Path(driver_args.policy).read_text())
+        Path(driver_args.policy).write_text(json.dumps({**overlay, "author.context_tokens": 1}))
+    await driver.one(driver_args)
+    workpiece = published_workpiece(destination := Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    reason = str(workpiece.decisions[-1])
+    assert workpiece.terminal is Terminal.HELD and "Unreproducible" in reason and workpiece.submission is None
+    assert executions(resumed) == (0, 0)
+    expected = {
+        "hydration": ("another request at position 0", []),
+        "context window": ("returned before its recorded history ended", ["stamp"]),
+        "sandbox definition": ("another sandbox definition", []),
+    }[change]
+    assert expected[0] in reason and envs.created[0].executed == expected[1]
+    if change != "context window":
+        assert not envs.created[0].files  # held before the hydration write
+    assert sum(isinstance(r.event, StageCompleted) and r.event.terminal is Terminal.HELD for r in history(destination))
+
+
+ROLE = "cat /fixture/role"
+
+
+class RoleEnvs(Envs):
+    """Adversary machine ``k``, created in roster order after the author's, prints ``outputs[k]`` for ``ROLE``.
+
+    Its command waits for the machine before it in ``order`` to finish, or with ``overlap``, for its sibling to start.
+    """
+
+    def __init__(self, outputs: Sequence[str], order: Sequence[int], overlap: bool) -> None:
+        super().__init__()
+        self.outputs, self.order = outputs, order
+        self.finished = [asyncio.Event() for _ in outputs]
+        self.barrier = asyncio.Barrier(len(outputs)) if overlap else None
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        env = await super().create(requirements)
+        if (index := len(self.created) - 2) < 0:
+            return env  # the author's machine
+        result = FakeCommand(CommandResult(0, self.outputs[index], "", 0, False), {})
+        env.commands = {**env.commands, ROLE: result}
+        envs, run = self, env.run
+
+        async def ordered(cmd: str, *, timeout: float) -> CommandResult:
+            if cmd == ROLE and envs.barrier is not None:
+                await envs.barrier.wait()
+            elif cmd == ROLE and (turn := envs.order.index(index)):
+                await envs.finished[envs.order[turn - 1]].wait()
+            try:
+                return await run(cmd, timeout=timeout)
+            finally:
+                envs.finished[index].set()
+
+        env.run = ordered  # type: ignore[method-assign]
+        return env
+
+
+class Adversaries(InferenceClient):
+    """Each adversary runs ``ROLE``, then reports no findings, or with ``hold`` fails on that turn instead."""
+
+    def __init__(self, hold: bool, served: Sequence[InferenceRequest] = ()) -> None:
+        self.hold, self.served = hold, {event_digest(request) for request in served}
+        self.requests: list[InferenceRequest] = []
+
+    @override
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("inference", "adversary", ReplayPolicy.CACHE)
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        if event_digest(request) in self.served:
+            raise AssertionError("an already-resolved adversary turn reached inference")
+        self.requests.append(request)
+        if not any(message.role == Role.ASSISTANT for message in request.conversation):
+            return call("shell", {"command": ROLE, "timeout": 5}, "role")
+        if self.hold:
+            raise Hold("relay unavailable")
+        return call("report", {"findings": []}, "report")
+
+    def outputs(self) -> list[tuple[str, str]]:
+        """(adversary name, the role output its report turn saw), for each report turn."""
+        return sorted(
+            (
+                next(name for name in ("alpha", "beta") if name in request.conversation[1].content),
+                json.loads(request.conversation[-1].content)["stdout"],
+            )
+            for request in self.requests
+            if any(message.role == Role.ASSISTANT for message in request.conversation)
+        )
+
+
+# Review 2026-11-20: siblings whose readiness reversed on resume swapped outputs, and overlapping identical results held.
+@pytest.mark.parametrize(
+    ("roster", "recorded", "fresh", "overlap"),
+    [
+        (("alpha", "beta"), ("alpha 1\n", "beta 1\n"), ("alpha 2\n", "beta 2\n"), False),
+        (("alpha", "alpha"), ("first 1\n", "second 1\n"), ("first 2\n", "second 2\n"), False),
+        (("alpha", "beta"), ("/workspace\n", "/workspace\n"), ("/workspace\n", "/workspace\n"), True),
+    ],
+    ids=["reversed readiness", "duplicate roster names", "identical results overlapping"],
+)
+async def test_each_adversary_replays_its_own_machine_history_whatever_its_siblings_do(
+    driver_args: Namespace,
+    monkeypatch: pytest.MonkeyPatch,
+    roster: tuple[str, str],
+    recorded: tuple[str, str],
+    fresh: tuple[str, str],
+    overlap: bool,
+) -> None:
+    overlay = json.loads(Path(driver_args.policy).read_text())
+    Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": list(roster)}))
+    held = Adversaries(hold=True)
+    first = replace(resources(RoleEnvs(recorded, (0, 1), overlap), script()), role_inference={"adversary": held})
+    serve(monkeypatch, first)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published_workpiece(destination).terminal is Terminal.HELD  # both searches failed on their report turn
+    # Same-named searches send one identical first turn, which the cache resolves once for both.
+    assert len(held.requests) == (3 if roster[0] == roster[1] else 4)
+    resolved = [r.event.request for r in history(destination) if isinstance(r.event, Resolved)]
+    adversary = Adversaries(
+        hold=False, served=[r for r in resolved if isinstance(r, InferenceRequest) and r in held.requests]
+    )
+    envs = RoleEnvs(fresh, (1, 0), overlap)
+    resumed = replace(resources(envs, ()), inference=ServedOnce((), ()), role_inference={"adversary": adversary})
+    serve(monkeypatch, resumed)
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    await driver.one(driver_args)
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert executions(resumed) == (0, 0) and len(adversary.requests) == 2  # only the two report turns are new
+    assert [env.executed for env in envs.created[1:]] == [[ROLE], [ROLE]]
+    names = [roster[0], roster[1]]
+    assert adversary.outputs() == sorted(zip(names, recorded, strict=True)) == held.outputs()
+    notes = [r for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
+    assert len(notes) == (0 if recorded == fresh else 2)
 
 
 MALFORMED = b'{"malformed"'

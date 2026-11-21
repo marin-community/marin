@@ -12,6 +12,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.effects.log import Opened
 from taskforge.lowering import host_requirements, lowering_settings, requirements
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.llm import Message, Role
@@ -97,7 +98,8 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     )
     env = await resources.envs.create(host_requirements(requested))
     try:
-        async with ctx.scope("author"):
+        # A round has one author visit, which a stage restart reconstructs on its fresh machine.
+        async with ctx.scope("author", Opened(f"author/{workpiece.round}", env.fingerprint().digest)):
             install_env(ctx, env)
             files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
             writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]

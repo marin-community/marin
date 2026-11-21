@@ -136,8 +136,8 @@ class Shifting:
         return self.current
 
 
-@pytest.mark.parametrize("policy", [ReplayPolicy.CACHE, ReplayPolicy.REEXECUTE])
-async def test_replay_keys_on_the_event_and_the_resource_fingerprint_at_emission(policy: ReplayPolicy) -> None:
+async def test_cached_replay_keys_on_the_event_and_the_resource_fingerprint_at_emission() -> None:
+    policy = ReplayPolicy.CACHE
     fingerprint = Fingerprint("fake", "before", policy)
     previous = EventLog()
     await previous.record(Resolved(Number(1), (fingerprint,), 10))
@@ -147,11 +147,10 @@ async def test_replay_keys_on_the_event_and_the_resource_fingerprint_at_emission
     resource = Shifting(fingerprint)
     executed: list[tuple[int, int | Missing]] = []
 
-    async def execute(event: Number, obj: Shifting, *, recorded: int | Missing = Missing()) -> int:
+    async def execute(event: Number, obj: Shifting) -> int:
         assert obj is resource
-        executed.append((event.value, recorded))
-        # A re-executed effect keeps its recorded result.
-        return recorded if isinstance(recorded, int) else event.value * 100
+        executed.append((event.value, Missing()))
+        return event.value * 100
 
     ctx.handle(Number, execute, resource)
     async with ctx.scope("replay"):
@@ -161,9 +160,8 @@ async def test_replay_keys_on_the_event_and_the_resource_fingerprint_at_emission
         resource.current = fingerprint
         assert await ctx.emit(Number(1)) == 10
     await ctx.drain()
-    cached = policy == ReplayPolicy.CACHE
-    assert executed == ([(1, Missing())] if cached else [(2, 20), (1, Missing()), (1, 10)])
-    assert [r.event for r in log.records if isinstance(r.event, Resolved)][-1].replayed == cached
+    assert executed == [(1, Missing())]
+    assert [r.event for r in log.records if isinstance(r.event, Resolved)][-1].replayed
     assert isinstance(log.lookup(Number(9), (fingerprint,)), Missing)
 
 

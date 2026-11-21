@@ -36,9 +36,9 @@ from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
-from taskforge.effects.events import Event, Fingerprint, Note, ReplayPolicy, digest
+from taskforge.effects.events import Event, Failed, Fingerprint, Note, ReplayPolicy, digest, failure
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, Unreproducible, describe_exception
-from taskforge.effects.log import Missing
+from taskforge.effects.log import Missing, Outcome
 from taskforge.resources.execution import Notify, retry_effect
 from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
 
@@ -87,8 +87,6 @@ class Env(Protocol):
     async def write(self, path: PurePosixPath, data: bytes) -> None: ...
     async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None: ...
     async def close(self) -> None: ...
-    def record_command(self, cmd: str, timeout: float, result: CommandResult) -> None: ...
-    def record_write(self, path: PurePosixPath, data: bytes) -> None: ...
 
 
 class EnvFactory(Protocol):
@@ -100,8 +98,7 @@ def _stable(result: CommandResult) -> tuple[str, ...]:
 
 
 class RecordedEnv(Env):
-    """An environment whose fingerprint chains every command and write; the executors below call ``record_command``
-    and ``record_write`` with each effect's published result."""
+    """An environment fingerprinted by its initial sandbox definition, which an attempt's open row records."""
 
     def __init__(self, image: str) -> None:
         self.digest = digest((image,))
@@ -110,12 +107,6 @@ class RecordedEnv(Env):
     @override
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("env", self.digest, ReplayPolicy.REEXECUTE)
-
-    def record_command(self, cmd: str, timeout: float, result: CommandResult) -> None:
-        self.digest = digest((self.digest, "command", cmd, float(timeout), *_stable(result)))
-
-    def record_write(self, path: PurePosixPath, data: bytes) -> None:
-        self.digest = digest((self.digest, "write", str(path), digest(data)))
 
     @override
     async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None:
@@ -303,25 +294,28 @@ class ShellboxEnvFactory(EnvFactory):
 
 
 async def reexecuted[T](
-    event: Event[T], recorded: T | Missing, operation: Callable[[], Awaitable[T]], notify: Notify
+    event: Event[T], recorded: Outcome[T], operation: Callable[[], Awaitable[T]], notify: Notify
 ) -> T:
-    """Apply ``event`` to this machine and return its recorded result when it has one.
+    """Apply ``event`` to this machine and return its recorded outcome when it has one.
 
-    A resumed stage rebuilds its machine by re-executing the recorded history. Serving a command's recorded output
-    keeps the model's view, and every later request, equal to the recording when only its text drifts (a PID, a
-    timestamp); that drift, the truncation flag included, is noted at INFO by digest. A failure where the recording
-    succeeded, a changed exit status, and a read of other bytes cannot rebuild that history and hold.
+    A resumed attempt rebuilds its machine by re-executing its owner's history in order. Serving a command's recorded
+    output keeps the model's view, and every later request, equal to the recording when only its text drifts (a PID, a
+    timestamp); that drift, the truncation flag included, is noted at INFO by digest. A handled failure is served again
+    when the guest fails with the same errno; any other change of outcome, exit status or bytes holds.
     """
     try:
         fresh = await retry_effect(event, operation, notify)
     except OSError as error:
         if isinstance(recorded, Missing):
             raise
-        raise Unreproducible(
-            f"{event.kind} succeeded when recorded but failed here: {describe_exception(error)}"
-        ) from error
+        if isinstance(recorded, Failed) and failure(error).category == recorded.category:
+            raise recorded.error() from error
+        was = f"failed with {recorded.category}" if isinstance(recorded, Failed) else "succeeded"
+        raise Unreproducible(f"{event.kind} {was} when recorded but failed here: {describe_exception(error)}") from error
     if isinstance(recorded, Missing):
         return fresh
+    if isinstance(recorded, Failed):
+        raise Unreproducible(f"{event.kind} failed with {recorded.category} when recorded but succeeded here")
     if isinstance(fresh, CommandResult) and isinstance(recorded, CommandResult):
         if recorded.exit_code != fresh.exit_code:
             raise Unreproducible(f"{event.kind} exited {recorded.exit_code} when recorded but {fresh.exit_code} here")
@@ -337,25 +331,20 @@ async def reexecuted[T](
 
 
 async def run_command(
-    event: RunCommand, env: Env, *, notify: Notify, recorded: CommandResult | Missing = Missing()
+    event: RunCommand, env: Env, *, notify: Notify, recorded: Outcome[CommandResult] = Missing()
 ) -> CommandResult:
-    result = await reexecuted(event, recorded, lambda: env.run(event.cmd, timeout=event.timeout), notify)
-    env.record_command(event.cmd, event.timeout, result)
-    return result
+    return await reexecuted(event, recorded, lambda: env.run(event.cmd, timeout=event.timeout), notify)
 
 
-async def write_file(event: WriteFile, env: Env, *, notify: Notify, recorded: None | Missing = Missing()) -> None:
+async def write_file(event: WriteFile, env: Env, *, notify: Notify, recorded: Outcome[None] = Missing()) -> None:
     await reexecuted(event, recorded, lambda: env.write(event.path, event.data), notify)
-    env.record_write(event.path, event.data)
 
 
-async def write_files(event: WriteFiles, env: Env, *, notify: Notify, recorded: None | Missing = Missing()) -> None:
+async def write_files(event: WriteFiles, env: Env, *, notify: Notify, recorded: Outcome[None] = Missing()) -> None:
     await reexecuted(event, recorded, lambda: env.write_many(event.files), notify)
-    for path, data in event.files:
-        env.record_write(path, data)
 
 
-async def read_file(event: ReadFile, env: Env, *, notify: Notify, recorded: bytes | Missing = Missing()) -> bytes:
+async def read_file(event: ReadFile, env: Env, *, notify: Notify, recorded: Outcome[bytes] = Missing()) -> bytes:
     return await reexecuted(
         event, recorded, lambda: env.read(event.path, offset=event.offset, limit=event.limit), notify
     )

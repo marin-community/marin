@@ -6,32 +6,29 @@ import base64
 import json
 import os
 import time
-from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from itertools import islice
 from pathlib import Path
-from typing import Any, Protocol, cast, override
+from typing import Any, NamedTuple, Protocol, cast, override
 
 from pydantic import TypeAdapter
 
 from taskforge.effects.events import (
     BYTES_TAG,
     EVENT_TYPES,
-    LAUNCH_SCOPE,
     MAPPING_TAG,
     Event,
+    Failed,
     Fingerprint,
     ReplayPolicy,
     Resolved,
     Retrying,
-    ScopeEntered,
     StageCompleted,
-    digest,
     event_digest,
     json_value,
 )
-from taskforge.effects.issues import LogFailure, Unreproducible
+from taskforge.effects.issues import LogFailure, Unreproducible, UnsupportedFormat
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
@@ -41,11 +38,32 @@ class Missing:
     """A replay miss, distinct from a resolved None."""
 
 
+type Outcome[T] = T | Failed | Missing
+"""What a re-executed request's position recorded: its result, its handled failure, or nothing yet."""
+
+
+@dataclass(frozen=True, slots=True)
+class Opened:
+    """An environment-open row's envelope: the logical owner its physical attempt reconstructs, and its sandbox."""
+
+    owner: str
+    definition: str
+
+
 @dataclass(frozen=True, slots=True)
 class Record:
+    """A journal row. Its envelope, outside the event's identity, links sandbox rows: ``opened`` on an environment-open
+    row, whose sequence names the attempt; ``attempt`` on a request, naming that row; ``answers`` on an outcome."""
+
     sequence: int
     wall_time: float
     event: Event[object]
+    opened: Opened | None = None
+    attempt: int | None = None
+    answers: int | None = None
+
+
+ENVELOPE = ("opened", "attempt", "answers")
 
 
 class Sink(Protocol):
@@ -120,7 +138,10 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
             if first_seen is not None:
                 # Digests first decoded in this row are the newest insertions; earlier ones are never revisited.
                 first_seen.update((key, row["sequence"]) for key in islice(reversed(known), len(known) - before))
-            decoded.append(Record(row["sequence"], row["wall_time"], event))
+            opened = Opened(**row["opened"]) if "opened" in row else None
+            decoded.append(
+                Record(row["sequence"], row["wall_time"], event, opened, row.get("attempt"), row.get("answers"))
+            )
     except (TypeError, ValueError, KeyError) as error:
         raise LogFailure("Cannot decode the event stream") from error
     if any(record.sequence != index for index, record in enumerate(decoded, 1)):
@@ -152,9 +173,11 @@ class JsonlSink(Sink):
                     "sequence": record.sequence,
                     "wall_time": record.wall_time,
                     "event": _encode(record.event, record.sequence, self._known),
+                    **{name: value for name in ENVELOPE if (value := getattr(record, name)) is not None},
                 },
                 sort_keys=True,
                 allow_nan=True,
+                default=asdict,
             )
             + "\n"
         ).encode()
@@ -204,44 +227,76 @@ def cached(fingerprints: tuple[Fingerprint, ...]) -> bool:
     return all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
 
 
-def occurrences(records: Sequence[Record]) -> tuple[dict[Key, list[object]], frozenset[Key]]:
-    """Each re-executed key's results in dispatch order, and the keys whose results cannot be told apart.
+class Step(NamedTuple):
+    request: str
+    outcome: object  # a result or ``Failed``; ``Missing`` at a frontier, a request whose outcome is unknown
 
-    A launch re-dispatches the occurrences recorded before it, so its n-th result for a key replaces the n-th one.
-    Sibling machines with one history share keys. When two requests with one digest were in flight at once in a
-    launch and a key's results there differ, the record does not say whose result is whose: the key is ambiguous.
-    """
-    history: dict[Key, list[object]] = {}
-    ambiguous: set[Key] = set()
-    launches: list[list[Event[object]]] = [[]]
-    for record in records:
-        if isinstance(record.event, ScopeEntered) and record.event.name == LAUNCH_SCOPE:
-            launches.append([])
-        launches[-1].append(record.event)
-    for launch in launches:
-        position, inflight, overlapped, results = Counter[Key](), Counter[str](), set[str](), dict[Key, set[str]]()
-        for event in launch:
-            if not isinstance(event, Resolved):
-                inflight[request := event_digest(event)] += 1
-                if inflight[request] > 1:
-                    overlapped.add(request)
-                continue
-            inflight[request := event_digest(event.request)] -= 1
-            if not cached(event.fingerprints):
-                key = request, event.fingerprints
-                history.setdefault(key, [])[position[key] : position[key] + 1] = [event.value]  # replace or append
-                position[key] += 1
-                results.setdefault(key, set()).add(digest(event.value))
-        ambiguous.update(key for key, seen in results.items() if key[0] in overlapped and len(seen) > 1)
-    return history, frozenset(ambiguous)
+
+@dataclass(slots=True)
+class Attempt:
+    """One physical machine reconstructing an owner from an immutable view of the steps established before it."""
+
+    sequence: int
+    owner: str
+    history: tuple[Step, ...]
+    position: int = 0
+    unanswered: int | None = None
+
+
+class Owners:
+    """Each logical owner's established steps: the longest prefix that its attempts, recorded or live, verified."""
+
+    def __init__(self, records: Sequence[Record] = ()) -> None:
+        self.definitions: dict[str, str] = {}
+        self.steps: dict[str, list[Step]] = {}
+        self.attempts: dict[int, Attempt] = {}
+        self.requests: dict[int, tuple[Attempt, int, str]] = {}
+        for record in records:
+            self.add(record)
+
+    def add(self, record: Record) -> None:
+        """Place ``record`` in its owner's history; a request's position is its dispatch order in its attempt.
+
+        Raises:
+            LogFailure: the row breaks owner references, request/outcome pairing or one-request-at-a-time continuity.
+            UnsupportedFormat: a re-executed outcome names no request row, as before owner references.
+        """
+        event = record.event
+        if record.opened is not None:
+            owner, definition = record.opened.owner, record.opened.definition
+            if self.definitions.setdefault(owner, definition) != definition:
+                raise LogFailure(f"Row {record.sequence} reopens {owner} on another sandbox definition")
+            self.attempts[record.sequence] = Attempt(record.sequence, owner, tuple(self.steps.setdefault(owner, [])))
+        elif record.attempt is not None:
+            attempt = self.attempts.get(record.attempt)
+            if attempt is None or attempt.unanswered is not None:
+                raise LogFailure(f"Row {record.sequence} names no attempt {record.attempt} ready for a request")
+            steps = self.steps[attempt.owner]
+            if attempt.position == len(steps):
+                steps.append(Step(event_digest(event), Missing()))
+            self.requests[record.sequence] = (attempt, attempt.position, event_digest(event))
+            attempt.position, attempt.unanswered = attempt.position + 1, record.sequence
+        elif record.answers is not None:
+            attempt, position, request = self.requests.get(record.answers, (None, 0, ""))
+            outcome = event.value if isinstance(event, Resolved) else event
+            matched = isinstance(event, Failed) or (
+                isinstance(event, Resolved) and event_digest(event.request) == request
+            )
+            if attempt is None or attempt.unanswered != record.answers or not matched:
+                raise LogFailure(f"Row {record.sequence} answers no unanswered request {record.answers}")
+            attempt.unanswered = None
+            steps = self.steps[attempt.owner]
+            if steps[position] == (request, Missing()):  # an established outcome stays; a frontier gets one
+                steps[position] = Step(request, outcome)
+        elif isinstance(event, Resolved) and not cached(event.fingerprints):
+            raise UnsupportedFormat(f"Row {record.sequence} re-executed {event.request.kind} without an owner")
 
 
 class EventLog:
     """Replay source and ordered stream; retain records even when persistence fails.
 
-    A cached effect replays the last result recorded for its key, in any launch. A re-executed effect is matched to
-    the next unconsumed occurrence of its key in the launches before this one; this launch's own results only advance
-    that position, so an effect beyond the recorded history gets its fresh result.
+    A cached effect replays the last result recorded for its key, in any launch. A re-executed effect replays by
+    position: its owner's established history says what the request at each position was and how it ended.
     """
 
     def __init__(
@@ -263,8 +318,7 @@ class EventLog:
             for record in replay_from
             if isinstance(record.event, Resolved) and cached(record.event.fingerprints) and replayable(record.event)
         }
-        self._history, self._ambiguous = occurrences(replay_from)
-        self._consumed: Counter[Key] = Counter()
+        self._owners = Owners(replay_from)
         self._attempts = attempts
         self._lock = asyncio.Lock()
 
@@ -272,22 +326,38 @@ class EventLog:
     def records(self) -> tuple[Record, ...]:
         return tuple(self._records)
 
-    async def record(self, event: Event[object]) -> None:
+    def append(
+        self,
+        event: Event[object],
+        *,
+        opened: Opened | None = None,
+        attempt: int | None = None,
+        answers: int | None = None,
+    ) -> Record:
+        """Number and place ``event`` at dispatch, for ``persist`` to write; an owner reopened on another sandbox
+        definition is ``Unreproducible``."""
         try:
             json.dumps(_encode(event), sort_keys=True, allow_nan=True)
         except (TypeError, ValueError) as error:
             raise LogFailure("Cannot encode the event") from error
-        record = Record(len(self._records) + 1, time.time(), event)
+        if opened is not None and self._owners.definitions.get(opened.owner, opened.definition) != opened.definition:
+            raise Unreproducible(f"{opened.owner} was recorded on another sandbox definition")
+        record = Record(len(self._records) + 1, time.time(), event, opened, attempt, answers)
+        self._owners.add(record)
         self._records.append(record)
-        if isinstance(event, Resolved):
-            key = event_digest(event.request), event.fingerprints
-            if not cached(event.fingerprints):
-                self._consumed[key] += 1
-            elif self._replayable(event):
-                self._index[key] = event.value
+        if isinstance(event, Resolved) and cached(event.fingerprints) and self._replayable(event):
+            self._index[event_digest(event.request), event.fingerprints] = event.value
+        if self._sink is not None:
+            self._pending.append(record)
+        return record
+
+    async def record(self, event: Event[object]) -> None:
+        self.append(event)
+        await self.persist()
+
+    async def persist(self) -> None:
         if self._sink is None:
             return
-        self._pending.append(record)
         async with self._lock:
             batch = tuple(self._pending)
             if not batch:
@@ -304,18 +374,21 @@ class EventLog:
             raise LogFailure("Persistence requires at least one attempt")
 
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
-        """The result to replay for ``event``; for a re-executed effect, its next historical occurrence.
+        """The cached result to replay for ``event``."""
+        return cast(T | Missing, self._index.get((event_digest(event), fingerprints), Missing()))
 
-        Raises:
-            Unreproducible: sibling machines recorded different results for this re-executed key at once.
-        """
-        key = event_digest(event), fingerprints
-        if cached(fingerprints):
-            return cast(T | Missing, self._index.get(key, Missing()))
-        if key in self._ambiguous:
-            raise Unreproducible(f"{event.kind} was recorded with different results on sibling machines at once")
-        recorded = self._history.get(key, [])
-        return cast(T, recorded[self._consumed[key]]) if self._consumed[key] < len(recorded) else Missing()
+    def attempt(self, sequence: int) -> Attempt:
+        return self._owners.attempts[sequence]
+
+    def recorded(self, request: int) -> object:
+        """The outcome recorded at request row ``request``'s position, ``Missing`` at a frontier or beyond; another
+        request recorded there is ``Unreproducible``."""
+        attempt, position, digest = self._owners.requests[request]
+        if position >= len(attempt.history):
+            return Missing()
+        if attempt.history[position].request != digest:
+            raise Unreproducible(f"{attempt.owner} issued another request at position {position} than was recorded")
+        return attempt.history[position].outcome
 
 
 @dataclass(frozen=True, slots=True)

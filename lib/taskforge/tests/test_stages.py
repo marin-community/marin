@@ -376,7 +376,7 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder")
+    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder", 0)
     await ctx.drain()
     assert harness.session is not None
     prompt = harness.session.messages[-1].content
@@ -471,7 +471,7 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         harness = RecordingHarness(outcome)
         harness.run = run
         setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
-        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
         if failures == 2:
             assert (result.status, result.limit, result.findings) == (
                 AdversaryStatus.EXHAUSTED,
@@ -699,7 +699,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     )
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": client})
-    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
     assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
     (note,) = result.reasons
     assert "ran out" in note and "context window" in note
