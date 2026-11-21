@@ -918,7 +918,7 @@ def _validate_locality_groups(
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
-    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
+    CLUSTER pods do. Legacy GVISOR pods need the CNI-created interface and routes
     for cluster egress.
     """
     if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
@@ -1248,8 +1248,8 @@ def _build_pod_manifest(
         **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
-    # gVisor isolates the whole pod via a node RuntimeClass; the container
-    # securityContext stays at the DEFAULT posture (see _security_context).
+    # The RuntimeClass isolates the pod; the container keeps the DEFAULT
+    # securityContext (see _security_context).
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
         spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
