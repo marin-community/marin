@@ -615,7 +615,7 @@ def judge_endpoint(monkeypatch, request):
             }
             status = 200
             if request.param == "slow":
-                time.sleep(1)
+                time.sleep(0.3)
             elif len(requests) == 1:
                 if request.param == "http-503":
                     body = {"error": {"message": "fixture unavailable"}}
@@ -776,7 +776,7 @@ async def test_driver_grading_deadline_covers_the_judge_budget(tmp_path, run_con
         tmp_path, [{"prompt": "slow judge", "judge_budget": 3.0}], converter=convert_judged_row
     )
     judge_requests, connection, _ = judge_endpoint
-    limits = run_config.limits.model_copy(update={"verifier_timeout": 0.5})
+    limits = run_config.limits.model_copy(update={"verifier_timeout": 0.1})
     config = run_config.model_copy(
         update={
             "limits": limits,
