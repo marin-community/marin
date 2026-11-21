@@ -700,7 +700,9 @@ async def test_a_cold_driver_resume_buys_no_second_review(
     0.0 in the trial summaries, and task labels written z then a reloaded a then z in the manifest, so a cold resume
     paid the reviewer again. Everything the reviewer sees is rendered canonically."""
     envs = Envs()
+    check = inline_resource("check.sh", b"exit 0\n").model_copy(update={"mode": "0755", "mtime_ns": 1_700_000_000_123})
     task = arithmetic_task().model_copy(update={"labels": {"z": "last", "a": "first"}})
+    task = task.model_copy(update={"resources": task.resources.model_copy(update={"verifier": (check,)})})
     draft = envs.commands["write-draft"]
     written = {**draft.writes, PurePosixPath("/workspace/task.json"): task.model_dump_json().encode()}
     envs.commands["write-draft"] = replace(draft, writes=written)
@@ -749,14 +751,16 @@ def test_a_file_s_mode_and_build_inputs_are_evidence() -> None:
     the task carries is shown with the signature the task review signs, build inputs included."""
     script = inline_resource("check.sh", b"exit 0\n")
 
-    def index(mode: str, dockerfile: bytes) -> Evidence:
+    def index(mode: str, dockerfile: bytes, mtime: int | None = None) -> Evidence:
         submission = with_resources(verifier=())
         task = submission.task
         build = DockerBuildContext(files=(inline_resource("Dockerfile", dockerfile),))
         environment = task.environment_requirements.model_copy(
             update={"docker_build": build, "command_semantics": CommandSemantics.LINUX_PROCESS}
         )
-        resources = task.resources.model_copy(update={"verifier": (script.model_copy(update={"mode": mode}),)})
+        resources = task.resources.model_copy(
+            update={"verifier": (script.model_copy(update={"mode": mode, "mtime_ns": mtime}),)}
+        )
         task = task.model_copy(update={"resources": resources, "environment_requirements": environment})
         return evidence(replace(submission, task=task), TRIALS, OUTPUT_CHARS)
 
@@ -764,6 +768,14 @@ def test_a_file_s_mode_and_build_inputs_are_evidence() -> None:
     assert len({plain.version, executable.version, rebased.version}) == 3
     assert '"mode": "0755"' in executable.sources["resource/verifier/check.sh"].summary
     assert rebased.sources["resource/actor_build/Dockerfile"].parts == ("FROM b:1",)
+    # Coordinator question C: mtime is the task's declared ``mtime_ns``, never a checkout's stat, so it is the same live,
+    # on a fresh resume and in another process (the cold driver and two-process tests carry one); changing it is a
+    # change to the task, as its digest says.
+    touched = index("0644", b"FROM a:1", 1_700_000_000_123)
+    assert (
+        touched.version != plain.version
+        and '"mtime_ns": 1700000000123' in touched.sources["resource/verifier/check.sh"].summary
+    )
 
 
 async def listing(index: Evidence) -> list[str]:
