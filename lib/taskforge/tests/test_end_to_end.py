@@ -325,7 +325,7 @@ class RevisionFaults(SolverEngine):
         return replace(solved, grade=grade)
 
 
-# Review 2026-11-21 (follow-up 1): a faulted revision resubmitted the same task and controls with new notes; review
+# Review 2026-11-21: a faulted revision resubmitted the same task and controls with new notes; review
 # chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
 # the faulted round's notes shipped as a clean acceptance. At the shipped default the restore is confirmed on its own
 # round (index 0), not the faulted one of the same digest.
@@ -531,7 +531,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         policy=str(overlay),
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
-        resume_held=False,  # and no probe: an in-process caller built before the flag existed (follow-up 2)
+        resume_held=False,  # and no probe: an in-process caller built before the flag existed
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -785,7 +785,7 @@ async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
         ("events.jsonl.parts/000000000001.jsonl", 1, "format 1"),
         ("status.json", 1, "format 1"),
         ("workpiece.json", 1, "format 1"),
-        # The version gate refuses every format but its own: the n3 reader, at format 2, refuses this one's heads.
+        # The version gate refuses every format but its own: the format-2 reader refuses this one's heads.
         (HEAD, checkpoint.JOURNAL_FORMAT - 1, f"format {checkpoint.JOURNAL_FORMAT - 1}"),
         (HEAD, checkpoint.JOURNAL_FORMAT + 1, f"format {checkpoint.JOURNAL_FORMAT + 1}"),
     ],
@@ -1121,7 +1121,7 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
     ]
 
 
-# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. Follow-up 1 added
+# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. The faults also include
 # empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
@@ -1139,7 +1139,7 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
     assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
 
 
-# Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged (a known limit of the
+# Review 2026-11-21: a confirmed tail from an exited worker is still charged (a known limit of the
 # client-side bound, which consults no pool state).
 @pytest.mark.parametrize("tail", [False, True], ids=["live", "exited-worker-tail"])
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
@@ -1158,7 +1158,7 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
-# Review 2026-11-21, follow-up 2: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
+# Review 2026-11-21: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
 # (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
 async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2097,8 +2097,8 @@ def rows(records: Sequence[Record]) -> list[Record]:
 
 
 FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
-"""The policy digest the n3 and n4 fixtures recorded. The default policy has since gained the two adversary briefs,
-which changes only that digest in an author-only journal."""
+"""The policy digest the ``N3_JOURNAL`` and ``N4_JOURNAL`` fixtures recorded. The default policy has since gained the
+two adversary briefs, which changes only that digest in an author-only journal."""
 
 
 def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
@@ -2161,7 +2161,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
     return b"".join(lines[:cut])
 
 
-# Review 2026-11-20: the n3 reader claimed a positional journal under the same format number, ignoring its owners.
+# Review 2026-11-20: the format-2 reader claimed a positional journal under the same format number, ignoring its owners.
 @pytest.mark.parametrize(
     "events",
     [
@@ -2174,7 +2174,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
 async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
 ) -> None:
-    """The n3 fixture is the journal the n3 dispatch (e5ec5eba21) published for the held first launch of
+    """``N3_JOURNAL`` is the journal the format-2 dispatch (e5ec5eba21) published for the held first launch of
     ``held_after_stamp``; the positional one is ``N4_JOURNAL``, which an earlier revision published as format 2."""
     destination = plant(driver_args, events, 2)
     before = tree(destination)
@@ -2202,9 +2202,10 @@ N8_AUTHOR_HELD = Path(__file__).parent / "fixtures" / "n8-author-revision-held-r
 N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restored-root.json.gz"
 
 
-# Review 2026-11-21: n7 resumed this n6 head, accepted a fresh empty adversary report and published a round-0 Accept
-# without the author repair, dropping the finding both verifier grades had confirmed and the Modify it caused.
-# Review 2026-11-21 (n9): a format-4 root held in author revision re-held forever at its first positional write, and
+# Review 2026-11-21: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
+# a round-0 Accept without the author repair, dropping the finding both verifier grades had confirmed and the Modify
+# it caused.
+# Review 2026-11-21: a format-4 root held in author revision re-held forever at its first positional write, and
 # an accepted one lost its restoration provenance on read.
 @pytest.mark.parametrize("resume_held", [True, False])
 @pytest.mark.parametrize(
@@ -2215,9 +2216,9 @@ N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restore
 async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool, fixture: Path, found: int
 ) -> None:
-    """Each fixture is a whole published root. The n6 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
+    """Each fixture is a whole published root. The format-3 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
     holds a finding both verifier grades confirmed, Modify, and the author held in round 1 (73 rows); format 4
-    changed what an adversary finding means. The n8 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
+    changed what an adversary finding means. The format-4 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
     trial solved and every later one failed) are 58 rows held at the round-1 author's first model call and 96 rows
     accepted on the restored too-easy baseline; format 5 changed what a decision, a fallback and a solver slot
     mean."""
@@ -2233,7 +2234,8 @@ async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_unt
 
 
 def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(proposal: TaskProposal) -> None:
-    """Adding an optional persisted field changes no existing bytes: the n8 author hydrated these exact bytes."""
+    """Adding an optional persisted field changes no existing bytes: the author that recorded ``N8_AUTHOR_HELD``
+    hydrated these exact bytes."""
     root = json.loads(gzip.decompress(N8_AUTHOR_HELD.read_bytes()))
     records = decode("".join(root[f"chunks/{name}"] for name in json.loads(root[HEAD])["chunks"]).encode())
     (written,) = {
@@ -2250,7 +2252,7 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert "fallback" not in snapshot and not {"restore", "fallback", "awaits"} & keys
 
 
-# Review 2026-11-21 (follow-up 1): an empty restore and None serialised alike, so an invalid direct restore became an
+# Review 2026-11-21: an empty restore and None serialised alike, so an invalid direct restore became an
 # ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
 def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
     stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY, 0)
@@ -2279,7 +2281,7 @@ def restoring_bundle(engine: Engine) -> Resources:
     return replace(bundle, rollouts=replace(bundle.rollouts, engine=engine))
 
 
-# Review 2026-11-21 (follow-up 2): after the coordinator returned the accepted fallback, an OSError on runtime exit
+# Review 2026-11-21: after the coordinator returned the accepted fallback, an OSError on runtime exit
 # published HELD with the faulted revision's notes and [Modify, Incomplete], though the journal recorded the Accept.
 async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpiece(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -2329,7 +2331,7 @@ async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
     assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
 
 
-# Review 2026-11-21 (follow-up 1): a disk-full error persisting the final review held the run from the initial
+# Review 2026-11-21: a disk-full error persisting the final review held the run from the initial
 # workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -3251,7 +3253,7 @@ def drafting_script() -> tuple[Completion, ...]:
     return (*(call("write_file", {"path": str(p), "content": d.decode()}, p.name) for p, d in drafts), *script()[2:])
 
 
-# Review 2026-11-21 (inherited follow-up): with guest /tmp unwritable, four-file hydration journalled EACCES for
+# Review 2026-11-21: with guest /tmp unwritable, four-file hydration journalled EACCES for
 # Taskforge's own archive as the caller's failure, and every resume on a healthy sandbox held as unreproducible.
 async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3324,7 +3326,7 @@ async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_una
     assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2
 
 
-# Review 2026-11-21 (n10 finding 1): an ordinary launch entered a human hold and replayed its refusals as if an
+# Review 2026-11-21: an ordinary launch entered a human hold and replayed its refusals as if an
 # operator had passed --resume-held. Only the exact typed marker that an outage-only hold records is entered again,
 # and the refusal replay rule always sees the operator's own flag.
 @pytest.mark.parametrize(
@@ -3357,7 +3359,7 @@ async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators
     assert entered == [False] * (1 + enters)
     held_wp = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
     assert held_wp.terminal is Terminal.HELD and driver.deferred(held_wp) is enters
-    positional = Incomplete(("held",), "incomplete")  # the n9 constructor: the second argument is still the kind
+    positional = Incomplete(("held",), "incomplete")  # the earlier constructor: the second argument is still the kind
     assert (positional.kind, positional.awaits) == ("incomplete", None)
     assert not driver.deferred(held_wp.with_(decisions=(*held_wp.decisions, positional)))
 
@@ -3424,7 +3426,7 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     assert "submitted=4 completed=4 failed=0 skipped=0" in out
 
 
-# Review 2026-11-21 (n10 finding 5): with one child slot, a code proposal never started while a health read was
+# Review 2026-11-21: with one child slot, a code proposal never started while a health read was
 # pending. The run reads health in the background and keeps reaping and launching children while it waits.
 async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
@@ -3442,7 +3444,7 @@ async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
     assert launches == ["first", "code", "first"]
 
 
-# Review 2026-11-21 (n10 finding 5): without a health route, a probe child that crashed, was superseded, needed a
+# Review 2026-11-21: without a health route, a probe child that crashed, was superseded, needed a
 # migration or found a corrupt journal reopened the queue. Only a probe that is not deferred again releases the
 # rest; any other exit is reported as usual and another parked proposal probes after the interval.
 @pytest.mark.parametrize("code", [1, driver.SUPERSEDED, driver.NEEDS_MIGRATION, driver.CORRUPT])
@@ -3467,7 +3469,7 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
 
 
-# Review 2026-11-21 (n10 follow-up 2, finding 5): an ordinary child exiting 10 was counted a success. Only the
+# Review 2026-11-21: an ordinary child exiting 10 was counted a success. Only the
 # designated probe's 10 is an answer; from any other child it is the unexpected exit it is.
 async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
     driver_args: Namespace,
@@ -3483,7 +3485,7 @@ async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
     assert f"OUTCOME failed exit={driver.ANSWERED} proposal={tmp_path / 'code.proposal.json'}" in capsys.readouterr().out
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 3): a probe whose grade replayed a cached read exited 0 having made no
+# Review 2026-11-21: a probe whose grade replayed a cached read exited 0 having made no
 # decision-model call, and released every parked proposal. A probe that proves no fresh answer stays a probe: each
 # parked proposal probes in turn after the interval, and none is released on its evidence.
 async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
@@ -3496,7 +3498,7 @@ async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
     assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 3): after one healthy reading the first released child deferred again,
+# Review 2026-11-21: after one healthy reading the first released child deferred again,
 # and the rest of the released queue kept starting while the next health read was pending. A fresh outage parks
 # everything not yet started: no decision-model child launches while health is being read.
 async def test_a_fresh_outage_parks_released_work_that_has_not_started(
@@ -3556,7 +3558,7 @@ def probe_bundles(
     ]
 
 
-# Review 2026-11-21 (n10 follow-up 1, finding 3): what a probe child reports. Only a probe that resolved a decision-
+# Review 2026-11-21: what a probe child reports. Only a probe that resolved a decision-
 # model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
 async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -3584,10 +3586,10 @@ CLEF_BODIES: Mapping[str, httpx.Response] = {
 }
 
 
-# Review 2026-11-21 (n10 follow-up 4): through the default reader, one 200 followed only by an off-scale level, an
+# Review 2026-11-21: through the default reader, one 200 followed only by an off-scale level, an
 # HTTP 403 or a 200 without answers left the earlier answer standing, and the probe released its peers with the root
 # manual. Every dispatched read that fails records the failure, whatever its class; only the caller's own cancellation
-# of a read in flight leaves the earlier answer standing. Follow-up 5: a read whose own request deadline expired, its
+# of a read in flight leaves the earlier answer standing. A read whose own request deadline expired, its
 # waiter then cancelled during the HTTP cleanup, ended in CancelledError and was taken for the caller's leaving; a
 # cancellation is the caller's only while neither the request's deadline nor the overall wait has expired.
 @pytest.mark.parametrize(
@@ -3642,7 +3644,7 @@ async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
     assert held.terminal is Terminal.HELD and not driver.deferred(held) and sent == ["12", second]
 
 
-# Review 2026-11-21 (n10 follow-ups 2 and 3): a probe that read 200 and then met a 503 ended on a human hold yet
+# Review 2026-11-21: a probe that read 200 and then met a 503 ended on a human hold yet
 # answered, first in general and then when the 503's retry row landed before the 200's resolution in one loop turn;
 # and three answers followed by a fourth dispatched read that expired in flight left no row at all and answered. The
 # reader's last physical outcome in the probe's process decides: a later failure, or a dispatched read unanswered at

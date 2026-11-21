@@ -324,7 +324,7 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     assert isinstance(decision, Accept)
 
 
-# Review 2026-11-21 (follow-up 2): a revision that ran into the context window, through a provider rejection or the
+# Review 2026-11-21: a revision that ran into the context window, through a provider rejection or the
 # harness's own prompt-window cutoff, kept the last report but typed the search end as reported with the generic note.
 # A voluntary finish is the control.
 @pytest.mark.parametrize(
@@ -475,11 +475,12 @@ async def test_a_named_strategy_prompt_runs_any_roster_name(
 
 
 N6_POLICY = Path(__file__).parent / "fixtures" / "n6-policy"
-"""n6's (40d35b8bcc) complete default policy directory, which predates ``adversary.max_revisions``."""
+"""The complete default policy directory of 40d35b8bcc, which predates ``adversary.max_revisions``."""
 
 
-# Review 2026-11-21: a complete n6 policy directory, loaded on its own rather than overlaid on the defaults, rendered
-# the adversary prompt and spent one inference before raising KeyError('adversary.max_revisions').
+# Review 2026-11-21: a complete policy directory written before the revision budget, loaded on its own rather than
+# overlaid on the defaults, rendered the adversary prompt and spent one inference before raising
+# KeyError('adversary.max_revisions').
 @pytest.mark.parametrize("roster", [["adversary"], ["custom"]])
 async def test_a_complete_policy_without_a_revision_budget_fails_at_wiring_and_its_prompt_overlaid_on_defaults_runs(
     workpiece: Workpiece, roster: list[str]
@@ -508,7 +509,7 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
 
     The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
     grades and the adversary's hydration replay; only the adversary's model turns are new. Its solver fake recorded no
-    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence (n11)."""
+    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence."""
     recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
     served = [
         r.event.request
