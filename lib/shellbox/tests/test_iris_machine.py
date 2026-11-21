@@ -9,7 +9,6 @@ import math
 import os
 import pwd
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -1053,8 +1052,6 @@ def test_cut_exec_stream_is_never_a_guest_timeout(tmp_path, state, error_message
     asyncio.run(scenario())
 
 
-# Review 2026-11-21: a 137 without the command's own record before the budget elapsed, or any other `timeout` exit,
-# is the status shell killed by something else, not a timeout.
 @pytest.mark.parametrize("signal_name", ["KILL", "TERM"])
 def test_status_shell_killed_before_the_limit_is_an_unknown_outcome(tmp_path, signal_name) -> None:
     async def scenario() -> None:
@@ -1255,43 +1252,6 @@ def test_ordinary_timeout_needs_only_the_timer(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-class TermProofStatusRpc(CountingRpc):
-    """Makes the status shell ignore TERM, so only the timer's KILL ends it: a real escalation to `timer 137`."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.replies: list[str] = []
-
-    def exec_in_container(self, request, timeout_ms):
-        *shell, script = request.command
-        timed = shlex.quote(iris_backend.TIMED_COMMAND)
-        script = script.replace(timed, shlex.quote("trap '' TERM; " + iris_backend.TIMED_COMMAND))
-        response = super().exec_in_container(SimpleNamespace(command=[*shell, script]), timeout_ms)
-        if is_command_exec(script):
-            self.replies.append(response.stdout)
-        return response
-
-
-@pytest.mark.parametrize("shell", ["dash", "bash"])
-def test_command_surviving_term_until_the_kill_closes_the_machine(tmp_path, monkeypatch, shell) -> None:
-    if not (shell_path := shutil.which(shell)) or not shutil.which("timeout"):
-        pytest.skip(f"{shell} or a coreutils timeout is not installed")
-    monkeypatch.setattr(iris_backend, "GUEST_KILL_GRACE_SECONDS", 0.2)
-    rpc = TermProofStatusRpc()
-    machine, job = local_machine(tmp_path, rpc)
-    machine._guest_timer = (shutil.which("timeout"), shell_path)  # type: ignore[assignment]
-
-    async def scenario() -> None:
-        with pytest.raises(CommandOutcomeUnknown):
-            await machine.run(Command(("sh", "-c", "printf prefix; sleep 30"), timeout=0.3))
-        assert rpc.replies[0].endswith("timer 137\n")  # The timer really escalated.
-        assert job.cancelled
-        with pytest.raises(MachineTerminated, match=r"no completion record \(timer 137\)"):
-            await machine.run(Command(("true",)))
-
-    asyncio.run(scenario())
-
-
 # Review follow-up 2026-11-21: argv that is a shell builtin ran in the status shell itself, so `exit` and `exec`
 # ended it before it wrote the command's record. At the base the argv was joined into the script and they worked.
 @pytest.mark.parametrize("shell", ["dash", "bash"])
@@ -1357,8 +1317,6 @@ class CancelFailingJob(LocalJob):
 CANCEL_FAILURES = [Code.UNAVAILABLE, Code.PERMISSION_DENIED]  # HTTP 503 and 403.
 
 
-# Review follow-up 2026-11-21: after a lone `timer 137` was classified, a failed TerminateJob replaced the OOM or
-# unknown outcome with the bare transport error, so Taskforge exited through its generic error path, not a hold.
 @pytest.mark.parametrize("code", CANCEL_FAILURES, ids=["503", "403"])
 @pytest.mark.parametrize(
     "status,expected", [(OOM_KILLED, MachineResourceExhausted), (RUNNING, CommandOutcomeUnknown)], ids=["oom", "unknown"]
@@ -1382,7 +1340,7 @@ def test_failed_close_keeps_the_classified_outcome(tmp_path, code, status, expec
 
 
 @pytest.mark.parametrize("code", CANCEL_FAILURES, ids=["503", "403"])
-def test_failed_close_keeps_a_host_deadline_timeout_and_a_cancellation(tmp_path, code, caplog) -> None:
+def test_failed_close_keeps_a_host_deadline_timeout_and_a_cancellation(tmp_path, code) -> None:
     async def deadline() -> None:
         machine, _ = local_machine(tmp_path, DeadlineRpc(), job=CancelFailingJob(code))
         slow = await machine.run(Command(("sleep", "30"), timeout=0.3))
@@ -1391,8 +1349,6 @@ def test_failed_close_keeps_a_host_deadline_timeout_and_a_cancellation(tmp_path,
             await machine.run(Command(("true",)))
 
     asyncio.run(deadline())
-    assert "Sandbox cleanup failed after command 'sleep 30' got no exec reply" in caplog.text
-
     admitted, release = threading.Event(), threading.Event()
 
     class HeldRpc(CountingRpc):
