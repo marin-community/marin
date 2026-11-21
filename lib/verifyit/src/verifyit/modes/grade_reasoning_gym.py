@@ -122,10 +122,15 @@ def _score_candidate(dataset: str, entry: dict, answer: str, score_answer: Calla
         score = score_answer(answer, entry)
     except MALFORMED_REPLY_ERRORS:
         # A broken entry raises the same types and stays an error: the scorer must accept the entry's own
-        # answer. An entry without an answer (boxnet, propositional_logic) cannot be checked this way.
+        # answer with a valid reward. An entry without an answer (boxnet, propositional_logic) cannot be
+        # checked this way.
         if entry["answer"] is not None:
-            score_answer(entry["answer"], entry)
+            scored(_checked_score(dataset, score_answer(entry["answer"], entry)))
         return 0.0
+    return _checked_score(dataset, score)
+
+
+def _checked_score(dataset: str, score: object) -> float:
     if isinstance(score, bool) or not isinstance(score, int | float):
         raise TypeError(f"reasoning-gym scorer for {dataset} returned {type(score).__name__}")
     return float(score)

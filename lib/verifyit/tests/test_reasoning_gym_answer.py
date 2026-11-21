@@ -301,6 +301,22 @@ def test_broken_external_scorer_cannot_persist_an_invalid_reward(tests_dir, work
     assert not (logs / "reward.json").exists()
 
 
+@pytest.mark.parametrize("score", [True, float("nan"), float("inf"), -0.1, 1.1])
+def test_invalid_reference_score_keeps_a_parse_failure_an_error(tests_dir, workspace, monkeypatch, score):
+    # The reply raises, so the entry's own answer is scored to tell a broken entry from a malformed reply.
+    def score_answer(response, entry):
+        if response == entry["answer"]:
+            return score
+        raise ValueError("unparseable reply")
+
+    monkeypatch.setattr(grade_reasoning_gym.reasoning_gym, "get_score_answer_fn", lambda name: score_answer)
+    answer(workspace, "not the answer")
+    spec_path = tests_dir / "verifier.toml"
+    spec_path.write_text(render_spec(ReasoningGymSpec(dataset="needle_haystack")))
+    verdict = run(spec_path, workspace)
+    assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
+
+
 def test_configured_decimal_precision_preserves_source_score(tests_dir, workspace):
     params = {"seed": 11, "size": 1, "min_num_decimal_places": 4, "max_num_decimal_places": 4}
     dataset = reasoning_gym.create_dataset("decimal_arithmetic", **params)
