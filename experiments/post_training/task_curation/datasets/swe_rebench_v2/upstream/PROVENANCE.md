@@ -22,3 +22,9 @@ The vendored `grade.py.tmpl` adds `unscorable: true` and an `UNSCORABLE` log lin
 when no test IDs are expected and the parsed log is empty. Upstream's
 `normalized_passed_subset` already requires a nonempty expected set, so the
 grader exits nonzero and `test.sh` leaves reward at zero in both versions.
+
+The vendored `log_parsers.py` also changes `parse_java_mvn`: upstream marks every
+class seen in a `Running` line as passed when no result was parsed. This copy
+requires a completed-test result, such as a Maven summary or `BUILD SUCCESS`,
+before marking that class passed. A forked JVM that terminates before reporting
+a result therefore leaves the class unresolved and reward at zero.

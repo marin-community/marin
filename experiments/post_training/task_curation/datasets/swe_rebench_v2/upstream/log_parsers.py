@@ -175,7 +175,6 @@ def parse_java_mvn(log: str) -> ParsedTestLog:
     gradle_test_status_re = re.compile(r"^Test\s+(.+?)\s+(PASSED|FAILED)(?:\s+\(\d+(?:\.\d+)?\s*m?s\))?$")
     summary_re = re.compile(r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)," r"\s*Skipped:\s*(\d+)")
 
-    seen_running: set[str] = set()
     current_running: str | None = None
     current_gradle_class: str | None = None
 
@@ -187,11 +186,9 @@ def parse_java_mvn(log: str) -> ParsedTestLog:
             running_name = rm.group(1)
             current_running = running_name
             current_gradle_class = running_name
-            seen_running.add(running_name)
             continue
         if gm := gradle_class_re.match(line):
             current_gradle_class = gm.group(1)
-            seen_running.add(current_gradle_class)
             continue
         if tm := gradle_test_status_re.match(line):
             _record_mvn_gradle_test_status(results, current_gradle_class, tm)
@@ -209,10 +206,6 @@ def parse_java_mvn(log: str) -> ParsedTestLog:
 
     for test_name, status in parse_log_maven(log).items():
         results.setdefault(test_name, status)
-
-    if not results and seen_running:
-        for clazz in seen_running:
-            results.setdefault(clazz, TestStatus.PASSED)
 
     _promote_nested_class_parents(results)
     return results
