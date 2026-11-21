@@ -45,11 +45,13 @@ Iris commands and file transfer use the existing `ExecInContainer` RPC and requi
 Iris runs a command that has a timeout under the image's coreutils `timeout`, which sends TERM to the command's
 process group at the limit and, if the group's shell has not exited, KILL 5 seconds later. The command runs in a
 subshell whose parent reports its exit status, so `exit` and `exec` behave as usual, and the outer shell reports
-`timeout`'s own exit with the guest's elapsed seconds. A command with neither record, such as one whose exec stream
-the controller cut, is an unknown outcome and the machine closes. A `timeout` exit of 124 returns `TIMED_OUT` with the
-output so far and keeps the machine. A `timeout` exit of 137 does the same only when the guest clock shows the limit
-plus the grace had passed and the sandbox task still reports running; otherwise the task's terminal or OOM cause, or an
-unknown outcome, closes the machine. A timeout is evidence about the monitored process group only: a detached session
+`timeout`'s own exit. A command with neither record, such as one whose exec stream the controller cut, is an unknown
+outcome and the machine closes. A `timeout` exit of 124 returns `TIMED_OUT` with the output so far and keeps the
+machine. A command that survives TERM until the KILL escalation also closes the machine: `timeout` then exits 137, and
+137 alone cannot tell the timer's KILL from an independent one, while no portable guest evidence identifies the
+escalation. One status read then reports the task's terminal or OOM cause, or an unknown outcome, and later calls
+name the timer's exit, such as `timer 137`, in their `Machine is closed` reason. A timeout is evidence about the
+monitored process group only: a detached session
 can survive it. A timeout of zero or less returns `TIMED_OUT` without sending
 anything; a NaN or infinite one raises `ValueError`. The controller's exec deadline is the timeout plus 30 seconds and
 the client's RPC deadline adds 60 more; admission refusals and their retries spend neither, and stdin upload, output
