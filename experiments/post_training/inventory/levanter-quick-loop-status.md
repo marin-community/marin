@@ -8,8 +8,9 @@ blocked. The latest 40-H100 smoke, version `2026.11.20.5` from
 setup before model loading or updates. Its configured DCN (inter-host) axis
 product was one, while mesh validation required four slices. A source repair
 keeps GPU hosts in one global mesh and preserves TPU slice meshes; local
-topology regressions pass. No replacement run or matched comparison has been
-submitted; the comparison remains gated on smoke acceptance.
+topology regressions pass. Fresh smoke `2026.11.21.1` is submitted at BATCH
+priority from `1b6f4a9ca28bb3ee4faf46f7e3e98ba24462f6d8`. GPU startup and
+acceptance remain pending; the matched comparison is gated on smoke acceptance.
 
 ## Scope and fixed recipe
 
@@ -96,7 +97,7 @@ independent source review passed for these fixes. The earlier broad suite had
 17 failures: six sandbox and ten router failures reproduced on clean main;
 one nested-launcher setup failure remained unclassified.
 
-## Latest terminal run and planned reproduction
+## Latest failure, current submission, and reproduction
 
 Smoke `2026.11.20.5` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2`,
@@ -120,10 +121,16 @@ TPU expert groups stay within each slice. These are local topology checks;
 the repaired source still requires accelerator acceptance.
 
 Run from the repository with the required storage, evaluation, and judge
-credentials loaded. All three versions below are planned and not submitted.
+credentials loaded. Smoke `2026.11.21.1` was submitted through coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.1-coordinator-e6c36b61`.
+At 11:48 PST it was running with actual BATCH priority; no GPU child had yet
+been discovered. Its accepted source bundle matches all 4,582 entries of the
+frozen `1b6f4a9ca2` archive, including 41 required runtime files.
+Comparison versions `2026.11.21.2` and `2026.11.21.3` remain unsubmitted.
 Local topology checks, four real CPU update/checkpoint/restart cases, lint,
-types, strict docs, and independent mesh review pass. The next smoke requires
-a new source freeze. No successful rerun is established by this record.
+types, strict docs, and independent mesh review pass. No successful accelerator
+rerun is established by this record. The smoke command below records that
+submission; use a fresh unused version for another attempt.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
