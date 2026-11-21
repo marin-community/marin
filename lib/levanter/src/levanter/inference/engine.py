@@ -40,7 +40,7 @@ from levanter.inference.snowball_replay_payload import (
 )
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import AttentionMask
-from levanter.layers.kv_cache import PageCache
+from levanter.layers.kv_cache import KvPageCache, ListCache, PageCache, StackedKvPageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import SnowballLMHeadModel
@@ -838,8 +838,32 @@ def _run_generation_loop(
     if capture_routes:
         assert isinstance(model, SnowballLMHeadModel)
         routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds + gen_state.decode_state.max_seqs)
+    stacked_axes = None
+    stacked_sharding = None
+    if (
+        not capture_routes
+        and isinstance(model, SnowballLMHeadModel)
+        and model.config.inference_decode_implementation == "unrolled_split_cache"
+        and isinstance(gen_state.cache, StackedKvPageCache)
+    ):
+        # Split once per round so each decode step can update the layer buffers directly.
+        stacked = gen_state.cache.kv_pages
+        stacked_axes = stacked.axes
+        stacked_sharding = named_sharding_of(stacked.array)
+        layers = jnp.unstack(stacked.array, axis=0)
+        if stacked_sharding is not None and not stacked_sharding.mesh.empty:
+            layer_sharding = stacked_sharding.update(spec=PartitionSpec(*stacked_sharding.spec[1:]))
+            layers = tuple(jax.reshard(layer, layer_sharding) for layer in layers)
+        caches = ListCache(tuple(KvPageCache(hax.named(layer, stacked_axes[1:])) for layer in layers))
+        gen_state = dataclasses.replace(gen_state, cache=caches)
     init_state = (gen_state, outputs_buf, routes, jnp.array(0, dtype=jnp.int32))
     final_gen_state, final_outputs, routes, _ = jax.lax.while_loop(cond, body, init_state)
+    if stacked_axes is not None:
+        assert isinstance(final_gen_state.cache, ListCache)
+        pages = jnp.stack([cache.kv_pages.array for cache in final_gen_state.cache])
+        if stacked_sharding is not None and not stacked_sharding.mesh.empty:
+            pages = jax.reshard(pages, stacked_sharding)
+        final_gen_state = dataclasses.replace(final_gen_state, cache=StackedKvPageCache(hax.named(pages, stacked_axes)))
     if routes is not None:
         assert isinstance(model, SnowballLMHeadModel)
         final_gen_state, routes = _capture_terminal_inputs(final_gen_state, model, routes)

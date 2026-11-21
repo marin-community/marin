@@ -93,11 +93,12 @@ def test_prefill_buckets_preserve_snowball_generation(serving_model):
     assert bucketed == full
 
 
-def test_unrolled_decode_preserves_snowball_generation(serving_model):
+@pytest.mark.parametrize("decode_layers", ["unrolled", "unrolled_split_cache"])
+def test_unrolled_decode_preserves_snowball_generation(serving_model, decode_layers):
     requests = _requests()
     scanned = _engine(serving_model, 3).generate(requests)
     model = dataclasses.replace(
-        serving_model, _config=dataclasses.replace(serving_model.config, inference_decode_implementation="unrolled")
+        serving_model, _config=dataclasses.replace(serving_model.config, inference_decode_implementation=decode_layers)
     )
     assert _engine(model, 3).generate(requests) == scanned
 
@@ -135,8 +136,12 @@ def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, cap
 
 
 @pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
-@pytest.mark.parametrize("expert_implementation", ("grouped", "split"))
-def test_snowball_expert_sharded_cache_preserves_five_head_generation(serving_model, expert_implementation):
+@pytest.mark.parametrize(
+    "expert_implementation,decode_layers", [("grouped", "unrolled"), ("split", "unrolled_split_cache")]
+)
+def test_snowball_expert_sharded_cache_preserves_five_head_generation(
+    serving_model, expert_implementation, decode_layers
+):
     config = dataclasses.replace(
         serving_model.config, hidden_dim=160, num_heads=20, num_kv_heads=5, inference_decode_implementation="unrolled"
     )
@@ -151,14 +156,20 @@ def test_snowball_expert_sharded_cache_preserves_five_head_generation(serving_mo
         prefix_cache="last_prompt",
         compute_dtype=jnp.float32,
     )
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=4)):
+    with (
+        jax.set_mesh(compact_grug_mesh(expert_axis_size=4)),
+        hax.axis_mapping({"batch": ("replica_dcn", "data", "expert"), "vocab": "model"}),
+    ):
         first, second = _requests()[:2]
         second = dataclasses.replace(second, prompt_tokens=[1, 2, 5])
         vocab, key = hax.Axis("vocab", 23), jax.random.key(41)
         model = SnowballLMHeadModel.init(vocab, config, key=key)
         model_cache = InferenceEngine.from_model_with_config(model, None, serving)
         expert_config = dataclasses.replace(
-            config, inference_kv_sharding="expert", inference_expert_implementation=expert_implementation
+            config,
+            inference_kv_sharding="expert",
+            inference_expert_implementation=expert_implementation,
+            inference_decode_implementation=decode_layers,
         )
         sharded = SnowballLMHeadModel.init(vocab, expert_config, key=key)
         expert_cache = InferenceEngine.from_model_with_config(sharded, None, serving)

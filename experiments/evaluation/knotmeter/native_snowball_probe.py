@@ -78,7 +78,7 @@ def main() -> None:
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
-    parser.add_argument("--decode-layers", choices=("scan", "unrolled"), default="scan")
+    parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
@@ -193,7 +193,6 @@ def main() -> None:
                 if service.prefill_bucket_sizes:
                     context = server.inference_context
                     filler = tokenizer.encode(" example", add_special_tokens=False)[0]
-                    alternate = tokenizer.encode(" test", add_special_tokens=False)[0]
                     with (
                         context.model_lock,
                         trainer.use_device_mesh(),
@@ -201,8 +200,8 @@ def main() -> None:
                     ):
                         for index, previous_bucket in enumerate(service.prefill_bucket_sizes):
                             prompt = [filler] * (previous_bucket + 1)
-                            # Alternate the first token so warmup exercises the full buffer.
-                            prompt[0] = alternate if index % 2 else filler
+                            # Distinct prefixes force each prefill buffer to compile.
+                            prompt[0] = index
                             context.engine.generate([_request(prompt, 1)])
                         context.engine.reset()
                     evidence["bucket_warmup_seconds"] = time.monotonic() - started - evidence["cold_completion_seconds"]
