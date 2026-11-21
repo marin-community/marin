@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 1:59 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 2:06 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -622,8 +622,12 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
 
   The two-update preset currently commits the SkyRL recovery checkpoint at
   train end. Its earlier worker roundtrip covers learner state alone.
-  In the callback-driven configuration, an interrupted save can leave a
-  higher-numbered folder that blocks resume from the committed marker.
+  In a CPU reproduction, the real trainer committed step 2. A staged
+  step-3 folder with one TensorStore file blocked resume before any
+  learner loaded weights. Moving the staged folder outside the checkpoint
+  root let a fresh learner restore the exact state and prompt cursor.
+  [Callback recovery reproduction][native-callback-recovery-source]
+
   The restart qualification needs a step-1 trainer checkpoint, an
   interrupted step-2 save, and fresh learner and serving processes.
   Resume the exact committed path and cursor, verify the restored policy
@@ -713,6 +717,7 @@ arms. [Prior timing comparison][timing]
 [native-cross-host-serving]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fserving.tar.zst
 [native-cross-host-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fsource-inputs.tar.zst
 [native-install-retry-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.14%2Finstall-retry-source-and-tests.tar.zst
+[native-callback-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.15%2Fcallback-recovery-reproduction.tar.zst
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
