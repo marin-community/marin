@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 9:24 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 9:31 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -17,14 +17,14 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks were still scheduling-gated at 9:24 p.m. The last detailed diagnostic showed a shortfall of one GPU and one InfiniBand allocation. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks were still scheduling-gated at 9:31 p.m. The last detailed diagnostic showed a shortfall of one GPU and one InfiniBand allocation. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native online loop on current `main` | The bounded prototype passed two updates on one and four CPU devices, then on four TPUv4 chips after aligning sampler normalization. The TPU proof decoded eight binary frames covering 128 tokens. Its second rollout used the exact first published weight fingerprint. | Qualify the integrated queue and cache barrier, then connect the native backend to the rollout service. |
-| Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
+| Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. Eight binary frames covered 128 tokens, and the second rollout used the exact first published weight fingerprint. | Connect the native backend to the rollout service and prove the binary process boundary. |
+| Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify multi-rank weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
 | Typed binary protocol | The local native loop uses protobuf metadata and binary tensor buffers end to end between generation and learner batching. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Qualify cross-process native transport with bounded flow control, then migrate the learner pipe after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
-[First TPUv4 attempt][iris-native] · [Successful TPUv4 proof][iris-native-rerun] ·
+[First TPUv4 attempt][iris-native] · [TPUv4 queue and cache proof][iris-native-install] ·
 [Snowball qualification report][snowball-status] ·
 [Historical quick-loop timing][timing]
 
@@ -270,8 +270,22 @@ the old policy on installation failure, and rejecting stale policy
 requests. The integrated revision `ff1fc5e833` completed both updates on
 four CPU devices with queued generation and that policy owner in both
 scoring modes. Each run decoded eight binary frames and verified the
-`0 → 1 → 2` installed policy chain. The integrated revision still needs
-accelerator and cross-process validation.
+`0 → 1 → 2` installed policy chain. The same revision passed the
+full-vocabulary profile and fused forward diagnostic on four TPUv4 chips.
+The three installed weight digests were distinct, the second group
+used step 1, and the 128 sampled scores matched within `4.29e-6`. This
+qualifies fresh local KV state across updates. Multi-rank publication and an
+external serving process remain open. [TPUv4 queue and cache proof][iris-native-install]
+
+The integrated proof archive is
+`gs://marin-us-central2/users/dlwh/quick-loop-rl/native-proof/2026.11.20.03/outputs.tar.zst`.
+Its SHA-256 is `dfe5aadfd44f1d3c3111474cb5a8a528d0b55078df9b166b30dd8727c8e5d1c1`.
+[Integrated proof archive in Filer][native-install-archive]
+
+The maintained learner and native ports share the SPMD policy scorer and
+learner commit `d52fd47db5`. Reconcile the overlapping Snowball model and
+attention changes from that base. Preserve the learner's explicit positions
+and attention precision and the inference port's paged and replay paths.
 
 Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
 and a deterministic grader with mixed rewards within a group. Submit four
@@ -352,4 +366,6 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 [preset-migration]: https://github.com/marin-community/marin/pull/10740
 [iris-native]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-01
 [iris-native-rerun]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-02
+[iris-native-install]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-03
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
+[native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
