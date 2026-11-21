@@ -13,7 +13,8 @@ from typing import override
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources as stage_resources
-from lib.taskforge.tests.resource_doubles import FakeInference
+from lib.taskforge.tests.resource_doubles import FakeEnv, FakeInference
+from lib.taskforge.tests.stage_fakes import Environments
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
     Envs,
@@ -25,15 +26,17 @@ from lib.taskforge.tests.test_end_to_end import (
 )
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import Outcome
+from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, StageCompleted
-from taskforge.effects.issues import ContextExceeded
+from taskforge.effects.issues import ContextExceeded, OutputBudgetExhausted
 from taskforge.effects.log import EventLog, decode
+from taskforge.llm.policy import replay_arguments
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion
+from taskforge.model.llm import Completion, Message
 from taskforge.model.llm import Role as Speaker
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
@@ -268,6 +271,52 @@ async def test_a_search_is_out_of_budget_only_after_its_revision_ends_without_a_
         "ran out of search budget without a finding (its revision 1 ended without a report); "
         "this is not a validation of the task",
     )
+
+
+class Exhausting(Environments):
+    """Every machine's ``cat log`` exceeds the sandbox output budget."""
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
+        env = FakeEnv(requirements.model_dump_json(), {"cat log": OutputBudgetExhausted("output budget exhausted")})
+        self.created.append(env)
+        return env
+
+
+# Review 2026-11-21: a revision that ran a shell command and then ran out of output kept the search's end at "reported"
+# and recorded the one-turn conversation of its first report. Owner's ruling: the exception consumes the remaining
+# opportunity (live Forge retried on a fresh machine and found the correction), and the last report stands.
+async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_conversation_it_ended_with(
+    workpiece: Workpiece,
+) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
+    shell = call("shell", {"command": "cat log", "timeout": 5}, "look")
+    client = Scripted(
+        {
+            "false_reject": (
+                call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first"),
+                shell,
+                call("report", {"findings": [finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0)]}, "available"),
+            )
+        }
+    )
+    ctx = Context(log=EventLog())
+    bundle = replace(stage_resources(ctx), envs=Exhausting(), role_inference={"adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    (reject,) = result.adversary
+    assert len(client.requests) == 2 and reject.status is AdversaryStatus.REPORTED
+    assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False)]
+    assert reject.reasons == (
+        "ran out of search budget without a finding (its output budget ran out during revision 1); "
+        "this is not a validation of the task",
+    )
+    (look,) = shell.tool_calls
+    ended = Message(Speaker.ASSISTANT, "", (replace(look, arguments=replay_arguments(look.arguments)),))
+    final = Conversation((*client.requests[1].conversation, ended), client.requests[1].tools)
+    owner = "validate/0/0/adversary:false_reject/0/0"
+    assert reject.continuation == Continuation(owner, SearchEnd.BUDGET_EXHAUSTED, digest(final), 2)
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Accept)
 
 
 # Review 2026-11-21: with adversary.max_revisions=-1 the revision loop also skipped reproducing the report itself, so a

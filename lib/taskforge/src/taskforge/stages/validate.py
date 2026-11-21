@@ -49,7 +49,7 @@ from taskforge.model.review import (
     ValidationResult,
 )
 from taskforge.model.stage import Exit
-from taskforge.model.workpiece import Workpiece
+from taskforge.model.workpiece import Conversation, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
@@ -117,11 +117,12 @@ def exhausted(name: str, limit: SearchLimit, continuation: Continuation) -> Adve
     return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,), limit, continuation)
 
 
-def stopped_at(owner: str, end: SearchEnd, outcome: Exit) -> Continuation:
-    if not isinstance(outcome, Returned | Stopped):
+def stopped_at(owner: str, end: SearchEnd, ended: Exit | Conversation | None) -> Continuation:
+    """Where a session ended: at its exit, or at the conversation it held when a command raised."""
+    session = ended.session if isinstance(ended, Returned | Stopped) else ended
+    if not isinstance(session, Conversation):
         return Continuation(owner, end)
-    turns = sum(message.role == Role.ASSISTANT for message in outcome.session.messages)
-    return Continuation(owner, end, digest(outcome.session), turns)
+    return Continuation(owner, end, digest(session), sum(message.role == Role.ASSISTANT for message in session.messages))
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:
@@ -172,7 +173,7 @@ async def reproduced(
     return finding, reasons
 
 
-def report_of(outcome: Exit | None) -> Returned[AdversaryReport] | None:
+def report_of(outcome: object) -> Returned[AdversaryReport] | None:
     if isinstance(outcome, Returned) and outcome.tool == "report" and isinstance(outcome.payload, AdversaryReport):
         return cast(Returned[AdversaryReport], outcome)
     return None
@@ -272,7 +273,8 @@ async def run_adversary(
             )
         revisions = config.policy.setting("adversary.max_revisions", int)
         replays: list[tuple[AdversaryFinding, tuple[str, ...]]] = []
-        how = "its session ended with a report and no reproduced finding"
+        end, how = SearchEnd.REPORTED, "its session ended with a report and no reproduced finding"
+        ended: Exit | Conversation | None = report
         for revision in itertools.count(1):  # the first report is reproduced whatever the revision budget
             async with asyncio.TaskGroup() as group:
                 claims = [
@@ -286,13 +288,15 @@ async def run_adversary(
                 break
             ctx.notify(Note(f"Adversary {name}: {len(missed)} finding(s) did not reproduce; revision {revision}"))
             try:
-                revised = await session(Answer(report.session, replay_feedback(missed, revisions - revision)))
-            except* OutputBudgetExhausted:
-                revised = None
-            if (revised_report := report_of(revised)) is None:  # the last report stands
-                how = f"its revision {revision} ended without a report"
+                ended = await session(Answer(report.session, replay_feedback(missed, revisions - revision)))
+            except* OutputBudgetExhausted as error:
+                # It consumes the remaining revisions; the search ends at the conversation the exhausted command left.
+                end, how = SearchEnd.BUDGET_EXHAUSTED, f"its output budget ran out during revision {revision}"
+                ended = next((e.session for e in error.exceptions if isinstance(e, OutputBudgetExhausted)), None)
+            if (revised := report_of(ended)) is None:  # the last report stands
+                how = how if end is SearchEnd.BUDGET_EXHAUSTED else f"its revision {revision} ended without a report"
                 break
-            report = revised_report
+            report = revised
         findings = tuple(finding for finding, _ in replays)
         # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
         reasons = tuple(
@@ -301,9 +305,7 @@ async def run_adversary(
         status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
         if not reasons and not any(finding.met for finding in findings):
             reasons = (no_finding(how),)
-        return AdversaryResult(
-            name, status, findings, reasons, continuation=stopped_at(owner, SearchEnd.REPORTED, report)
-        )
+        return AdversaryResult(name, status, findings, reasons, continuation=stopped_at(owner, end, ended))
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:
