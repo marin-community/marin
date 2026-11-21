@@ -13,6 +13,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path, PurePosixPath
 from tarfile import AbsoluteLinkError, TarInfo
 from typing import override
+from uuid import uuid4
 
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
@@ -669,3 +670,19 @@ async def test_broken_guest_helpers_hold_with_their_cause_in_one_bounded_probe(
     assert len(controller.scripts) == 1
     if expected is Hold:
         assert isinstance(caught.value.__cause__, GuestHelperFailed)
+
+
+# Review 2026-11-21 (inherited follow-up): Taskforge's own hydration archive is not the caller's file; a guest that
+# cannot unpack it holds with the helper's cause instead of failing as a bug, and leaves no scratch behind.
+async def test_hydration_archive_the_guest_cannot_unpack_holds_with_its_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = uuid4()
+    monkeypatch.setattr(env_module, "uuid4", lambda: name)
+    occupied = Path(f"/tmp/forge-hydration-{name.hex}")
+    occupied.write_bytes(b"")  # the extraction directory's name is taken by a file
+    env = ShellboxEnv(local_iris_machine(tmp_path, LocalController()), "image", AsyncExitStack(), str(tmp_path))
+    with pytest.raises(Hold, match="Could not unpack hydration archive") as caught:
+        await write_files(WriteFiles(FILES), env, notify=Notes())
+    assert isinstance(caught.value.__cause__, GuestHelperFailed) and not list(tmp_path.iterdir())
+    assert not occupied.exists() and not occupied.with_suffix(".tar").exists()
