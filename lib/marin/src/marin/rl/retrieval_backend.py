@@ -7,6 +7,7 @@ import argparse
 import base64
 import importlib
 import json
+import logging
 import threading
 from argparse import Namespace
 from collections.abc import Callable
@@ -20,15 +21,21 @@ DOCUMENT_PATH = "/document"
 BM25_RELATIVE_PATH = "index/bm25"
 CHUNK_BYTES = 1024 * 1024
 
+logger = logging.getLogger(__name__)
+
 
 class OpenResearcherIndex:
     """Keep the source's searcher and tokenizer loaded for the life of one run."""
 
     def __init__(self, root: Path, top_k: int, snippet_max_tokens: int, document_cache_size: int):
         # These optional image dependencies are pinned by the service's immutable image.
+        logger.info("Importing pinned retrieval dependencies")
         backend = importlib.import_module("browsecomp.retrieval")
+        logger.info("Opening pinned BM25 index at %s", root / BM25_RELATIVE_PATH)
         self.searcher = backend.BM25Searcher(Namespace(index_path=str(root / BM25_RELATIVE_PATH)))
+        logger.info("BM25 index open; loading the local tokenizer at %s", root / "tokenizer")
         self.tokenizer = backend.AutoTokenizer.from_pretrained(root / "tokenizer", local_files_only=True)
+        logger.info("Pinned tokenizer loaded")
         self.top_k = top_k
         self.snippet_max_tokens = snippet_max_tokens
         self.document: Callable[[str], bytes] = lru_cache(maxsize=document_cache_size)(
@@ -135,10 +142,13 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--concurrency", type=int, required=True)
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     state = json.loads(args.state.read_bytes())
     with importlib.import_module("browsecomp.tool").source_diagnostics():
         index = OpenResearcherIndex(args.root, state["top_k"], state["snippet_max_tokens"], args.concurrency)
+    logger.info("Binding retrieval HTTP server on port %d", args.port)
     with RetrievalServer(("0.0.0.0", args.port), retrieval_handler(index, state), args.concurrency) as server:
+        logger.info("Retrieval HTTP server bound at %s; serving requests", server.server_address)
         server.serve_forever()
 
 
