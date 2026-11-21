@@ -222,8 +222,10 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   reverting to the earlier submission if the hardening broke something.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
-  `false_accept` and `false_reject`), `adversary.image`. Each name needs a prompt
-  `adversary.brief.<name>` (`prompts/adversary/brief/<name>.md`): `false_accept` looks for a submission
+  `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
+  name needs a prompt `adversary.brief.<name>` (`prompts/adversary/brief/<name>.md`); a user prompt
+  that renders only `{name}` (`Review strategy: {name}`) uses the roster name itself as the strategy
+  and runs any name. The default briefs: `false_accept` looks for a submission
   the grader accepts but should not, `false_reject` for a correct submission the grader rejects, and
   `adversary` is the earlier single adversary's strategy line. An overlay may rewrite a brief's text;
   a new brief is a new prompt entry in the policy (`Policy({**policy.entries, "adversary.brief.mine":

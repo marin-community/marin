@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import PurePosixPath
+from string import Formatter
 from types import MappingProxyType
 from typing import override
 
@@ -285,9 +286,15 @@ def build_config(
     policy: Policy, factories: Mapping[str, MachineFactory], profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES
 ) -> TaskforgeConfig:
     """The run's sessions and rules; ``profiles`` overrides the model profile per role, as in ``build_resources``."""
-    unbriefed = [name for name in policy.setting("adversary.roster", tuple) if f"adversary.brief.{name}" not in policy.entries]
+    # A user prompt that renders only {name} uses the roster name as its strategy; one that renders {brief} needs it.
+    fields = {field for _, field, _, _ in Formatter().parse(policy.prompt("adversary.user").template)}
+    roster = policy.setting("adversary.roster", tuple) if "brief" in fields else ()
+    unbriefed = [name for name in roster if f"adversary.brief.{name}" not in policy.entries]
     if unbriefed:
-        raise ValueError(f"adversary.roster names {', '.join(unbriefed)} without a prompt adversary.brief.<name>")
+        raise ValueError(
+            f"adversary.user renders {{brief}}, but adversary.roster names {', '.join(unbriefed)} without a prompt "
+            "adversary.brief.<name>"
+        )
     settings = lowering_settings(policy)
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")

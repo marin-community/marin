@@ -13,6 +13,7 @@ from typing import override
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources as stage_resources
+from lib.taskforge.tests.resource_doubles import FakeInference
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
     Envs,
@@ -48,7 +49,7 @@ from taskforge.model.review import (
     SearchLimit,
 )
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from taskforge.policy import load_policy
+from taskforge.policy import Policy, Prompt, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.inference import InferenceClient, InferenceRequest
@@ -270,10 +271,44 @@ async def test_a_search_is_out_of_budget_only_after_its_revision_ends_without_a_
 
 
 def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
+    """The default user prompt renders ``{brief}``, so every roster name must resolve to a brief."""
     with pytest.raises(
         ValueError, match=re.escape("adversary.roster names finder without a prompt adversary.brief.<name>")
     ):
         build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept", "finder"]}), {})
+
+
+NAMED_STRATEGY = "Review strategy: {name}\n\nTask manifest:\n{task}\n\nProposal:\n{proposal}\n\nWorkspace: {workdir}"
+"""The earlier user prompt, whose strategy line is the roster name itself."""
+
+
+def named_strategy_policy(roster: Sequence[str], *, briefs: bool) -> Policy:
+    """The defaults with the earlier ``{name}`` user prompt and ``roster``; without ``briefs``, no brief entries."""
+    entries = {
+        key: value
+        for key, value in load_policy(DEFAULTS_DIR).entries.items()
+        if briefs or not key.startswith("adversary.brief.")
+    }
+    return Policy({**entries, "adversary.user": Prompt(NAMED_STRATEGY)}).overlaid({"adversary.roster": list(roster)})
+
+
+# Review 2026-11-21: an earlier policy's single `adversary` or custom roster name failed at wiring, and the documented
+# user-prompt override `Review strategy: {name}` raised KeyError('name') before a sandbox opened.
+@pytest.mark.parametrize(
+    ("roster", "briefs"),
+    [(["adversary"], False), (["finder"], False), (["false_accept"], True)],
+    ids=["single adversary", "custom name", "name override with the default briefs"],
+)
+async def test_a_named_strategy_prompt_runs_any_roster_name(
+    workpiece: Workpiece, roster: list[str], briefs: bool
+) -> None:
+    setup = build_config(named_strategy_policy(roster, briefs=briefs), {})
+    client = FakeInference((call("report", {"findings": []}, "report"),))
+    ctx = Context(log=EventLog())
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    (result,) = (await validate(ctx, workpiece, setup, bundle)).result.adversary
+    assert result.status is AdversaryStatus.REPORTED and len(client.requests) == 1
+    assert client.requests[0].conversation[1].content.startswith(f"Review strategy: {roster[0]}\n\nTask manifest:")
 
 
 SINGLE_ADVERSARY = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"

@@ -228,12 +228,14 @@ async def run_adversary(
         *((PurePosixPath("/", file.path), resource_bytes(file)) for file in shared),
         (PurePosixPath(workdir, "task.json"), spec.task.model_dump_json().encode()),
     )
+    brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts
     opening = Fresh(
         config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
         config.policy.prompt("adversary.user").render(
             task=task_manifest(spec.task),
             proposal=render(workpiece.proposal),
-            brief=config.policy.prompt(f"adversary.brief.{name}").template,
+            name=name,
+            brief=config.policy.prompt(brief).template if brief in config.policy.entries else name,
             workdir=workdir,
         ),
     )
