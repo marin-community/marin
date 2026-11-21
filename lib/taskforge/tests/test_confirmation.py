@@ -58,7 +58,7 @@ from taskforge.harness.tools.evidence import (
 )
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import digest
-from taskforge.model.llm import Completion, Message, Role, Usage
+from taskforge.model.llm import Completion, FinishReason, Message, Role, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -1016,3 +1016,20 @@ async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_
     assert kinds(wp)[0] == "modify" and wp.evidence[0].review is not None
     assert wp.evidence[0].review.findings == (finding(1),)
     assert [(r.review, r.response, r.reason) for r in wp.responses] == [(0, Response.DECLINED, "the grader is right")]
+
+
+# Review 2026-11-21 (n12 follow-up 2, inherited): a provider's context refusal of the author's revision was raised
+# past the effect, so a cold resume asked again; when the provider then answered, the restored round's response became
+# a revision and the run bought a second confirmation (16 solves, not 8).
+async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal, tmp_path: Path) -> None:
+    refused = Completion("maximum context length exceeded", finish_reason=FinishReason.CONTEXT_EXCEEDED)
+    sink, engine = JsonlSink(str(tmp_path / "events.jsonl")), Trials()
+    live = bundle(engine, Reviewer(rounds=[[found(1)]]), (*script(), *script()[:3], refused))
+    done = await run_workpiece(proposal, setup(), live, EventLog(sink=sink), install=install)
+    assert done.terminal is Terminal.ACCEPTED
+    assert [(r.response, r.discarded) for r in done.responses] == [(Response.STOPPED, True)] and len(engine.runs) == 8
+    again, author = Trials(), (*script(), *RESUBMIT)
+    resumed = bundle(again, Reviewer(rounds=[[found(1)]]), author)
+    wp = await run_workpiece(proposal, setup(), resumed, EventLog(replay_from=local_records(sink)), install=install)
+    assert wp == done and not again.runs
+    assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests
