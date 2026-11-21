@@ -15,6 +15,8 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     SETUP_TIMEOUT_SEC as declared,
+)
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     _flatten,
     admission_receipt_labels,
     dockerfile,
@@ -30,7 +32,6 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.ta
     grader_source,
     solve_sh,
 )
-from experiments.post_training.task_curation.swe_rebench_fidelity_driver import row_variant_files
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
@@ -40,6 +41,7 @@ from experiments.post_training.task_curation.swe_rebench_fidelity_driver import 
     ChurnMonitor,
     OutcomeLedger,
     fail_closed_reward,
+    row_variant_files,
     transient_daytona_error,
     transient_daytona_text,
     verifier_timeout_text,
@@ -549,5 +551,5 @@ def test_gate_doubles_the_setup_deadline_for_the_slow_tail():
            "FAIL_TO_PASS": ["tests/test_x.py::test_a"], "PASS_TO_PASS": ["tests/test_x.py::test_b"],
            "test_files": ["tests/test_x.py"], "test_patch": "diff --git a/tests/test_x.py"}
     files = row_variant_files(row, "condensed", "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64)
-    document = _tomlkit.parse(files["task.toml"])
+    document = tomlkit.parse(files["task.toml"])
     assert document["environment"]["setup"]["timeout_sec"] == declared * 2
