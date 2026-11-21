@@ -74,7 +74,7 @@ from taskforge.model.review import (
     ValidationResult,
 )
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
@@ -646,7 +646,7 @@ def test_a_clean_same_digest_revision_is_the_occurrence_that_ships(proposal: Tas
 def test_an_author_stopping_restores_the_stored_fallback(proposal: TaskProposal) -> None:
     """Review 2026-11-21 (n11 P1): the author hit its context limit in a review revision and the task was abandoned
     with a valid fallback. Owner's ruling (2026-11-13): an author stopping reverts to the fallback."""
-    setup = config()
+    setup = settings_config(**{"budget.max_modify_rounds": 2})
     wp = reviewed_round(proposal, setup)
     session = Conversation((Message(Role.SYSTEM, "author"),), ())
     stopped, after = advance(wp, Stage.AUTHOR, Stopped(StopReason.CONTEXT_LIMIT, session, "window full"), setup)
@@ -654,6 +654,8 @@ def test_an_author_stopping_restores_the_stored_fallback(proposal: TaskProposal)
     assert after is None and stopped.terminal is Terminal.ACCEPTED and stopped.submission == SUBMISSION
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and decision.notes == (FOUND,)
     assert any("author stopped" in reason for reason in decision.reasons)
+    # Review 2026-11-21 (n11 follow-up 1): the stop, not an exhausted budget, is why the notes are notes.
+    assert setup.budget.max_modify_rounds > wp.round and not any("no revision round" in r for r in decision.reasons)
 
 
 def test_a_stored_fallback_leaves_the_remaining_rounds_for_review(proposal: TaskProposal) -> None:
@@ -797,3 +799,94 @@ async def test_a_defect_account_needs_a_surviving_finding_that_cites_its_trial()
     review = await reviewed(reviewer)
     assert replies(reviewer)[0].startswith("Invalid report: trial 1 is attributed to a task defect, but no surviving")
     assert len(review.findings) == 1 and review.findings[0].citations[0].source == "trial/1"
+
+
+LIVE_RULES = (
+    (True, True, True, True, True, "modify", ""),
+    (True, True, True, True, False, "modify", ""),
+    (True, True, True, False, True, "accept", "no revision round left"),
+    (True, True, True, False, False, "accept", "no revision round left"),
+    (True, True, False, True, True, "modify", ""),
+    (True, True, False, True, False, "modify", ""),
+    (True, True, False, False, True, "accept", "no revision round left"),
+    (True, True, False, False, False, "accept", "no revision round left"),
+    (True, False, True, True, True, "accept", ""),
+    (True, False, True, True, False, "accept", ""),
+    (True, False, True, False, True, "accept", ""),
+    (True, False, True, False, False, "accept", ""),
+    (True, False, False, True, True, "accept", ""),
+    (True, False, False, True, False, "accept", ""),
+    (True, False, False, False, True, "accept", ""),
+    (True, False, False, False, False, "accept", ""),
+    (False, True, True, True, True, "modify", ""),
+    (False, True, True, True, False, "modify", ""),
+    (False, True, True, False, True, "accept", "a placement change is tagged"),
+    (False, True, True, False, False, "accept", "The one band-only round is used"),
+    (False, True, False, True, True, "modify", ""),
+    (False, True, False, True, False, "modify", ""),
+    (False, True, False, False, True, "accept", "a placement change is tagged"),
+    (False, True, False, False, False, "accept", "Shared modification budget exhausted"),
+    (False, False, True, True, True, "accept", "a placement change is tagged"),
+    (False, False, True, True, False, "accept", "The one band-only round is used"),
+    (False, False, True, False, True, "accept", "a placement change is tagged"),
+    (False, False, True, False, False, "accept", "The one band-only round is used"),
+    (False, False, False, True, True, "accept", "a placement change is tagged"),
+    (False, False, False, True, False, "modify", ""),
+    (False, False, False, False, True, "accept", "a placement change is tagged"),
+    (False, False, False, False, False, "accept", "Shared modification budget exhausted"),
+)
+"""(in band, review finding, band-only round used, a round left, stored fallback) -> live Forge's decision at
+marin-forge-passes ``rules.py`` (``placed`` then ``with_solve_review``), with a fragment of an acceptance's reasons."""
+
+
+@pytest.mark.parametrize("in_band,finding,used,left,stored,kind,reason", LIVE_RULES)
+def test_review_decisions_match_live_forge(
+    proposal: TaskProposal, in_band: bool, finding: bool, used: bool, left: bool, stored: bool, kind: str, reason: str
+) -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): every combination decides as live Forge does. A stored fallback was
+    placed in band; a used band-only round is an earlier too-easy round with no review finding to revise."""
+    setup = config()
+    reward = 0.0 if in_band else 1.0
+    current = replace(
+        round_with(SolveReview("v", ReviewEnd.REPORTED, (FOUND,) * finding)),
+        solver=(TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, GradeResult(Outcome.GRADED, reward))),
+    )
+    decisions = (Modify(("2 of 2 trials solved: too_easy",), BandOutcome.TOO_EASY),) * used
+    wp = Workpiece("w", proposal, round=len(decisions), submission=SUBMISSION, decisions=decisions)
+    wp = wp.with_(
+        evidence=(round_with(None), current), fallback=Fallback(SUBMISSION, BandOutcome.IN_BAND, 0) if stored else None
+    )
+    budget = replace(setup.budget, max_modify_rounds=wp.round + left)
+    decision = default_review(wp, setup.band, budget)
+    placement = BandOutcome.IN_BAND if in_band else BandOutcome.TOO_EASY
+    assert type(decision).__name__.lower() == kind
+    assert isinstance(decision, Accept | Modify)
+    assert (decision.band if isinstance(decision, Accept) else decision.placement) is placement
+    if isinstance(decision, Modify):
+        assert decision.review == (FOUND,) * finding and decision.fallback == SUBMISSION.digest
+    else:
+        assert decision.restore is None and decision.notes == (FOUND,) * finding
+        assert not reason or any(reason in line for line in decision.reasons)
+
+
+def test_a_clean_changed_band_after_a_reviewed_round_ships_and_a_defect_round_leaves_the_band_round(
+    proposal: TaskProposal,
+) -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): with two rounds, an in-band task revised for a defect came back clean
+    and too easy and bought another round; live ships it at its new placement. Conversely a too-easy round with a
+    defect spent the band-only allowance, so the clean too-easy revision was accepted instead of revised for its band."""
+    setup = settings_config(**{"budget.max_modify_rounds": 2})
+    easy = replace(
+        round_with(SolveReview("v1", ReviewEnd.REPORTED)),
+        solver=(TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, GradeResult(Outcome.GRADED, 1.0))),
+    )
+    wp = reviewed_round(proposal, setup)
+    decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
+    assert isinstance(decision, Accept) and decision.band is BandOutcome.TOO_EASY and decision.restore is None
+    defect = replace(easy, review=SolveReview("v0", ReviewEnd.REPORTED, (FOUND,)))
+    session = Conversation((Message(Role.SYSTEM, "author"),), ())
+    start = Workpiece("w", proposal, submission=SUBMISSION, evidence=(defect,), session=session)
+    first, wp = decided(start, setup)
+    assert isinstance(first, Modify) and first.review == (FOUND,) and first.placement is BandOutcome.TOO_EASY
+    decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
+    assert isinstance(decision, Modify) and not decision.review and decision.placement is BandOutcome.TOO_EASY

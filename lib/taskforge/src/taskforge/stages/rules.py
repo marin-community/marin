@@ -88,7 +88,8 @@ def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
     review = workpiece.evidence[shipped].review if workpiece.evidence else None
     missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no solve-review ran"),) if review is None else review.missing
     notes = () if review is None else review.findings
-    why = ("Solve-review findings recorded as notes: no revision round left",) * bool(notes)
+    why = "of the restored round recorded as notes" if decision.restore else "recorded as notes: no revision round left"
+    why = (f"Solve-review findings {why}",) * bool(notes)
     return replace(decision, reasons=(*decision.reasons, *why), missing=missing, notes=notes)
 
 
@@ -102,14 +103,19 @@ def author_stopped(workpiece: Workpiece, summary: str) -> Decision:
     return accepted(Accept(kept.band, (*tagged(kept.band), restored), kept.submission.digest), workpiece)
 
 
-def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
-    """Owner's ruling (2026-11-12): placement tags a task and never filters it. An out-of-band task gets one band-only
-    round within the shared budget and is then accepted tagged; a clean revision is placed on its own evidence and a
-    faulted one restores the fallback, named by digest and band.
+def band_only(decision: Decision) -> bool:
+    """A modification round for difficulty alone: placed, with no review finding to revise (a defect round carries its
+    placement too, and is not one)."""
+    return isinstance(decision, Modify) and decision.placement is not None and not decision.review
 
-    One rule sets what a round may still buy: review findings join its modification, or turn its acceptance into one
-    at its placement, while the shared budget has a round left, and are the acceptance's notes after; a placement out
-    of band buys a revision only while no earlier round spent the band-only one.
+
+def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    """Owner's ruling (2026-11-12): placement tags a task and never filters it; live Forge's three decisions, in order.
+
+    A clean revision placed out of its fallback's band is accepted at its own placement, tagged; otherwise an out-of-band
+    task gets one band-only round (``band_only``) within the shared budget and is then accepted tagged. Review findings
+    join a round's modification, or turn its acceptance into one at its placement, while the shared budget has a round
+    left, and are the acceptance's notes after. A faulted revision restores the fallback, named by digest and band.
     """
     result = workpiece.evidence[-1]
     decision = assess(result, band, budget.max_missing_trials)
@@ -122,27 +128,28 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
         if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
-    left = workpiece.round < budget.max_modify_rounds
-    band_spent = any(
-        isinstance(d, Modify) and d.placement not in (None, BandOutcome.IN_BAND) for d in workpiece.decisions
-    )
-    review = result.review.findings if result.review is not None and left else ()
-    if isinstance(decision, Accept) and review:
+    left, stored, notes = workpiece.round < budget.max_modify_rounds, workpiece.fallback, exhausted_notes(result)
+    review = result.review.findings if result.review is not None else ()
+    placement = decision.placement if isinstance(decision, Modify) and decision.placement in band.accepted else None
+    if isinstance(decision, Modify) and placement is not None:  # a clean round out of band
+        if stored is not None and placement is not stored.band:
+            why = f"Clean revision placed {placement}, not {stored.band}: a placement change is tagged, not reverted"
+        elif any(map(band_only, workpiece.decisions)):
+            why = "The one band-only round is used"
+        elif not left:
+            why = "Shared modification budget exhausted"
+        else:
+            why = ""
+        if why:
+            decision = Accept(placement, (*tagged(placement), why, *decision.findings[1:], *notes))
+    if isinstance(decision, Accept) and review and left:
         decision = Modify((f"The solve-review proposed {len(review)} edit(s)",), decision.band)
+        placement = decision.placement
     if not isinstance(decision, Modify):
         return accepted(decision, workpiece)
-    placement = decision.placement if decision.placement in band.accepted else None  # None: a fault or ineligible
     chosen = fallback_for(workpiece, placement, band)
-    revise = left and (bool(review) or (placement not in (None, BandOutcome.IN_BAND) and not band_spent))
-    if (placement is not None and revise) or chosen is None:
+    if placement is not None or chosen is None:  # a round to revise, or a fault with nothing to restore
         return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
-    notes = exhausted_notes(result)
-    if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
-        stored = workpiece.fallback
-        changed = f", not {stored.band}: a placement change is tagged, not reverted" if stored else ""
-        changed = changed if stored and stored.band is not chosen.band else " after its band round"
-        why = f"Clean revision placed {chosen.band}{changed}" if stored else "Shared modification budget exhausted"
-        return accepted(Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes)), workpiece)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
     restored = Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)

@@ -233,6 +233,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
   out of band gets one band-only revision round within the shared budget and is then accepted at its own
   placement, tagged `accepted_with: <band>`; only a fault or the author stopping reverts to the stored fallback.
+  As in live Forge, in this order: a clean revision placed outside its fallback's band is accepted at its new
+  placement, tagged; a round with review findings is a defect round, not the band-only one, even out of band;
+  and the band-only round is spent only by a round revised for its placement alone.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
@@ -272,7 +275,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   `{source, start, end, quote}`. A finding is kept only when every quote occurs, whitespace collapsed, in
   the parts it addresses; any other is recorded as dropped with its reason. The report must account for
   every trial that did not pass, by a real trial number, and a failure attributed to a task defect needs a
-  finding that survived its citations and cites that trial (task files may support it alongside); otherwise the report goes back to the reviewer. While the shared
+  finding that survived its citations and cites that trial (task files may support it alongside);
+  otherwise the report goes back to the reviewer. While the shared
   budget has a round left, kept findings send the task back for a revision (the author may decline a
   finding by number, with a reason, on `submit`), which is validated again and restores the reviewed
   version through the fallback on a fault; after that they are the acceptance's `notes`. A restore carries
