@@ -6,7 +6,10 @@ The learner-only integration and CPU proofs are ready; H100 acceptance remains
 pending. Smoke `2026.11.21.5`, from `832147b475a17ed9c803e8cbbb901203c85bccdd`,
 failed during model initialization with a 45.28-GiB GPU allocation request in
 `jit_load_from_state_dict`. A targeted import-memory fix passes local checks
-and independent review. Native Snowball initialization, updates, publication, generation,
+and independent review. Fresh smoke `2026.11.21.6` is submitted at BATCH priority
+from `40184fec60e355aefeb0a0f2075d429922b20c0e`. At 14:09 PST its CPU
+coordinator was running, with no GPU child yet discovered.
+Native Snowball initialization, updates, publication, generation,
 and checkpoint continuation remain unverified on H100. The matched comparison
 is gated on smoke acceptance.
 
@@ -184,7 +187,10 @@ a shared-storage Torch checkpoint probe. A shape-only census gives 9.30 GiB of
 FP32 model parameters per device on data4/expert8; it excludes optimizer state,
 import scratch, activations, and allocator overhead, and does not prove H100 fit.
 
-The next smoke, `2026.11.21.6`, is not submitted. Native initialization
+Fresh smoke `2026.11.21.6` was submitted through coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.6-coordinator-6eb0f104`.
+It has verified BATCH priority, and its accepted archive matches all 4,582
+frozen entries, including 42 required runtime files. Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch
 and finalization. Ordinary RPCs retain their 1,800-second limit. This changes
@@ -196,8 +202,8 @@ import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
 No successful accelerator rerun is established by this record.
 Run from the repository with the required storage, evaluation, and judge
-credentials loaded. The smoke command below is planned; freeze and record its
-source before submission.
+credentials loaded. The smoke command records the submitted attempt; use a
+fresh unused version for another attempt.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
