@@ -384,7 +384,6 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
             ),
         ),
         data_settings=frozenset({"shuffle"}),
-        evaluations=(replace(_TASK_SET, every=10, at_start=True),),
         checkpoints="none",
         checkpoint_every=None,
         export="none",
