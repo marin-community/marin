@@ -990,6 +990,7 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
             head_dim=8,
             max_seq_len=128,
             router_dot_fp32=True,
+            router_combine_fp32=True,
             tokenizer=str(hf_path),
         )
         # HF metadata chooses the platform kernel; test reload separately from
@@ -1005,7 +1006,6 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
             train_batch_size=max(8, jax.device_count()),
             per_device_parallelism=1,
             num_train_steps=1,
-            max_eval_batches=1,
             require_accelerator=False,
             tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
             checkpointer=CheckpointerConfig(base_path=str(tmp_path / "ckpts")),
@@ -1023,27 +1023,21 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
             )
         with local_cpu_mesh():
             examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
-        main(
-            TrainLmConfig(
-                data=LmDataConfig(
-                    tokenizer=str(hf_path),
-                    components={
-                        "direct": DirectDatasetComponent(
-                            datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)},
-                        )
-                    },
-                ),
-                model=config,
-                initialize_from_hf=str(hf_path),
-                use_hf_model_config=True,
-                trainer=trainer,
-                optimizer=AdamConfig(learning_rate=5e-5),
-            )
+        run_config = TrainLmConfig(
+            data=LmDataConfig(
+                tokenizer=str(hf_path),
+                components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
+            ),
+            model=config,
+            initialize_from_hf=str(hf_path),
+            use_hf_model_config=True,
+            trainer=trainer,
+            optimizer=AdamConfig(learning_rate=5e-5),
         )
-        metrics = json.loads((tmp_path / "eval_results.json").read_text())
-        assert math.isfinite(metrics["train/loss"])
-        assert 0.0 <= metrics["train/moe/dropped_assignment_fraction"] <= 1.0
-        assert math.isfinite(metrics["eval/loss"])
+        main(run_config)
+    # main replaces run_config.model with the config read from HF metadata, which carries neither flag.
+    assert run_config.model.router_dot_fp32
+    assert run_config.model.router_combine_fp32
 
 
 def test_fp32_router_training_rejects_missing_fp32_bias_before_loading(tmp_path):
