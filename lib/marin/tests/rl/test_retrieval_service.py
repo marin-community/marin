@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import threading
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,10 +19,11 @@ import rolloutengine.harness.retrieval_service as retrieval_runtime
 from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, create_environment
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import JobName
+from iris.rpc import controller_pb2
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 from rolloutengine.harness.retrieval_service import OpenResearcherServiceProvider
@@ -129,15 +131,15 @@ def test_retrieval_private_relay_preserves_documents_larger_than_capture_limit()
             thread.join(timeout=5)
 
 
-def test_service_child_submission_forwards_mounted_storage_credentials(monkeypatch, tmp_path):
+def test_service_child_preserves_credentials_and_region_and_resolves_its_run_endpoint(monkeypatch, tmp_path):
     for name, value in {"CW_KEY_ID": "mounted-id", "CW_KEY_SECRET": "mounted-secret"}.items():
         (tmp_path / name).write_text(value)
         monkeypatch.delenv(name, raising=False)
     (tmp_path / "DAYTONA_RL_API_KEY").write_text("parent-only")
     monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
 
-    class SubmissionCaptured(Exception):
-        pass
+    endpoints = {}
+    terminated = []
 
     class ControllerStub:
         def __init__(self, *, address, **kwargs):
@@ -149,12 +151,37 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
             assert not {"CW_KEY_ID", "CW_KEY_SECRET", "DAYTONA_RL_API_KEY"} & wire.env_vars.keys()
             assert not any(item.key in {"region", "cluster"} for item in request.constraints)
             assert request.name == "/alice/rollout/retrieval"
-            raise SubmissionCaptured
+            child = IrisContext.from_job_info(JobInfo(task_id=JobName.from_wire(request.name + "/0")), client=client)
+            stack.enter_context(child.registry.registered(launch.config.endpoint_name, address))
+            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+        def register_endpoint(self, request, **kwargs):
+            endpoints[request.name] = controller_pb2.Controller.Endpoint(
+                endpoint_id=request.endpoint_id, name=request.name, address=request.address, task_id=request.task_id
+            )
+            return controller_pb2.Controller.RegisterEndpointResponse(
+                endpoint_id=request.endpoint_id, lease_duration=request.lease_duration
+            )
+
+        def list_endpoints(self, request, **kwargs):
+            return controller_pb2.Controller.ListEndpointsResponse(
+                endpoints=[value for key, value in endpoints.items() if key == request.prefix]
+            )
+
+        def unregister_endpoint(self, request, **kwargs):
+            endpoints.clear()
+
+        def terminate_job(self, request, **kwargs):
+            terminated.append(request.job_id)
+
+        def get_job_status(self, request, **kwargs):
+            pytest.fail("The registered service endpoint must resolve before waiting on job status")
 
         def close(self):
             pass
 
     monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
+    monkeypatch.setattr("iris.cluster.client.remote_client.EndpointServiceClientSync", ControllerStub)
     monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
     launch = RetrievalServiceLaunch(
         config=RetrievalServiceConfig(
@@ -187,10 +214,38 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
     )
     set_job_info(info)
     try:
-        with IrisClient.in_cluster("http://parent-controller:8080", workspace=tmp_path) as client:
-            with set_current_client(FrayIrisClient.from_iris_client(client)):
-                with pytest.raises(SubmissionCaptured), retrieval_service(launch):
-                    pytest.fail("Submission capture must stop before service readiness")
+        with (
+            RetrievalServer(
+                ("127.0.0.1", 0),
+                retrieval_handler(FixtureIndex("source document"), launch.config.state.model_dump(mode="json")),
+                4,
+            ) as server,
+            ExitStack() as stack,
+        ):
+            address = f"http://127.0.0.1:{server.server_port}"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = stack.enter_context(IrisClient.in_cluster("http://parent-controller:8080", workspace=tmp_path))
+                context = IrisContext.from_job_info(info, client=client)
+                with iris_ctx_scope(context), set_current_client(FrayIrisClient.from_iris_client(client)):
+                    with retrieval_service(launch) as endpoint:
+                        response = httpx.post(
+                            endpoint + "/search",
+                            json={
+                                "name": "search",
+                                "arguments": {"query": "quantum physics"},
+                                "state": launch.config.state.model_dump(mode="json"),
+                            },
+                            trust_env=False,
+                        )
+                        response.raise_for_status()
+                        assert response.json() == [{"docid": "7385", "score": 1.0, "snippet": "quantum physics"}]
+                    assert terminated == ["/alice/rollout/retrieval"]
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+        assert not endpoints
     finally:
         set_job_info(previous)
 

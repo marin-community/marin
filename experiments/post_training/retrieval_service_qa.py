@@ -137,7 +137,8 @@ async def actor_retrieval(endpoint: str, config: QualificationConfig) -> tuple[D
         await machine.close()
 
 
-def qualify(config: QualificationConfig) -> QualificationResult:
+def retrieval_service_launch(config: QualificationConfig) -> RetrievalServiceLaunch:
+    """Build the pinned service allocation and environment for a qualification run."""
     service = RetrievalServiceConfig(
         state=config.state,
         index_uri=config.index_uri,
@@ -153,13 +154,18 @@ def qualify(config: QualificationConfig) -> QualificationResult:
         env_vars={"MARIN_CLUSTER": "coreweave", "JAVA_HOME": "/opt/java21", "JDK_JAVA_OPTIONS": "-Xmx2048m"},
         secret_behavior=SecretBehavior.ISOLATE,
     )
-    launch = RetrievalServiceLaunch(
+    return RetrievalServiceLaunch(
         config=service,
         resources=ResourceConfig(**config.resources.model_dump()),
         environment=environment,
         startup_timeout=3600,
         lifetime=Duration.from_hours(3),
     )
+
+
+def qualify(config: QualificationConfig) -> QualificationResult:
+    """Run concurrent search and private actor document probes against the pinned service."""
+    launch = retrieval_service_launch(config)
     started = time.monotonic()
     with retrieval_service(launch) as endpoint:
         ready_elapsed = time.monotonic() - started

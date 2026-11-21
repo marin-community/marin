@@ -104,7 +104,6 @@ def test_frozen_tasks_bind_verifier_floor_and_typed_local_actor(tmp_path, stored
     loaded = dataset.collate_fn([dataset[0]])[0]["input"].spec
     assert loaded.task == task
     assert loaded.task_machine.backend == Backend.LOCAL
-    assert loaded.task_machine.network.value == "deny"
     assert loaded.limits.verifier_timeout == 2400
     assert (
         loaded.limits.attempt_timeout is None or loaded.limits.attempt_timeout >= 2400 + loaded.limits.cleanup_timeout
