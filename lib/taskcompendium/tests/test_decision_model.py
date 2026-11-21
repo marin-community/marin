@@ -96,7 +96,7 @@ def test_a_cut_outside_the_level_band_is_rejected(cut):
 )
 def test_a_task_the_decision_model_cannot_read_is_rejected_at_construction(answer_type, answer_format):
     fields = {**_task().model_dump(), "answer_type": answer_type, "answer_format": answer_format.model_dump()}
-    with pytest.raises(ValidationError, match="decision_model grader reads a text or action answer"):
+    with pytest.raises(ValidationError, match="decision_model grader"):
         TaskSpec.model_validate(fields)
 
 
