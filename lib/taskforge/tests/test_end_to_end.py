@@ -100,6 +100,7 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.decision_model import (
     DecisionModel,
+    DecisionModelDown,
     DecisionModelHealth,
     DecisionModelPolicy,
     DecisionModelRead,
@@ -3357,28 +3358,44 @@ async def test_a_fresh_outage_parks_released_work_that_has_not_started(
 
 # Review 2026-11-21 (n10 follow-up 1, finding 3): what a probe child reports. Only a probe that resolved a decision-
 # model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
+# Follow-up 2 (finding 4): a probe that read 200, then met a 503 in the same process and ended on a human hold,
+# answered and released every parked proposal. The latest evidence decides: a later outage leaves it proving nothing,
+# while the human hold stays manual either way.
+@pytest.mark.parametrize("outage", [False, True], ids=["answered", "answered-then-down"])
 async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, outage: bool
 ) -> None:
     reads: list[DecisionModelRequest] = []
 
     class Reader(DecisionModelReader):
         async def read(self, request: DecisionModelRequest) -> float:
             reads.append(request)
+            if request.candidate == "13":
+                raise DecisionModelDown("HTTP 503: clef_unavailable")
             return 1.0
 
         async def health(self) -> DecisionModelHealth:
             return DecisionModelHealth.HEALTHY
 
-    async def reading(ctx: Context, *_: object) -> object:
-        policy = DecisionModelPolicy("clef@fixture-1", 1, 10.0, 20.0, 1.0, 1.0, 0.0)
-        ctx.handle(
-            DecisionModelRead,
-            partial(read_level, ctx=ctx),
-            DecisionModel(Reader(), policy),
+    def asked(candidate: str) -> DecisionModelRead:
+        return DecisionModelRead(
+            DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", candidate)
         )
-        request = DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", "12")
-        await ctx.emit(DecisionModelRead(request))
+
+    async def reading(ctx: Context, *_: object) -> object:
+        policy = DecisionModelPolicy("clef@fixture-1", 2, 10.0, 20.0, 1.0, 1.0, 0.0)
+
+        async def backoff(_seconds: float) -> None:  # a retry waits until it is cancelled
+            await asyncio.Event().wait()
+
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), DecisionModel(Reader(), policy, sleep=backoff))
+        await ctx.emit(asked("12"))
+        if outage:  # a sibling's read then meets the outage, and the sibling's human hold ends the launch
+            down, start = asyncio.create_task(ctx.emit(asked("13"))), len(reads)
+            while len(reads) == start:
+                await asyncio.sleep(0)
+            down.cancel()
+            await asyncio.gather(down, return_exceptions=True)
         raise Hold("a human reads this")
 
     monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
@@ -3387,4 +3404,5 @@ async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process
     for resume in (False, True, False):  # fresh; replayed on an explicit resume; skipped as held
         driver_args.probe, driver_args.resume_held = True, resume
         codes.append(await driver.one(driver_args))
-    assert (codes, len(reads)) == ([driver.ANSWERED, 0, 0], 1)
+    assert codes == [0 if outage else driver.ANSWERED, 0, 0]
+    assert [read.candidate for read in reads] == (["12", "13", "13"] if outage else ["12"])  # one paid "12"

@@ -28,7 +28,7 @@ from rigging.secrets import get_secret, list_secret_names, require_secret
 
 from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
-from taskforge.effects.events import Resolved, StageCompleted
+from taskforge.effects.events import Resolved, Retrying, StageCompleted
 from taskforge.effects.issues import (
     CorruptJournal,
     DecisionModelUnavailable,
@@ -190,9 +190,14 @@ async def one(args: argparse.Namespace) -> int:
             status = fold(tuple(record.event for record in log.records))
             matched = wp[0].terminal is not None and (status.round, status.terminal) == (wp[0].round, wp[0].terminal)
             await checkpoints.finish(status if matched else Status(), wp[0])
-    fresh = (r.event for r in log.records[len(previous) :] if isinstance(r.event, Resolved) and not r.event.replayed)
-    answered = args.probe and any(isinstance(event.request, DecisionModelRead) for event in fresh)
-    return DEFERRED if deferred(wp[0]) else ANSWERED if answered else 0
+    # The decision model's answers (True) and retried failures (False) in this process, in order; the latest decides.
+    contact = [
+        isinstance(event, Resolved)
+        for record in log.records[len(previous) :]
+        if isinstance(event := record.event, Resolved | Retrying) and isinstance(event.request, DecisionModelRead)
+        if not (isinstance(event, Resolved) and event.replayed)
+    ]
+    return DEFERRED if deferred(wp[0]) else ANSWERED if args.probe and contact[-1:] == [True] else 0
 
 
 async def recovery(policy: Policy) -> DecisionModelHealth:
