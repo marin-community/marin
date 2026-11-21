@@ -186,7 +186,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
             "reference": "9662fdba:experiments/post_training/long_loop/specs/sft.yaml",
             "replaces_parallelism": "CP32/EP8",
             "expert_axis_size": 1,
-            "parameter_precision": "Retain FP32 master parameters and BF16 compute; R1 used BF16 parameters",
+            "parameter_precision": spec.sft.mp,
             "optimizer_grouping": (
                 "Retain corrected hero-EP grouping (#11639): stacked expert matrices use MuonH, "
                 "RMSNorm scales use Adam, lm_head/output_proj use AdamH; "
