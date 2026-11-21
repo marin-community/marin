@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared settings for RL batches that include Pi and one-turn tasks."""
+"""Shared settings for RL batches that include agent and shell-tool tasks."""
 
 from dataclasses import replace
 from fractions import Fraction
 
+from rolloutengine.models import MachineRuntimeSpec
+from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
@@ -99,4 +101,63 @@ def agentic_preset(preset: Preset, *, name: str, limits: RecipePatch) -> Preset:
         harbor=HARBOR_EVALUATION if preset.evaluations else None,
         then=task_health_step,
         recipe=replace(preset.recipe, config=config.replace(context_budget=budget.replace(max_turns=128))),
+    )
+
+
+TOOL_TURNS = 16
+TASK_MACHINE_STARTUP_TIMEOUT = 600
+TASK_MACHINE_CLEANUP_TIMEOUT = 60
+# Each shell-tool task runs on a machine that matches its command semantics.
+TASK_MACHINES = {
+    # ShellSim has no guest network.
+    CommandSemantics.SHELL_SIMULATOR: MachineRuntimeSpec(
+        backend=Backend.SHELLSIM,
+        network=NetworkPolicy.DENY,
+        cpus=None,
+        memory_mb=None,
+        storage_mb=None,
+        gpus=0,
+        user=None,
+        startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
+        cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
+    ),
+    CommandSemantics.LINUX_PROCESS: MachineRuntimeSpec(
+        backend=Backend.DAYTONA,
+        network=NetworkPolicy.ALLOW,
+        cpus=1,
+        memory_mb=2048,
+        storage_mb=10240,
+        gpus=0,
+        user=None,
+        startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
+        cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
+    ),
+}
+_SHELL_TOOL_RECIPE = RecipePatch(
+    environment=sections.Environment(
+        task_sessions={
+            # Linux task machines and image graders are training work, so they use the RL organization.
+            "daytona": {"api_key_env": _DAYTONA_RL_KEY, "ttl_minutes": 60},
+            "task_spec": {
+                "session": {"max_turns": TOOL_TURNS},
+                "task_machine_by_command_semantics": {
+                    semantics.value: machine.model_dump(mode="json") for semantics, machine in TASK_MACHINES.items()
+                },
+            },
+        }
+    ),
+)
+
+
+def shell_tool_preset(preset: Preset, *, name: str) -> Preset:
+    """Train a model's preset on a selection of shell-tool tasks."""
+    config = preset.recipe.config.merge(_SHELL_TOOL_RECIPE)
+    budget = config.context_budget
+    assert budget is not None
+    return replace(
+        preset,
+        name=name,
+        tasks_input="required",
+        recipe=replace(preset.recipe, config=config.replace(context_budget=budget.replace(max_turns=TOOL_TURNS))),
+        gaps=tuple(gap for gap in preset.gaps if gap not in ("no-agentic-tasks", "no-image-sandbox")),
     )
