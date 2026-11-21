@@ -30,6 +30,7 @@ from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
+from iris.rpc.async_adapter import BoundedThreadExecutor
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
@@ -73,16 +74,17 @@ class FailingRpc:
 class RefusingRpc(LocalRpc):
     """Fails the first ``refusals`` execs with ``code`` before running anything, then runs them locally."""
 
-    def __init__(self, code: Code, refusals: int, cause: Exception | None = None):
+    def __init__(self, code: Code, refusals: int, cause: Exception | None = None, message: str = "refused"):
         self.code = code
         self.refusals = refusals
         self.cause = cause
+        self.message = message
         self.scripts: list[str] = []
 
     def exec_in_container(self, request, timeout_ms):
         self.scripts.append(request.command[-1])
         if len(self.scripts) <= self.refusals:
-            raise ConnectError(self.code, "refused") from self.cause
+            raise ConnectError(self.code, self.message) from self.cause
         return super().exec_in_container(request, timeout_ms)
 
     def sent(self, marker: str) -> int:
@@ -358,15 +360,48 @@ def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path
         asyncio.run(machine.run(Command(("true",))))
 
 
+def pool_refusal() -> ConnectError:
+    """The refusal lib/iris's bounded exec pool raises when it is full, from the real executor."""
+    executor = BoundedThreadExecutor(max_workers=1, max_pending=0, thread_name_prefix="test-exec")
+    release = threading.Event()
+
+    async def refused() -> ConnectError:
+        busy = asyncio.ensure_future(executor.run(release.wait))
+        await asyncio.sleep(0)
+        try:
+            await executor.run(lambda: None)
+        except ConnectError as error:
+            return error
+        finally:
+            release.set()
+            await busy
+            executor.shutdown()
+        raise AssertionError("A full exec pool admitted another call")
+
+    return asyncio.run(refused())
+
+
 def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
-    rpc = RefusingRpc(Code.RESOURCE_EXHAUSTED, refusals=2)
+    refusal = pool_refusal()
+    rpc = RefusingRpc(refusal.code, refusals=2, message=refusal.message)
     machine, _ = local_machine(tmp_path, rpc)
 
     result = asyncio.run(machine.run(Command(("echo", "ran"))))
 
     assert result.stdout == b"ran\n"
     assert rpc.sent("echo ran") == 3
+
+
+# Review 2026-11-20 (follow-up 3): the generated client raises RESOURCE_EXHAUSTED for a reply above its read limit,
+# after the exec ran, and that reran the command in place.
+def test_resource_exhausted_other_than_the_pool_refusal_is_not_retried(tmp_path: Path) -> None:
+    rpc = RefusingRpc(Code.RESOURCE_EXHAUSTED, refusals=1, message="message is larger than configured max 24")
+    machine, _ = local_machine(tmp_path, rpc)
+
+    with pytest.raises(CommandOutcomeUnknown, match="larger than configured max"):
+        asyncio.run(machine.run(Command(("echo", "once"))))
+    assert rpc.sent("echo once") == 1
 
 
 @pytest.mark.parametrize("connected", [True, False])
@@ -385,7 +420,8 @@ class ClosingRpc(RefusingRpc):
     """Refuses every exec for a full pool; during the first refusal another thread closes the machine."""
 
     def __init__(self):
-        super().__init__(Code.RESOURCE_EXHAUSTED, refusals=1_000)
+        refusal = pool_refusal()
+        super().__init__(refusal.code, refusals=1_000, message=refusal.message)
         self.machine: IrisMachine | None = None
         self.closer: threading.Thread | None = None
 
