@@ -56,6 +56,7 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
+from taskforge.stages.rules import actionable
 from taskforge.stages.summary import task_manifest
 
 
@@ -179,11 +180,6 @@ def report_of(outcome: object) -> Returned[AdversaryReport] | None:
     return None
 
 
-def counted(finding: AdversaryFinding) -> bool:
-    """Whether review treats the finding as a defect (see ``rules.assess``)."""
-    return finding.met or CAUSE_DECISIONS.get(finding.cause) is Modify
-
-
 def replay_feedback(missed: Sequence[AdversaryFinding], remaining: int) -> str:
     """Tell the adversary what the replay saw for each finding that did not reproduce."""
     lines = [f"Validation replayed your report against the original task. {len(missed)} finding(s) did not reproduce:"]
@@ -283,7 +279,7 @@ async def run_adversary(
                 ]
             results = [claim.result() for claim in claims]
             replays += results
-            missed = tuple(finding for finding, failure in results if not failure and not counted(finding))
+            missed = tuple(finding for finding, failure in results if not failure and not actionable(finding))
             if not missed or revision > revisions:
                 break
             ctx.notify(Note(f"Adversary {name}: {len(missed)} finding(s) did not reproduce; revision {revision}"))
@@ -303,7 +299,7 @@ async def run_adversary(
             f"reproducing {f.claim!r} was inconclusive: {reason}" for f, failure in replays for reason in failure
         )
         status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
-        if not reasons and not any(finding.met for finding in findings):
+        if not reasons and not any(map(actionable, findings)):
             reasons = (no_finding(how),)
         return AdversaryResult(name, status, findings, reasons, continuation=stopped_at(owner, end, ended))
 

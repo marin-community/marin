@@ -14,7 +14,7 @@ from typing import override
 import pytest
 from lib.taskforge.tests.fake_resources import resources as stage_resources
 from lib.taskforge.tests.resource_doubles import FakeEnv, FakeInference
-from lib.taskforge.tests.stage_fakes import Environments
+from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
     Envs,
@@ -25,7 +25,7 @@ from lib.taskforge.tests.test_end_to_end import (
     script,
 )
 from rolloutengine.test_support import arithmetic_task
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.coordinator import run_workpiece
@@ -42,6 +42,7 @@ from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     Accept,
     AdversaryStatus,
+    Cause,
     Continuation,
     Defect,
     DefectClaim,
@@ -54,7 +55,7 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, Prompt, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.resources.grading import GradeCandidate
+from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
@@ -317,6 +318,37 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     assert reject.continuation == Continuation(owner, SearchEnd.BUDGET_EXHAUSTED, digest(final), 2)
     decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Accept)
+
+
+# Review 2026-11-21: a report alleging a wrong score whose fresh verifier crashed correctly led to Modify, but the review
+# repeated the unverified score as the finding and the search said it ran out of budget without one.
+async def test_a_claim_whose_fresh_verifier_crashes_is_reported_by_its_graded_cause(workpiece: Workpiece) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
+    crash = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        "grader exited 1",
+        failure=GradingFailure.GRADER_EXIT,
+        diagnostics={"exit_code": 1, "stderr": "ZeroDivisionError"},
+    )
+    client = Briefed({"false_reject": [finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0)]})
+    ctx = Context(log=EventLog())
+    bundle = replace(
+        stage_resources(Context(log=EventLog())),
+        grading=GradingResource(CandidateEngine(), "grader", CandidateEngine(crash)),
+        role_inference={"adversary": client},
+    )
+    install(ctx, bundle)
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    ((crashed,),) = (result.adversary[0].findings,)
+    assert (crashed.met, crashed.cause) == (False, Cause.GRADER_EXECUTION)
+    assert result.adversary[0].reasons == ()
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify) and decision.findings == (
+        "1 ungraded trial(s): grader_execution",
+        "grader exited 1\nZeroDivisionError",
+        "false_reject: its replay showed grader_execution, not the claimed defect",
+    )
 
 
 # Review 2026-11-21: with adversary.max_revisions=-1 the revision loop also skipped reproducing the report itself, so a

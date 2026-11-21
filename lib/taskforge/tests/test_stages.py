@@ -768,7 +768,7 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
         Candidate('{"target_value":' + "9" * 400 + "}"),
         DefectClaim(Defect.GRADER_CRASH, Observation(ObservedStatus.GRADER_ERROR), None),
         grade,
-        False,
+        True,  # a claimed crash that the replay showed
         cause,
     )
     final = reviewed(

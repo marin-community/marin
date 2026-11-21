@@ -11,6 +11,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.model.review import (
     Accept,
+    AdversaryFinding,
     AdversaryStatus,
     BandOutcome,
     BandRules,
@@ -36,6 +37,11 @@ def passed(grade: GradeResult) -> bool:
         return grade.passed
     reward, score_max = grade.reward or 0.0, grade.score_max
     return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def actionable(finding: AdversaryFinding) -> bool:
+    """Whether review acts on a finding: its defect reproduced, or its replay found a grader fault to repair."""
+    return finding.met or CAUSE_DECISIONS.get(finding.cause) is Modify
 
 
 def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
@@ -113,10 +119,10 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         if CAUSE_DECISIONS.get(trial.cause) is Modify and trial.grade is not None
     )
     findings += tuple(
-        f"{trial.name}: {finding.claim}"
+        f"{trial.name}: {finding.claim if finding.met else f'its replay showed {finding.cause}, not the claimed defect'}"
         for trial in result.adversary
         for finding in trial.findings
-        if finding.met or CAUSE_DECISIONS.get(finding.cause) is Modify
+        if actionable(finding)
     )
     if findings:
         return Modify(findings)
