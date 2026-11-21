@@ -1917,8 +1917,8 @@ def test_snowball_cached_decode_routes_reassemble_for_teacher_forced_replay():
         prefill_logits, cache, prefill_capture = model.decode_with_route_captures(
             prefill_ids, cache, prefill_info, prefill_positions
         )
-        legacy_prefill_pages = tuple(page.kv_pages.array for page in legacy_cache)
-        capture_prefill_pages = tuple(page.kv_pages.array for page in cache)
+        legacy_prefill_pages = legacy_cache.kv_pages.array
+        capture_prefill_pages = cache.kv_pages.array
         assert isinstance(prefill_capture, SnowballDecodeRouteCaptureBatch)
         assert len(prefill_capture.route_captures) == cfg.num_layers
         assert all(c.selected_experts.shape == (4, cfg.num_experts_per_token) for c in prefill_capture.route_captures)
@@ -1960,8 +1960,8 @@ def test_snowball_cached_decode_routes_reassemble_for_teacher_forced_replay():
         continuation_logits, cache, continuation_capture = model.decode_with_route_captures(
             continuation_ids, cache, continuation_info, continuation_positions
         )
-        legacy_continuation_pages = tuple(page.kv_pages.array for page in legacy_cache)
-        capture_continuation_pages = tuple(page.kv_pages.array for page in cache)
+        legacy_continuation_pages = legacy_cache.kv_pages.array
+        capture_continuation_pages = cache.kv_pages.array
         padded_ids = hax.named(jnp.asarray([12, 0], dtype=jnp.int32), "position")
         padded_positions = hax.named(jnp.asarray([5, -1], dtype=jnp.int32), "position")
         padded_info = PageBatchInfo(
@@ -1977,8 +1977,8 @@ def test_snowball_cached_decode_routes_reassemble_for_teacher_forced_replay():
         padded_logits, cache, padded_capture = model.decode_with_route_captures(
             padded_ids, cache, padded_info, padded_positions
         )
-        legacy_padded_pages = tuple(page.kv_pages.array for page in legacy_cache)
-        capture_padded_pages = tuple(page.kv_pages.array for page in cache)
+        legacy_padded_pages = legacy_cache.kv_pages.array
+        capture_padded_pages = cache.kv_pages.array
         full_capture = SnowballDecodeRouteCaptureBatch.concatenate(
             prefill_capture, continuation_capture, padded_capture
         )
@@ -1997,14 +1997,11 @@ def test_snowball_cached_decode_routes_reassemble_for_teacher_forced_replay():
         full_ordinary = model(full_teacher_ids)
 
     np.testing.assert_array_equal(np.asarray(prefill_logits.array), np.asarray(legacy_logits.array))
-    for expected, actual in zip(legacy_prefill_pages, capture_prefill_pages, strict=True):
-        np.testing.assert_array_equal(np.asarray(expected), np.asarray(actual))
+    np.testing.assert_array_equal(capture_prefill_pages, legacy_prefill_pages)
     np.testing.assert_array_equal(np.asarray(legacy_continuation_logits.array), np.asarray(continuation_logits.array))
-    for expected, actual in zip(legacy_continuation_pages, capture_continuation_pages, strict=True):
-        np.testing.assert_array_equal(np.asarray(expected), np.asarray(actual))
+    np.testing.assert_array_equal(capture_continuation_pages, legacy_continuation_pages)
     np.testing.assert_array_equal(np.asarray(legacy_padded_logits.array), np.asarray(padded_logits.array))
-    for expected, actual in zip(legacy_padded_pages, capture_padded_pages, strict=True):
-        np.testing.assert_array_equal(np.asarray(expected), np.asarray(actual))
+    np.testing.assert_array_equal(capture_padded_pages, legacy_padded_pages)
     np.testing.assert_allclose(np.asarray(prefill_logits.array), np.asarray(replayed.array[0]), rtol=1e-4, atol=1e-4)
     assert not np.array_equal(np.asarray(changed_replay.array), np.asarray(replayed.array))
     assert float(jnp.max(jnp.abs(changed_grad.transformer.blocks[0].mlp.router))) > 0.0
