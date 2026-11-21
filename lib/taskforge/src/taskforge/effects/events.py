@@ -121,6 +121,16 @@ class Retrying(Event[None]):
 
 
 @dataclass(frozen=True, slots=True)
+class Invalidated(Event[None]):
+    """An operator-authorised replacement of the result recorded for ``request`` under exactly ``fingerprints`` has
+    started: no later launch replays that result."""
+
+    kind = "effect.invalidated"
+    request: Event[object]
+    fingerprints: tuple[Fingerprint, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Failed(Event[None]):
     """A re-executed request's handled failure: the ``OSError`` its caller saw, by errno name and text."""
 

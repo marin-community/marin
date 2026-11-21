@@ -4,7 +4,8 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
+from contextvars import Context as Ambient
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -74,6 +75,12 @@ class Context:
     def observe[E: Event[object]](self, etype: type[E], fn: Observer[E]) -> None:
         self._chain.get()[-1].observers += ((etype, cast(Observer[Event[object]], fn)),)
 
+    def detached(self) -> Ambient:
+        """The caller's context variables with this context's scope reset to the root, for work no caller scope owns."""
+        ambient = copy_context()
+        ambient.run(self._chain.set, (self._root,))
+        return ambient
+
     def notify(self, event: Event[None]) -> None:
         """Record a diagnostic and start its observers without waiting for either."""
         self._publish(self._log.append(event), self._chain.get())
@@ -115,6 +122,8 @@ class Context:
         value = self._log.lookup(event, fingerprints)
         replayed = not isinstance(value, Missing)
         if not replayed:
+            if (invalidated := self._log.invalidate(event, fingerprints)) is not None:
+                self._publish(invalidated, chain)  # as the replacement starts
             value = await handler.fn(event, *uses)
         result = cast(T, value)
         self._publish(self._log.append(Resolved(event, fingerprints, result, replayed)), chain)

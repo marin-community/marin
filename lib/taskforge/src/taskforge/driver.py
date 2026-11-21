@@ -48,8 +48,8 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.resources.decision_model import DecisionModelHealth
-from taskforge.stages.classify import replay_rule
+from taskforge.resources.decision_model import DecisionModel, DecisionModelHealth
+from taskforge.stages.classify import replaced_refusals, replayable_grade
 from taskforge.wiring import clef, endpoint_source, install, runtime
 
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
@@ -59,8 +59,9 @@ OUTCOMES = {
     CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
 }
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
-DEFERRED = 75
-"""``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL)."""
+DEFERRED, ANSWERED = 75, 10
+"""``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL), and a ``--probe``
+child's when its own reader's last physical outcome was a valid answer, the only evidence that the model answers."""
 
 
 def deferred(wp: Workpiece | None) -> bool:
@@ -156,11 +157,14 @@ async def one(args: argparse.Namespace) -> int:
         return 0
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
+    replaces = replaced_refusals(previous, args.resume_held)
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade, replaces=replaces)
     wp = [Workpiece(proposal.header.id, proposal)]  # the current workpiece: each stage's start, then the returned one
+    readers: list[DecisionModel | None] = [None]  # this process's decision model, as the runtime built it
     try:
         async with checkpoints.running():
             async with runtime(policy, glm_source(policy), get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+                readers[0] = resources.decision_model
                 wp[0] = await run_workpiece(
                     proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
                 )
@@ -189,22 +193,20 @@ async def one(args: argparse.Namespace) -> int:
             status = fold(tuple(record.event for record in log.records))
             matched = wp[0].terminal is not None and (status.round, status.terminal) == (wp[0].round, wp[0].terminal)
             await checkpoints.finish(status if matched else Status(), wp[0])
-    return DEFERRED if deferred(wp[0]) else 0
-
-
-async def decision_model_health(policy: Policy) -> DecisionModelHealth:
-    """The default decision model's health on the gateway that ``one`` reads through."""
-    async with httpx.AsyncClient() as http:
-        return await clef(policy, glm_source(policy), http).health()
+    # A probe answers only when its own reader's last physical outcome is an answer; in-process callers omit the flag.
+    reader = readers[0] if getattr(args, "probe", False) else None
+    return DEFERRED if deferred(wp[0]) else ANSWERED if reader is not None and reader.answered else 0
 
 
 async def recovery(policy: Policy) -> DecisionModelHealth:
-    """HEALTHY once the decision model's host says so; UNSUPPORTED ``decision_model.retry_interval`` after a host
-    without the health route says so, when one deferred proposal probes it."""
-    while (health := await decision_model_health(policy)) is not DecisionModelHealth.HEALTHY:
-        await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
-        if health is DecisionModelHealth.UNSUPPORTED:
-            break
+    """HEALTHY once the default decision model's host (``one``'s gateway) says so; UNSUPPORTED after a host without
+    the health route says so and ``decision_model.retry_interval`` passes, when one deferred proposal probes it."""
+    async with httpx.AsyncClient() as http:
+        reader = clef(policy, glm_source(policy), http)
+        while (health := await reader.health()) is not DecisionModelHealth.HEALTHY:
+            await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
+            if health is DecisionModelHealth.UNSUPPORTED:
+                break
     return health
 
 
@@ -252,6 +254,7 @@ async def run(args: argparse.Namespace) -> None:
                 ]
                 if args.resume_held:  # the operator's flag alone: a child enters an outage-only hold by itself
                     command.append("--resume-held")
+                command += ["--probe"] * (path == probe)
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
@@ -268,13 +271,13 @@ async def run(args: argparse.Namespace) -> None:
                 path, _ = active.pop(task)
                 completed += 1
                 code = task.result()
-                if path == probe:  # only a probe that is not deferred again shows the decision model reads
+                if path == probe:  # only a probe's fresh answer shows the decision model reads; from others, a failure
                     probe = None
-                    if code == 0:
-                        ready, parked = ready + parked, []
-                if code == DEFERRED:
+                    if code == ANSWERED:
+                        ready, parked, code = ready + parked, [], 0
+                if code == DEFERRED:  # a fresh outage parks what was released but has not started
                     print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
-                    parked.append(path)
+                    parked, ready = ([*parked, path], ready) if probe else ([*parked, *ready, path], [])
                 elif code != 0:
                     label, action = OUTCOMES.get(code, ("failed", "see its log"))
                     labels[label] += 1
@@ -327,6 +330,8 @@ def main() -> None:
             command.add_argument("--buckets", type=int, default=4096)
             command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
+        else:
+            command.add_argument("--probe", action="store_true", help="Exit ANSWERED after a fresh decision-model read")
     args = parser.parse_args()
     if args.command == "report":
         configure_coreweave_s3()

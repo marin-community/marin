@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import importlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import cast, override
+from types import SimpleNamespace
+from typing import Any, cast, override
 
 import httpx
 import pytest
+from iris.client.client import IrisContext, iris_ctx_scope
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
@@ -22,7 +25,7 @@ from taskcompendium.models import DECISION_LEVELS, DECISION_QUESTION, DecisionMo
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, Retrying
-from taskforge.effects.issues import DecisionModelUnavailable
+from taskforge.effects.issues import DecisionModelUnavailable, Hold
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.client import Progress, Segment
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
@@ -30,6 +33,7 @@ from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_se
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.proposal import TaskProposal
+from taskforge.model.review import AdversaryResult, AdversaryStatus, Cause, ControlResult, TrialResult
 from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -49,10 +53,18 @@ from taskforge.stages.author import system_prompt, task_schema
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Validated
 from taskforge.stages.validate import solver_batch, validate
-from taskforge.wiring import build_config, build_resources, decision_model_policy, install, submit_gate
+from taskforge.wiring import (
+    RelayEndpoint,
+    build_config,
+    build_resources,
+    decision_model_policy,
+    install,
+    submit_gate,
+)
 
 MODEL = "clef@fixture-1"
 ROLES = ("author", "solver", "adversary")
+validate_stage = importlib.import_module("taskforge.stages.validate")  # the package re-exports the stage
 GRADER = DecisionModelGrader(deliverable="Six plus six.", rubric="The sum, as a number.", reference="12", cut=3.0)
 
 
@@ -258,7 +270,7 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
     model = DecisionModel(Gateway(30.0 if down else 60.0, down), replace(policy, unavailable_wait=100.0))
     start = time.clock()
     reads = asyncio.gather(
-        *(read_level(DecisionModelRead(request(str(n))), model, notify=lambda _: None) for n in range(3)),
+        *(read_level(DecisionModelRead(request(str(n))), model, ctx=Context(log=EventLog())) for n in range(3)),
         return_exceptions=True,
     )
     while not reads.done() and time.clock() - start < 150.0:  # half a virtual second at a time
@@ -269,10 +281,18 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
     assert [read if isinstance(read, float) else str(read) for read in ended] == outcomes
 
 
+HUGE = 10**5000  # 5,001 digits: no repr within the default limit
+
+
 # Review 2026-11-21 (n10 finding 4): an override returning "4" was graded INFRA_ERROR, then replayed from the journal as
 # the level 4.0 and passed with no new read; an unconvertible string made the journal unreadable. A level is checked
-# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume.
-@pytest.mark.parametrize("level, shown", [(7, "7"), ("4", "a value of type str"), ("four", "a value of type str")])
+# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume. Follow-up 1
+# (finding 4): a 5,001-digit integer was formatted before X2 saw it, raising a rollout restart; X2 bounds the diagnostic.
+@pytest.mark.parametrize(
+    "level, shown",
+    [(7, "7"), ("4", "a value of type str"), ("four", "a value of type str"), (HUGE, "a value of type int")],
+    ids=["7", "str", "word", "huge"],
+)
 async def test_an_off_scale_level_is_an_infrastructure_error_recorded_nowhere_and_read_again(
     level: object, shown: str, tmp_path: Path
 ) -> None:
@@ -316,6 +336,90 @@ async def test_equal_reads_in_flight_share_one_paid_read_and_survive_a_cancelled
     rewards = await asyncio.gather(*grades[1:])
     await ctx.drain()
     assert (reader.peak, [grade.reward for grade in rewards]) == (1, [1.0] * 3)
+
+
+class Answers(FakeReader):
+    """Each read waits for ``release``, then answers the next of ``answers``: a second paid read would show."""
+
+    def __init__(self, *answers: float) -> None:
+        super().__init__()
+        self.answers, self.release = list(answers), asyncio.Event()
+
+    @override
+    async def read(self, request: DecisionModelRequest) -> float:
+        self.reads.append(request)
+        await self.release.wait()
+        return self.answers.pop(0)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 1): an equal request arriving after the shared read left the table but
+# before its waiter recorded the level paid again, and the two read 1 and 4 for one key. The flight is owned until a
+# waiter has recorded its result: at every interleaving around completion, one call and one level.
+@pytest.mark.parametrize("steps", range(6))
+async def test_an_equal_request_around_a_reads_completion_shares_its_one_recorded_level(steps: int) -> None:
+    reader, ctx = Answers(4.0, 1.0), Context(log=EventLog())
+    installed(overlaid(), reader, ScriptedProvider(()), ctx, VirtualTime())
+    first = asyncio.create_task(ctx.emit(DecisionModelRead(request("12"))))
+    while not reader.reads:
+        await asyncio.sleep(0)
+    reader.release.set()
+    for _ in range(steps):
+        await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    second = asyncio.Task(ctx.emit(DecisionModelRead(request("12"))), loop=loop, eager_start=True)  # asks at this step
+    levels = (await first, await second)
+    await ctx.drain()
+    recorded = {r.event.value for r in ctx._log.records if isinstance(r.event, Resolved)}
+    assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
+
+
+# Review 2026-11-21 (n10 follow-up 2, finding 1): a waiter cancelled after the read completed evicted it while another
+# waiter had yet to record the level; an equal request then paid again, and the two recorded 1 and 4 for one key. A
+# cancelled waiter only leaves: the read stays shared until its last waiter leaves or one records it.
+@pytest.mark.parametrize("steps", range(6))
+@pytest.mark.parametrize("gap", range(3))
+async def test_a_waiter_cancelled_after_the_read_completes_leaves_it_to_the_waiter_that_records_it(
+    steps: int, gap: int
+) -> None:
+    reader, ctx = Answers(4.0, 1.0), Context(log=EventLog())
+    installed(overlaid(), reader, ScriptedProvider(()), ctx, VirtualTime())
+    cancelled, kept = (asyncio.create_task(ctx.emit(DecisionModelRead(request("12")))) for _ in range(2))
+    while not reader.reads:
+        await asyncio.sleep(0)
+    for _ in range(20):  # both wait on the one read
+        await asyncio.sleep(0)
+    reader.release.set()
+    for _ in range(steps):
+        await asyncio.sleep(0)
+    cancelled.cancel()
+    for _ in range(gap):
+        await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    late = asyncio.Task(ctx.emit(DecisionModelRead(request("12"))), loop=loop, eager_start=True)  # asks at this step
+    levels = (await kept, await late)
+    await asyncio.gather(cancelled, return_exceptions=True)
+    await ctx.drain()
+    recorded = {r.event.value for r in ctx._log.records if isinstance(r.event, Resolved)}
+    assert (levels, len(reader.reads), recorded) == ((4.0, 4.0), 1, {4.0})
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 1): with every waiter cancelled, the shared read kept retrying after the
+# drain. The last waiter to leave cancels and joins it: nothing runs on, and nothing is recorded resolved.
+async def test_a_read_every_waiter_left_stops_before_the_drain_and_records_nothing() -> None:
+    reader, ctx = FakeReader(down={"12"}), Context(log=EventLog())
+    installed(overlaid(), reader, ScriptedProvider(()), ctx, VirtualTime())
+    waiters = [asyncio.create_task(ctx.emit(DecisionModelRead(request("12")))) for _ in range(2)]
+    while len(reader.reads) < 2:  # retrying
+        await asyncio.sleep(0)
+    for waiter in waiters:
+        waiter.cancel()
+    await asyncio.gather(*waiters, return_exceptions=True)
+    await ctx.drain()
+    calls, rows = len(reader.reads), len(ctx._log.records)
+    for _ in range(100):
+        await asyncio.sleep(0)
+    assert (len(reader.reads), len(ctx._log.records)) == (calls, rows)
+    assert not [r for r in ctx._log.records if isinstance(r.event, Resolved)]
 
 
 async def test_without_a_decision_model_its_grader_is_returned_to_the_author_before_any_validation() -> None:
@@ -388,10 +492,11 @@ async def late_twelve(_progress: Progress) -> Segment:
 
 
 async def validated(
-    proposal: TaskProposal, reader: FakeReader, history: Sequence[Record] = (), concurrency: int = 3
+    proposal: TaskProposal, reader: FakeReader, history: Sequence[Record] = (), concurrency: int = 3, roster: int = 0
 ) -> tuple[Validated | BaseExceptionGroup, int, Sequence[Record]]:
     """Validate a decision-model task: three solver trials answering 12, and the controls 12 and 13."""
-    policy = overlaid().overlaid({"decision_model.unavailable_wait": 10.0, "solver.concurrency": concurrency})
+    overlay = {"decision_model.unavailable_wait": 10.0, "solver.concurrency": concurrency}
+    policy = overlaid().overlaid({**overlay, "adversary.roster": ["false_accept"] * roster})
     solver = ScriptedProvider((late_twelve,) * 3)
     log = EventLog(replay_from=history)
     ctx = Context(log=log)
@@ -401,10 +506,54 @@ async def validated(
         async with ctx.scope("workpiece"):
             built = installed(policy, reader, solver, ctx, VirtualTime())
             outcome = await validate(ctx, workpiece, build_config(policy, {}), built)
-    except* DecisionModelUnavailable as error:
+    except* (DecisionModelUnavailable, Hold) as error:
         outcome = error
     await ctx.drain()
     return outcome, len(solver.bodies), log.records
+
+
+def human(outcome: object) -> str:
+    """The reasons that keep ``outcome`` a human hold, empty when it awaits the decision model alone."""
+    rest = outcome.split(DecisionModelUnavailable)[1] if isinstance(outcome, BaseExceptionGroup) else None
+    return "" if rest is None else repr(rest)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 2): the negative control's outage was raised before the grade observer
+# joined, so the off-scale grades' hold was dropped and the run deferred as if only the decision model were missing.
+async def test_a_held_grade_beside_an_outage_keeps_the_wave_a_human_hold(proposal: TaskProposal) -> None:
+    held, _, _ = await validated(proposal, FakeReader(levels={"12": 7}, down={"13"}))
+    assert "returned 7, not a level in 0..4" in human(held)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 2): a failed adversary, or a solver refusal over the allowance that
+# returned before a control's outage, disappeared beside it, and the automatic resume bought the adversary again or
+# reused the refusal on a second launch. Every finished sibling's disposition is settled before the wave waits.
+@pytest.mark.parametrize("sibling", ["adversary", "solver"])
+async def test_a_human_disposition_finished_before_a_late_outage_outranks_it(
+    proposal: TaskProposal, sibling: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = validate_stage.control_result
+
+    async def control(ctx: Context, spec: TaskRolloutSpec, index: int, control: Control) -> ControlResult:
+        if index == 0:
+            return await real(ctx, spec, index, control)
+        for _ in range(1000):  # after every sibling has finished
+            await asyncio.sleep(0)
+        raise DecisionModelUnavailable(f"{MODEL} gave no read")
+
+    async def refused(*_args: object, **_kwargs: object) -> tuple[TrialResult, ...]:
+        return (TrialResult(0, None, Cause.HELD, "the model server refused"),)
+
+    async def failed(*args: object) -> AdversaryResult:
+        return AdversaryResult(str(args[5]), AdversaryStatus.FAILED, (), ("the search lost its machine",))
+
+    monkeypatch.setattr(validate_stage, "control_result", control)
+    monkeypatch.setattr(validate_stage, "adversary_result", failed)
+    if sibling == "solver":
+        monkeypatch.setattr(validate_stage, "solver_batch", refused)
+    held, _, _ = await validated(proposal, FakeReader(), roster=int(sibling == "adversary"))
+    reason = "the search lost its machine" if sibling == "adversary" else "the model server refused"
+    assert reason in human(held)
 
 
 # The decision model is down for the negative control's answer only, so its grade waits while the solver wave and
@@ -481,6 +630,29 @@ async def test_the_default_reader_asks_clef_the_whole_request_and_returns_the_ex
         },
         "questions": {"whole": {"type": "score", "instructions": DECISION_QUESTION, "criteria": list(DECISION_LEVELS)}},
     }
+
+
+# Review 2026-11-21 (n10 follow-up 2, finding 2): the shared read ran in an empty context, so a caller's scoped Iris
+# client was gone and the installed grade raised Restart before any POST, though the same reader called directly read
+# 4.0. The read keeps the caller's context and leaves only Taskforge's effect scope.
+async def test_the_installed_grade_reads_clef_through_the_callers_iris_client() -> None:
+    sent: list[httpx.Request] = []
+
+    def answer(call: httpx.Request) -> httpx.Response:
+        sent.append(call)
+        probabilities = {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 1.0}
+        return httpx.Response(200, json={"answers": {"whole": {"probabilities": probabilities}}})
+
+    relay = SimpleNamespace(resolve=lambda _model: SimpleNamespace(endpoints=[SimpleNamespace(url="http://gateway")]))
+    client = SimpleNamespace(resolver_for_job=lambda _job: relay)
+    source = RelayEndpoint("/muchanem/glm53-relay", "secret", Pool("high"), "glm-5.3")
+    reader = ClefReader(source, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
+    policy, ctx = overlaid(), Context(log=EventLog())
+    with iris_ctx_scope(IrisContext(job_id=None, client=cast(Any, client))):
+        installed(policy, reader, ScriptedProvider(()), ctx, VirtualTime())
+        grade = await ctx.emit(GradeCandidate(decision_spec(policy), Candidate("12")))
+    await ctx.drain()
+    assert (grade.reward, [str(call.url) for call in sent]) == (1.0, ["http://gateway/v1/systemone"])
 
 
 async def test_the_default_reader_reads_unavailability_as_down_and_other_refusals_as_bugs() -> None:

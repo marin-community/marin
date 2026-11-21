@@ -159,7 +159,7 @@ def install(ctx: Context, resources: Resources) -> None:
         rollouts = replace(rollouts, engine=DecisionModelEngine(rollouts.engine, ctx))
         fresh = DecisionModelEngine(grading.fresh_engine, ctx) if grading.fresh_engine else None
         grading = replace(grading, engine=DecisionModelEngine(grading.engine, ctx), fresh_engine=fresh)
-        ctx.handle(DecisionModelRead, partial(read_level, notify=ctx.notify), decision_model)
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), decision_model)
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.notify

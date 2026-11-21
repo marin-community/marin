@@ -22,7 +22,7 @@ from taskcompendium.decision_model import DecisionModelRequest
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
-from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, GlmEndpoint, retry_after
+from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
 from taskforge.resources.rollouts import Engine
 
@@ -48,12 +48,8 @@ class DecisionModelDown(Exception):
 
 
 class OffScale(Exception):
-    """A reader returned ``level``, which is no level of its request: it is never recorded, so a resumed run reads
-    again, and TaskCompendium grades it ``INFRA_ERROR``."""
-
-    def __init__(self, level: object) -> None:
-        super().__init__(f"Decision model returned {level!r}, not a level")
-        self.level = level
+    """A reader returned the argument, no level of its request: it is never recorded, so a resumed run reads again,
+    and TaskCompendium grades it ``INFRA_ERROR`` with its own bounded diagnostic."""
 
 
 class DecisionModelReader(Protocol):
@@ -72,24 +68,24 @@ class ClefReader(DecisionModelReader):
     source: EndpointSource
     http: httpx.AsyncClient
 
-    async def _endpoint(self) -> GlmEndpoint:
+    async def _send(self, method: str, route: str, body: object = None) -> httpx.Response:
+        """The authorized request to ``route``; an unresolvable or unreachable host is down. The caller bounds it."""
         try:
-            return await asyncio.to_thread(self.source.current)
+            endpoint = await asyncio.to_thread(self.source.current)
+            url, headers = f"{endpoint.base_url}{route}", {"Authorization": f"Bearer {endpoint.token}"}
+            return await self.http.request(method, url, headers=headers, json=body, timeout=None)
         except EndpointUnavailable as error:
             raise DecisionModelDown(str(error)) from error
+        except httpx.TransportError as error:
+            raise DecisionModelDown(f"unreachable: {type(error).__name__}") from error
 
     @override
     async def read(self, request: DecisionModelRequest) -> float:
-        endpoint = await self._endpoint()
         state = {"task_deliverable": request.deliverable, "rubric": request.rubric}
         state |= {"y_reference_answer": request.reference, "z_candidate_answer": request.candidate}
         question = {"type": "score", "instructions": request.question, "criteria": list(request.levels)}
         body = {"model": CLEF_MODEL, "state": state, "questions": {CLEF_QUESTION: question}}
-        headers = {"Authorization": f"Bearer {endpoint.token}"}
-        try:  # the resource's request deadline bounds the call
-            response = await self.http.post(f"{endpoint.base_url}/systemone", json=body, headers=headers, timeout=None)
-        except httpx.TransportError as error:
-            raise DecisionModelDown(f"unreachable: {type(error).__name__}") from error
+        response = await self._send("POST", "/systemone", body)  # the resource's request deadline bounds it
         if (status := response.status_code) in DOWN_STATUSES or status >= 500:
             raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", retry_after(response))
         if status != 200:
@@ -104,11 +100,8 @@ class ClefReader(DecisionModelReader):
     async def health(self) -> DecisionModelHealth:
         try:
             async with asyncio.timeout(HEALTH_TIMEOUT):  # relay resolution included
-                endpoint = await self._endpoint()
-                response = await self.http.get(
-                    f"{endpoint.base_url}/systemone/health", headers={"Authorization": f"Bearer {endpoint.token}"}
-                )
-        except (DecisionModelDown, httpx.TransportError, TimeoutError):
+                response = await self._send("GET", "/systemone/health")
+        except (DecisionModelDown, TimeoutError):
             return DecisionModelHealth.DOWN
         if response.status_code == 200:
             return DecisionModelHealth.HEALTHY
@@ -147,10 +140,11 @@ class DecisionModel:
     gate: asyncio.Semaphore = field(init=False)
     down: str | None = field(default=None, init=False)
     """Why the latest attempt failed, until one succeeds: what a read still waiting for a slot reports."""
-    reading: dict[str, asyncio.Task[float]] = field(default_factory=dict, init=False)
-    """Reads in flight by event digest: equal requests share one paid read, and a cancelled waiter leaves it running
-    for the others. A finished read leaves at once, so a failure is never shared with a later request; the event log
-    replays a recorded one."""
+    answered: bool | None = field(default=None, init=False)
+    """The latest physical outcome of a read in this process, in order of occurrence: a valid answer (True), or a
+    failure or a dispatched read still unanswered at its deadline (False); a read that only waited for a slot is none."""
+    reading: dict[str, "Flight"] = field(default_factory=dict, init=False)
+    """Reads in flight by event digest, so that equal requests share one paid read."""
 
     def __post_init__(self) -> None:
         self.gate = asyncio.Semaphore(self.policy.concurrency)
@@ -161,10 +155,11 @@ class DecisionModel:
     async def level(self, event: DecisionModelRead, notify: Notify) -> float:
         policy = self.policy
         delay, attempt, why = policy.backoff_initial, 1, f"none of its {policy.concurrency} read slots came free"
+        dispatched = False
         try:
             async with asyncio.timeout(policy.unavailable_wait), self.gate:
                 while True:
-                    why = "its read went unanswered"
+                    why, dispatched = "its read went unanswered", True
                     try:
                         async with asyncio.timeout(policy.request_timeout):
                             level: object = await self.reader.read(event.request)
@@ -172,27 +167,51 @@ class DecisionModel:
                         top = len(event.request.levels) - 1  # TaskCompendium's level contract, checked before recording
                         if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= top:
                             raise OffScale(level)
+                        self.answered = True
                         return level
                     except DecisionModelDown as error:
                         reason, asked = str(error), error.retry_after
                     except TimeoutError:
                         reason, asked = f"no answer within {policy.request_timeout:g}s", 0.0
-                    self.down = reason
+                    self.down, self.answered, dispatched = reason, False, False
                     notify(Retrying(event, attempt, reason))
                     await self.sleep(max(asked, delay))
                     delay, attempt = min(delay * 2, policy.backoff_maximum), attempt + 1
         except TimeoutError:
+            if dispatched:  # in flight at the deadline: an outage observation
+                self.answered = False
             last = why if self.down is None else f"last {self.down}"
             raise DecisionModelUnavailable(
                 f"{policy.model} gave no read within {policy.unavailable_wait:g}s: {last}"
             ) from None
 
 
-async def read_level(event: DecisionModelRead, model: DecisionModel, *, notify: Notify) -> float:
-    if (shared := model.reading.get(key := event_digest(event))) is None:
-        shared = model.reading[key] = asyncio.ensure_future(model.level(event, notify))
-        shared.add_done_callback(lambda _: model.reading.pop(key))
-    return await asyncio.shield(shared)
+@dataclass(slots=True)
+class Flight:
+    """A paid read, findable until a waiter takes its result (recorded before any other task runs) or a failure, or
+    until its last waiter leaves; a waiter cancelled meanwhile only leaves, and the last to leave early cancels and
+    joins it."""
+
+    task: asyncio.Task[float]
+    waiters: int = 0
+
+
+async def read_level(event: DecisionModelRead, model: DecisionModel, *, ctx: Context) -> float:
+    if (flight := model.reading.get(key := event_digest(event))) is None:
+        # In the caller's context (its Iris client) outside every caller's scope: its retries are root rows.
+        read = asyncio.get_running_loop().create_task(model.level(event, ctx.notify), context=ctx.detached())
+        flight = model.reading[key] = Flight(read)
+    flight.waiters += 1
+    try:
+        return await asyncio.shield(flight.task)
+    finally:
+        flight.waiters -= 1
+        taken = flight.task.done() and not cast(asyncio.Task[float], asyncio.current_task()).cancelling()
+        if (taken or not flight.waiters) and model.reading.get(key) is flight:
+            del model.reading[key]
+        if not flight.task.done() and not flight.waiters:
+            flight.task.cancel()
+            await asyncio.gather(flight.task, return_exceptions=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +228,7 @@ class DecisionModelEngine:
                 try:
                     return await self.ctx.emit(DecisionModelRead(request))
                 except OffScale as error:
-                    return cast(float, error.level)  # graded INFRA_ERROR; the level was never recorded
+                    return cast(float, error.args[0])  # graded INFRA_ERROR; the level was never recorded
 
             spec = spec.model_copy(update={"decision_model": replace(connection, read=read)})
         return await self.engine.run_task(spec, model, run_id=run_id)

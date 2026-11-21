@@ -11,9 +11,11 @@ from pathlib import Path
 import pytest
 from lib.taskforge.tests.effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed, local_records
 
+from taskforge.effects.context import Context
 from taskforge.effects.events import (
     Event,
     Fingerprint,
+    Invalidated,
     Note,
     ReplayPolicy,
     Resolved,
@@ -226,3 +228,60 @@ async def test_a_cold_reader_importing_the_stage_package_decodes_every_row_of_a_
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["57"]
+
+
+class Paid:
+    """A cached resource bought under ``profile``; ``calls`` collects the profile of each paid execution."""
+
+    def __init__(self, profile: str, calls: list[str]) -> None:
+        self.profile, self.calls = profile, calls
+
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("paid", self.profile, ReplayPolicy.CACHE)
+
+
+async def pay(event: Timed, resource: Paid) -> float:
+    resource.calls.append(resource.profile)
+    return event.timeout * 2
+
+
+async def launch(path: Path, profile: str, calls: list[str]) -> None:
+    """One cold process: the journal at ``path`` alone, then one request of the paid effect, appended to it."""
+    sink = JsonlSink(str(path))
+    ctx = Context(log=EventLog(sink=sink, replay_from=local_records(sink) if path.exists() else ()))
+    ctx.handle(Timed, pay, Paid(profile, calls))
+    await ctx.emit(Timed(5))
+    await ctx.drain()
+
+
+# Review 2026-11-21 (n10 follow-up 3): a bare request row discarded the cached result for its request digest under
+# every fingerprint. Cold runs under profiles A, then B, then A paid three times; the third replays A's result.
+async def test_a_result_under_one_fingerprint_survives_a_run_under_another(tmp_path: Path) -> None:
+    calls: list[str] = []
+    for profile in ("A", "B", "A"):
+        await launch(tmp_path / "journal.jsonl", profile, calls)
+    assert calls == ["A", "B"]
+
+
+# Review 2026-11-21 (n10 follow-up 3): a replay's durable prefix ending between its request row and its replayed
+# resolution discarded the paid result, and the next process paid again. No cut of a normal replay costs a call.
+@pytest.mark.parametrize("rows", [2, 3, 4], ids=["before-request", "after-request", "after-resolution"])
+async def test_no_durable_prefix_of_a_replay_costs_a_paid_call(tmp_path: Path, rows: int) -> None:
+    journal, calls = tmp_path / "journal.jsonl", list[str]()
+    for _ in range(2):  # a paid run, then its replay
+        await launch(journal, "A", calls)
+    cut = tmp_path / "cut.jsonl"
+    cut.write_bytes(b"".join(journal.read_bytes().splitlines(keepends=True)[:rows]))
+    await launch(cut, "A", calls)
+    assert calls == ["A"]
+
+
+# Review 2026-11-21 (n10 follow-up 3): an invalidation names one result exactly, resource fingerprint included.
+async def test_an_invalidation_for_one_fingerprint_leaves_another_fingerprints_result(tmp_path: Path) -> None:
+    sink, request = JsonlSink(str(tmp_path / "journal.jsonl")), Timed(5)
+    x, y = Paid("X", []).fingerprint(), Paid("Y", []).fingerprint()
+    log = EventLog(sink=sink)
+    for event in (Resolved(request, (x,), 1.0), Resolved(request, (y,), 2.0), Invalidated(request, (x,))):
+        await log.record(event)
+    reloaded = EventLog(replay_from=local_records(sink))
+    assert (reloaded.lookup(request, (y,)), type(reloaded.lookup(request, (x,)))) == (2.0, Missing)

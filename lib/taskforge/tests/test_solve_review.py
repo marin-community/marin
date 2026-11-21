@@ -391,16 +391,16 @@ def test_the_recorded_solver_rollouts_are_one_projection_of_the_journal() -> Non
     assert solver_rollout(recorded) == (request, TRIALS[0][1]) and solver_rollout(Resolved(request, (), None)) is None
 
 
-async def test_a_format_5_root_is_refused_before_claim_and_left_untouched(
+async def test_a_format_6_root_is_refused_before_claim_and_left_untouched(
     driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A format-5 acceptance names no missing evidence although no solve-review ran, and resuming a format-5 round would
-    buy a review its history never had; such a root waits for a migration."""
+    """A format-6 acceptance, recorded at the base, names no missing evidence although no solve-review ran, and
+    resuming a format-6 round would buy a review its history never had; such a root waits for a migration."""
     destination = plant(driver_args, b"", checkpoint.JOURNAL_FORMAT - 1)
     before = sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file())
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(LogFailure, match="has journal format 5, not 6"):
+    with pytest.raises(LogFailure, match="has journal format 6, not 7"):
         await driver.one(driver_args)
     assert sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file()) == before
 

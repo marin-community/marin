@@ -152,15 +152,18 @@ async def solver_batch(
         ticker.cancel()
         await asyncio.gather(ticker, return_exceptions=True)
     results = [slot.result() for slot in slots]
-    holds = [
-        f"solver trial {r.trial}: {r.detail}" for r in results if isinstance(r, TrialResult) and r.cause is Cause.HELD
-    ]
     unfinished = [result for result in results if isinstance(result, Restart | DecisionModelUnavailable)]
-    if (unfinished or stopped()) and len(holds) > max_missing:
-        raise Hold("; ".join(holds))  # what review would decide, before anything unfinished is bought again
+    if unfinished and (held := refusal([r for r in results if isinstance(r, TrialResult)], max_missing)):
+        raise held  # what review would decide, before anything unfinished is bought again
     if unfinished:
         raise BaseExceptionGroup(f"Solver {phase} slots did not finish", unfinished)
     return tuple(result for result in results if isinstance(result, TrialResult))
+
+
+def refusal(trials: Sequence[TrialResult], max_missing: int) -> Hold | None:
+    """More than ``max_missing`` held slots: a human hold, whatever else is unfinished."""
+    held = [f"solver trial {trial.trial}: {trial.detail}" for trial in trials if trial.cause is Cause.HELD]
+    return Hold("; ".join(held)) if len(held) > max_missing else None
 
 
 async def settled[T](work: Awaitable[T], holds: list[BaseException]) -> T | None:
@@ -458,42 +461,37 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
         holds: list[BaseException] = []  # every sibling settles before a hold or an outage stops the workpiece
         rollouts: dict[int, GradedRollout] = {}
         async with asyncio.TaskGroup() as group:
-            controls = [
-                group.create_task(settled(control_result(ctx, spec, index, control), holds))
-                for index, control in enumerate(submission.controls)
-            ]
-            solver = group.create_task(
-                settled(
-                    solver_batch(
-                        ctx,
-                        spec,
-                        "validation",
-                        len(workpiece.evidence),
-                        (),
-                        0,
-                        k,
-                        concurrency=config.policy.setting("solver.concurrency", int),
-                        heartbeat=config.policy.setting("solver.heartbeat_interval", float),
-                        max_missing=config.budget.max_missing_trials,
-                        stopped=lambda: bool(holds),
-                        rollouts=rollouts,
-                    ),
-                    holds,
+
+            def start[T](work: Awaitable[T]) -> asyncio.Task[T | None]:
+                return group.create_task(settled(work, holds))
+
+            controls = [start(control_result(ctx, spec, i, control)) for i, control in enumerate(submission.controls)]
+            solver = start(
+                solver_batch(
+                    ctx,
+                    spec,
+                    "validation",
+                    len(workpiece.evidence),
+                    (),
+                    0,
+                    k,
+                    concurrency=config.policy.setting("solver.concurrency", int),
+                    heartbeat=config.policy.setting("solver.heartbeat_interval", float),
+                    max_missing=config.budget.max_missing_trials,
+                    stopped=lambda: bool(holds),
+                    rollouts=rollouts,
                 )
             )
             adversary = [
-                group.create_task(
-                    settled(
-                        adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name)),
-                        holds,
-                    )
-                )
+                start(adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name)))
                 for i, name in enumerate(roster)
             ]
-            review = group.create_task(
-                settled(reviewed(ctx, workpiece, config, resources, solver, controls, rollouts, holds), holds)
-            )
-        if holds:
+            review = start(reviewed(ctx, workpiece, config, resources, solver, controls, rollouts, holds))
+        await settled(ctx.check(), holds)  # the grade observers settle with the wave
+        if holds:  # an outage defers only a wave whose every other disposition is settled evidence
+            failed = [a for a in map(asyncio.Task.result, adversary) if a and a.status is AdversaryStatus.FAILED]
+            holds += [Hold(f"{a.name}: {'; '.join(a.reasons)}") for a in failed]
+            holds += [held] if (held := refusal(solver.result() or (), config.budget.max_missing_trials)) else []
             raise BaseExceptionGroup("Validation holds", holds)
         controls_done, adversaries_done = tuple(map(kept, controls)), tuple(map(kept, adversary))
         result = ValidationResult(submission.digest, kept(solver), controls_done, adversaries_done)

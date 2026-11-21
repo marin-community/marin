@@ -38,6 +38,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
+from taskcompendium.decision_model import DecisionModelRequest
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
@@ -97,7 +98,15 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submiss
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.decision_model import DecisionModelHealth
+from taskforge.resources.decision_model import (
+    DecisionModel,
+    DecisionModelDown,
+    DecisionModelHealth,
+    DecisionModelPolicy,
+    DecisionModelRead,
+    DecisionModelReader,
+    read_level,
+)
 from taskforge.resources.env import (
     CommandResult,
     EnvFactory,
@@ -453,7 +462,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         policy=str(overlay),
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
-        resume_held=False,
+        resume_held=False,  # and no probe: an in-process caller built before the flag existed (follow-up 2)
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -3222,10 +3231,10 @@ async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators
 
     def rule(previous: Sequence[Record], resume: bool) -> Any:
         entered.append(resume)
-        return replayable_grade
+        return lambda _: False
 
     monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: held})
-    monkeypatch.setattr(driver, "replay_rule", rule)
+    monkeypatch.setattr(driver, "replaced_refusals", rule)
     serve(monkeypatch, resources(Envs(), ()), resources(Envs(), ()))
     deferred = driver.DEFERRED if enters else 0
     assert await driver.one(driver_args) == deferred
@@ -3258,7 +3267,8 @@ def batch(
     concurrency: int = 1,
 ) -> list[str]:
     """A run over one proposal per ``codes`` entry, decision-model ones unless named ``code``, whose children exit with
-    their codes in turn and then 0; the list collects each child launch, which must carry no --resume-held."""
+    their codes in turn and then 0; the list collects each child launch, starred for a probe, and none carries
+    --resume-held."""
     decision = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
     paths = {name: tmp_path / f"{name}.proposal.json" for name in codes}
     for name, path in paths.items():
@@ -3272,7 +3282,7 @@ def batch(
 
     async def child(args: Namespace) -> int:
         assert not args.resume_held, "only the operator reopens a hold"
-        launches.append(Path(args.proposals).stem.removesuffix(".proposal"))
+        launches.append(Path(args.proposals).stem.removesuffix(".proposal") + "*" * getattr(args, "probe", False))
         return (remaining[args.proposals] or [0]).pop(0)
 
     monkeypatch.setattr(driver, "one", child)
@@ -3290,7 +3300,7 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     codes = {"first": [driver.DEFERRED], "second": [], "code": []}
     launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
     given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     await driver.run(driver_args)
     assert launches == ["first", "code", "first", "second"]
     assert given == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
@@ -3311,7 +3321,7 @@ async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
             await asyncio.sleep(0)
         return DecisionModelHealth.HEALTHY
 
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     async with asyncio.timeout(30.0):  # a health read that blocks dispatch never answers
         await driver.run(driver_args)
     assert launches == ["first", "code", "first"]
@@ -3329,14 +3339,186 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     capsys: pytest.CaptureFixture[str],
     code: int,
 ) -> None:
-    codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": []}
+    codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": [driver.ANSWERED]}
     launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
     given, health = answering(DecisionModelHealth.UNSUPPORTED)
-    monkeypatch.setattr(driver, "decision_model_health", health)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
     with contextlib.suppress(RuntimeError):  # a failed probe fails the run, once every proposal has run
         await driver.run(driver_args)
     # a defers, and b and c wait behind it; a probes and fails, so b probes and defers again, then c probes and is
     # answered, which releases b. Health is read before each probe: after a's hold, a's failed probe and b's hold.
-    assert (launches, len(given)) == (["a", "a", "b", "c", "b"], 3)
+    assert (launches, len(given)) == (["a", "a*", "b*", "c*", "b"], 3)
     label = "failed" if code == 1 else driver.OUTCOMES[code][0]
     assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
+
+
+# Review 2026-11-21 (n10 follow-up 2, finding 5): an ordinary child exiting 10 was counted a success. Only the
+# designated probe's 10 is an answer; from any other child it is the unexpected exit it is.
+async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"code": [driver.ANSWERED]})
+    with pytest.raises(RuntimeError, match="1 workpieces failed"):
+        await driver.run(driver_args)
+    assert launches == ["code"]
+    assert f"OUTCOME failed exit={driver.ANSWERED} proposal={tmp_path / 'code.proposal.json'}" in capsys.readouterr().out
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 3): a probe whose grade replayed a cached read exited 0 having made no
+# decision-model call, and released every parked proposal. A probe that proves no fresh answer stays a probe: each
+# parked proposal probes in turn after the interval, and none is released on its evidence.
+async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"a": [driver.DEFERRED, 0], "b": [], "c": []})
+    given, health = answering(DecisionModelHealth.UNSUPPORTED)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    await driver.run(driver_args)
+    assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 3): after one healthy reading the first released child deferred again,
+# and the rest of the released queue kept starting while the next health read was pending. A fresh outage parks
+# everything not yet started: no decision-model child launches while health is being read.
+async def test_a_fresh_outage_parks_released_work_that_has_not_started(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    codes = {"a": [driver.DEFERRED, driver.DEFERRED], "b": [], "c": [], "d": []}
+    launches, started, seen = batch(driver_args, tmp_path, monkeypatch, proposal, codes), list[str](), list[int]()
+    popen = driver.subprocess.Popen
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: started.append(command[-1]) or popen(command))
+
+    async def health(_policy: Policy) -> DecisionModelHealth:
+        seen.append(len(started))  # admission is synchronous: a launch beside this read happened before it
+        return DecisionModelHealth.HEALTHY
+
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    await driver.run(driver_args)
+    assert (seen, sorted(launches)) == ([1, 2], ["a", "a", "a", "b", "c", "d"])
+
+
+class ProbeReader(DecisionModelReader):
+    """Answers 1.0, except that "13" is down and "hang" is dispatched and never answered; ``reads`` collects them."""
+
+    def __init__(self, reads: list[str]) -> None:
+        self.reads = reads
+
+    async def read(self, request: DecisionModelRequest) -> float:
+        self.reads.append(request.candidate)
+        if request.candidate == "13":
+            raise DecisionModelDown("HTTP 503: clef_unavailable")
+        if request.candidate == "hang":
+            await asyncio.Event().wait()
+        return 1.0
+
+    async def health(self) -> DecisionModelHealth:
+        return DecisionModelHealth.HEALTHY
+
+
+def asked(candidate: str) -> DecisionModelRead:
+    return DecisionModelRead(
+        DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", candidate)
+    )
+
+
+def probe_bundles(reads: list[str], count: int) -> list[Resources]:
+    """Launch resources whose decision model reads through ``ProbeReader``: two slots, a 10 s wait, a 30 s request
+    deadline, and a backoff that lasts until it is cancelled."""
+
+    async def backoff(_seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    policy = DecisionModelPolicy("clef@fixture-1", 2, 30.0, 10.0, 1.0, 1.0, 0.0)
+    return [
+        replace(resources(Envs(), ()), decision_model=DecisionModel(ProbeReader(reads), policy, sleep=backoff))
+        for _ in range(count)
+    ]
+
+
+# Review 2026-11-21 (n10 follow-up 1, finding 3): what a probe child reports. Only a probe that resolved a decision-
+# model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
+async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[str] = []
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), bundle.decision_model)
+        await ctx.emit(asked("12"))
+        raise Hold("a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles(reads, 3))
+    codes = []
+    for resume in (False, True, False):  # fresh; replayed on an explicit resume; skipped as held
+        driver_args.probe, driver_args.resume_held = True, resume
+        codes.append(await driver.one(driver_args))
+    assert (codes, reads) == ([driver.ANSWERED, 0, 0], ["12"])
+
+
+# Review 2026-11-21 (n10 follow-ups 2 and 3): a probe that read 200 and then met a 503 ended on a human hold yet
+# answered, first in general and then when the 503's retry row landed before the 200's resolution in one loop turn;
+# and three answers followed by a fourth dispatched read that expired in flight left no row at all and answered. The
+# reader's last physical outcome in the probe's process decides: a later failure, or a dispatched read unanswered at
+# its deadline, proves nothing; a read that expired only waiting for a slot is no evidence; a pure outage defers.
+@pytest.mark.parametrize(
+    "scenario, code",
+    [
+        ("answered", 10),
+        ("same-tick-200-then-503", 0),
+        ("in-flight-expiry", 0),
+        ("queue-only-expiry", 10),
+        ("pure-outage", 75),
+    ],
+)
+async def test_a_probe_child_reports_its_readers_last_physical_outcome(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, scenario: str, code: int
+) -> None:
+    reads: list[str] = []
+    clock = LoopTime()
+
+    async def lapsed(read: asyncio.Task[float]) -> asyncio.Task[float]:
+        for _ in range(10):  # the read arms its deadline, then the clock passes the 10 s wait
+            await asyncio.sleep(0)
+        await clock.sleep(11.0)
+        return read
+
+    async def expired(ctx: Context, candidate: str) -> None:
+        with pytest.raises(DecisionModelUnavailable):
+            await (await lapsed(asyncio.create_task(ctx.emit(asked(candidate)))))
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        model = bundle.decision_model
+        assert model is not None
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), model)
+        if scenario == "pure-outage":
+            await (await lapsed(asyncio.create_task(ctx.emit(asked("13")))))  # the typed outage: the workpiece defers
+        if scenario == "same-tick-200-then-503":
+            answered, down = asyncio.create_task(ctx.emit(asked("12"))), asyncio.create_task(ctx.emit(asked("13")))
+            await answered
+            while len(reads) < 2:
+                await asyncio.sleep(0)
+            down.cancel()
+            await asyncio.gather(down, return_exceptions=True)
+        else:
+            for candidate in ("1", "2", "3") if scenario == "in-flight-expiry" else ("12",):
+                await ctx.emit(asked(candidate))
+        if scenario == "in-flight-expiry":
+            await expired(ctx, "hang")
+        if scenario == "queue-only-expiry":  # both slots held, so the read is never dispatched
+            for _ in range(2):
+                await model.gate.acquire()
+            await expired(ctx, "queued")
+        raise Hold("a sibling's refusal: a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles(reads, 1))
+    driver_args.probe = True
+    assert await driver.one(driver_args) == code
+    held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held.terminal is Terminal.HELD and driver.deferred(held) is (code == driver.DEFERRED)
+    assert "queued" not in reads
