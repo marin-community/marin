@@ -196,6 +196,14 @@ reached it; one cancelled after its terminal event was written but before that w
 publishes `terminal: null` over the full history, and the next launch replays it to the terminal
 workpiece without new model calls.
 
+**Rollout rule: never launch a root with an earlier driver.** A context-window refusal of an agent's request
+(author, adversary or reviewer) is recorded as a `context_exceeded` completion, so a resumed visit replays the
+stop. This revision and later ones read every row earlier drivers wrote; earlier drivers reject that row. The
+earlier driver of this journal format raises while it reads the journal, before it claims or publishes anything,
+so the root stays as published (read from its code, not run: `CheckpointSink.claim` decodes the history before it swaps the head). No
+format number fences the drivers before this layout. So roots written by this revision or later must never be
+launched by an earlier driver, and a rollback of the binary uses a fresh output prefix.
+
 While a driver is working on a workpiece, its head reads `terminal: null` with
 `published_at`; the hub's `job describe` for a finished federated driver can keep saying
 `running` indefinitely, so judge progress by these files and by the driver's pods, not by job state.
@@ -304,7 +312,11 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A
   finding given both dispositions is refused. In every report, round or final, each submitted version of a
   finding is checked against the evidence first, and the versions that survive become one finding carrying
-  their distinct citations, so a stale copy never hides a valid one and the author answers one number.
+  their distinct citations, so a stale copy never hides a valid one and the author answers one number. The
+  finding keeps each surviving version's citations as its own group (`groups`, stored only when there are
+  several): shipped notes, an earlier finding an account blames and the earlier-claim recheck keep a finding
+  while any one group's citations all still occur, so a revision that changes one cited trial never takes down
+  the version citing another.
   As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
   `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
   finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:
