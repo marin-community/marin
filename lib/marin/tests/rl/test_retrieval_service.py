@@ -18,6 +18,10 @@ import rolloutengine.harness.retrieval_service as retrieval_runtime
 from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, create_environment
+from iris.client.client import IrisClient
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.constraints import region_constraint
+from iris.cluster.types import JobName
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 from rolloutengine.harness.retrieval_service import OpenResearcherServiceProvider
@@ -135,17 +139,23 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
     class SubmissionCaptured(Exception):
         pass
 
-    class IrisSubmission:
-        def submit(self, **request):
-            environment = request["environment"]
-            wire = environment.to_proto()
+    class ControllerStub:
+        def __init__(self, *, address, **kwargs):
+            assert address == "http://parent-controller:8080"
+
+        def launch_job(self, request, *, timeout_ms=None):
+            wire = request.environment
             assert dict(wire.secrets) == {"CW_KEY_ID": "mounted-id", "CW_KEY_SECRET": "mounted-secret"}
             assert not {"CW_KEY_ID", "CW_KEY_SECRET", "DAYTONA_RL_API_KEY"} & wire.env_vars.keys()
-            assert environment.secret_behavior is SecretBehavior.ISOLATE
-            region = next(item for item in request["constraints"] if item.key == "region")
-            assert tuple(item.value for item in region.values) == ("us-east-02a",)
+            assert not any(item.key in {"region", "cluster"} for item in request.constraints)
+            assert request.name == "/alice/rollout/retrieval"
             raise SubmissionCaptured
 
+        def close(self):
+            pass
+
+    monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
+    monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
     launch = RetrievalServiceLaunch(
         config=RetrievalServiceConfig(
             state=OpenResearcherState(
@@ -169,9 +179,20 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
         startup_timeout=60,
         lifetime=Duration.from_hours(1),
     )
-    with set_current_client(FrayIrisClient.from_iris_client(IrisSubmission())):
-        with pytest.raises(SubmissionCaptured), retrieval_service(launch):
-            pytest.fail("Submission capture must stop before service readiness")
+    previous = get_job_info()
+    info = JobInfo(
+        task_id=JobName.from_wire("/alice/rollout/0"),
+        worker_region="us-east-02a",
+        constraints=[region_constraint(["us-east-02a"])],
+    )
+    set_job_info(info)
+    try:
+        with IrisClient.in_cluster("http://parent-controller:8080", workspace=tmp_path) as client:
+            with set_current_client(FrayIrisClient.from_iris_client(client)):
+                with pytest.raises(SubmissionCaptured), retrieval_service(launch):
+                    pytest.fail("Submission capture must stop before service readiness")
+    finally:
+        set_job_info(previous)
 
 
 def test_relay_pump_failure_preserves_the_partial_rollout_and_closes_the_guest(monkeypatch):

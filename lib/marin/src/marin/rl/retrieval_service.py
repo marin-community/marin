@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 from fray.current_client import current_client
-from fray.types import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
+from fray.types import ANY_REGION, Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
@@ -140,7 +140,9 @@ def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
         raise ValueError("Retrieval service must inherit the RL run cluster")
     if launch.resources.regions is not None and tuple(launch.resources.regions) != (launch.config.region,):
         raise ValueError("Retrieval service placement must match its run region")
-    resources = replace(launch.resources, regions=(launch.config.region,))
+    # CoreWeave CPU nodes lack region labels. The child inherits its single-region
+    # run cluster; ANY clears a GPU parent's region selector without routing elsewhere.
+    resources = replace(launch.resources, regions=(ANY_REGION,))
     storage = {
         name: launch.environment.secrets[name] if name in launch.environment.secrets else require_secret(name)
         for name in COREWEAVE_SECRET_NAMES

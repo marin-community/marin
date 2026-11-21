@@ -18,14 +18,13 @@ from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.shell import ToolContext
-from rolloutengine.machines import _machine_spec
+from rolloutengine.machines import task_machine
 from rolloutengine.models import MachineRuntimeSpec
 from rolloutengine.validation import validate_spec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, Command, NetworkPolicy
 from skyrl_gym.rollout_specs import TOOL_PROVIDERS, rollout_spec
 from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.environment import prepare_machine_spec
 
 
 class PythonQualificationInput(BaseModel):
@@ -85,14 +84,7 @@ async def qualify(rows: list[PythonQualificationInput], factory: LocalMachineFac
         lowered = rollout_spec(task, session, task_machine=runtime)
         validate_spec(lowered, {Backend.LOCAL: factory})
         assert lowered.task_machine is not None
-        selected = prepare_machine_spec(
-            task.environment_requirements,
-            factory,
-            _machine_spec(task.environment_requirements, lowered.task_machine),
-            os.environ,
-        )
-        machine = await factory.create(selected)
-        try:
+        async with task_machine(task, factory, lowered.task_machine, cleanup_timeout=60) as machine:
             (requirement,) = task.environment_requirements.tool_providers.values()
             provider = TOOL_PROVIDERS[requirement.action_interface]
             (tool,) = provider.tools(requirement)
@@ -133,8 +125,6 @@ async def qualify(rows: list[PythonQualificationInput], factory: LocalMachineFac
                 )
             finally:
                 await tools.close()
-        finally:
-            await machine.close()
     return tuple(results)
 
 

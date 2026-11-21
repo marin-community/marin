@@ -993,5 +993,5 @@ class TaskSpec(BaseModel):
 
 
 def declared_verifier_timeout(task: TaskSpec) -> float | None:
-    """Return the verifier budget shared by the task's declared allocations."""
+    """Return the declared verifier budget, or None when the task has no allocation."""
     return task.execution_requirements.verifier_timeout_sec if task.execution_requirements is not None else None
