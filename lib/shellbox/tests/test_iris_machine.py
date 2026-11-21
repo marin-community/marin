@@ -319,7 +319,7 @@ def test_command_on_an_ended_sandbox_raises_machine_terminated(tmp_path: Path, s
         asyncio.run(machine.run(Command(("true",))))
 
 
-def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Path) -> None:
+def test_exec_error_on_a_running_sandbox_is_an_unknown_outcome(tmp_path: Path) -> None:
     rpc = SimpleNamespace(
         exec_in_container=lambda request, timeout_ms: SimpleNamespace(
             exit_code=0, stdout="", stderr="", error="unexpected adapter bug"
@@ -327,9 +327,28 @@ def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Pat
     )
     machine, _ = local_machine(tmp_path, rpc, LocalTask(TaskState.RUNNING))
 
-    with pytest.raises(RuntimeError, match="Iris exec failed") as raised:
+    with pytest.raises(CommandOutcomeUnknown, match="unexpected adapter bug"):
         asyncio.run(machine.run(Command(("true",))))
-    assert not isinstance(raised.value, MachineTerminated)
+
+
+class FailingCleanupRpc(LocalRpc):
+    def exec_in_container(self, request, timeout_ms):
+        if request.command[-1].startswith("rm -f /tmp/.shellbox-"):
+            return SimpleNamespace(exit_code=1, stdout="", stderr="rm: Operation not permitted", error="")
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_failed_capture_cleanup_is_logged_and_keeps_the_result(tmp_path: Path, caplog) -> None:
+    machine, _ = local_machine(tmp_path, FailingCleanupRpc())
+
+    result = asyncio.run(machine.run(Command(("echo", "kept"))))
+
+    assert (result.exit_code, result.stdout) == (0, b"kept\n")
+    # The guest's own diagnostic reaches the operator; the result is unchanged.
+    assert any(
+        record.levelname == "WARNING" and "rm: Operation not permitted" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path) -> None:

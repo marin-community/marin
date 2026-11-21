@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
-from lib.taskforge.tests.resources.iris_fakes import Fault, LocalController, local_iris_machine
+from lib.taskforge.tests.resources.iris_fakes import RPC_SITES, Fault, LocalController, local_iris_machine
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
@@ -368,46 +368,75 @@ async def test_write_backend_path_failures_are_normalized(code: int, simulated: 
     assert caught.value.filename == str(OUTPUT)
 
 
-def _faults(names: tuple[str, ...], command: str) -> list[tuple[Callable[[str], bool], Fault]]:
-    rpcs: dict[str, Callable[[str], bool]] = {
-        "command": lambda script: command in script,
-        "capture": lambda script: script.startswith("wc -c") and script.endswith("-out"),
-        "cleanup": lambda script: script.startswith("rm -f /tmp/.shellbox-"),
-    }
-    return [(rpcs[rpc], Fault(fault)) for rpc, fault in (name.split(":") for name in names)]
+def _iris_env(tmp_path: Path, controller: LocalController) -> ShellboxEnv:
+    return ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
+
+
+def _counted(tmp_path: Path) -> RunCommand:
+    """A command that appends one line to ``tmp_path / "counter"`` each time it runs."""
+    return RunCommand(f"echo ran >> {tmp_path / 'counter'}; printf done; printf oops >&2", 5)
 
 
 # Review 2026-11-20: a lost Iris reply after the exec ran made the handler run the command again and succeed.
-# Follow-up: so did a capture or cleanup RPC that failed before it was sent, and a cleanup failure after a lost
-# reply replaced the primary failure. A failure may be retried in place only if the command was never sent.
+# Follow-up 1: so did a capture or cleanup RPC that failed before it was sent, and a cleanup failure after a lost
+# reply replaced the primary failure. Follow-up 2: a lost exec stream whose diagnostic status lookup was refused
+# retried in place, and one with a healthy status escaped raw. Only a primary exec never sent may be retried.
 @pytest.mark.parametrize(
-    "faults,restarts",
+    "faults,outcome",
     [
-        (("command:lose-reply",), True),
-        (("capture:lose-reply",), True),
-        (("capture:setup-failed",), True),
-        (("cleanup:setup-failed",), False),
-        (("cleanup:lose-reply",), False),
-        (("command:lose-reply", "cleanup:connect-refused"), True),
-        (("command:connect-refused",), False),
-        (("command:setup-failed",), False),
+        (("command:lose-reply",), "restart"),
+        (("command:stream-lost",), "restart"),
+        (("command:stream-lost-raised",), "restart"),
+        (("command:stream-lost", "status:connect-refused"), "restart"),
+        (("command:stream-lost", "status:lose-reply"), "restart"),
+        (("stdout-size:lose-reply",), "restart"),
+        (("stdout-size:setup-failed",), "restart"),
+        (("cleanup:setup-failed",), "result"),
+        (("cleanup:lose-reply",), "result"),
+        (("command:lose-reply", "cleanup:connect-refused"), "restart"),
+        (("command:connect-refused",), "retried"),
+        (("command:setup-failed",), "retried"),
     ],
 )
-async def test_command_runs_once_whichever_iris_rpc_fails(
-    tmp_path: Path, faults: tuple[str, ...], restarts: bool
-) -> None:
-    counter = tmp_path / "counter"
-    command = f"echo ran >> {counter}; printf done"
-    controller = LocalController(_faults(faults, command))
+async def test_command_runs_once_whichever_iris_rpc_fails(tmp_path: Path, faults: tuple[str, ...], outcome: str) -> None:
+    env = _iris_env(
+        tmp_path, LocalController([(site, Fault(fault)) for site, fault in (name.split(":") for name in faults)])
+    )
     events: list[Event[None]] = []
-    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
-    if restarts:
+    if outcome == "restart":
         with pytest.raises(Restart, match="outcome unknown"):
-            await run_command(RunCommand(command, 5), env, notify=events.append)
+            await run_command(_counted(tmp_path), env, notify=events.append)
     else:
-        result = await run_command(RunCommand(command, 5), env, notify=events.append)
-        assert (result.exit_code, result.stdout) == (0, "done")
-    assert counter.read_text() == "ran\n"
+        result = await run_command(_counted(tmp_path), env, notify=events.append)
+        assert (result.exit_code, result.stdout, result.stderr) == (0, "done", "oops")
+    assert (tmp_path / "counter").read_text() == "ran\n"
+    assert sum(isinstance(event, Retrying) for event in events) == (outcome == "retried")
+
+
+REPLY_LOSSES = (Fault.LOSE_REPLY, Fault.STREAM_LOST, Fault.STREAM_LOST_RAISED)
+# Every RPC ``IrisMachine.run`` makes once its command was dispatched, failed in every way: capture and cleanup
+# after a reply, or the status diagnostic and cleanup after each way the reply can be lost.
+AFTER_DISPATCH_RPCS = [
+    *(((site, fault),) for site in RPC_SITES if site not in ("command", "status") for fault in Fault),
+    *((("command", loss), (site, fault)) for loss in REPLY_LOSSES for site in ("status", "cleanup") for fault in Fault),
+]
+
+
+@pytest.mark.parametrize("faults", AFTER_DISPATCH_RPCS, ids=lambda faults: "+".join(map(":".join, faults)))
+async def test_no_failure_after_dispatch_reruns_the_command_or_escapes(
+    tmp_path: Path, faults: tuple[tuple[str, Fault], ...]
+) -> None:
+    controller = LocalController(faults)
+    events: list[Event[None]] = []
+    try:
+        result = await run_command(_counted(tmp_path), _iris_env(tmp_path, controller), notify=events.append)
+    except Restart as error:
+        assert "outcome unknown" in str(error) or "environment terminated" in str(error)
+    else:
+        assert (result.exit_code, result.stdout, result.stderr) == (0, "done", "oops")
+    assert not controller.faults, "every injected fault must fire"
+    assert (tmp_path / "counter").read_text() == "ran\n"
+    assert not any(isinstance(event, Retrying) for event in events)
 
 
 async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.MonkeyPatch) -> None:
