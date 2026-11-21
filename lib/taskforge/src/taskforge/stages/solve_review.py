@@ -9,7 +9,6 @@ One implementation over any set of trials: a review names its prompts and its re
 confirmation step's final review) passes its own, not a new path. Decision rules live with the review rules.
 """
 
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -17,7 +16,8 @@ from dataclasses import replace
 from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import format_conversation
+from taskcompendium.models import TaskResource, format_conversation
+from taskcompendium.pipeline.review import resource_inventory, resource_signature
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
@@ -116,10 +116,11 @@ def text_source(name: str, text: str, about: str = "") -> Source:
     return Source(name, f"{name}: {about}lines={len(text.splitlines())} chars={len(text)}", tuple(text.splitlines()))
 
 
-def resource_source(name: str, data: bytes) -> Source:
-    """A resource read by line, its summary naming the bytes it was built from; bytes that are not UTF-8 are named
-    opaque and have no parts, never replacement characters two different files could share."""
-    about = f"bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} "
+def resource_source(role: str, resource: TaskResource) -> Source:
+    """A file read by line, its summary the signature the task review signs (role, path, mode, mtime, bytes); bytes
+    that are not UTF-8 are named opaque and have no parts, never replacement characters two files could share."""
+    name, data = f"{RESOURCE}{role}/{resource.path}", resource_bytes(resource)
+    about = f"{canonical(resource_signature(role, resource, data))} "
     try:
         return text_source(name, data.decode(), about)
     except UnicodeDecodeError:
@@ -132,18 +133,14 @@ def task_document(submission: Submission) -> str:
 
 
 def task_sources(submission: Submission) -> tuple[Source, ...]:
-    """The task's documents under ``task/``, then each resource under ``resource/<group>/``: no file can take another
-    file's or a trial's address."""
-    task, groups = submission.task, submission.task.resources
+    """The task's documents under ``task/``, then every file it carries under ``resource/<role>/``, build inputs
+    included: no file can take another file's or a trial's address."""
+    task = submission.task
     return (
         text_source(f"{TASK}task.json", task_document(submission)),
         text_source(f"{TASK}prompt.md", format_conversation(task.context.events)),
         text_source(f"{TASK}controls.json", CONTROLS.dump_json(submission.controls, indent=1).decode()),
-        *(
-            resource_source(f"{RESOURCE}{group}/{file.path}", resource_bytes(file))
-            for group in ("all", "worker", "oracle", "verifier")
-            for file in getattr(groups, group)
-        ),
+        *(resource_source(role, resource) for role, resource in resource_inventory(task)),
     )
 
 

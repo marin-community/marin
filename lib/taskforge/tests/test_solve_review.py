@@ -35,7 +35,7 @@ from pydantic import TypeAdapter
 from rolloutengine.models import ConversationRecord, GradedRollout, Model, Rollout, RolloutFailure, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, DockerBuildContext, EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge import checkpoint, driver
@@ -729,3 +729,26 @@ async def test_the_earlier_template_with_its_version_slot_still_renders() -> Non
     opening = reviewer.requests[0].conversation[1].content
     version = evidence(SUBMISSION, TRIALS, OUTPUT_CHARS).version
     assert f"Evidence version {version}, its sources" in opening and opening.endswith(f"Evidence version: {version}")
+
+
+def test_a_file_s_mode_and_build_inputs_are_evidence() -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): making verifier ``check.sh`` executable changed the submission digest
+    but not the evidence, so the old report was reused; an equal-length Dockerfile edit was invisible too. Each file
+    the task carries is shown with the signature the task review signs, build inputs included."""
+    script = inline_resource("check.sh", b"exit 0\n")
+
+    def index(mode: str, dockerfile: bytes) -> Evidence:
+        submission = with_resources(verifier=())
+        task = submission.task
+        build = DockerBuildContext(files=(inline_resource("Dockerfile", dockerfile),))
+        environment = task.environment_requirements.model_copy(
+            update={"docker_build": build, "command_semantics": CommandSemantics.LINUX_PROCESS}
+        )
+        resources = task.resources.model_copy(update={"verifier": (script.model_copy(update={"mode": mode}),)})
+        task = task.model_copy(update={"resources": resources, "environment_requirements": environment})
+        return evidence(replace(submission, task=task), TRIALS, OUTPUT_CHARS)
+
+    plain, executable, rebased = index("0644", b"FROM a:1"), index("0755", b"FROM a:1"), index("0644", b"FROM b:1")
+    assert len({plain.version, executable.version, rebased.version}) == 3
+    assert '"mode": "0755"' in executable.sources["resource/verifier/check.sh"].summary
+    assert rebased.sources["resource/actor_build/Dockerfile"].parts == ("FROM b:1",)

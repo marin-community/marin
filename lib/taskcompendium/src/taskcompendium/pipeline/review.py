@@ -15,7 +15,14 @@ from typing import Any, Protocol
 from zephyr import counters
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    NoGrader,
+    ScriptGrader,
+    TaskResource,
+    TaskSpec,
+    VerifyitGrader,
+)
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import (
@@ -307,11 +314,16 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
     )
 
 
-def review_payload(task: TaskSpec) -> dict[str, Any]:
-    """Expose bounded readable fixture evidence without duplicating encoded bytes."""
-    payload = task.model_dump(mode="json")
-    remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
-    previews = []
+def build_environments(task: TaskSpec) -> list[tuple[str, EnvironmentRequirements]]:
+    """The task's environments that can carry unresolved build inputs, by the role their files take."""
+    environments = [("actor_build", task.environment_requirements)]
+    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
+        environments.append(("grader_build", task.grader.environment))
+    return environments
+
+
+def resource_inventory(task: TaskSpec) -> list[tuple[str, TaskResource]]:
+    """Every file the task carries, by role: the four resource groups, then the actor and grader build inputs."""
     resources = [
         (role, resource)
         for role, group in (
@@ -322,23 +334,40 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         )
         for resource in group
     ]
-    environments = [("actor_build", task.environment_requirements, payload["environment_requirements"])]
-    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
-        environments.append(("grader_build", task.grader.environment, payload["grader"]["environment"]))
-    for role, environment, projected in environments:
+    for role, environment in build_environments(task):
         if environment.docker_build is not None:
             resources.extend((role, resource) for resource in environment.docker_build.files)
-            projected["docker_build"] = {"resource_role": role, "status": "unresolved"}
+    return resources
+
+
+def resource_signature(role: str, resource: TaskResource, data: bytes) -> dict[str, Any]:
+    """A file's role, path, metadata and bytes, as the review signs them."""
+    return {
+        "role": role,
+        **resource.model_dump(mode="json", exclude={"source"}),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "byte_count": len(data),
+    }
+
+
+def review_payload(task: TaskSpec) -> dict[str, Any]:
+    """Expose bounded readable fixture evidence without duplicating encoded bytes."""
+    payload = task.model_dump(mode="json")
+    remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
+    previews = []
+    resources = resource_inventory(task)
+    projections = {
+        "actor_build": payload["environment_requirements"],
+        "grader_build": payload["grader"].get("environment"),
+    }
+    for role, environment in build_environments(task):
+        if environment.docker_build is not None:
+            projections[role]["docker_build"] = {"resource_role": role, "status": "unresolved"}
     manifest = []
     text_previews: list[dict[str, Any]] = []
     for role, resource in resources:
         data = resource_bytes(resource)
-        signature = {
-            "role": role,
-            **resource.model_dump(mode="json", exclude={"source"}),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "byte_count": len(data),
-        }
+        signature = resource_signature(role, resource, data)
         manifest.append(signature)
         if len(previews) == MAX_RESOURCE_PREVIEWS:
             continue
