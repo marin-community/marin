@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator admission last checked November 20, 2026 at 8:51 p.m. PST.
+Draft for review. Accelerator admission last checked November 20, 2026 around 9:00 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,8 +16,8 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | --- | --- | --- |
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
-| Learner on current `main` | Local ports cover the SPMD policy core, Snowball precision and rotary positions, and the JAX worker with one- and two-process checkpoint coverage. | Complete the SkyRL host adapter and a synchronous BATCH preset. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. The live child ends in `afd506ffbac0`. All five tasks are scheduling-gated. At 8:51 p.m., Kueue reported a shortfall of 10 GPUs and 10 InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks are scheduling-gated. Kueue reported a shortfall of nine GPUs and nine InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
 | Native online loop on current `main` | The local prototype completed both updates on one and four CPU devices. Each run consumed eight binary frames and sampled 128 tokens. The second rollout used the exact first published weight fingerprint. The maximum sampled-to-learner logprob difference was `4.06e-6`. | Run the four-TPUv4 gate and compare the current scorer to the prior bitwise fixture. |
 | Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
@@ -199,8 +199,9 @@ A fresh preflight from the current shell reached the selection metadata check
 and requires the regional object-store credentials.
 
 Current `main` uses the `experiments.post_training.rl` runner and named
-Snowball presets. Add a dedicated synchronous BATCH preset for the native
-learner with native checkpoint output. The existing `learning-medium`
+Snowball presets. The local port adds `levanter-smoke`, `learner-control`
+and `learner-levanter` presets for synchronous BATCH runs. Both Levanter
+presets emit native checkpoints. The existing `learning-medium`
 preset uses asynchronous rollouts, truncated importance sampling and HF
 export. Those features each need explicit learner support before carrying
 the new strategy into that preset. [Preset migration][preset-migration]
@@ -216,8 +217,11 @@ A separate exact-pin CPU probe confirmed that a native child can receive
 SIGTERM when its spawning thread exits while the host remains alive.
 Check for this separately if a restored process exits immediately after
 a matching checkpoint receipt. The CPU probes establish two concrete
-diagnostics. CUDA/NCCL startup and the actual Ray actor's thread lifetime
-remain unverified on the frozen H100 job.
+diagnostics. A local serial Ray probe kept the creating thread and child
+alive between method calls. The current-main port creates the child on its
+persistent IPC thread and passed single- and two-process host restart
+tests. CUDA/NCCL startup and restart remain unverified on the frozen H100
+job.
 
 [Exact smoke and comparison recipes][learner-status] ·
 [Frozen checkpoint validation code][frozen-worker]
@@ -295,7 +299,7 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
   consumers.
 
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
-[iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-afd506ffbac0
+[iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a1029950e470
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
 [timing]: https://github.com/marin-community/marin/issues/11190
 [launch]: ../references/rl-launching.md
