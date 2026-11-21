@@ -429,12 +429,14 @@ def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) 
     runner = "experiments/post_training/rl_tests/test_rl.py"
     for path in (census, runner):
         write(tmp_path, path, "def test_launch(): pass\n")
-    for changed in (
+    native_changes = (
         "vendor/skyrl/uv.lock",
         "lib/skyrlrecipe/src/skyrlrecipe/recipe.py",
         "vendor/skyrl/skyrl-train/skyrl_train/callbacks/builtin.py",
-    ):
+    )
+    for changed in native_changes:
         assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
+    assert sorted(leg_paths(select_matrix([*native_changes, runner], tmp_path), "marin")) == [runner, census]
 
 
 @pytest.mark.parametrize(
