@@ -140,6 +140,9 @@ class DecisionModel:
     gate: asyncio.Semaphore = field(init=False)
     down: str | None = field(default=None, init=False)
     """Why the latest attempt failed, until one succeeds: what a read still waiting for a slot reports."""
+    answered: bool | None = field(default=None, init=False)
+    """The latest physical outcome of a read in this process, in order of occurrence: a valid answer (True), or a
+    failure or a dispatched read still unanswered at its deadline (False); a read that only waited for a slot is none."""
     reading: dict[str, "Flight"] = field(default_factory=dict, init=False)
     """Reads in flight by event digest, so that equal requests share one paid read."""
 
@@ -152,10 +155,11 @@ class DecisionModel:
     async def level(self, event: DecisionModelRead, notify: Notify) -> float:
         policy = self.policy
         delay, attempt, why = policy.backoff_initial, 1, f"none of its {policy.concurrency} read slots came free"
+        dispatched = False
         try:
             async with asyncio.timeout(policy.unavailable_wait), self.gate:
                 while True:
-                    why = "its read went unanswered"
+                    why, dispatched = "its read went unanswered", True
                     try:
                         async with asyncio.timeout(policy.request_timeout):
                             level: object = await self.reader.read(event.request)
@@ -163,16 +167,19 @@ class DecisionModel:
                         top = len(event.request.levels) - 1  # TaskCompendium's level contract, checked before recording
                         if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= top:
                             raise OffScale(level)
+                        self.answered = True
                         return level
                     except DecisionModelDown as error:
                         reason, asked = str(error), error.retry_after
                     except TimeoutError:
                         reason, asked = f"no answer within {policy.request_timeout:g}s", 0.0
-                    self.down = reason
+                    self.down, self.answered, dispatched = reason, False, False
                     notify(Retrying(event, attempt, reason))
                     await self.sleep(max(asked, delay))
                     delay, attempt = min(delay * 2, policy.backoff_maximum), attempt + 1
         except TimeoutError:
+            if dispatched:  # in flight at the deadline: an outage observation
+                self.answered = False
             last = why if self.down is None else f"last {self.down}"
             raise DecisionModelUnavailable(
                 f"{policy.model} gave no read within {policy.unavailable_wait:g}s: {last}"

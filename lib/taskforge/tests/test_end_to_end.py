@@ -3371,53 +3371,124 @@ async def test_a_fresh_outage_parks_released_work_that_has_not_started(
     assert (seen, sorted(launches)) == ([1, 2], ["a", "a", "a", "b", "c", "d"])
 
 
+class ProbeReader(DecisionModelReader):
+    """Answers 1.0, except that "13" is down and "hang" is dispatched and never answered; ``reads`` collects them."""
+
+    def __init__(self, reads: list[str]) -> None:
+        self.reads = reads
+
+    async def read(self, request: DecisionModelRequest) -> float:
+        self.reads.append(request.candidate)
+        if request.candidate == "13":
+            raise DecisionModelDown("HTTP 503: clef_unavailable")
+        if request.candidate == "hang":
+            await asyncio.Event().wait()
+        return 1.0
+
+    async def health(self) -> DecisionModelHealth:
+        return DecisionModelHealth.HEALTHY
+
+
+def asked(candidate: str) -> DecisionModelRead:
+    return DecisionModelRead(
+        DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", candidate)
+    )
+
+
+def probe_bundles(reads: list[str], count: int) -> list[Resources]:
+    """Launch resources whose decision model reads through ``ProbeReader``: two slots, a 10 s wait, a 30 s request
+    deadline, and a backoff that lasts until it is cancelled."""
+
+    async def backoff(_seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    policy = DecisionModelPolicy("clef@fixture-1", 2, 30.0, 10.0, 1.0, 1.0, 0.0)
+    return [
+        replace(resources(Envs(), ()), decision_model=DecisionModel(ProbeReader(reads), policy, sleep=backoff))
+        for _ in range(count)
+    ]
+
+
 # Review 2026-11-21 (n10 follow-up 1, finding 3): what a probe child reports. Only a probe that resolved a decision-
 # model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
-# Follow-up 2 (finding 4): a probe that read 200, then met a 503 in the same process and ended on a human hold,
-# answered and released every parked proposal. The latest evidence decides: a later outage leaves it proving nothing,
-# while the human hold stays manual either way.
-@pytest.mark.parametrize("outage", [False, True], ids=["answered", "answered-then-down"])
 async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, outage: bool
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reads: list[DecisionModelRequest] = []
+    reads: list[str] = []
 
-    class Reader(DecisionModelReader):
-        async def read(self, request: DecisionModelRequest) -> float:
-            reads.append(request)
-            if request.candidate == "13":
-                raise DecisionModelDown("HTTP 503: clef_unavailable")
-            return 1.0
-
-        async def health(self) -> DecisionModelHealth:
-            return DecisionModelHealth.HEALTHY
-
-    def asked(candidate: str) -> DecisionModelRead:
-        return DecisionModelRead(
-            DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", candidate)
-        )
-
-    async def reading(ctx: Context, *_: object) -> object:
-        policy = DecisionModelPolicy("clef@fixture-1", 2, 10.0, 20.0, 1.0, 1.0, 0.0)
-
-        async def backoff(_seconds: float) -> None:  # a retry waits until it is cancelled
-            await asyncio.Event().wait()
-
-        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), DecisionModel(Reader(), policy, sleep=backoff))
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), bundle.decision_model)
         await ctx.emit(asked("12"))
-        if outage:  # a sibling's read then meets the outage, and the sibling's human hold ends the launch
-            down, start = asyncio.create_task(ctx.emit(asked("13"))), len(reads)
-            while len(reads) == start:
-                await asyncio.sleep(0)
-            down.cancel()
-            await asyncio.gather(down, return_exceptions=True)
         raise Hold("a human reads this")
 
     monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
-    serve(monkeypatch, *(resources(Envs(), ()) for _ in range(3)))
+    serve(monkeypatch, *probe_bundles(reads, 3))
     codes = []
     for resume in (False, True, False):  # fresh; replayed on an explicit resume; skipped as held
         driver_args.probe, driver_args.resume_held = True, resume
         codes.append(await driver.one(driver_args))
-    assert codes == [0 if outage else driver.ANSWERED, 0, 0]
-    assert [read.candidate for read in reads] == (["12", "13", "13"] if outage else ["12"])  # one paid "12"
+    assert (codes, reads) == ([driver.ANSWERED, 0, 0], ["12"])
+
+
+# Review 2026-11-21 (n10 follow-ups 2 and 3): a probe that read 200 and then met a 503 ended on a human hold yet
+# answered, first in general and then when the 503's retry row landed before the 200's resolution in one loop turn;
+# and three answers followed by a fourth dispatched read that expired in flight left no row at all and answered. The
+# reader's last physical outcome in the probe's process decides: a later failure, or a dispatched read unanswered at
+# its deadline, proves nothing; a read that expired only waiting for a slot is no evidence; a pure outage defers.
+@pytest.mark.parametrize(
+    "scenario, code",
+    [
+        ("answered", 10),
+        ("same-tick-200-then-503", 0),
+        ("in-flight-expiry", 0),
+        ("queue-only-expiry", 10),
+        ("pure-outage", 75),
+    ],
+)
+async def test_a_probe_child_reports_its_readers_last_physical_outcome(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, scenario: str, code: int
+) -> None:
+    reads: list[str] = []
+    clock = LoopTime()
+
+    async def lapsed(read: asyncio.Task[float]) -> asyncio.Task[float]:
+        for _ in range(10):  # the read arms its deadline, then the clock passes the 10 s wait
+            await asyncio.sleep(0)
+        await clock.sleep(11.0)
+        return read
+
+    async def expired(ctx: Context, candidate: str) -> None:
+        with pytest.raises(DecisionModelUnavailable):
+            await (await lapsed(asyncio.create_task(ctx.emit(asked(candidate)))))
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        model = bundle.decision_model
+        assert model is not None
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), model)
+        if scenario == "pure-outage":
+            await (await lapsed(asyncio.create_task(ctx.emit(asked("13")))))  # the typed outage: the workpiece defers
+        if scenario == "same-tick-200-then-503":
+            answered, down = asyncio.create_task(ctx.emit(asked("12"))), asyncio.create_task(ctx.emit(asked("13")))
+            await answered
+            while len(reads) < 2:
+                await asyncio.sleep(0)
+            down.cancel()
+            await asyncio.gather(down, return_exceptions=True)
+        else:
+            for candidate in ("1", "2", "3") if scenario == "in-flight-expiry" else ("12",):
+                await ctx.emit(asked(candidate))
+        if scenario == "in-flight-expiry":
+            await expired(ctx, "hang")
+        if scenario == "queue-only-expiry":  # both slots held, so the read is never dispatched
+            for _ in range(2):
+                await model.gate.acquire()
+            await expired(ctx, "queued")
+        raise Hold("a sibling's refusal: a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles(reads, 1))
+    driver_args.probe = True
+    assert await driver.one(driver_args) == code
+    held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held.terminal is Terminal.HELD and driver.deferred(held) is (code == driver.DEFERRED)
+    assert "queued" not in reads

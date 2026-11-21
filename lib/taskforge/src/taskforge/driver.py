@@ -28,7 +28,7 @@ from rigging.secrets import get_secret, list_secret_names, require_secret
 
 from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
-from taskforge.effects.events import Resolved, Retrying, StageCompleted
+from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import (
     CorruptJournal,
     DecisionModelUnavailable,
@@ -48,7 +48,7 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.resources.decision_model import DecisionModelHealth, DecisionModelRead
+from taskforge.resources.decision_model import DecisionModel, DecisionModelHealth
 from taskforge.stages.classify import replaced_refusals, replayable_grade
 from taskforge.wiring import clef, endpoint_source, install, runtime
 
@@ -61,7 +61,7 @@ OUTCOMES = {
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
 DEFERRED, ANSWERED = 75, 10
 """``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL), and a ``--probe``
-child's for one that resolved a decision-model read in its own process, the only evidence that it answers."""
+child's when its own reader's last physical outcome was a valid answer, the only evidence that the model answers."""
 
 
 def deferred(wp: Workpiece | None) -> bool:
@@ -160,9 +160,11 @@ async def one(args: argparse.Namespace) -> int:
     replaces = replaced_refusals(previous, args.resume_held)
     log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade, replaces=replaces)
     wp = [Workpiece(proposal.header.id, proposal)]  # the current workpiece: each stage's start, then the returned one
+    readers: list[DecisionModel | None] = [None]  # this process's decision model, as the runtime built it
     try:
         async with checkpoints.running():
             async with runtime(policy, glm_source(policy), get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+                readers[0] = resources.decision_model
                 wp[0] = await run_workpiece(
                     proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
                 )
@@ -191,14 +193,9 @@ async def one(args: argparse.Namespace) -> int:
             status = fold(tuple(record.event for record in log.records))
             matched = wp[0].terminal is not None and (status.round, status.terminal) == (wp[0].round, wp[0].terminal)
             await checkpoints.finish(status if matched else Status(), wp[0])
-    # The decision model's answers (True) and retried failures (False) in this process, in order; the latest decides.
-    contact = [
-        isinstance(event, Resolved)
-        for record in (log.records[len(previous) :] if getattr(args, "probe", False) else ())  # in-process: unset
-        if isinstance(event := record.event, Resolved | Retrying) and isinstance(event.request, DecisionModelRead)
-        if not (isinstance(event, Resolved) and event.replayed)
-    ]
-    return DEFERRED if deferred(wp[0]) else ANSWERED if contact[-1:] == [True] else 0
+    # A probe answers only when its own reader's last physical outcome is an answer; in-process callers omit the flag.
+    reader = readers[0] if getattr(args, "probe", False) else None
+    return DEFERRED if deferred(wp[0]) else ANSWERED if reader is not None and reader.answered else 0
 
 
 async def recovery(policy: Policy) -> DecisionModelHealth:

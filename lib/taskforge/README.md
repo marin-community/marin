@@ -174,7 +174,11 @@ A driver restarted against the same output resumes each workpiece from its journ
 `SKIP <id>: published terminal=<state>` for every published terminal, `held` included. Held
 workpieces are resumed only when the launch passes `--resume-held`; use it under a new job prefix
 after an infrastructure outage (sandbox admission, a provider gap longer than
-`provider.unavailable_wait`). Model calls replay from the event log; shell commands are
+`provider.unavailable_wait`). The one exception is a workpiece held only until the decision model answers again:
+its last decision is `Incomplete(..., awaits="decision_model")` and its `one` child exits 75. Every later launch
+enters it without the flag, and `run` parks such proposals until the decision model's health route reports healthy,
+or, on a gateway without that route, until a `one --probe` child exits 10 because its own reader's last physical
+outcome in that process was a valid answer. A hold that mixes the outage with any other cause stays manual. Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
 its initial sandbox definition; each command or file operation it issues references that row, takes the
