@@ -37,6 +37,8 @@ class Fault(StrEnum):
     """The controller's exec pool is full and refuses the request before its handler runs."""
     SETUP_FAILED = "setup-failed"
     """The reply carries the Kubernetes client's WebSocket setup-failure text."""
+    SETUP_FAILED_LATE = "setup-failed-late"
+    """As ``SETUP_FAILED``, but the admitted exec is still running: it finishes after the controller's next exec."""
     REPLY_TOO_LARGE = "reply-too-large"
     """The generated client rejects a reply above its configured read limit as RESOURCE_EXHAUSTED."""
     LOSE_REPLY = "lose-reply"
@@ -57,7 +59,12 @@ NEVER_AFTER_RUN = {
 }
 """Faults that cannot follow an executed exec, and why."""
 
-REPLIES = {Fault.SETUP_FAILED: EXEC_SETUP_FAILURE, Fault.STREAM_LOST: STREAM_LOST, Fault.OOM_KILLED: STREAM_LOST}
+REPLIES = {
+    Fault.SETUP_FAILED: EXEC_SETUP_FAILURE,
+    Fault.SETUP_FAILED_LATE: EXEC_SETUP_FAILURE,
+    Fault.STREAM_LOST: STREAM_LOST,
+    Fault.OOM_KILLED: STREAM_LOST,
+}
 """Faults the controller reports in its reply's error field rather than as an RPC error."""
 
 Injection = tuple[str, Fault, bool]
@@ -74,10 +81,19 @@ RPC_SITES: dict[str, Callable[[str], bool]] = {
     "stderr-chunk": lambda script: script.startswith("tail -c") and "-err |" in script,
     "cleanup": lambda script: script.startswith("rm -f /tmp/.shellbox-"),
 }
+# The helpers of ``IrisMachine.upload`` and ``download_file``: create or truncate the target, append a chunk, read one.
+TRANSFER_SITES: dict[str, Callable[[str], bool]] = {
+    "truncate": lambda script: 'true > "$p"' in script or (script.startswith("mkdir -p") and " && : > " in script),
+    "append": lambda script: "| base64 -d >>" in script,
+    "read-chunk": lambda script: script.startswith("tail -c") and "/tmp/.shellbox-" not in script,
+}
+SITES = RPC_SITES | TRANSFER_SITES
 
 
 def injections(site: str, fault: Fault) -> tuple[Injection, ...]:
     """Each physically possible way ``fault`` can hit ``site``: before the exec ran and, where it can, after."""
+    if fault is Fault.SETUP_FAILED_LATE:
+        return () if site == "status" else ((site, fault, True),)
     unsent = (site, fault, False)
     return (unsent,) if fault in NEVER_AFTER_RUN or site == "status" else (unsent, (site, fault, True))
 
@@ -106,15 +122,16 @@ class LocalController:
         self.faults, self.prelude = list(faults), prelude
         self.scripts: list[str] = []
         self.oom_killed = False
+        self.late: list[tuple[list[str], str]] = []
 
     def _fault(self, script: str) -> Injection | None:
-        entry = next((entry for entry in self.faults if RPC_SITES[entry[0]](script)), None)
+        entry = next((entry for entry in self.faults if SITES[entry[0]](script)), None)
         if entry is not None:
             self.faults.remove(entry)
         return entry
 
     def sent(self, site: str) -> int:
-        return sum(RPC_SITES[site](script) for script in self.scripts)
+        return sum(SITES[site](script) for script in self.scripts)
 
     def status(self) -> SimpleNamespace:
         self.scripts.append("status")
@@ -135,9 +152,14 @@ class LocalController:
         entry = self._fault(script)
         if entry is None:
             result = self._execute(shell, script)
+            for late in self.late:
+                self._execute(*late)
+            self.late.clear()
             return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
         _, fault, ran = entry
-        if ran:
+        if ran and fault is Fault.SETUP_FAILED_LATE:
+            self.late.append((shell, script))
+        elif ran:
             self._execute(shell, script)
         assert not (ran and fault in NEVER_AFTER_RUN), NEVER_AFTER_RUN.get(fault)
         self.oom_killed = self.oom_killed or fault is Fault.OOM_KILLED
