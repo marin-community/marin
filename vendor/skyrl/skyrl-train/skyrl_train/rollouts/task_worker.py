@@ -1,12 +1,13 @@
 """TaskCompendium execution and projection into SkyRL training batches."""
 
 import asyncio
+import heapq
 import math
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
@@ -82,6 +83,7 @@ from skyrl_train.rollouts.task_projections import (
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
+    reject_capped_rollout,
     reject_malformed_reasoning,
     training_rollout,
 )
@@ -350,6 +352,56 @@ class RemoteJudgeSettings:
         return JudgeConnection(self.base_url, os.environ[self.api_key_env])
 
 
+class HarborSlots:
+    """Grant available Harbor capacity to the oldest waiting lease batch first."""
+
+    def __init__(self, capacity: int):
+        if capacity < 1:
+            raise ValueError("Harbor slot capacity must be positive")
+        self._available = capacity
+        self._sequence = 0
+        self._waiters: list[tuple[int, int, asyncio.Future[None]]] = []
+
+    def _grant(self) -> None:
+        while self._available and self._waiters:
+            _, _, future = heapq.heappop(self._waiters)
+            if future.cancelled():
+                continue
+            self._available -= 1
+            future.set_result(None)
+
+    def _release(self) -> None:
+        self._available += 1
+        self._grant()
+
+    @asynccontextmanager
+    async def admit(self, batch_id: int) -> AsyncIterator[None]:
+        future = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._waiters, (batch_id, self._sequence, future))
+        self._sequence += 1
+        self._grant()
+        blocked = not future.done()
+        started = time.monotonic()
+        fields = {"gate": "harbor_trials", "batch_id": batch_id}
+        try:
+            if blocked:
+                record_event("rollout_admission_blocked", fields)
+            await future
+        except BaseException:
+            if future.done() and not future.cancelled():
+                self._release()
+            else:
+                future.cancel()
+                self._grant()
+            raise
+        try:
+            if blocked:
+                record_event("rollout_admission_resumed", {**fields, "wait_seconds": time.monotonic() - started})
+            yield
+        finally:
+            self._release()
+
+
 @asynccontextmanager
 async def admission_slot(gate: str, slots: asyncio.Semaphore | None) -> AsyncIterator[None]:
     """Record a saturated trajectory resource while preserving semaphore ownership."""
@@ -407,7 +459,7 @@ class TaskRolloutWorker:
         self.harbor_task_slots = (
             None
             if harbor is None
-            else asyncio.Semaphore(
+            else HarborSlots(
                 harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
             )
         )
@@ -497,11 +549,11 @@ class TaskRolloutWorker:
             harnesses[SKYRL_AGENT_HARNESS] = AgentHarness(agent)
         return lowered, harnesses
 
-    async def generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
+    async def generate(self, request: TaskRequestBatch, *, batch_id: int = 0) -> list[TrainingRollout]:
         with self._active_request():
-            return await self._generate(request)
+            return await self._generate(request, batch_id=batch_id)
 
-    async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
+    async def _generate(self, request: TaskRequestBatch, *, batch_id: int) -> list[TrainingRollout]:
         lowered_tasks = [row.spec for row in request.rows]
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
@@ -565,7 +617,8 @@ class TaskRolloutWorker:
             retries = 0
             while True:
                 try:
-                    async with admission_slot("harbor_trials", harbor_slots), admission_slot("trajectory_tasks", self.task_slots):
+                    harbor_slot = nullcontext() if harbor_slots is None else harbor_slots.admit(batch_id)
+                    async with harbor_slot, admission_slot("trajectory_tasks", self.task_slots):
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
@@ -617,7 +670,7 @@ class TaskRolloutWorker:
                     self.projection.tokenizer,
                     harbor_tasks=[harbor is not None for harbor in harbor_settings],
                 )
-        return rollouts
+        return [reject_capped_rollout(rollout) for rollout in rollouts]
 
     async def run(self, input_batch: TaskRequestBatch) -> TrajectoryBatch:
         with self._active_request():
@@ -676,7 +729,7 @@ class TaskRolloutWorker:
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
             started = time.perf_counter()
-            rollouts = await self.generate(task.request)
+            rollouts = await self.generate(task.request, batch_id=task.lease.batch_id)
             batch = await self.training_batch(task.request, rollouts)
             record_event(
                 "task_group_completed",

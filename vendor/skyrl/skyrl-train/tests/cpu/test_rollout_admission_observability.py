@@ -1,16 +1,99 @@
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from loguru import logger
 from omegaconf import OmegaConf
+from rolloutengine.models import ModelTurn, RolloutFailure
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from skyrl_train.config.utils import get_default_config
 
 from skyrl_train.rollouts.buffer import BatchPolicy, RolloutBuffer, RolloutBufferConfig
-from skyrl_train.rollouts.task_worker import admission_slot
+from skyrl_train.rollouts.task_worker import HarborSlots, admission_slot
+from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition, reject_capped_rollout
 from skyrl_train.telemetry import process_telemetry
 from skyrl_train.trainer import RayPPOTrainer
+
+
+@pytest.mark.asyncio
+async def test_harbor_slots_admit_oldest_waiting_batch_before_earlier_arrivals(telemetry_endpoint):
+    slots = HarborSlots(1)
+    entered = []
+
+    async def run(batch_id, name):
+        async with slots.admit(batch_id):
+            entered.append(name)
+
+    with process_telemetry("worker"):
+        async with slots.admit(0):
+            waiters = []
+            for batch_id, name in [(4, "four"), (3, "three"), (1, "one-a"), (1, "one-b")]:
+                waiters.append(asyncio.create_task(run(batch_id, name)))
+                await asyncio.sleep(0)  # Each arrival must queue before the next one is submitted.
+            cancelled = asyncio.create_task(run(0, "cancelled"))
+            await asyncio.sleep(0)
+            cancelled.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled
+            assert entered == []
+        await asyncio.gather(*waiters)
+    assert entered == ["one-a", "one-b", "three", "four"]
+    resumed = telemetry_endpoint.select("rollout_admission_resumed")
+    assert [event["body"]["batch_id"] for event in resumed] == [1, 1, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_harbor_slot_grant_cancelled_before_resume_returns_capacity():
+    slots = HarborSlots(1)
+    entered = []
+
+    async def run():
+        async with slots.admit(1):
+            entered.append(1)
+
+    async with slots.admit(0):
+        pending = asyncio.create_task(run())
+        await asyncio.sleep(0)
+    pending.cancel()  # The free slot has been granted, but its coroutine has not resumed.
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    async with slots.admit(2):
+        entered.append(2)
+    assert entered == [2]
+
+
+@pytest.mark.parametrize(
+    "stop_reason,failure,diagnostics",
+    [
+        ("length", None, {}),
+        ("total_turn_timeout", None, {}),
+        ("error", RolloutFailure("AgentTimeoutError"), {}),
+        ("stop", None, {"harbor_exception_type": "AgentTimeoutError"}),
+        ("stop", None, {"harbor_model_limit": "length"}),
+    ],
+)
+def test_capped_trajectory_rejects_positive_verifier_and_turn_rewards(stop_reason, failure, diagnostics):
+    turn = ModelTurn(
+        prompt_token_ids=(1,), response_token_ids=(2,), logprobs=(-0.1,),
+        message={"role": "assistant", "content": "answer"}, stop_reason="stop",
+    )
+    grade = GradeResult(Outcome.GRADED, 1.0, passed=True, diagnostics=diagnostics)
+    rollout = TrainingRollout(
+        task_id="capped", messages=(), prompt_token_ids=(1,), response_token_ids=(2,),
+        loss_mask=(1,), logprobs=(-0.1,), grade=grade, stop_reason=stop_reason, failure=failure,
+        steps=(TrainingStep(turn, TrainingTransition(
+            done=True, reward=1.0, token_rewards=(1.0,), token_credit=(1.0,), grade=grade,
+        ), 0, ()),),
+    )
+    rejected = reject_capped_rollout(rollout)
+    assert (rejected.grade.status, rejected.grade.reward, rejected.grade.passed) == (Outcome.SUBMISSION_FAILURE, 0.0, False)
+    assert rejected.steps[0].transition.reward is None
+    assert rejected.steps[0].transition.token_rewards is None
+    assert rejected.steps[0].transition.token_credit is None
+    completed = replace(rollout, stop_reason="stop", failure=None, grade=GradeResult(Outcome.GRADED, 1.0, passed=True))
+    assert reject_capped_rollout(completed).grade.reward == 1.0
 
 
 @pytest.mark.asyncio

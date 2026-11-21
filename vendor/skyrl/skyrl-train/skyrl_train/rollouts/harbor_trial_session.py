@@ -6,6 +6,7 @@ import json
 import math
 import shlex
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped, AgentInferenceBackend
 from skyrl_train.rollouts.agent_trace import recorded_completion
-from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION
+from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION, HARBOR_MODEL_LIMIT
 
 
 def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
@@ -167,6 +168,9 @@ class HarborTrialHarness:
 
         result = await self.run_trial(complete)
         if last is not None:
-            session.record(data=StepReward(grade=trial_grade(result, self.reward_key)))
+            grade = trial_grade(result, self.reward_key)
+            if stopped is not None and model_error is None:
+                grade = replace(grade, diagnostics={**grade.diagnostics, HARBOR_MODEL_LIMIT: stopped})
+            session.record(data=StepReward(grade=grade))
         if model_error is not None:
             raise model_error
