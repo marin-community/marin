@@ -309,8 +309,9 @@ class ModelClient:
         request_fields: Mapping[str, object],
         call: _Call,
     ) -> Completion:
-        # A cut segment resends only itself, continuing from the segments already complete; n4 restarted the call.
-        # With a deterministic prefix both record the same answer, while a resampled prefix now keeps the first one.
+        # A cut segment resends only itself, continuing from the segments already complete; the earlier client restarted
+        # the call. With a deterministic prefix both record the same answer, while a resampled prefix now keeps the
+        # first one.
         segments: list[Segment] = []
         conversation, fields = list(messages), request_fields
         while True:

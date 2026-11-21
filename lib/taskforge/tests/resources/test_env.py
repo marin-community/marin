@@ -672,7 +672,7 @@ async def test_broken_guest_helpers_hold_with_their_cause_in_one_bounded_probe(
         assert isinstance(caught.value.__cause__, GuestHelperFailed)
 
 
-# Review 2026-11-21 (inherited follow-up): Taskforge's own hydration archive is not the caller's file; a guest that
+# Review 2026-11-21: Taskforge's own hydration archive is not the caller's file; a guest that
 # cannot unpack it holds with the helper's cause instead of failing as a bug, and leaves no scratch behind.
 async def test_hydration_archive_the_guest_cannot_unpack_holds_with_its_cause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
