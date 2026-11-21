@@ -4,6 +4,8 @@
 import json
 import shutil
 import tempfile
+import threading
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -14,6 +16,7 @@ import pytest
 
 import haliax as hax
 
+from levanter.data.text import datasets as text_datasets
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
@@ -33,6 +36,7 @@ from levanter.data.text.formats import (
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
+from levanter.testing.tokenizer import stage_gpt2_tokenizer
 from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -981,3 +985,84 @@ def test_build_caches_rejects_required_component_missing_from_catalog(tmp_path):
 
     with pytest.raises(KeyError):
         config.build_caches("train")
+
+
+@pytest.mark.parametrize("use_catalog", [False, True])
+def test_build_caches_loads_tokenizer_once_with_parallel_components(tmp_path, monkeypatch, use_catalog):
+    records = [{"input_ids": np.asarray([1, 2, 3], dtype=np.int32)}]
+    cache_path = tmp_path / "cache"
+    write_levanter_cache(records, str(cache_path), metadata={})
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    stage_gpt2_tokenizer(Path(__file__).parent, tokenizer_dir)
+    config = LmDataConfig(
+        components={
+            str(index): DatasetComponent(
+                source=None,
+                cache_dir=str(cache_path),
+                format=PrebuiltLmDatasetFormat(),
+                flat_cache=True,
+            )
+            for index in range(32)
+        },
+        tokenizer=str(tokenizer_dir),
+        auto_build_caches=False,
+    )
+    if use_catalog:
+        catalog_path = tmp_path / "catalog.json"
+        config.build_cache_catalog(str(catalog_path))
+        config = replace(config, cache_catalog=str(catalog_path))
+
+    load = text_datasets.load_marin_tokenizer
+    load_count = 0
+    counter_lock = threading.Lock()
+    concurrent_loads = threading.Barrier(32)
+    caller = threading.current_thread()
+
+    def counted_load(name):
+        nonlocal load_count
+        with counter_lock:
+            load_count += 1
+        # Keep concurrent cold misses in flight together on the old pool path.
+        # A preload on the caller thread needs no rendezvous.
+        if threading.current_thread() is not caller:
+            concurrent_loads.wait(timeout=10)
+        return load(name)
+
+    monkeypatch.setattr(text_datasets, "load_marin_tokenizer", counted_load)
+    caches = config.build_caches("train")
+
+    assert load_count == 1
+    assert set(caches) == set(config.components)
+    for cache in caches.values():
+        np.testing.assert_array_equal(cache.get_batch_sync([0])[0]["input_ids"], records[0]["input_ids"])
+
+
+def test_build_caches_preserves_tokenized_shard_bytes(tmp_path, local_gpt2_tokenizer_path):
+    source_path = tmp_path / "shard.jsonl"
+    texts = ["A small real document.", "Another document with different tokens.", ""]
+    source_path.write_text("".join(json.dumps({"text": text}) + "\n" for text in texts))
+    cache_path = tmp_path / "cache"
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(source_path)], validation_urls=[]),
+        cache_dir=str(cache_path),
+        flat_cache=True,
+    )
+    source = component.source.get_shard_source("train")
+    tokenizer = load_tokenizer(local_gpt2_tokenizer_path)
+    reference = build_lm_dataset_cache(str(cache_path), source, component.format, tokenizer)
+    expected = reference.get_batch_sync(range(len(texts)))
+    reference_bytes = {
+        path.relative_to(cache_path): path.read_bytes() for path in cache_path.rglob("*") if path.is_file()
+    }
+    del reference
+    shutil.rmtree(cache_path)
+
+    config = LmDataConfig(components={"text": component}, tokenizer=local_gpt2_tokenizer_path)
+    rebuilt = config.build_caches("train")["text"]
+
+    assert {
+        path.relative_to(cache_path): path.read_bytes() for path in cache_path.rglob("*") if path.is_file()
+    } == reference_bytes
+    for actual, wanted in zip(rebuilt.get_batch_sync(range(len(texts))), expected, strict=True):
+        np.testing.assert_array_equal(actual["input_ids"], wanted["input_ids"])
