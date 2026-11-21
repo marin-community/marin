@@ -1,0 +1,20 @@
+experiment: X0254
+kind: study
+track: custom
+question: Does a same-commit rerun of the recipe at d1024 and d1280 match the cross-commit s7n baselines every competitive rung is judged against (d1280 s7n Paloma macro 2.2706)?
+runs:
+  d1024:
+    track: competitive-d1024
+    seed: 0
+    variant: recipe, no flag, this week's branch
+    flags: []
+    hours: 18
+  d1280:
+    track: competitive-d1280
+    seed: 0
+    variant: recipe, no flag, this week's branch
+    flags: []
+    hours: 18
+analysis:
+  - script: experiments/belay/studies/X0254.py
+    input: d1280
