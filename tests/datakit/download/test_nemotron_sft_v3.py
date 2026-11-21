@@ -197,6 +197,53 @@ def test_opencode_tool_schema_is_available_to_chat_template():
     assert kwargs["tools"][0]["function"]["parameters"]["properties"]["command"]["type"] == "string"
 
 
+def test_opencode_prompt_loses_the_quotes_added_by_its_generator():
+    note = "\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>"
+    row = {
+        "question": 'Why does `print("total")` fail?',
+        "messages": [
+            {"role": "system", "content": "You are opencode."},
+            {"role": "user", "content": '"Why does `print(\\"total\\")` fail?' + note + '"'},
+            {"role": "assistant", "content": "The variable is undefined."},
+        ],
+    }
+
+    [document] = row_to_chat_doc(row, family="opencode_v1", partition_name="general")
+
+    assert document["messages"][1]["content"][0]["text"] == 'Why does `print("total")` fail?' + note
+
+
+def test_opencode_subagent_prompt_keeps_its_own_quotes():
+    row = {
+        "question": "When should I use useReducer instead of useState?",
+        "messages": [
+            {"role": "system", "content": "You are opencode."},
+            {"role": "user", "content": '"useState" versus "useReducer"'},
+            {"role": "assistant", "content": "Use useReducer for coupled state."},
+        ],
+    }
+
+    [document] = row_to_chat_doc(row, family="opencode_v1", partition_name="general")
+
+    assert document["messages"][1]["content"][0]["text"] == '"useState" versus "useReducer"'
+
+
+def test_empty_source_system_prompt_adds_no_system_turn():
+    row = {
+        "messages": [
+            {"role": "system", "content": ""},
+            {"role": "user", "content": "What was revenue in 2023?"},
+            {"role": "assistant", "content": "It was $5M."},
+        ],
+        "metadata": {"train_turns": [False, False, True]},
+    }
+
+    [document] = row_to_chat_doc(row, family="finance_v1", partition_name="train")
+
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
+    assert document["source_train_turns"] == [False, True]
+
+
 def test_load_jsonl_with_skips_only_ignores_pinned_bad_lines(tmp_path):
     path = tmp_path / "data.jsonl"
     path.write_text('{"id": 1}\n{bad json}\n{"id": 2}\n')
