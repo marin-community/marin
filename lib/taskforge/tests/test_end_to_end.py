@@ -5,7 +5,7 @@ import asyncio
 import json
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -16,6 +16,7 @@ from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solve
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
+from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 
@@ -36,7 +37,7 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpie
 from taskforge.policy import Policy, load_policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.clock import Clock
-from taskforge.resources.env import CommandResult, EnvFactory, FakeCommand, FakeEnv
+from taskforge.resources.env import CommandResult, EnvFactory, FakeCommand, FakeEnv, ShellboxEnv
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
 from taskforge.resources.inference import FakeInference, InferenceRequest
@@ -105,7 +106,7 @@ def script(arm: str) -> tuple[Completion, ...]:
     )
 
 
-def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
+def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
     return Resources(
         envs,
         FakeInference(responses),
@@ -551,3 +552,47 @@ async def test_driver_holds_an_undecodable_stream_without_touching_it(
     assert isinstance(decision := workpiece.decisions[-1], Incomplete) and "diverged" in decision.reasons[0]
     assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
     assert (destination / "events.jsonl").read_bytes() == published
+
+
+class HelperlessMachine(Machine):
+    """Runs every command; file downloads fail because the image lacks a transfer helper."""
+
+    @override
+    async def run(self, command: Command) -> Result:
+        return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+    @override
+    async def upload(self, source: Path, target: str) -> None:
+        pass
+
+    @override
+    async def download(self, source: str, target: Path) -> None:
+        raise GuestHelperFailed("Iris command failed (127): wc: not found")
+
+    @override
+    async def close(self) -> None:
+        pass
+
+
+class HelperlessEnvs(EnvFactory):
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+        return ShellboxEnv(HelperlessMachine(), "image", lambda _: None, AsyncExitStack())
+
+
+# Review 2026-11-20 (follow-up 1): a missing guest `wc` was stored as a bug hold and failed the child process.
+async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield config(arm), resources(HelperlessEnvs(), script("S"))
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    assert result.terminal is Terminal.HELD
+    assert "wc: not found" in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])

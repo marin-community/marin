@@ -26,8 +26,9 @@ from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhauste
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
+from taskforge.harness.tools import adversary_tools
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
-from taskforge.lowering import machine_backend, requirements
+from taskforge.lowering import lowering_settings, machine_backend, requirements
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, Message, Role, ToolCall, Usage
 from taskforge.model.proposal import (
@@ -286,6 +287,78 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
     assert all(finding.grade is not None for finding in adversary.findings[1:])
     restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
     assert isinstance(default_review(restored, setup.band, setup.budget), Incomplete)
+
+
+# Review 2026-11-20 (follow-up 1): the adversary's grade tool hit the grading machine's output limit; validation
+# recorded an exhausted search with no findings and review accepted.
+async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_accept(workpiece: Workpiece) -> None:
+    setup = config()
+    claim = {"claim": "13 earns credit", "candidate": {"reply": "13"}, "expected": {"status": "graded", "reward_min": 1}}
+    client = FakeInference(
+        (
+            Completion("", (ToolCall("1", "grade", json.dumps({"reply": "13"})),)),
+            Completion("", (ToolCall("2", "report", json.dumps({"findings": [claim]})),)),
+        )
+    )
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    tools = adversary_tools(
+        task_path="/workspace/task.json",
+        policy=setup.policy,
+        factories=bundle.factories,
+        settings=lowering_settings(setup.policy),
+    )
+    harness = AgenticHarness(262144, sampling(setup.policy), "report findings", 20000)
+    setup = replace(
+        setup,
+        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        adversaries={"finder": harness},
+        tools={"finder": tools},
+    )
+
+    async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
+        if event.candidate.reply == "13":
+            raise OutputBudgetExhausted("output budget exhausted")
+        return await grade(event, grading, notify=ctx.emit)
+
+    ctx.handle(GradeCandidate, output_limited, uses=(bundle.grading,))
+    evidence = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    assert client.requests[1].conversation[-1].content.startswith("Grading this candidate failed")
+    (adversary,) = evidence.adversary
+    assert adversary.status is AdversaryStatus.FAILED and adversary.limit is None
+    (finding,) = adversary.findings
+    assert (finding.claim, finding.candidate.reply, finding.grade) == ("13 earns credit", "13", None)
+    assert isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)
+
+
+# Review 2026-11-20 (follow-up 1): an infrastructure grade on one of two reproductions raised Hold at the adversary
+# scope's exit, and the outer handler replaced the report with zero findings.
+async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sibling_grade(
+    workpiece: Workpiece,
+) -> None:
+    claims = tuple(
+        AdversaryClaim(f"{reply} earns credit", Candidate(reply), RewardBand(Outcome.GRADED, 1)) for reply in ("13", "9")
+    )
+    setup = adversary_config(RecordingHarness(Returned("report", AdversaryReport(claims), Conversation((), ()))))
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+
+    async def outage(event: GradeCandidate, grading: GradingResource) -> GradeResult:
+        if event.candidate.reply == "13":
+            return GradeResult(Outcome.INFRA_ERROR, None, "grader machine lost", failure=GradingFailure.EXECUTION)
+        return await grade(event, grading, notify=ctx.emit)
+
+    ctx.handle(GradeCandidate, outage, uses=(bundle.grading,))
+    evidence = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    (adversary,) = evidence.adversary
+    assert adversary.status is AdversaryStatus.FAILED
+    failed, sibling = adversary.findings
+    assert (failed.claim, failed.candidate.reply, failed.grade, failed.met) == ("13 earns credit", "13", None, False)
+    assert sibling.grade is not None and sibling.grade.reward == 0.0 and not sibling.met
+    assert any("grader machine lost" in reason for reason in adversary.reasons)
+    assert isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)
 
 
 # "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
