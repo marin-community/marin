@@ -42,12 +42,13 @@ A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate r
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `RolloutLimits` | `max_turns`, `max_total_tokens`, `model_turn_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
-| `TaskRolloutSpec` | `task: TaskSpec`, `harness`, `task_machine`, `verifier_machine`, `limits: RolloutLimits`, `trace`, `judge_connection` |
+| `TaskRolloutSpec` | `task: TaskSpec`, `harness`, `task_machine`, `verifier_machine`, `limits: RolloutLimits`, `trace`, `judge_connection`, `decision_model` |
 
 Fields require explicit values except `trace`, which defaults to `TraceMode.EXACT_TOKENS`, and `judge_connection`,
 which defaults to `None`. `judge_connection` is a verifyit `JudgeConnection` for a judge grader (see
 [Grading](#grading)). It holds an API key, so `model_dump`, `model_dump_json`, and `pickle` leave it out, and a spec
-loaded from them has no connection. Optional fields accept `None`. `RolloutLimits.cleanup_timeout` requires a
+loaded from them has no connection. `decision_model`, a TaskCompendium `DecisionModelConnection` for a
+`decision_model` grader, defaults to `None` and is left out the same way. Optional fields accept `None`. `RolloutLimits.cleanup_timeout` requires a
 finite, positive value. Other deadlines accept `None` or a finite, positive value. `max_turns` and `max_total_tokens`
 accept `None` or a positive integer; with `max_turns=None` an attempt ends only on its token budget, its deadlines, or
 a `length` stop.
@@ -572,6 +573,7 @@ The engine grades by grader kind:
 | `VerifyitGrader` with a judge mode (`JudgeSpec`) | `taskcompendium.grading.grade_remote_judge_answer` on the host, in a worker thread, through the judge service |
 | `ScriptGrader` | `grade_in_sandbox` runs the grader command on the verifier machine |
 | `NoGrader` | `GradeResult(Outcome.UNAVAILABLE, None, reason)` |
+| `DecisionModelGrader` | `taskcompendium.decision_model.grade_decision_model_answer` on the host, through `TaskRolloutSpec.decision_model`; a conversation answer only |
 
 A judge grades on the host even when its grader declares an environment, so it uses no verifier machine. It calls
 the service of `TaskRolloutSpec.judge_connection`, or else of `VERIFYIT_JUDGE_BASE_URL` with the key in
