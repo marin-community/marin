@@ -260,24 +260,32 @@ def test_a_child_follows_its_pipe_at_any_descriptor(
     proposal: TaskProposal, tmp_path: Path, descriptor: str, writer: str
 ) -> None:
     sources = inputs(proposal, tmp_path)
-    lifeline, kept = os.pipe()
-    if descriptor == "high":
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        if soft <= HIGH:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, 4 * HIGH), hard))
-        high = fcntl.fcntl(lifeline, fcntl.F_DUPFD, HIGH)
-        os.close(lifeline)
-        lifeline = high
-        assert lifeline >= HIGH
-    if writer == "closed":
-        os.close(kept)
-    scenario = "block" if writer == "closed" else "resume"
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if descriptor == "high" and hard != resource.RLIM_INFINITY and hard <= HIGH:
+        pytest.skip(f"the hard open-file limit {hard} admits no descriptor numbered {HIGH}")
+    raised = descriptor == "high" and soft != resource.RLIM_INFINITY and soft <= HIGH
+    owned: list[int] = []  # every descriptor this test opened and still holds
     try:
-        code = run_to_end_with(scenario, lifeline, argv("one", tmp_path), tmp_path / "first.log")
-    finally:
-        os.close(lifeline)
-        if writer == "open":
+        if raised:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (HIGH + 1, hard))
+        owned.extend(os.pipe())
+        lifeline, kept = owned
+        if descriptor == "high":
+            owned.append(lifeline := fcntl.fcntl(lifeline, fcntl.F_DUPFD, HIGH))
+        opened = list(owned)
+        if writer == "closed":
             os.close(kept)
+            owned.remove(kept)
+        code = run_to_end_with(
+            "block" if writer == "closed" else "resume", lifeline, argv("one", tmp_path), tmp_path / "first.log"
+        )
+    finally:
+        for held in owned:
+            os.close(held)
+        if raised:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+    assert resource.getrlimit(resource.RLIMIT_NOFILE) == (soft, hard)
+    assert not any(map(is_open, opened)) and (descriptor == "low" or lifeline >= HIGH)
     assert code == (TERMINATED if writer == "closed" else 0), (tmp_path / "first.log").read_text()[-4000:]
     if writer == "closed":
         assert not roots(tmp_path, sources)[0].exists()
