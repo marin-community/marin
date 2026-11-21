@@ -314,6 +314,7 @@ class TrainingContext:
             if self._rollout_spans:
                 for outcome in admission.dispositions:
                     record_group_disposition(
+                        uid=outcome.uid,
                         disposition=outcome.disposition,
                         tokens=outcome.tokens,
                         step=self._policy_step,
