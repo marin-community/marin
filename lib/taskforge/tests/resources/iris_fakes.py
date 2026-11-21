@@ -3,6 +3,7 @@
 
 """An Iris machine whose controller runs each exec as a local subprocess, with scripted faults."""
 
+import re
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
@@ -18,7 +19,7 @@ from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from shellbox.backends.iris.machine import EXEC_ADMISSION_REFUSED, EXEC_SETUP_FAILURE, IrisMachine
 from shellbox.image import RegistryImage
-from shellbox.machine import MachineSpec
+from shellbox.machine import Backend, ExecutionRequirements, MachineSpec
 
 # Guest images' /bin/sh is a POSIX shell such as dash; macOS's sh is bash, which tolerates more.
 GUEST_SH = shutil.which("dash") or "sh"
@@ -71,7 +72,8 @@ Injection = tuple[str, Fault, bool]
 """An RPC site, its fault, and whether the controller runs the exec before the fault."""
 
 
-# Every RPC an ``IrisMachine.run`` without stdin can make. Status is the sandbox task lookup; the rest are exec scripts.
+# Every RPC an ``IrisMachine.run`` without stdin can make once its machine has probed the guest ``timeout``.
+# Status is the sandbox task lookup; the rest are exec scripts.
 RPC_SITES: dict[str, Callable[[str], bool]] = {
     "command": lambda script: "2> /tmp/.shellbox-" in script,
     "status": lambda script: script == "status",
@@ -178,3 +180,38 @@ def local_iris_machine(workdir: Path, controller: LocalController) -> IrisMachin
         task,  # type: ignore[arg-type]
         MachineSpec(source=RegistryImage("fixture"), workdir=str(workdir)),
     )
+
+
+# Guest roots a rooted controller maps into its directory: the task workdir and staged candidate files.
+GUEST_ROOTS = re.compile(r"(?<![\w.-])/(workspace|\.forge-candidates)(?=/|[\s'\"]|$)")
+
+
+class RootedController(LocalController):
+    """A local controller whose guest task roots live under ``root``."""
+
+    def __init__(self, root: Path, faults: Sequence[Injection] = ()) -> None:
+        super().__init__(faults)
+        self.root = root
+
+    def exec_in_container(self, request: object, timeout_ms: int) -> SimpleNamespace:
+        command = [GUEST_ROOTS.sub(lambda match: str(self.root / match[1]), part) for part in request.command]  # type: ignore[attr-defined]
+        return super().exec_in_container(SimpleNamespace(command=command), timeout_ms)
+
+
+class LocalIrisFactory:
+    """Creates each machine as a local Iris sandbox in a fresh directory, with the same scripted faults."""
+
+    backend = Backend.GVISOR
+
+    def __init__(self, root: Path, faults: Sequence[Injection] = ()) -> None:
+        self.root, self.faults = root, faults
+        self.created: list[Path] = []
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        pass
+
+    async def create(self, spec: MachineSpec) -> IrisMachine:
+        root = self.root / f"machine-{len(self.created)}"
+        (root / "workspace").mkdir(parents=True)
+        self.created.append(root)
+        return local_iris_machine(root / "workspace", RootedController(root, self.faults))
