@@ -124,7 +124,7 @@ rl:
           open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
           open-thoughts/TaskTrove: nonagentic
           nvidia/Llama-Nemotron-Post-Training-Dataset: nonagentic
-        max_staleness_steps: 11
+        max_staleness_steps: 3
         batch_policy: full_batch
         max_in_flight: 128
         object_store_root: null
