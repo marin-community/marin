@@ -23,6 +23,8 @@ class TrajectoryMetadata:
     data_source: str | None = None
     teacher_route: str | None = None
     metric_tags: tuple[str, ...] = ()
+    task_id: str | None = None
+    subset_id: str | None = None
     evaluation_identity: TaskEvaluationIdentity | None = None
 
 

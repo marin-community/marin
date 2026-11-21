@@ -88,7 +88,7 @@ def recipe_code_identity(recipe: SourceRecipe) -> dict[str, str]:
 
 def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     """Hash public task semantics, optionally including its private reference."""
-    content = task.model_dump(mode="json", exclude={"id", "source"})
+    content = task.model_dump(mode="json", exclude={"id": True, "source": True, "labels": {"subset_id"}})
     # Oracle scripts are executable witnesses, not task semantics.
     content["resources"]["oracle"] = []
     grader = task.grader

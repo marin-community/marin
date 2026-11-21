@@ -120,6 +120,8 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
+                            task_id=lowered.task.id,
+                            subset_id=lowered.task.labels.get("subset_id") or lowered.task.source.dataset,
                             evaluation_identity=(
                                 TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
                                 if extras.get(TASK_EVALUATION_IDENTITY) is not None

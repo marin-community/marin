@@ -12,18 +12,28 @@ function element(tag, value) {
   return node;
 }
 
-const columns = [
-  ['Environment', (row) => row.environment],
-  ['Task source', (row) => row.data_source],
+const successColumns = [
   ['Attempted', (row) => row.attempted],
   ['Verified', (row) => row.verified],
   ['Coverage', (row) => row.verification_coverage == null ? null : percent.format(row.verification_coverage)],
   ['Success rate', (row) => row.success_rate == null ? null : percent.format(row.success_rate)],
+];
+
+const subsetColumns = [
+  ['Subset', (row) => row.subset_id ?? row.data_source ?? row.environment],
+  ['Task source', (row) => row.data_sources?.join(', ') || row.data_source],
+  ...successColumns,
   ['Grader failures', (row) => counts(row.grading_failures)],
   ['Rollout failures', (row) => counts(row.rollout_failures)],
   ['Mean (s)', (row) => latency(row, 'mean')],
   ['p95 (s)', (row) => latency(row, 'p95')],
   ['Max (s)', (row) => latency(row, 'max')],
+];
+
+const taskColumns = [
+  ['Task ID', (row) => row.task_id],
+  ['Subset', (row) => row.subset_ids.join(', ')],
+  ...successColumns,
 ];
 
 function counts(values) {
@@ -38,14 +48,7 @@ function latency(row, key) {
 
 const failureCount = (row) => Object.values(row.grading_failures ?? {}).reduce((total, value) => total + value, 0);
 
-function section(title, rows) {
-  const panel = element('section');
-  panel.className = 'panel';
-  panel.append(element('h2', title));
-  if (!rows.length) {
-    panel.append(element('p', 'No samples were recorded.'));
-    return panel;
-  }
+function resultsTable(rows, columns) {
   const table = element('table');
   const head = table.createTHead().insertRow();
   for (const [label] of columns) {
@@ -54,16 +57,38 @@ function section(title, rows) {
     head.append(cell);
   }
   const body = table.createTBody();
-  const sorted = [...rows].sort((a, b) => failureCount(b) - failureCount(a)
-    || (b.grading_latency_seconds?.p95 ?? 0) - (a.grading_latency_seconds?.p95 ?? 0));
-  for (const row of sorted) {
+  for (const row of rows) {
     const tr = body.insertRow();
     for (const [, value] of columns) tr.append(element('td', value(row) ?? '—'));
   }
   const container = element('div');
   container.className = 'table-scroll grader-table';
   container.append(table);
-  panel.append(container);
+  return container;
+}
+
+function section(title, rows, tasks) {
+  const panel = element('section');
+  panel.className = 'panel';
+  panel.append(element('h2', title));
+  if (!rows.length) {
+    panel.append(element('p', 'No samples were recorded.'));
+    return panel;
+  }
+  const sorted = [...rows].sort((a, b) => failureCount(b) - failureCount(a)
+    || (b.grading_latency_seconds?.p95 ?? 0) - (a.grading_latency_seconds?.p95 ?? 0));
+  panel.append(resultsTable(sorted, subsetColumns));
+  if (tasks?.length) {
+    const details = element('details');
+    details.append(element('summary', `Individual tasks (${tasks.length})`));
+    function renderTasks() {
+      if (!details.open) return;
+      details.append(resultsTable(tasks, taskColumns));
+      details.removeEventListener('toggle', renderTasks);
+    }
+    details.addEventListener('toggle', renderTasks);
+    panel.append(details);
+  }
   return panel;
 }
 
@@ -91,10 +116,10 @@ async function load() {
       const evaluation = separator < 0 ? 'Evaluation' : key.slice(0, separator);
       const step = key.slice(separator + 1);
       const title = step === 'eval_only' ? evaluation : `${evaluation} · step ${step}`;
-      results.append(section(title, rows));
+      results.append(section(title, rows, report.evaluation_tasks?.[key]));
     }
     for (const [execution, rows] of Object.entries(report.training ?? {})) {
-      results.append(section(`Training · ${execution}`, rows));
+      results.append(section(`Training · ${execution}`, rows, report.training_tasks?.[execution]));
     }
   } catch (error) {
     status.textContent = error.message;
