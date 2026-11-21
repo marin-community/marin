@@ -37,7 +37,7 @@ from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
-from taskforge.effects.events import Event, Failed, Fingerprint, Note, ReplayPolicy, digest, failure
+from taskforge.effects.events import ENVIRONMENT, Event, Failed, Fingerprint, Note, ReplayPolicy, digest, failure
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, Unreproducible, describe_exception
 from taskforge.effects.log import Missing, Outcome
 from taskforge.resources.execution import Notify, retry_effect
@@ -107,7 +107,7 @@ class RecordedEnv(Env):
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("env", self.digest, ReplayPolicy.REEXECUTE)
+        return Fingerprint(ENVIRONMENT, self.digest, ReplayPolicy.REEXECUTE)
 
     @override
     async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None:

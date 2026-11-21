@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 from taskforge.effects.events import (
     BYTES_TAG,
+    ENVIRONMENT,
     EVENT_TYPES,
     FAILURE_CATEGORIES,
     MAPPING_TAG,
@@ -84,25 +85,32 @@ ROW = TypeAdapter(_Row)
 
 
 def _sandbox(event: Event[object]) -> bool:
-    return event.kind.startswith("env.")  # the area of re-executed sandbox requests, per ``events``
+    return event.kind.startswith(f"{ENVIRONMENT}.")
 
 
 def _outcome(event: Event[object]) -> bool:
     if isinstance(event, Failed):
         return event.category in FAILURE_CATEGORIES
-    replays = {fp.replay for fp in event.fingerprints} if isinstance(event, Resolved) else set()
-    return isinstance(event, Resolved) and _sandbox(event.request) and replays == {ReplayPolicy.REEXECUTE}
+    shape = [(fp.resource, fp.replay) for fp in event.fingerprints] if isinstance(event, Resolved) else []
+    return isinstance(event, Resolved) and _sandbox(event.request) and shape == [(ENVIRONMENT, ReplayPolicy.REEXECUTE)]
+
+
+def _plain(event: Event[object]) -> bool:
+    if isinstance(event, Resolved):
+        return not _sandbox(event.request) and cached(event.fingerprints)
+    return not (_sandbox(event) or isinstance(event, Failed))
 
 
 ROLES: Mapping[str | None, Callable[[Event[object]], bool]] = {
     "opened": lambda event: isinstance(event, ScopeEntered),
     "attempt": _sandbox,
     "answers": _outcome,
-    None: lambda event: not (_sandbox(event) or isinstance(event, Failed) or _outcome(event)),
+    None: _plain,
 }
-"""The events each row role may carry, by its one envelope field: an environment-open row enters a scope, a request is
-a re-executed sandbox event, its outcome resolves it under the sandbox or fails it with a supported category, and no
-other row is any of those. Cached, paid results thus stay outside every owner's history."""
+"""The events each row role may carry, by its one envelope field: an environment-open row enters a scope; a request is
+a re-executed sandbox event; its outcome resolves it under the one environment fingerprint the sandbox writer emits, or
+fails it with a supported category; a plain row is any other event or a cached resolution of a non-sandbox request.
+Cached, paid results thus stay outside every owner's history, and every resolution replays under its recorded role."""
 
 
 class Sink(Protocol):

@@ -31,6 +31,9 @@ from taskforge.model.content_hash import (
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
+ENVIRONMENT = "env"
+"""The sandbox area: the kind prefix of every re-executed sandbox request and the resource that fingerprints it."""
+
 
 class ReplayPolicy(StrEnum):
     CACHE = "cache"

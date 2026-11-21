@@ -2135,6 +2135,15 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
 
 
+def relabelled_inference() -> bytes:
+    """``N4_JOURNAL`` with its first inference resolution (row 9) relabelled REEXECUTE, as the review planted it."""
+    rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
+    (fingerprint,) = rows[8]["event"]["payload"]["fingerprints"]
+    assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE
+    fingerprint["replay"] = ReplayPolicy.REEXECUTE
+    return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+
+
 # Review 2026-11-20: the real claim swapped the head for each of these journals, and a list-valued owner escaped as an
 # untyped TypeError. The paid id result reached both the content cache and the owner's history.
 @pytest.mark.parametrize(
@@ -2174,6 +2183,21 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
         ),
         lines((OPENED, Record(2, 0.0, READ_STATUS, attempt=1), Record(3, 0.0, Failed("ENOTANERRNO", "x"), answers=2))),
         lines((OPENED,), (1, "opened", {"owner": ["author/0"], "definition": "definition"})),
+        relabelled_inference(),
+        lines((OPENED, Record(2, 0.0, Resolved(READ_STATUS, (replace(SANDBOX[0], replay=ReplayPolicy.CACHE),), b"A")))),
+        lines((OPENED, Record(2, 0.0, Resolved(READ_STATUS, (), b"A")))),
+        lines(
+            (
+                OPENED,
+                Record(2, 0.0, Resolved(READ_STATUS, (*SANDBOX, replace(SANDBOX[0], replay=ReplayPolicy.CACHE)), b"A")),
+            )
+        ),
+        lines(
+            (
+                *ANSWERED[:2],
+                replace(ANSWERED[2], event=Resolved(READ_STATUS, (replace(SANDBOX[0], resource="ids"),), b"A")),
+            )
+        ),
     ],
     ids=[
         "note as open row",
@@ -2187,6 +2211,11 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
         "contradictory answered result",
         "unsupported failure category",
         "list-valued owner",
+        "inference resolution relabelled reexecute",
+        "plain sandbox resolution under cache",
+        "plain sandbox resolution without fingerprints",
+        "plain sandbox resolution under mixed policies",
+        "sandbox answer under a non-environment resource",
     ],
 )
 async def test_claim_refuses_a_journal_whose_rows_break_their_roles_and_leaves_the_head(
@@ -2200,6 +2229,21 @@ async def test_claim_refuses_a_journal_whose_rows_break_their_roles_and_leaves_t
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.CORRUPT
     assert tree(destination) == before
+
+
+# Review 2026-11-20: the driver claimed this journal, repeated the first completed author request and accepted.
+async def test_a_resolution_relabelled_reexecute_is_refused_before_any_model_call(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = plant(driver_args, relabelled_inference(), checkpoint.JOURNAL_FORMAT)
+    before = tree(destination)
+    resumed = replace(resources(DriftingEnvs(2), ()), inference=FakeInference(drifting_script()))
+    serve(monkeypatch, resumed)
+    driver_args.resume_held = True
+    with pytest.raises(CorruptJournal) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.CORRUPT
+    assert tree(destination) == before and executions(resumed) == (0, 0)
 
 
 async def test_claim_takes_a_journal_held_on_a_divergent_unanswered_request(
