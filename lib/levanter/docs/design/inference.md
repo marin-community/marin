@@ -312,13 +312,16 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
 - **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, `seed` parameters
 - **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
+- For streaming requests, the chat endpoint emits server-sent events (SSE) after
+  generation completes. Set `stream_options.include_usage` to `true` to receive
+  an event with `usage` and an empty `choices` list just before `[DONE]`.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Performance Considerations
 - **JIT Compilation**: Warmup generation on startup to trigger JIT compilation
 - **Memory Management**: Efficient KV cache page allocation and deallocation
 - **Batching**: Support for concurrent requests with `JitScheduler`
-- **Streaming**: Server-Sent Events (SSE) for real-time token streaming
+- **Streaming**: Incremental SSE delivery is a design goal
 
 ## File/Code References
 - `src/levanter/main/sample_lm.py`: `SampleLmConfig`, `_load_model`, `GenState`, `run_generation_loop`, `_one_round`, `extract_outputs`.
