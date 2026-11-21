@@ -516,6 +516,12 @@ The child inherits the run cluster, verifies its actual Iris worker region and
 x86 architecture, and prepares every digest-pinned image before registration.
 Missing worker-region metadata fails readiness before any image transfer.
 
+For bubblewrap on Kubernetes, submit the root run with
+`--container-profile CONTAINER_PROFILE_PRIVILEGED` and set the CPU child's
+`resources.container_profile` to `"CONTAINER_PROFILE_PRIVILEGED"`. Iris permits
+a privileged parent's task to submit a privileged child. A default-profile
+parent cannot. Set the root profile when you submit the run.
+
 Bind the endpoint only after the context yields:
 
 ```python
