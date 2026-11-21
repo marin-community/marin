@@ -145,9 +145,12 @@ def test_wandb_tracker_skips_artifacts_larger_than_20_mb_without_raising(tmp_pat
     with caplog.at_level(logging.WARNING):
         WandbTracker(FakeRun()).log_artifact(artifact_path)
 
-    assert "Skipping W&B artifact" in caplog.text
-    assert "20,000,000-byte limit" in caplog.text
-    assert caplog.text.count("Skipping W&B artifact") == 1
+    skip_warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(skip_warnings) == 1
+    # The warning names the artifact, its size, and the limit.
+    assert "oversized.bin" in skip_warnings[0].getMessage()
+    assert "20,000,001" in skip_warnings[0].getMessage()
+    assert "20,000,000" in skip_warnings[0].getMessage()
 
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"

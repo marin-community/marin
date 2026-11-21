@@ -44,5 +44,12 @@ def test_write_artifact_keeps_oversized_file_and_skips_tracker_upload(tmp_path, 
     assert (artifact_dir / "train_step.hlo.txt").stat().st_size == MAX_WANDB_ARTIFACT_BYTES + 1
     # ...and the normal artifact uploads as before.
     assert run.logged == [(artifact_dir / "small.hlo.txt", "small.hlo.txt", "hlo")]
-    assert caplog.text.count("Skipping W&B artifact") == 1
-    assert "20,000,000-byte limit" in caplog.text
+    skip_warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "train_step.hlo.txt" in record.getMessage()
+    ]
+    assert len(skip_warnings) == 1
+    # The warning names the artifact, its size, and the limit.
+    assert "20,000,001" in skip_warnings[0].getMessage()
+    assert "20,000,000" in skip_warnings[0].getMessage()

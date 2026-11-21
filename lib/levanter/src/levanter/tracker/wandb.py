@@ -208,7 +208,7 @@ class WandbTracker(Tracker):
             return
         try:
             self.validate_artifact(artifact_path, name=name, type=type)
-        except (OSError, ValueError) as error:
+        except ValueError as error:
             logger.warning("Skipping W&B artifact %s: %s", artifact_path, error)
             return
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)

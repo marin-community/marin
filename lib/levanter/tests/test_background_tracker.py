@@ -146,10 +146,16 @@ def test_background_tracker_skips_oversized_wandb_artifact_with_one_warning(tmp_
         bt.finish()
 
     assert uploaded == ["config.yaml"]
-    skip_records = [record for record in caplog.records if "skipping artifact" in record.getMessage()]
-    assert len(skip_records) == 1
-    assert skip_records[0].levelno == logging.WARNING
-    assert "20,000,000-byte limit" in skip_records[0].getMessage()
+    skip_warnings = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and "train_step.jaxpr.txt.gz" in record.getMessage()
+    ]
+    assert len(skip_warnings) == 1
+    assert skip_warnings[0].levelno == logging.WARNING
+    # The warning names the artifact, its size, and the limit.
+    assert "20,000,001" in skip_warnings[0].getMessage()
+    assert "20,000,000" in skip_warnings[0].getMessage()
 
 
 def test_background_tracker_stages_artifact_so_source_can_be_deleted(tmp_path):
