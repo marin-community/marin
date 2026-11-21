@@ -32,7 +32,7 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 5
+JOURNAL_FORMAT = 6
 """Format 5 places a round over its scored solver slots, holds a slot without one, and falls back to an earlier
 submission named by digest; format 4 hydrated each trial without a detail and restored only a too-easy baseline.
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an

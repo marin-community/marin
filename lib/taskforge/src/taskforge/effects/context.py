@@ -122,6 +122,8 @@ class Context:
         value = self._log.lookup(event, fingerprints)
         replayed = not isinstance(value, Missing)
         if not replayed:
+            if (invalidated := self._log.invalidate(event, fingerprints)) is not None:
+                self._publish(invalidated, chain)  # as the replacement starts
             value = await handler.fn(event, *uses)
         result = cast(T, value)
         self._publish(self._log.append(Resolved(event, fingerprints, result, replayed)), chain)

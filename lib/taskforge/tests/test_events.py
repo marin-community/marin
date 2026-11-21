@@ -14,6 +14,7 @@ from taskforge.effects.events import (
     Event,
     Failed,
     Fingerprint,
+    Invalidated,
     Note,
     ReplayPolicy,
     Resolved,
@@ -41,6 +42,7 @@ from taskforge.resources.web import WebFetch, WebSearch
 KINDS: dict[str, type[Event[object]]] = {
     "decision_model.read": DecisionModelRead,
     "effect.failed": Failed,
+    "effect.invalidated": Invalidated,
     "effect.note": Note,
     "effect.resolved": Resolved,
     "effect.retrying": Retrying,

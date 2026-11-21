@@ -9,7 +9,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from functools import partial
-from typing import override
+from typing import cast, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import twelve
@@ -28,7 +28,7 @@ from shellbox.machine import MachineTerminated
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Note, Resolved, event_digest
+from taskforge.effects.events import Invalidated, Note, Resolved, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Unreproducible
 from taskforge.effects.log import EventLog, Record
 from taskforge.llm.client import ModelRequestRejected
@@ -36,7 +36,7 @@ from taskforge.model.review import Cause, TrialResult
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
-from taskforge.stages.classify import replay_rule
+from taskforge.stages.classify import replaced_refusals, replayable_grade
 from taskforge.stages.validate import solver_batch
 from taskforge.wiring import build_config
 
@@ -72,7 +72,7 @@ class Slots(Engine):
 
 
 def context(engine: Slots, recorded: Sequence[Record] = (), *, resume: bool = False) -> tuple[Context, EventLog]:
-    log = EventLog(replay_from=recorded, replayable=replay_rule(recorded, resume))
+    log = EventLog(replay_from=recorded, replayable=replayable_grade, replaces=replaced_refusals(recorded, resume))
     ctx = Context(log=log)
     ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(engine, twelve, "solver"))
     return ctx, log
@@ -341,10 +341,16 @@ async def test_an_authorised_replacement_cut_short_by_an_outage_resumes_and_neve
     refused = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=2, heartbeat=HEARTBEAT)
     await ctx.drain()
     assert [trial.cause for trial in refused] == [Cause.HELD] * 2  # review holds it for the operator
+    paid = [r.event for r in log.records if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)]
+    slot0 = next(event for event in paid if cast(SolverRollout, event.request).trial == 0)
     ctx, log = context(Slots(failures={0: waits()}), log.records, resume=True)  # the operator's --resume-held
     with pytest.raises(BaseExceptionGroup):
         await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=1, heartbeat=HEARTBEAT)
     await ctx.drain()
+    invalidated = [record.event for record in log.records if isinstance(record.event, Invalidated)]
+    assert [(event.request, event.fingerprints) for event in invalidated] == [
+        (slot0.request, slot0.fingerprints)  # the started replacement names exactly the refusal it replaces
+    ]
     healthy = Slots()
     ctx, log = context(healthy, log.records)  # the automatic resume
     resumed = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=1, heartbeat=HEARTBEAT)

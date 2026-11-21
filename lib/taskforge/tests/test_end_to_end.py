@@ -3201,10 +3201,10 @@ async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators
 
     def rule(previous: Sequence[Record], resume: bool) -> Any:
         entered.append(resume)
-        return replayable_grade
+        return lambda _: False
 
     monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: held})
-    monkeypatch.setattr(driver, "replay_rule", rule)
+    monkeypatch.setattr(driver, "replaced_refusals", rule)
     serve(monkeypatch, resources(Envs(), ()), resources(Envs(), ()))
     deferred = driver.DEFERRED if enters else 0
     assert await driver.one(driver_args) == deferred
