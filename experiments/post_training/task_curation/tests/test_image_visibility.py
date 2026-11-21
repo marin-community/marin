@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pyarrow as pa
@@ -20,6 +21,7 @@ from experiments.post_training.task_curation.check_image_visibility import (
     PackageVisibilityError,
     check_registry,
     ghcr_package,
+    ghcr_visibility,
 )
 from experiments.post_training.task_curation.image_registry import (
     MAP_COLUMNS,
@@ -155,6 +157,24 @@ def test_private_always_source_refuses_even_an_org_private_package():
     assert verdict.outcome is CheckOutcome.OVER_EXPOSED
     assert verdict.allowance is ImageVisibility.PRIVATE
     assert verdict.actual is ImageVisibility.INTERNAL
+
+
+def test_ghcr_visibility_queries_the_package_name_without_the_org_prefix(monkeypatch):
+    """The org-scoped endpoint takes the name after the org; a nested name keeps its encoded slash."""
+    calls = []
+
+    def run(argv, **_):
+        calls.append(argv[2])
+        payload = json.dumps({"visibility": "internal"})
+        return subprocess.CompletedProcess(argv, 0, stdout=payload, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert ghcr_visibility("marin-community/rollout-images") == "internal"
+    assert ghcr_visibility("marin-community/marin/tpu-ci") == "internal"
+    assert calls == [
+        "/orgs/marin-community/packages/container/rollout-images",
+        "/orgs/marin-community/packages/container/marin%2Ftpu-ci",
+    ]
 
 
 def test_missing_package_fails_closed():

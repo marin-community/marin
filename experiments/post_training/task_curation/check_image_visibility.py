@@ -133,8 +133,13 @@ def checked_package(reference: str) -> str | None:
 
 
 def ghcr_visibility(package: str) -> str:
-    """Read one package's actual visibility through the read-only gh CLI."""
-    encoded = package.replace("/", "%2F")
+    """Read one package's actual visibility through the read-only gh CLI.
+
+    The org-scoped endpoint takes the package name without its org prefix;
+    a nested name keeps its slash, URL-encoded.
+    """
+    name = package.removeprefix(f"{CHECKED_ORG}/")
+    encoded = name.replace("/", "%2F")
     result = subprocess.run(
         ("gh", "api", f"/orgs/{CHECKED_ORG}/packages/container/{encoded}"),
         capture_output=True,
