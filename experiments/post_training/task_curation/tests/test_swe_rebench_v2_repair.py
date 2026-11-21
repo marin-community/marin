@@ -14,6 +14,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+    SETUP_TIMEOUT_SEC as declared,
     _flatten,
     admission_receipt_labels,
     dockerfile,
@@ -29,6 +30,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.ta
     grader_source,
     solve_sh,
 )
+from experiments.post_training.task_curation.swe_rebench_fidelity_driver import row_variant_files
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
@@ -541,14 +543,6 @@ def test_gate_doubles_the_setup_deadline_for_the_slow_tail():
     population finishes its setup in ~126-185 s, but a long tail of heavy installs exceeds
     the declared 1800 s and dies as "Public fixture initialization timed out". The gate's
     trial package doubles the setup deadline (the 4cpu/8GB profile stretches the tail)."""
-    from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
-        SETUP_TIMEOUT_SEC as declared,
-    )
-    import tomlkit as _tomlkit
-    from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import _flatten
-    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import row_variant_files
-    from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import row_base
-
     row = {**PYTHON_ROW, "tags": ["swe-rebench"], "quality_flags": [], "env": [],
            "image_name": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64,
            "problem_statement": "Fix the bug.", "patch": "diff --git a/x",
