@@ -12,9 +12,9 @@ adopted_model:
   checkpoint_step: 400407
   tokenizer_uri: marin-community/marin-tokenizer-tools
   tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
-name: long-loop/mochi-throughput-workers128
-version: 2026.11.21.110
-slug: mochi-throughput-workers128
+name: long-loop/mochi-throughput-ep16-seqs64
+version: 2026.11.21.111
+slug: mochi-throughput-ep16-seqs64
 rl:
   role_plan:
     colocate_all: false
@@ -23,8 +23,8 @@ rl:
     num_inference_engines: 1
     inference_engine_tensor_parallel_size: 1
     inference_engine_pipeline_parallel_size: 1
-    inference_engine_data_parallel_size: 12
-    inference_engine_expert_parallel_size: 12
+    inference_engine_data_parallel_size: 16
+    inference_engine_expert_parallel_size: 16
     train_batch_size: 32
     policy_mini_batch_size: 32
     micro_train_batch_size_per_gpu: 1
@@ -39,7 +39,7 @@ rl:
   execution:
     cluster: cw-us-east-08a
     cluster_config: lib/iris/config/cw-us-east-08a.yaml
-    cpu: 136
+    cpu: 120
     memory: 900GB
     disk: 2TB
     priority: production
@@ -186,7 +186,7 @@ rl:
       max_num_batched_tokens: 8192
       enforce_eager: false
       gpu_memory_utilization: 0.85
-      max_num_seqs: 32
+      max_num_seqs: 64
       enable_http_endpoint: false
       error_handling:
         enable_error_classification: true
@@ -266,8 +266,8 @@ rl:
           api_key_env: TOGETHER_API_KEY
     trajectory_runner:
       rollout_workers:
-        num_workers: 128
-        cpus_per_worker: 1
+        num_workers: 32
+        cpus_per_worker: 2
         start_interval_seconds: 0
     terminal_bench:
       harbor:
