@@ -25,6 +25,8 @@ import os
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from types import UnionType
+from typing import get_origin
 
 import click
 import draccus
@@ -112,6 +114,7 @@ class RoundSft:
     compiler_dumps: bool = False
     wall_clock_cooldown_fraction: float | None = None
     first_collective_call_timeout: int | None = None
+    xla_flags: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -266,6 +269,8 @@ def _decode_strict(section: dict, target: type, label: str):
         if name not in section:
             continue
         value = section[name]
+        value_type = get_origin(field.type)
+        value_type = field.type if value_type in (None, UnionType) else value_type
         nested = isinstance(field.type, type) and dataclasses.is_dataclass(field.type)
         if nested:
             if not isinstance(value, dict):
@@ -273,7 +278,7 @@ def _decode_strict(section: dict, target: type, label: str):
             value = _decode_strict(value, field.type, f"{label}.{name}")
         elif field.type is not bool and isinstance(value, bool):
             raise ValueError(f"{label}.{name} must be {field.type.__name__}, got bool")
-        elif not isinstance(value, field.type):
+        elif not isinstance(value, value_type):
             raise ValueError(f"{label}.{name} must be {field.type.__name__}, got {type(value).__name__}")
         values[name] = value
     return target(**values)
@@ -468,6 +473,7 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
 def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict) -> SFTSpec:
     """Bind and verify the round's declared precision, token rates and LR controls."""
     spec = shared_sft_spec(name, version, recipe)
+    spec = dataclasses.replace(spec, xla_flags=tuple(dict.fromkeys((*spec.xla_flags, *round_spec.sft.xla_flags))))
     timeout = round_spec.sft.first_collective_call_timeout
     if timeout is not None:
         if timeout <= 0:
@@ -526,6 +532,7 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     sft["mesh"] = round_spec.sft.mesh
     sft["trainer"]["mesh"] = round_spec.sft.mesh
     sft["resources"] = round_spec.sft.resources
+    sft["xla_flags"] = list(dict.fromkeys((*sft["xla_flags"], *round_spec.sft.xla_flags)))
     if round_spec.sft.first_collective_call_timeout is not None:
         sft["first_collective_call_timeout"] = round_spec.sft.first_collective_call_timeout
     if round_spec.sft.compiler_dumps:
