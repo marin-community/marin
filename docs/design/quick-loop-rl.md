@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 6:15 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 6:30 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -289,6 +289,9 @@ Follow the coordinator if Iris retries the child.
 
 - Verify all learner ranks select CUDA and load
   `open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21` at `fe666478454e`.
+  Require startup placement evidence from all four learner hosts. Retrieve
+  the original attempt-scoped Ray worker logs if the aggregated startup
+  stream omits a rank.
 - Require two completed updates with model-change evidence for each. The
   frozen worker fingerprints the first change during its checkpoint gate.
   For the second update, compare identical trainable tensor slices in
@@ -618,7 +621,11 @@ stored FP32 router and QB dtypes before applying the serving compute cast.
 It records the weight manifest identity separately from the tokenizer
 revision. The paged generator uses its serving precision, and the FA4
 learner forward uses the learner's launch precision and fused projection.
-The inventory case requires all 32,768 targets and zero PPO clip crossings.
+The staged inventory probe at `97d63da41a` checks that each frame matches
+its request ID, sampling seed and exact prompt and finishes at the full
+context length.
+It checks the serving and learner score shapes before subtracting logprobs.
+The gate requires all 32,768 real targets and zero PPO clip crossings.
 
 The receipt records resolved inputs and loaded geometry before starting
 generation. It captures per-device allocator reports at each phase and
@@ -650,13 +657,16 @@ handoff and FA4 scorer.
 [8K TPU context probe][iris-native-8k-context] ·
 [24K TPU context probe][iris-native-24k-context]
 
-On the eight-H100 regional worker, run the probe with the GPU extras
-for `marin-core` and `marin-levanter`.
+On the eight-H100 regional worker, run the probe with the locked `pipeline`
+environment used for the isolated CUDA learner, including JAX and JAXLIB
+`0.11.0` and FA4. The staged job assumes authorized CoreWeave storage access
+to the pinned checkpoint and the Iris output bucket. Check free eight-GPU
+hosts as well as regional quota before reserving a host for this probe.
 
 ```bash
 JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   uv run --no-sync python -m experiments.post_training.snowball_native_qualification \
-  --case inventory "$IRIS_OUTPUT_DIR/snowball-native-full-context.json"
+  --case inventory "$IRIS_OUTPUT_DIR/snowball-native-67b-inventory.json"
 ```
 
 - Connect the native backend to the RolloutEngine operations used by the
@@ -835,7 +845,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
   Require all four attempt-scoped panels at steps 0 and 2, with each task
   ID, prompt token sequence and score reconciled against the successful
-  attempts. Compare step 2 separately because step 1 includes the learner
+  attempts. Collect logs using the successful rank-zero attempt from each
+  exact Iris coordinator. Match the receipts and panel paths to those
+  attempts, and recheck the attempt identities after collection. Compare
+  step 2 separately because step 1 includes the learner
   subprocess checkpoint round trip. Both maintained arms log
   `timing/rollout_admission_window_seconds`
   and `rollout/admission_window_groups` for fresh, full batches at zero
