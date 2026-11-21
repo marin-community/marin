@@ -2765,13 +2765,15 @@ Named snapshot preflight resolves the RL key from Secret Manager and preserves
 existing snapshots within its snapshot limit. See the
 [Daytona credential and account rules](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#credentials-and-account-selection).
 Before each actor or verifier sandbox create, Harbor runs the inventory admission
-command. It sums resources of all started, starting and creating sandboxes across
-all inventory pages, reserves 20% of DATA's total 2,000 vCPU / 4,000 GiB RAM /
-10,000 GiB disk, and waits 30 seconds before rechecking insufficient capacity.
-Requests above 4 vCPU / 8 GiB RAM / 10 GiB disk fail without shrinking the task.
-The organization-usage endpoint is not required. Until the shared Shellbox
-inventory mode lands, the command is the temporary
-`difficulty.daytona_admission` module; Harbor only consumes its usage-report JSON.
+command. The shared `shellbox-daytona-usage` gate counts compute and disk charged
+by every sandbox across all inventory pages. It keeps 20% of DATA's total
+2,000 vCPU / 4,000 GB RAM / 10,000 GB disk unused and converts RAM and disk
+capacity to GiB. It waits 30 seconds before rechecking insufficient capacity.
+Requests exceeding any per-sandbox limit of 4 vCPU, 8 GiB RAM or 10 GiB disk
+fail without shrinking the task.
+The organization-usage endpoint is not required. The command invokes the shared
+Shellbox usage CLI with `--api-key-env DAYTONA_DATA_API_KEY --limits data`;
+Harbor consumes its usage-report JSON.
 New DATA attempts have distinct action identities; existing EVAL receipts remain
 valid, and in-flight children drain before a controller replacement.
 
