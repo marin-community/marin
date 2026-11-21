@@ -7,6 +7,7 @@ import asyncio
 import json
 import pickle
 import tarfile
+import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -2642,9 +2643,11 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
 async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
     observer = RecordingObserver()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    started = time.time()
     record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_id="arithmetic/3"
     )
+    finished = time.time()
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
@@ -2654,11 +2657,13 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
         AttemptEnded("stop", None, None, 0.0, 2, 9),
     ]
     assert [event.index for event in observer.events] == list(range(len(observer.events)))
-    assert asdict(observer.events[-1]) == {
+    times = [event.time for event in observer.events]
+    assert times == sorted(times) and started <= times[0] and times[-1] <= finished
+    assert asdict(replace(observer.events[-1], time=0.0)) == {
         "run_id": "arithmetic/3",
         "task_id": "arithmetic",
         "index": len(observer.events) - 1,
-        "time": observer.events[-1].time,
+        "time": 0.0,
         "payload": {
             "stop_reason": "stop",
             "operation": None,

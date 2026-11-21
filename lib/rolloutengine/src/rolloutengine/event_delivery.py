@@ -18,11 +18,12 @@ EVENT_QUEUE_CAPACITY = 1024
 class _EventDelivery:
     """Queue one attempt's events and deliver them in order from a single task.
 
-    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``run_id`` and ``task_id``
-    and never blocks. When the queue is full, the event is dropped and counted. An observer
-    exception is logged and ends delivery for the attempt; it never reaches the rollout. ``close``
-    delivers what is queued within a deadline and returns the counts of events the observer did not
-    receive, keyed for ``Rollout.metrics``.
+    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``run_id`` and ``task_id``, the
+    event's index and the wall-clock time, and never blocks. Every emitted event takes an index, also one
+    that is not delivered, so the indexes that the observer receives show the gaps. When the queue is
+    full, the event is dropped and counted. An observer exception is logged and ends delivery for the
+    attempt; it never reaches the rollout. ``close`` delivers what is queued within a deadline and returns
+    the counts of events the observer did not receive, keyed for ``Rollout.metrics``.
     """
 
     def __init__(self, observer: RolloutObserver | None, run_id: str, task_id: str):
