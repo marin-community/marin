@@ -6,6 +6,7 @@
 """Completed validation evidence and the decisions made from it."""
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -17,6 +18,7 @@ from taskforge.model.controls import Candidate
 
 OMIT_NONE, OMIT_EMPTY = Field(exclude_if=lambda value: value is None), Field(exclude_if=lambda value: value == "")
 OMIT_NOTHING = Field(exclude_if=lambda value: value == ())
+OMIT_FALSE = Field(exclude_if=lambda value: value is False)
 """Persistence rule: a new optional persisted field is omitted from its serialised form when it holds its ONE declared
 default (``None``, ``""`` or ``()``, marked ``Annotated[T, OMIT_NONE]``, ``OMIT_EMPTY`` or ``OMIT_NOTHING``), so
 adding it changes no existing serialised bytes, and no other valid value encodes like it. Canonical content digests
@@ -87,6 +89,19 @@ class ReviewFinding:
     description: Text
     edit: Text
     citations: Annotated[tuple[Citation, ...], Field(min_length=1)]
+
+
+def same(finding: ReviewFinding) -> tuple[str, str, str]:
+    """A finding's identity across reports: what it says is wrong and the edit, not the trials it quotes."""
+    return finding.kind, finding.description, finding.edit
+
+
+def unique(findings: Sequence[ReviewFinding]) -> tuple[ReviewFinding, ...]:
+    """``findings`` with each (``same``) finding once, at its first occurrence."""
+    first: dict[tuple[str, str, str], ReviewFinding] = {}
+    for finding in findings:
+        first.setdefault(same(finding), finding)
+    return tuple(first.values())
 
 
 class Attribution(StrEnum):
@@ -168,6 +183,9 @@ class FindingResponse:
     finding: ReviewFinding
     response: Response
     reason: Annotated[str, OMIT_EMPTY] = ""
+    discarded: Annotated[bool, OMIT_FALSE] = False
+    """The revision it answered was discarded by a restore: it stays in the history, and never speaks for the
+    restored submission."""
 
 
 class RejectKind(StrEnum):
@@ -221,10 +239,10 @@ class Revise:
     findings and ``notes`` its notes, which the author sees as optional. It keeps no fallback."""
 
     findings: tuple[str, ...]
-    placement: BandOutcome | None
     review: tuple[ReviewFinding, ...]
     kind: Literal["revise"] = "revise"
     notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
+    placement: Annotated[BandOutcome | None, OMIT_NONE] = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +451,9 @@ class ValidationResult:
     confirms: Annotated[int | None, OMIT_NONE] = None
     """A confirmation record: the evidence index of the validation round whose submission it confirms. Its ``solver``
     holds that round's scored trials and the new ones, its ``review`` the final review."""
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
+    """A confirmation record's: the notes an acceptance on it ships, each once, in a version whose citations check
+    against its trials (``shipped_notes``)."""
 
 
 @dataclass(frozen=True, slots=True)

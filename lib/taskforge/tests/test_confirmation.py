@@ -26,6 +26,7 @@ from lib.taskforge.tests.test_solve_review import SUBMISSION, TRIALS, lowered, r
 from lib.taskforge.tests.test_solver_batch import rejected
 from pydantic import TypeAdapter
 from rolloutengine.models import (
+    MAX_TURNS_STOP_REASON,
     ConversationRecord,
     GradedRollout,
     Model,
@@ -47,10 +48,17 @@ from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageC
 from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
-from taskforge.harness.tools.evidence import FinalReportArgs, FinalReportTool, ReportTool, evidence_tools
+from taskforge.harness.tools.evidence import (
+    Evidence,
+    FinalReportArgs,
+    FinalReportTool,
+    ReportArgs,
+    ReportTool,
+    evidence_tools,
+)
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import digest
-from taskforge.model.llm import Completion, Message, Role, Usage
+from taskforge.model.llm import Completion, FinishReason, Message, Role, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -116,8 +124,9 @@ class Trials(Engine):
         restart: frozenset[Slot] = frozenset(),
         refuse: frozenset[Slot] = frozenset(),
         silent: frozenset[Slot] = frozenset(),
+        stop: Callable[[int, int], str] = lambda trial, attempt: "stop",
     ) -> None:
-        self.grade, self.restart, self.refuse, self.silent = grade, restart, refuse, silent
+        self.grade, self.restart, self.refuse, self.silent, self.stop = grade, restart, refuse, silent, stop
         self.runs: list[Slot] = []
 
     @override
@@ -130,12 +139,14 @@ class Trials(Engine):
         if slot in self.refuse:
             raise rejected()
         said = () if slot in self.silent else (transcript(f"trial {trial} attempt {attempt} answers 12"),)
-        return GradedRollout(Rollout(run_id, said, "stop"), self.grade(trial, attempt))
+        return GradedRollout(Rollout(run_id, said, self.stop(trial, attempt)), self.grade(trial, attempt))
 
 
-def found(trial: int, kind: FindingKind = FindingKind.GRADER_DEFECT, what: str = "accepts 13") -> dict[str, object]:
-    quote = {"source": f"trial/{trial}", "start": 1, "end": 1, "quote": "answers 12"}
-    return {"kind": kind, "description": what, "edit": "check equality", "citations": [quote]}
+def found(
+    trial: int, kind: FindingKind = FindingKind.GRADER_DEFECT, what: str = "accepts 13", quote: str = "answers 12"
+) -> dict[str, object]:
+    cited = {"source": f"trial/{trial}", "start": 1, "end": 1, "quote": quote}
+    return {"kind": kind, "description": what, "edit": "check equality", "citations": [cited]}
 
 
 def finding(trial: int, kind: FindingKind = FindingKind.GRADER_DEFECT, what: str = "accepts 13") -> ReviewFinding:
@@ -297,7 +308,10 @@ async def test_a_restored_fallback_is_confirmed_on_its_own_round(proposal: TaskP
     assert "trial 0 attempt 0 answers 12" in reviewer.replies[-1]
     (opening,) = reviewer.finals_seen
     assert "Solve-review of validation record 0 (this submission, 3 trials):" in opening
-    assert "Outcome: given to the author, who revised the task." in opening
+    assert (  # the response to the revision the restore discarded says so
+        "Outcome: given to the author, who revised the task; the driver then restored the version before that "
+        "attempted fix, so this submission does not carry it." in opening
+    )
     final = wp.decisions[-1]
     assert isinstance(final, Accept) and final.notes == (finding(1),)  # the restored round's finding
 
@@ -383,8 +397,11 @@ def confirmed(proposal: TaskProposal, revise: bool, note: bool, used: bool, in_b
     rewards = (1.0, 0.0) if in_band else (1.0,) * 4
     added = tuple(TrialResult(2 + i, GradeResult(Outcome.GRADED, reward)) for i, reward in enumerate(rewards))
     review = SolveReview("v", ReviewEnd.REPORTED, (REVISE,) * revise, notes=(NOTE,) * note)
-    record = ValidationResult(SUBMISSION.digest, (*SOLVED, *added), CONTROLS, (), review=review, confirms=0)
-    earlier = (Revise(("line",), BandOutcome.IN_BAND, (REVISE,)),) * used
+    shipped = (*(NOTE,) * note, *(REVISE,) * revise)  # what the step computes when the trials support both
+    record = ValidationResult(
+        SUBMISSION.digest, (*SOLVED, *added), CONTROLS, (), review=review, confirms=0, notes=shipped
+    )
+    earlier = (Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND),) * used
     pending = Accept(BandOutcome.IN_BAND)
     first = ValidationResult(SUBMISSION.digest, SOLVED, CONTROLS, (), review=SolveReview("v0", ReviewEnd.REPORTED))
     return Workpiece("w", proposal, submission=SUBMISSION, evidence=(first, record), decisions=(*earlier, pending))
@@ -425,7 +442,7 @@ def test_confirmation_decisions_match_live_forge(
 def after_revise(proposal: TaskProposal, result: ValidationResult) -> Workpiece:
     """The final review's revision validated as ``result``: the confirmed round, its record, the revision."""
     confirmed_wp = confirmed(proposal, True, False, False, True)
-    revise = Revise(("line",), BandOutcome.IN_BAND, (REVISE,))
+    revise = Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND)
     session = Conversation((Message(Role.SYSTEM, "author"),), ())
     return confirmed_wp.with_(
         round=1, session=session, evidence=(*confirmed_wp.evidence, result), decisions=(*confirmed_wp.decisions, revise)
@@ -603,7 +620,7 @@ def test_a_confirmation_fault_is_decided_before_placement_even_with_a_clean_fina
 def test_a_fault_in_the_revision_s_confirmation_abandons(proposal: TaskProposal) -> None:
     """Owner's decision (a): after the final review's revision nothing is kept to restore."""
     config = setup()
-    revise = Revise(("line",), BandOutcome.IN_BAND, (REVISE,))
+    revise = Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND)
     wp = confirming(proposal, [graded(3, INVALID)])
     wp = wp.with_(decisions=(revise, *wp.decisions))
     decision = default_review(wp, config.band, config.budget)
@@ -842,3 +859,177 @@ def test_an_omission_both_reviews_name_is_listed_once(proposal: TaskProposal) ->
     wp = wp.with_(decisions=(Accept(BandOutcome.IN_BAND, missing=(gone,)),))
     decision = default_review(wp, config.band, config.budget)
     assert isinstance(decision, Accept) and decision.missing == (gone,)
+
+
+# Review 2026-11-21 (n12 follow-up 1): the reviewer's reproductions.
+
+
+async def test_a_fix_attempted_in_a_discarded_revision_is_no_failed_fix_on_the_restored_task(
+    proposal: TaskProposal,
+) -> None:
+    """The revision that answered round 0's finding faulted and round 0 was restored; the final review cites the same
+    defect on round 0's own trials. That revision never shipped, so the repetition is not a failed fix: 11 solves, not
+    19, and the finding is a note. The discarded response stays in the history."""
+    engine, reviewer = Trials(faulted_after_attempt_0), Reviewer(rounds=[[found(1)]], finals=[([found(1)], [])])
+    live = bundle(engine, reviewer, (*script(), *RESUBMIT, *RESUBMIT))
+    wp = await run_workpiece(proposal, setup(), live, EventLog(), install=install)
+    assert kinds(wp) == ["modify", "accept", "accept"] and len(engine.runs) == 11
+    assert [(r.review, r.response, r.discarded) for r in wp.responses] == [(0, Response.REVISED, True)]
+    final = wp.decisions[-1]
+    assert isinstance(final, Accept) and final.notes == (finding(1),)
+
+
+async def test_a_newer_decline_outranks_an_older_revision(proposal: TaskProposal) -> None:
+    """Round 0's finding was revised for, round 1 repeated it and the author declined it: the latest response on the
+    shipped history decides, so the final review's repetition is a note: 14 solves, not 22. (Round 1 cites another
+    trial, so the author's second request differs from its first and the cached inference does not answer it.)"""
+    reviewer = Reviewer(rounds=[[found(1)], [found(2)], []], finals=[([found(1)], [])])
+    live = bundle(Trials(), reviewer, (*script(), *RESUBMIT, *DECLINE, *RESUBMIT))
+    engine = live.rollouts.engine
+    wp = await run_workpiece(proposal, setup(**{"budget.max_modify_rounds": 2}), live, EventLog(), install=install)
+    assert isinstance(engine, Trials) and kinds(wp) == ["modify", "modify", "accept", "accept"]
+    assert len(engine.runs) == 14
+    assert [r.response for r in wp.responses] == [Response.REVISED, Response.DECLINED]
+
+
+async def test_notes_the_shipped_trials_support_survive_the_final_revision(proposal: TaskProposal) -> None:
+    """Note A rode the first acceptance; the final review asked for a fix with optional note B; the author resubmitted
+    the same task and the next final report was clean. Both notes ship, as the shipped trials still support them."""
+    a, b = found(1, what="note A"), found(5, FindingKind.AMBIGUOUS_PROMPT, "note B")
+    reviewer = Reviewer(rounds=[[a], []], finals=[([found(3, what="fix")], [b])])
+    live = bundle(Trials(), reviewer, (*script(), *RESUBMIT))
+    wp = await run_workpiece(proposal, setup(**{"budget.max_modify_rounds": 0}), live, EventLog(), install=install)
+    assert kinds(wp) == ["accept", "revise", "accept", "accept"]
+    final = wp.decisions[-1]
+    assert isinstance(final, Accept)
+    assert final.notes == (finding(1, what="note A"), finding(5, FindingKind.AMBIGUOUS_PROMPT, "note B"))
+
+
+async def test_a_note_ships_in_the_version_its_shipped_trial_quotes(proposal: TaskProposal) -> None:
+    """Note B first quoted the first confirmation's trial 3; the revision's confirmation quotes its own trial 3. The
+    old quote does not occur in the shipped trial, so the current version ships."""
+    old = found(3, FindingKind.AMBIGUOUS_PROMPT, "note B", "trial 3 attempt 1 answers 12")
+    new = found(3, FindingKind.AMBIGUOUS_PROMPT, "note B", "trial 3 attempt 3 answers 12")
+    reviewer = Reviewer(finals=[([found(4, what="fix")], [old]), ([], [new])])
+    live = bundle(Trials(), reviewer, (*script(), *RESUBMIT))
+    wp = await run_workpiece(proposal, setup(), live, EventLog(), install=install)
+    assert kinds(wp) == ["accept", "revise", "accept", "accept"]
+    final = wp.decisions[-1]
+    assert isinstance(final, Accept) and [c.quote for f in final.notes for c in f.citations] == [
+        "trial 3 attempt 3 answers 12"
+    ]
+
+
+def test_a_finding_in_both_final_lists_is_refused_and_a_repeat_within_one_is_kept_once() -> None:
+    rollout = GradedRollout(
+        Rollout("r", (transcript("trial 1 attempt 0 answers 12"),), "stop"), GradeResult(Outcome.GRADED, 1.0)
+    )
+    index = evidence(SUBMISSION, [(TrialResult(1, rollout.grade), rollout)], 4000)
+    ctx, twice = Context(log=EventLog()), finding(1)
+    conflicting = asyncio.run(FinalReportTool(index).run(ctx, FinalReportArgs((twice,), (twice,), ())))
+    assert isinstance(conflicting, ToolResult) and "one disposition" in conflicting.content
+    repeated = asyncio.run(FinalReportTool(index).run(ctx, FinalReportArgs((twice, twice), (), ())))
+    assert not isinstance(repeated, ToolResult) and repeated.payload.findings == (twice,)
+
+
+class Unavailable(Reviewer):
+    """``Reviewer``, whose final review's provider is down."""
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        if FINAL in next(m.content for m in request.conversation if m.role == Role.USER):
+            raise AssertionError("a decided confirmation record asked its final reviewer")
+        return await super().complete(request)
+
+
+async def test_a_budget_rejection_in_the_confirmation_needs_no_final_review(proposal: TaskProposal) -> None:
+    engine = Trials(stop=lambda trial, attempt: MAX_TURNS_STOP_REASON if attempt == 1 else "stop")
+    wp, _ = await run(proposal, engine, Unavailable())
+    assert kinds(wp) == ["accept", "reject"] and wp.terminal is Terminal.REJECTED and len(engine.runs) == 8
+    assert wp.evidence[-1].review is None
+
+
+def test_a_fault_revision_writes_no_placement() -> None:
+    adapter = TypeAdapter(Revise)
+    fault = Revise(("1 ungraded trial(s): invalid_task",), ())
+    assert b"placement" not in adapter.dump_json(fault) and adapter.validate_json(adapter.dump_json(fault)) == fault
+    placed = Revise(("line",), (REVISE,), placement=BandOutcome.IN_BAND)
+    assert adapter.validate_json(adapter.dump_json(placed)) == placed
+
+
+# Review 2026-11-21 (n12 follow-up 2): every submitted version is checked before versions of one finding merge.
+
+
+def failed_trials(*trials: int) -> Evidence:
+    """An evidence index over unsolved trials ``trials``, each answering ``trial N attempt 0 answers 12``."""
+    rollouts = [
+        GradedRollout(
+            Rollout(f"r{t}", (transcript(f"trial {t} attempt 0 answers 12"),), "stop"), GradeResult(Outcome.GRADED, 0.0)
+        )
+        for t in trials
+    ]
+    return evidence(SUBMISSION, [(TrialResult(t, r.grade), r) for t, r in zip(trials, rollouts, strict=True)], 4000)
+
+
+def defect(*trials: int) -> tuple[TrialAccount, ...]:
+    return tuple(TrialAccount(t, Attribution.DEFECT, "the grader") for t in trials)
+
+
+@pytest.mark.parametrize("stale_first", [True, False])
+def test_a_stale_version_of_a_required_fix_never_hides_its_valid_one(stale_first: bool) -> None:
+    valid = finding(1)
+    stale = TypeAdapter(ReviewFinding).validate_python(found(1, quote="answers 13"))
+    submitted = (stale, valid) if stale_first else (valid, stale)
+    outcome = asyncio.run(
+        FinalReportTool(failed_trials(1)).run(Context(log=EventLog()), FinalReportArgs(submitted, (), defect(1)))
+    )
+    assert not isinstance(outcome, ToolResult)
+    assert outcome.payload.findings == (valid,) and outcome.payload.dropped[0][0] == stale
+
+
+def test_two_valid_versions_citing_different_trials_are_one_finding_carrying_both() -> None:
+    one, two, index, ctx = finding(1), finding(2), failed_trials(1, 2), Context(log=EventLog())
+    final = asyncio.run(FinalReportTool(index).run(ctx, FinalReportArgs((one, two), (), defect(1, 2))))
+    ordinary = asyncio.run(ReportTool(index).run(ctx, ReportArgs((one, two), defect(1, 2))))
+    for outcome in (final, ordinary):
+        assert not isinstance(outcome, ToolResult), outcome.content
+        assert outcome.payload.findings == (replace(one, citations=(*one.citations, *two.citations)),)
+
+
+@pytest.mark.parametrize("stale_first", [True, False])
+async def test_the_order_of_a_repeated_required_fix_does_not_change_the_run(
+    proposal: TaskProposal, stale_first: bool
+) -> None:
+    valid, stale = found(3, what="fix"), found(3, what="fix", quote="answers 13")
+    reviewer = Reviewer(finals=[([stale, valid] if stale_first else [valid, stale], [])])
+    live = bundle(Trials(), reviewer, (*script(), *RESUBMIT))
+    wp = await run_workpiece(proposal, setup(), live, EventLog(), install=install)
+    engine = live.rollouts.engine
+    assert isinstance(engine, Trials) and kinds(wp) == ["accept", "revise", "accept", "accept"]
+    assert len(engine.runs) == 16
+
+
+async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_once(proposal: TaskProposal) -> None:
+    reviewer = Reviewer(rounds=[[found(1), found(1)]])
+    live = bundle(Trials(), reviewer, (*script(), *DECLINE))
+    wp = await run_workpiece(proposal, setup(), live, EventLog(), install=install)
+    assert kinds(wp)[0] == "modify" and wp.evidence[0].review is not None
+    assert wp.evidence[0].review.findings == (finding(1),)
+    assert [(r.review, r.response, r.reason) for r in wp.responses] == [(0, Response.DECLINED, "the grader is right")]
+
+
+# Review 2026-11-21 (n12 follow-up 2, inherited): a provider's context refusal of the author's revision was raised
+# past the effect, so a cold resume asked again; when the provider then answered, the restored round's response became
+# a revision and the run bought a second confirmation (16 solves, not 8).
+async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal, tmp_path: Path) -> None:
+    refused = Completion("maximum context length exceeded", finish_reason=FinishReason.CONTEXT_EXCEEDED)
+    sink, engine = JsonlSink(str(tmp_path / "events.jsonl")), Trials()
+    live = bundle(engine, Reviewer(rounds=[[found(1)]]), (*script(), *script()[:3], refused))
+    done = await run_workpiece(proposal, setup(), live, EventLog(sink=sink), install=install)
+    assert done.terminal is Terminal.ACCEPTED
+    assert [(r.response, r.discarded) for r in done.responses] == [(Response.STOPPED, True)] and len(engine.runs) == 8
+    again, author = Trials(), (*script(), *RESUBMIT)
+    resumed = bundle(again, Reviewer(rounds=[[found(1)]]), author)
+    wp = await run_workpiece(proposal, setup(), resumed, EventLog(replay_from=local_records(sink)), install=install)
+    assert wp == done and not again.runs
+    assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests

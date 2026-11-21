@@ -50,6 +50,7 @@ from taskforge.model.review import (
     Observation,
     ObservedStatus,
     Reject,
+    Revise,
     SearchEnd,
     SearchLimit,
     SolveReview,
@@ -65,7 +66,7 @@ from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
 from taskforge.stages.rules import actionable, assess, earlier_findings, missing, shipped
-from taskforge.stages.solve_review import earlier_reports, solve_review
+from taskforge.stages.solve_review import earlier_reports, evidence, shipped_notes, solve_review
 from taskforge.stages.summary import task_manifest
 
 
@@ -558,5 +559,14 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
         pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
         earlier = tuple(f for result in workpiece.evidence if result.review for f in earlier_findings(result.review))
         final = ("solve_review.final", partial(FinalReportTool, earlier=earlier), earlier_reports(workpiece))
-        review = await solve_review(ctx, config, resources, workpiece.proposal, submission, pairs, *final)
-    return Validated(ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index))
+        probe = ValidationResult(submission.digest, trials, round_.controls, ())
+        review = None  # as in validation, a record review would not decide on is not reviewed (``reviewed``)
+        if not isinstance(assess(probe, config.band, len(trials)), Reject | Incomplete):
+            review = await solve_review(ctx, config, resources, workpiece.proposal, submission, pairs, *final)
+    noted = (
+        *(f for d in workpiece.decisions if isinstance(d, Accept | Revise) for f in d.notes),
+        *(() if review is None else (*review.notes, *review.findings)),
+    )
+    notes = shipped_notes(evidence(submission, pairs, policy.setting("tools.output_chars", int)), noted)
+    result = ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index)
+    return Validated(replace(result, notes=notes))

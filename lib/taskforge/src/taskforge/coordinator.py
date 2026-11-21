@@ -85,6 +85,11 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                 wp.fallback is None or (digest_of(wp.fallback), wp.fallback.band) != (restore, band)
             ):
                 raise ValueError(f"Cannot restore {restore} at {band}: the fallback is {wp.fallback}")
+            if restore is not None and wp.fallback is not None:  # the revisions after the restored round are discarded
+                after = wp.fallback.evidence
+                wp = wp.with_(
+                    responses=tuple(replace(r, discarded=r.discarded or r.review >= after) for r in wp.responses)
+                )
             confirmed = bool(wp.evidence) and wp.evidence[-1].confirms is not None
             final = confirmed or not policy.setting("solver.confirmation_k", int)
             return wp.with_(  # a pending acceptance's placement is its decision's band, published only once final
@@ -96,7 +101,7 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
             return wp.with_(terminal=Terminal.REJECTED)
         case Abandon():
             return wp.with_(terminal=Terminal.ABANDONED)
-        case Modify(findings, placement, _, _, review) | Revise(findings, placement, review):
+        case Modify(findings, placement, _, _, review) | Revise(findings, review, placement=placement):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
             fallback = decision.fallback if isinstance(decision, Modify) else None  # the final revision keeps none
