@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 7:43 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 8:10 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. | Submit the staged rerun once the inventory task service credentials are authorized for the CoreWeave job. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The standalone probe loaded the pinned 67B model on eight H100s, completed prefill for four 16,384-token prompts, and entered decode with query tiling and dedicated 90% GPU preallocation. Both held-learner plans for that serving configuration render locally. | Verify full generation and fused replay on H100, then run the held-learner serving comparison after the priority learner jobs. |
+| Native inventory backend | With query tiling and dedicated 90% GPU preallocation, the pinned 67B model generated four full-length replies on eight H100s. The fused learner scored all 32,768 targets and detected one PPO clip crossing. | Diagnose the replay outlier and repeat the full-shape gate with zero crossings. Run the held-learner serving comparison after the priority learner jobs. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -642,8 +642,7 @@ encoding, replay binding and fused scoring. The timing includes any
 compilation or cache reuse during that invocation. A two-device EP2 CPU
 control preserved FP32 router and QB values from a mixed-precision export,
 rejected rounded BF16 routing weights and mismatched metadata, and scored
-all targets for two prompt/response splits. The pinned 67B accelerator
-result remains open.
+all targets for two prompt/response splits.
 
 The first eight-H100 attempt verified the pinned weight metadata and
 stopped during model loading when XLA's per-fusion autotuning cache used
@@ -668,14 +667,28 @@ allocation to 35.50 GiB. The allocator reported 24.66 GiB resident and a
 trial uses the same context and records a focused XLA memory report to
 test whether the allocator's growth behavior contributes to the failure.
 The tiled prefill compiler report records 59.95 GiB per GPU including
-arguments and workspace. Dedicated preallocation let the probe finish
-prefill on all four 16,384-token prompts and enter decode. Early iterations
-logged 128 new tokens at about 16.34 tokens/s aggregate. Full generation
-and FA4 scoring at the full shape remain open on H100.
+arguments and workspace. Dedicated preallocation let the probe generate
+four 8,192-token replies from 16,384-token prompts in 43.81 minutes,
+including cold compilation and prefill. The JAX allocator recorded 59.97
+GiB peak in use per GPU. The learner ran the FA4 attention and fused XLA
+projection on all 32,768 targets in 12.25 seconds. The p99 absolute raw
+logprob difference was `2.322e-4`. One target reached a log-ratio of
+`+0.183555`, corresponding to a ratio of `1.201481` against the `1.20`
+upper PPO bound. The job failed the zero-crossing gate after scoring.
+This measures one synthetic group with a fixed checkpoint. The receipt
+retains four frame digests and omits the raw frames and outlier position.
 [67B model-load and prefill attempt][iris-native-67b-router] ·
 [90% allocator attempt][iris-native-67b-cap90] ·
 [Tiled H100 attempt][iris-native-67b-tiled] ·
-[Dedicated preallocation trial][iris-native-67b-prealloc]
+[Dedicated preallocation trial][iris-native-67b-prealloc] ·
+[Byte-verified original archive][native-67b-prealloc-archive]
+
+Repeat the gate with outlier positions and signed error bounds in the
+receipt. Reuse the bound routes and tokens when comparing learner
+matmul and projection precision. Include a control for the expert
+combine: paged serving uses `ring`, while the learner uses
+`ring_gather_combine` with a different accumulation order and precision.
+Keep the inventory scoring configuration as the acceptance path.
 
 The next attention candidate skips padding-only query tiles and bounds the
 scan to visible KV pages while preserving the accumulation order. The
@@ -979,6 +992,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-67b-cap90]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-cap90
 [iris-native-67b-tiled]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-tiled
 [iris-native-67b-prealloc]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-67b-inventory-h100-20261121-prealloc
+[native-67b-prealloc-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-67b-inventory%2F2026.11.21.1%2Foutputs.tar.zst
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
