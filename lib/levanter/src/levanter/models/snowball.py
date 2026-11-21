@@ -51,6 +51,7 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
     ragged_paged_attention,
+    ragged_paged_attention_append,
     token_validity_from_attention_mask,
 )
 from levanter.grug.attention.fixed_schedule import (
@@ -101,6 +102,7 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
 SnowballDecodeExpertImplementation = Literal["grouped", "split"]
+SnowballKvAppendImplementation = Literal["separate", "fused"]
 SnowballGatedNormImplementation = Literal["native", "fixed_schedule"]
 SnowballRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
 SnowballQKRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
@@ -487,6 +489,7 @@ class SnowballConfig(HFCompatConfig):
     inference_decode_implementation: Literal["scan", "unrolled"] = "scan"
     inference_expert_implementation: SnowballDecodeExpertImplementation = "grouped"
     inference_kv_sharding: Literal["model", "expert"] = "model"
+    inference_kv_append: SnowballKvAppendImplementation = "separate"
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -882,6 +885,7 @@ class SnowballAttention(eqx.Module):
         pos_ids: jax.Array,
         *,
         use_long: bool,
+        kv_append: SnowballKvAppendImplementation = "separate",
     ) -> tuple[jax.Array, KvPageCache]:
         """Attend a flat batch of serving tokens with the June attention recipe."""
         cfg = self.cfg
@@ -897,7 +901,8 @@ class SnowballAttention(eqx.Module):
             cache_v = jnp.pad(cache_v, ((0, 0), (0, extra_heads), (0, 0)))
         cache_k = reshard(cache_k, P(None, kv_axis, None))
         cache_v = reshard(cache_v, P(None, kv_axis, None))
-        cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+        if kv_append == "separate":
+            cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
         if cfg.shared_attention_implementation == "fixed_schedule":
             out = _fixed_shared_attention_decode(q, cache, batch_info, pos_ids, use_long=use_long, cfg=cfg)
             return self._project_output(x, out, v), cache
@@ -908,17 +913,32 @@ class SnowballAttention(eqx.Module):
         implementation = cfg.inference_attention_implementation
         if implementation is None and cfg.attention_implementation == "reference":
             implementation = "reference"
-        out = ragged_paged_attention(
-            q,
+        pages = (
             cache.kv_pages.array,
             batch_info.seq_lens.array,
             batch_info.page_indices.array,
             batch_info.cu_q_lens.array,
             batch_info.num_seqs,
-            sm_scale=head_dim**-0.5,
-            sliding_window=None if use_long else cfg.sliding_window,
-            implementation=implementation,
         )
+        sliding_window = None if use_long else cfg.sliding_window
+        if kv_append == "fused":
+            out, updated = ragged_paged_attention_append(
+                q,
+                cache_k.astype(cache.kv_pages.dtype),
+                cache_v.astype(cache.kv_pages.dtype),
+                *pages,
+                sm_scale=head_dim**-0.5,
+                sliding_window=sliding_window,
+            )
+            cache = KvPageCache(hax.named(updated, cache.kv_pages.axes))
+        else:
+            out = ragged_paged_attention(
+                q,
+                *pages,
+                sm_scale=head_dim**-0.5,
+                sliding_window=sliding_window,
+                implementation=implementation,
+            )
         if kv_axis == "expert":
             # Restore token sharding before trimming the padded KV heads.
             out = reshard(out, P(_BATCH_AXES, None, None, None))[:, : cfg.num_kv_heads]
@@ -1985,6 +2005,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             if expert_size > 1 and tokens.shape[0] == expert_size and sample_indices is None and not capture_routes
             else "grouped"
         )
+        kv_append = (
+            self.config.inference_kv_append
+            if sample_indices is None and not capture_routes and tokens.shape[0] <= 8
+            else "separate"
+        )
+        if kv_append == "fused" and (
+            self.config.inference_attention_implementation != "tpu_v3"
+            or self.config.shared_attention_implementation != "native"
+        ):
+            raise ValueError("Fused Snowball KV append requires native tpu_v3 attention")
         cache_axes = kv_cache.kv_pages.axes[1:]
 
         def inference_block(block):
@@ -2003,13 +2033,22 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             attn_in = block.attn_gated_norm(block.rms_attn(x))
             if isinstance(use_long, bool) or num_layers == 1:
                 attn_out, cache = block.attn.decode(
-                    attn_in, cache, batch_info, pos_ids.array, use_long=True if num_layers == 1 else use_long
+                    attn_in,
+                    cache,
+                    batch_info,
+                    pos_ids.array,
+                    use_long=True if num_layers == 1 else use_long,
+                    kv_append=kv_append,
                 )
             else:
                 attn_out, cache = jax.lax.cond(
                     use_long,
-                    lambda _: block.attn.decode(attn_in, cache, batch_info, pos_ids.array, use_long=True),
-                    lambda _: block.attn.decode(attn_in, cache, batch_info, pos_ids.array, use_long=False),
+                    lambda _: block.attn.decode(
+                        attn_in, cache, batch_info, pos_ids.array, use_long=True, kv_append=kv_append
+                    ),
+                    lambda _: block.attn.decode(
+                        attn_in, cache, batch_info, pos_ids.array, use_long=False, kv_append=kv_append
+                    ),
                     operand=None,
                 )
             x = x + attn_out

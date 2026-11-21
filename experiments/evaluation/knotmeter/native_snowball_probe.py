@@ -81,6 +81,7 @@ def main() -> None:
     parser.add_argument("--decode-layers", choices=("scan", "unrolled"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
+    parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
@@ -128,6 +129,7 @@ def main() -> None:
             inference_decode_implementation=args.decode_layers,
             inference_expert_implementation=args.decode_experts,
             inference_kv_sharding=args.kv_sharding,
+            inference_kv_append=args.kv_append,
         )
         tokenizer = load_tokenizer(series["tokenizer"], revision=series["tokenizer_revision"])
         with trainer.use_device_mesh():
@@ -162,6 +164,7 @@ def main() -> None:
             "decode_layers": args.decode_layers,
             "decode_experts": args.decode_experts,
             "kv_sharding": args.kv_sharding,
+            "kv_append": args.kv_append,
             "prefill_buckets": service.prefill_bucket_sizes,
             "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,

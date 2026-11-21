@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.grug.attention import ragged_paged_attention
+from levanter.grug.attention import ragged_paged_attention, ragged_paged_attention_append
 
 
 class _PagedCase(NamedTuple):
@@ -155,3 +155,28 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
     assert actual.dtype == args.q.dtype
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), rtol=0.008, atol=2e-4)
     np.testing.assert_array_equal(actual[offsets[2] :], jnp.zeros_like(actual[offsets[2] :]))
+
+
+@pytest.mark.skipif(jax.devices()[0].device_kind != "TPU v5", reason="v5p Pallas configuration")
+@pytest.mark.parametrize("window", [None, 2048])
+def test_grug_tpu_fused_append_updates_only_the_addressed_token(window):
+    rng = np.random.default_rng(25)
+    q = jnp.asarray(rng.normal(size=(4, 5, 4, 128)), jnp.bfloat16)
+    k = jnp.asarray(rng.normal(size=(4, 5, 128)), jnp.bfloat16)
+    v = jnp.asarray(rng.normal(size=(4, 5, 128)), jnp.bfloat16)
+    pages = jnp.asarray(rng.normal(size=(32, 128, 10, 128)), jnp.bfloat16)
+    indices = jnp.asarray(rng.permutation(32)[None], jnp.int32)
+    length, page_size = 2208, 128
+    lengths = jnp.array([length], jnp.int32)
+    offsets = jnp.array([0, 1], jnp.int32)
+    num_seqs = jnp.array(1, jnp.int32)
+    scale = 128**-0.5
+    attention = jax.jit(partial(ragged_paged_attention_append, sm_scale=scale, sliding_window=window))
+    actual, updated = attention(q, k, v, pages, lengths, indices, offsets, num_seqs)
+    logical_page, slot = divmod(length - 1, page_size)
+    physical_page = indices[0, logical_page]
+    expected_pages = pages.at[physical_page, slot, 0::2].set(k[0]).at[physical_page, slot, 1::2].set(v[0])
+    np.testing.assert_array_equal(updated, expected_pages)
+    args = _PagedCase(q, expected_pages, lengths, indices, offsets, num_seqs)
+    expected = _dense_reference(args, window, None, scale)
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), rtol=0.008, atol=2e-4)

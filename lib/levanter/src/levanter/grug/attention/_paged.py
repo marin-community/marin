@@ -99,11 +99,9 @@ def ragged_paged_attention(
         sliding_window=sliding_window,
         soft_cap=soft_cap,
     )
-    q_sharding = named_sharding_of(q)
-    if q_sharding is not None and not q_sharding.mesh.empty:
+    q_sharding = _attention_sharding(q)
+    if q_sharding is not None:
         q_spec = tuple(q_sharding.spec) + (None,) * (q.ndim - len(q_sharding.spec))
-        if any(q_spec[axis] is not None for axis in (0, 2, 3)):
-            raise ValueError("Paged attention supports sharding only the KV-head axis of q")
         heads = q_spec[1]
         # Cache updates can erase a size-one head-axis annotation.
         kv_spec = P(None, None, heads, None)
@@ -118,31 +116,110 @@ def ragged_paged_attention(
     return fn(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs)
 
 
+def _attention_sharding(q: jax.Array) -> NamedSharding | None:
+    sharding = named_sharding_of(q)
+    if sharding is None or sharding.mesh.empty:
+        return None
+    if any(axis is not None for index, axis in enumerate(sharding.spec) if index != 1):
+        raise ValueError("Paged attention supports sharding only the KV-head axis of q")
+    return sharding
+
+
 def _tpu_v3_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    output, _ = _tpu_v3(
+        q,
+        kv_pages,
+        kv_lens,
+        page_indices,
+        cu_q_lens,
+        num_seqs,
+        sm_scale=sm_scale,
+        sliding_window=sliding_window,
+        soft_cap=soft_cap,
+    )
+    return output
+
+
+def ragged_paged_attention_append(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    kv_pages: jax.Array,
+    kv_lens: jax.Array,
+    page_indices: jax.Array,
+    cu_q_lens: jax.Array,
+    num_seqs: jax.Array,
+    *,
+    sm_scale: float,
+    sliding_window: int | None,
+) -> tuple[jax.Array, jax.Array]:
+    """Append BF16 keys and values in query order and attend with RPA v3 on v5p."""
+    if jax.devices()[0].device_kind != "TPU v5":
+        raise ValueError("Fused paged KV append requires TPU v5p")
+    if q.dtype != k.dtype or q.dtype != v.dtype or q.dtype != kv_pages.dtype or q.dtype != jnp.bfloat16:
+        raise ValueError("Fused paged KV append requires BF16 queries, keys, values, and cache pages")
+    if q.shape[-1] != TPU_HEAD_ALIGNMENT or kv_pages.shape[1] != TPU_HEAD_ALIGNMENT:
+        raise ValueError("Fused paged KV append requires 128-wide heads and 128-token pages")
+
+    def attend(q, k, v, pages, lengths, indices, offsets, num_seqs):
+        return _tpu_v3(
+            q,
+            pages,
+            lengths,
+            indices,
+            offsets,
+            num_seqs,
+            k=k,
+            v=v,
+            sm_scale=sm_scale,
+            sliding_window=sliding_window,
+            soft_cap=None,
+        )
+
+    sharding = _attention_sharding(q)
+    if sharding is not None:
+        heads = sharding.spec[1] if len(sharding.spec) > 1 else None
+        q_spec, update_spec, page_spec = P(None, heads, None, None), P(None, heads, None), P(None, None, heads, None)
+        kv_pages = reshard(kv_pages, NamedSharding(sharding.mesh, page_spec))
+        attend = jax.shard_map(
+            attend,
+            mesh=sharding.mesh,
+            in_specs=(q_spec, update_spec, update_spec, page_spec, P(), P(), P(), P()),
+            out_specs=(q_spec, page_spec),
+            check_vma=False,
+        )
+    return attend(q, k, v, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs)
+
+
+def _tpu_v3(
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap, k=None, v=None
+):
+    append = k is not None
     dummy_kv = jnp.zeros((q.shape[0], q.shape[1], q.shape[-1]), dtype=q.dtype)
     active = jnp.arange(kv_lens.shape[0]) < num_seqs
     decode = jnp.where(jnp.all((jnp.diff(cu_q_lens) == 1) | ~active), num_seqs, 0)
     pages = jnp.where((page_indices >= 0) & (page_indices < kv_pages.shape[0]), page_indices, 0)
-    output, _ = tpu_ragged_paged_attention_v3(
+    decode_block = (512 if sliding_window is not None else 1024) if append else 2048
+    output, updated = tpu_ragged_paged_attention_v3(
         q.reshape(q.shape[0], -1, q.shape[-1]),
-        dummy_kv,
-        dummy_kv,
+        dummy_kv if k is None else k,
+        dummy_kv if v is None else v,
         kv_pages.reshape(*kv_pages.shape[:2], q.shape[1], 2, q.shape[-1]),
         jnp.maximum(kv_lens, 0),
         pages.reshape(-1),
         cu_q_lens,
         jnp.stack((decode, decode, num_seqs)),
-        update_kv_cache=False,
+        update_kv_cache=append,
         sm_scale=sm_scale,
         soft_cap=soft_cap,
         sliding_window=sliding_window,
         out_dtype=jnp.float32,
-        d_block_sizes=(1, 2048, 1, 512),
+        d_block_sizes=(1, decode_block, 1, 512),
         m_block_sizes=(min(q.shape[0], 128), 1024, min(q.shape[0], 64), 512),
         vmem_limit_bytes=_V5P_VMEM_LIMIT_BYTES,
     )
     valid = jnp.arange(q.shape[0]) < cu_q_lens[num_seqs]
-    return jnp.where(valid[:, None, None, None], output.reshape(q.shape), 0)
+    return jnp.where(valid[:, None, None, None], output.reshape(q.shape), 0), updated.reshape(kv_pages.shape)
 
 
 class _QueryMetadata(NamedTuple):
