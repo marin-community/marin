@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 10:01 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 10:22 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -17,10 +17,10 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. All five tasks were scheduling-gated at 10:01 p.m. Kueue reported a shortfall of nine GPUs and nine InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. The first learner task was still scheduling-gated at 10:22 p.m. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
 | Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. A separate CPU proof restored and installed both optimizer updates in a serving subprocess, with fresh KV for each version. | Connect the native backend and publication to the deployed rollout service. |
-| Native inventory backend | A local SkyRL trajectory and learner path now carries actual native tool-turn replay through the isolated JAX worker. The candidate expert-sharded layout passed a bounded eight-device CPU loop. | Register native serving with the deployed controller and qualify multi-rank installation and the pinned full checkpoint at production context. |
+| Native inventory backend | The local SkyRL Ray controller admitted two policy windows with a real isolated serving process and binary tool turns. The candidate expert-sharded layout passed a bounded eight-device CPU loop. | Render the native inventory launcher, then qualify multi-host installation and the pinned checkpoint at production context. |
 | Typed binary protocol | Separate Snowball serving and learner processes exchanged protobuf and binary tensor frames through two updates. Native SkyRL trajectory rows carry those frame bytes. The existing learner pipe uses a binary pickle envelope, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the deployed native service boundary. Migrate the learner envelope after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -173,6 +173,24 @@ each of versions 0, 1 and 2. The largest raw score difference was
 failed install, the active policy reproduced its earlier frames
 byte-for-byte. Both proofs ran on one and four CPU devices. Deployed
 service integration and distributed publication remain open.
+
+The real learner worker now publishes immutable, weights-only TensorStore
+snapshots through its command path at `457bde3a3d`. Each learner process
+hashes its owned FP32 weight slices and exchanges only the small digests.
+The serving restore validates those logical slices before casting for
+inference. CPU tests with one and two learner processes verified steps
+0 through 2, exact retry receipts, rejection of mismatched weights, and a
+bitwise-identical next update after learner restore. The digest includes
+the publisher's shard layout. A single serving host can verify the same
+receipt on a different local layout.
+
+The serving endpoint at `74414c2cdb` uses the existing bounded Marin
+worker pipe. The host client works without JAX or Torch. It passes exact
+prompt IDs, a seed and a stop or length budget to an isolated Levanter
+process and returns the binary replay frame. The child verifies the
+checkpoint before installing fresh KV state. CPU tests covered exact
+continuation tokens, both stop modes, obsolete policy IDs, corrupt
+checkpoint weights and unchanged old-policy output after failed install.
 
 At the pinned model's 26 layers and four selected experts, a synthetic
 24,576-token frame occupied 13,650,628 bytes. A four-answer group of those
@@ -367,6 +385,26 @@ CUDA and the TPU path also falls back for BF16. Benchmark that path at the
 current context and compare with a qualified faster kernel before
 concluding that native serving improves time per rollout group.
 
+The local qualification command at `33a2cf432b` uses the pinned regional
+67B export and tokenizer revision. It drives four independently seeded
+requests on a fixed synthetic prompt to 24,576 tokens with 32 targets per
+response, validates their binary frames and runs the fused learner scorer
+on the same loaded model.
+It records load, paged allocation, generation and score timings, peak
+device bytes when available, raw score deltas and ratios outside the PPO
+clip range. On a small BF16 HF export across eight CPU devices, the same
+path covered all 32 targets at context 128 with a maximum raw score
+difference of `1.21e-4` and zero ratios outside the clip range. The
+full-checkpoint result and the sustained inventory comparison remain open.
+
+On the eight-H100 regional worker, run the probe with the GPU extras
+for `marin-core` and `marin-levanter`.
+
+```bash
+JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball_native_qualification \
+  "$IRIS_OUTPUT_DIR/snowball-native-full-context.json"
+```
+
 - Connect the native backend to the RolloutEngine operations used by the
   recipe. Use SkyRL's exact-token chat continuation helper to retain the
   first assistant turn's served tokens and append only the rendered boundary
@@ -387,10 +425,25 @@ concluding that native serving improves time per rollout group.
   keeps raw old-policy scores separate from sampler probabilities. The
   real worker replay test passed on one and four CPU devices with
   JAX/JAXLIB 0.11.0.
-- Have the deployed controller supply the native transport and an
-  installer-verified policy identity for each admitted rollout window.
-  Exercise tool and infrastructure failure masks and a restart across
-  that deployment boundary. [Exact chat continuation][chat-continuation]
+- The controller at `658ee7e085` and `d4dcd378f5` opens lease `n+1`
+  after the learners agree on weight version `n` and serving acknowledges
+  its digest. A local Ray run installed two distinct snapshots and
+  exercised an offline tool call in each lease. The standard task worker
+  carried exact binary frames into ranked learner inputs with zero
+  staleness. The serving process rejected the first lease after installing
+  the second snapshot. That controller test used a deterministic weight
+  perturbation. The learner and IPC tests separately exercised real
+  optimizer changes.
+- Wire the typed inventory recipe and Iris bootstrap to that controller.
+  The recipe schema still declares only vLLM. The native arm needs a
+  shared snapshot root and an isolated Levanter environment on its
+  dedicated serving host. Exercise multi-host acknowledgement, tool and
+  infrastructure failure masks, and restart across that deployment
+  boundary. [Exact chat continuation][chat-continuation]
+- Qualify native evaluation with the inventory's temperature of 0.6 and
+  top-p of 0.95. Keep its transformed sampler probabilities separate from the
+  raw-policy evidence required by native training and use the same fixed
+  panel, policy revision and evaluation decoding settings in both arms.
 - Load the pinned 67B checkpoint on the intended serving hardware. Qualify
   real context and batch sizes, expert sharding, precision, peak memory,
   compile time and sustained serving. Measure serve/score drift under the
@@ -401,10 +454,13 @@ concluding that native serving improves time per rollout group.
 - Run a matched Levanter/vLLM versus Levanter/native comparison. Hold learner,
   task mix, sampling and fixed evaluation panel constant. Record hardware
   and cost, time per admitted group and optimizer update, and fixed-panel
-  reward. Break group readiness down into generation, tool execution and
-  grading. Record publication separately in the per-update timing. In the
-  prior FP8 run, mean decode time fell 13%, the wait for rollout groups rose
-  6.1 minutes and time to the same evaluation target rose 5.7 minutes.
+  reward. For group throughput, divide total elapsed time from opening
+  each policy's rollout leases to completing group admission by the actual
+  admitted group count across those steps. Keep the existing per-update
+  wall time and record publication separately. Use trajectory timings to
+  distinguish generation, tool execution and grading. In the prior FP8 run,
+  mean decode time fell 13%, the wait for rollout groups rose 6.1 minutes
+  and time to the same evaluation target rose 5.7 minutes.
   [Prior timing comparison][timing]
 
 ## Open decisions
