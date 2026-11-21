@@ -70,11 +70,12 @@ def test_grug_paged_attention_mixed_prefixes_match_reference(window, cap, dtype)
     np.testing.assert_array_equal(empty, jnp.zeros_like(args.q))
 
 
-def test_grug_paged_attention_explicit_head_sharding_matches_reference():
+@pytest.mark.parametrize("num_devices,cache_head_axis", [(2, "model"), (1, None)])
+def test_grug_paged_attention_explicit_head_sharding_matches_reference(num_devices, cache_head_axis):
     args = _mixed_case(jnp.float32)
-    devices = np.asarray(jax.devices()[:2])
+    devices = np.asarray(jax.devices()[:num_devices])
     mesh = Mesh(devices, ("model",), axis_types=(AxisType.Explicit,))
-    specs = (P(None, "model", None, None), P(None, None, "model", None), P(), P(), P(), P())
+    specs = (P(None, "model", None, None), P(None, None, cache_head_axis, None), P(), P(), P(), P())
     with jax.set_mesh(mesh):
         sharded = tuple(jax.device_put(arg, NamedSharding(mesh, spec)) for arg, spec in zip(args, specs, strict=True))
         actual = jax.jit(partial(ragged_paged_attention, sm_scale=0.17, sliding_window=5, implementation="reference"))(

@@ -11,7 +11,9 @@ import jax
 import jax.numpy as jnp
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention as tpu_ragged_paged_attention
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import get_min_heads_per_blk
+from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
@@ -81,10 +83,13 @@ def ragged_paged_attention(
         if any(q_spec[axis] is not None for axis in (0, 2, 3)):
             raise ValueError("Paged attention supports sharding only the KV-head axis of q")
         heads = q_spec[1]
+        # Cache updates can erase a size-one head-axis annotation.
+        kv_spec = P(None, None, heads, None)
+        kv_pages = reshard(kv_pages, NamedSharding(q_sharding.mesh, kv_spec))
         fn = jax.shard_map(
             fn,
             mesh=q_sharding.mesh,
-            in_specs=(P(None, heads, None, None), P(None, None, heads, None), P(), P(), P(), P()),
+            in_specs=(P(None, heads, None, None), kv_spec, P(), P(), P(), P()),
             out_specs=P(None, heads, None, None),
             check_vma=False,
         )
