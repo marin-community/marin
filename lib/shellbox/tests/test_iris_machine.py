@@ -13,9 +13,11 @@ import shutil
 import signal
 import subprocess
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from errno import EACCES, EISDIR, ENAMETOOLONG, ENOENT, ENOTDIR
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -30,8 +32,9 @@ from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.async_adapter import BoundedThreadExecutor
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
@@ -44,6 +47,7 @@ from shellbox.machine import (
     GuestHelperFailed,
     GuestPathError,
     MachineCancelled,
+    MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
     MachineUnavailable,
@@ -72,7 +76,7 @@ class LocalRpc:
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out") from None
+                raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out") from TimeoutError()
         return SimpleNamespace(exit_code=process.returncode, stdout=stdout, stderr=stderr, error="")
 
 
@@ -703,7 +707,7 @@ class DeadlineRpc(CountingRpc):
 
     def exec_in_container(self, request, timeout_ms):
         if "2> /tmp/.shellbox-" in request.command[-1]:
-            raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
+            raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out") from TimeoutError()
         return super().exec_in_container(request, timeout_ms)
 
 
@@ -997,5 +1001,184 @@ def test_directory_download_stays_recursive_and_helper_failures_are_typed(tmp_pa
         finally:
             await machine.close()
             await broken.close()
+
+    asyncio.run(scenario())
+
+
+# Review 2026-11-21: when the controller's own exec deadline expires with the stream still open, Iris K8s replies
+# with exit 124, nothing on the status channel and its diagnostic on stderr (`CloudK8sService.exec`). That read as a
+# guest timeout, returned partial output and admitted the next command while the guest command's state was unknown.
+class CutStreamRpc(CountingRpc):
+    """Runs the command, then replies as `CloudK8sService.exec` does for a stream still open at its deadline: exit
+    124, the stdout read so far (none of the records written at the end) and the timeout diagnostic."""
+
+    def exec_in_container(self, request, timeout_ms):
+        response = super().exec_in_container(request, timeout_ms)
+        if "printf partial" in request.command[-1]:
+            return SimpleNamespace(exit_code=124, stdout="", stderr="Command timed out after 36 seconds", error="")
+        return response
+
+
+@pytest.mark.parametrize(
+    "state,error_message,raised",
+    [(TaskState.RUNNING, "", CommandOutcomeUnknown), (TaskState.FAILED, "OOMKilled", MachineResourceExhausted)],
+    ids=["running", "oom-killed"],
+)
+def test_cut_exec_stream_is_never_a_guest_timeout(tmp_path, state, error_message, raised) -> None:
+    task = LocalTask(TaskState.RUNNING)
+    machine, job = local_machine(tmp_path, CutStreamRpc(), task)
+
+    async def scenario() -> None:
+        await machine.run(Command(("true",), timeout=5))  # The guest has a coreutils timeout.
+        task.status = lambda: SimpleNamespace(state=state, error_message=error_message)
+        with pytest.raises(raised) as caught:
+            await machine.run(Command(("printf", "partial"), timeout=5))
+        assert type(caught.value) is raised
+        # The command may still be running, so the sandbox takes no further command, and says why.
+        assert job.cancelled
+        with pytest.raises(MachineTerminated) as closed:
+            await machine.run(Command(("true",)))
+        assert str(closed.value) == (
+            "Machine is closed: command 'printf partial' ended with no completion record (exit 124): "
+            "Command timed out after 36 seconds"
+        )
+
+    asyncio.run(scenario())
+
+
+# Review 2026-11-21: a 137 without the command's own record before the budget elapsed, or any other `timeout` exit,
+# is the status shell killed by something else, not a timeout.
+@pytest.mark.parametrize("signal_name", ["KILL", "TERM"])
+def test_status_shell_killed_before_the_limit_is_an_unknown_outcome(tmp_path, signal_name) -> None:
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path)
+        with pytest.raises(CommandOutcomeUnknown, match=f"timer {128 + getattr(signal, 'SIG' + signal_name)}"):
+            await machine.run(Command(("sh", "-c", f"kill -{signal_name} $PPID"), timeout=30))
+        assert job.cancelled
+
+    asyncio.run(scenario())
+
+
+class ControllerHandler(BaseHTTPRequestHandler):
+    """A Connect controller endpoint whose command exec ``on_command`` answers; helpers succeed with no output."""
+
+    on_command: Callable[[BaseHTTPRequestHandler], None]
+
+    def do_POST(self) -> None:
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        request = controller_pb2.Controller.ExecInContainerRequest.FromString(body)
+        if "2> /tmp/.shellbox-" in request.command[-1]:
+            self.on_command(self)
+            return
+        self.reply(200, "application/proto", controller_pb2.Controller.ExecInContainerResponse().SerializeToString())
+
+    def reply(self, status: int, content_type: str, payload: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+# Review 2026-11-21: a worker's own deadline forwarded by the controller cancelled the machine and was reported as the
+# client's 21,600 s deadline for a command with no timeout. Each origin is exercised through the generated client.
+@pytest.mark.parametrize("origin", ["upstream", "local"])
+def test_exec_deadline_origin_decides_the_outcome(tmp_path, origin) -> None:
+    release = threading.Event()
+
+    def on_command(handler: BaseHTTPRequestHandler) -> None:
+        if origin == "local":
+            release.wait(timeout=10)  # Hold the reply past the client's deadline.
+            return
+        error = json.dumps({"code": "deadline_exceeded", "message": "worker exec deadline exceeded"}).encode()
+        handler.reply(504, "application/json", error)  # type: ignore[attr-defined]
+
+    handler = type("Handler", (ControllerHandler,), {"on_command": staticmethod(on_command)})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = ControllerServiceClientSync(address=f"http://127.0.0.1:{server.server_port}", send_compression=None)
+    machine, job = local_machine(tmp_path, client)
+
+    async def scenario() -> None:
+        if origin == "upstream":
+            with pytest.raises(CommandOutcomeUnknown, match="worker exec deadline exceeded") as caught:
+                await machine.run(Command(("true",)))
+            assert "timeout" not in str(caught.value).replace("deadline", "")
+            assert not job.cancelled
+        else:
+            # The guest has no timer (the helper reply is empty), so the client's deadline is the command's own.
+            result = await machine.run(Command(("true",), timeout=0.2))
+            assert (result.reason, result.exit_code) == (ExitReason.TIMED_OUT, None)
+            assert job.cancelled
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+
+
+# Review 2026-11-21: a caller PATH holding only its own tools, as script graders pass, and an absolute program both
+# exited 127 because the wrapper looked up `timeout` and `sh` in that PATH.
+@pytest.mark.parametrize("timeout", [None, 5])
+def test_commands_resolve_in_the_callers_path_while_helpers_do_not(tmp_path, timeout) -> None:
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "grader").write_text("#!/bin/sh\nprintf graded\n")
+    (tools / "grader").chmod(0o755)
+
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        try:
+            for argv, expected in ((("grader",), b"graded"), (("/bin/echo", "abs"), b"abs\n")):
+                result = await machine.run(Command(argv, env={"PATH": str(tools)}, timeout=timeout))
+                assert (result.reason, result.exit_code, result.stdout) == (ExitReason.EXITED, 0, expected)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+# Review 2026-11-21: a zero budget disabled the guest timer and a negative one exited with the timer's usage error.
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_nonpositive_timeout_expires_before_anything_is_sent(tmp_path, timeout) -> None:
+    rpc = CountingRpc()
+    machine, job = local_machine(tmp_path, rpc)
+
+    async def scenario() -> None:
+        expired = await machine.run(Command(("sh", "-c", "printf ran > ran.txt"), stdin=b"input", timeout=timeout))
+        assert (expired.reason, expired.exit_code, expired.stdout) == (ExitReason.TIMED_OUT, None, b"")
+        assert rpc.scripts == [] and not (tmp_path / "ran.txt").exists()
+        assert (await machine.run(Command(("echo", "open")))).stdout == b"open\n"
+        assert not job.cancelled
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("timeout", [math.nan, math.inf])
+def test_nonfinite_timeout_is_rejected_before_anything_is_sent(tmp_path, timeout) -> None:
+    rpc = CountingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+
+    with pytest.raises(ValueError, match="finite"):
+        asyncio.run(machine.run(Command(("true",), timeout=timeout)))
+    assert rpc.scripts == []
+
+
+def test_timer_escalating_to_kill_at_the_limit_is_a_timeout(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "GUEST_KILL_GRACE_SECONDS", 0.2)
+    # An ignored TERM is inherited, so only the timer's KILL ends the status shell: `timeout` exits 137.
+    machine, job = local_machine(tmp_path, CountingRpc(prelude="trap '' TERM; "))
+
+    async def scenario() -> None:
+        slow = await machine.run(Command(("sleep", "30"), timeout=0.3))
+        assert (slow.reason, slow.exit_code) == (ExitReason.TIMED_OUT, None)
+        assert (await machine.run(Command(("echo", "open"), timeout=5))).stdout == b"open\n"
+        assert not job.cancelled
 
     asyncio.run(scenario())

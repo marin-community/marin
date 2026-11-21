@@ -102,18 +102,23 @@ CLOSE_DRAIN_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
 # How much of each stuck exec's command ``close`` quotes when the drain times out.
 STUCK_EXEC_PREVIEW_CHARS = 120
-# A command with a timeout runs under the guest's coreutils ``timeout``, which sends TERM to the command's process
-# group at the limit and KILL after this grace; it exits 124, or 137 when it needed the KILL.
+# A command with a timeout runs under the guest's coreutils ``timeout``, which sends TERM to its process group at the
+# limit and KILL after this grace; it exits 124, or 137 when it needed the KILL.
 GUEST_KILL_GRACE_SECONDS = 5
-GUEST_TIMEOUT_EXITS = (124, 137)
 # The controller's own exec deadline beyond the guest bound: exec setup and the guest shell's exit. The client's RPC
 # deadline adds RPC_PADDING_SECONDS to it and is the host backstop for an exec that never returns.
 GUEST_EXEC_MARGIN_SECONDS = 25
-# Prints ``bounded`` when the guest has a coreutils (GNU or uutils) ``timeout``; BusyBox's differs in flags and exits.
-GUEST_TIMEOUT_PROBE = 'case "$(timeout --version 2>/dev/null)" in *coreutils*) printf bounded;; esac'
-# Runs "$@" and prints its exit status on fd 3, the exec's own stdout, which the command never sees. A missing
-# status means this shell was killed: by the guest ``timeout`` when it exits 124 or 137.
-REPORT_STATUS = '"$@" 3>&-; echo "$?" >&3'
+# Prints the absolute paths of a coreutils (GNU or uutils) ``timeout`` and of ``sh`` in the image's own environment,
+# or nothing; BusyBox's ``timeout`` differs in flags and exits. Callers' environments may not find either.
+GUEST_TIMER_PROBE = (
+    'if t=$(command -v timeout) && s=$(command -v sh); then case "$("$t" --version 2>/dev/null)" in '
+    '*coreutils*) printf \'%s\\n%s\' "$t" "$s";; esac; fi'
+)
+# A guest-timed command reports on the exec's stdout, which it never sees: its shell writes ``exit <code>`` when it
+# finishes, and the outer shell writes ``timer <code>`` once ``timeout`` itself has returned. A reply with neither,
+# such as the controller cutting an open exec stream, says nothing about the command.
+TIMED_COMMAND = '"$@" 3>&-; echo "exit $?" >&3'
+COMPLETION_RECORD = re.compile(r"(exit|timer) (\d+)")
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
 EGRESS_POLICIES = {
@@ -150,8 +155,13 @@ def _raise_if_unreachable(error: BaseException) -> None:
         raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
 
 
-def _deadline_expired(error: BaseException) -> bool:
-    return isinstance(error, ConnectError) and error.code == Code.DEADLINE_EXCEEDED
+def _local_deadline_expired(error: BaseException) -> bool:
+    """This client's own RPC timer expired; an upstream service's deadline arrives without a ``TimeoutError`` cause."""
+    return (
+        isinstance(error, ConnectError)
+        and error.code == Code.DEADLINE_EXCEEDED
+        and isinstance(error.__cause__, TimeoutError)
+    )
 
 
 def _rpc_deadline(timeout: float | None, deadline: float | None) -> float:
@@ -162,10 +172,13 @@ def _rpc_deadline(timeout: float | None, deadline: float | None) -> float:
     return seconds + RPC_PADDING_SECONDS if seconds >= 0 else DEFAULT_JOB_TTL
 
 
-def _reported_status(stdout: str) -> int | None:
-    """The command's exit status as ``REPORT_STATUS`` printed it, or ``None`` when its shell was killed first."""
-    lines = stdout.splitlines()
-    return int(lines[-1]) if lines and lines[-1].isdigit() else None
+def _timer_paths(stdout: str) -> tuple[str, ...]:
+    paths = tuple(stdout.split("\n"))
+    return paths if len(paths) == 2 and all(path.startswith("/") for path in paths) else ()
+
+
+def _completion_records(stdout: str) -> dict[str, int]:
+    return {match[1]: int(match[2]) for line in stdout.splitlines() if (match := COMPLETION_RECORD.fullmatch(line))}
 
 
 def never_connected(error: BaseException) -> bool:
@@ -288,7 +301,7 @@ class IrisMachine:
         self._closed = False
         self._closed_because = ""
         self._container_user: tuple[str, str] | None = None
-        self._guest_timeout: bool | None = None
+        self._guest_timer: tuple[str, ...] | None = None
         # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
         # check-then-send; it can only wait for attempts that already passed the check.
         self._admission = threading.Condition()
@@ -457,11 +470,11 @@ class IrisMachine:
             self._container_user = (uid, name)
         return self._container_user
 
-    async def _bounds_commands(self) -> bool:
-        """Whether the guest bounds commands itself; probed once per machine."""
-        if self._guest_timeout is None:
-            self._guest_timeout = (await self._script(GUEST_TIMEOUT_PROBE)).stdout == "bounded"
-        return self._guest_timeout
+    async def _timer(self) -> tuple[str, ...]:
+        """The guest's ``timeout`` and ``sh`` paths, or ``()`` when it cannot bound commands; probed once."""
+        if self._guest_timer is None:
+            self._guest_timer = _timer_paths((await self._script(GUEST_TIMER_PROBE)).stdout)
+        return self._guest_timer
 
     async def _close_because(self, reason: str) -> None:
         if not self._closed:
@@ -483,6 +496,10 @@ class IrisMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
+        if command.timeout is not None and not math.isfinite(command.timeout):
+            raise ValueError(f"Command timeout must be finite: {command.timeout}")
+        if command.timeout is not None and command.timeout <= 0:
+            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)  # Nothing was sent.
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
         if command.stdin:
@@ -494,17 +511,22 @@ class IrisMachine:
             raise ValueError("Environment variable names must be shell identifiers")
         # The guest bounds a command that has a timeout and keeps the machine, as Docker and Daytona do. Without a
         # coreutils ``timeout`` the exec's RPC deadline is the timeout itself, and it closes the machine as before.
-        bounded = command.timeout is not None and await self._bounds_commands()
-        limit = f"timeout -k {GUEST_KILL_GRACE_SECONDS} {command.timeout} " if bounded else ""
-        script = (
-            f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{limit}sh -c {shlex.quote(REPORT_STATUS)} shellbox {shlex.join(command.argv)} 3>&1 "
+        timer = () if command.timeout is None else await self._timer()
+        redirects = (
             f"< {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
+        cwd = shlex.quote(command.cwd or self.spec.workdir)
+        script = f"{exports}\ncd {cwd} || exit 1\n{shlex.join(command.argv)} {redirects}"
         # An exec without a positive deadline falls back to the controller's short Kubernetes default.
         exec_timeout, deadline = command.timeout, None
-        if command.timeout is not None and bounded:
+        if command.timeout is not None and timer:
+            timeout_path, sh_path = (shlex.quote(path) for path in timer)
+            script = (
+                f'{exports}\ncd {cwd} || {{ echo "exit 1"; exit 1; }}\n'
+                f"{timeout_path} -k {GUEST_KILL_GRACE_SECONDS} {command.timeout} {sh_path} -c "
+                f'{shlex.quote(TIMED_COMMAND)} shellbox {shlex.join(command.argv)} 3>&1 {redirects}; echo "timer $?"'
+            )
             exec_timeout = command.timeout + GUEST_KILL_GRACE_SECONDS + GUEST_EXEC_MARGIN_SECONDS
         elif command.timeout is not None:
             exec_timeout, deadline = command.timeout + RPC_PADDING_SECONDS, command.timeout
@@ -513,18 +535,21 @@ class IrisMachine:
         # Refused attempts do not spend the exec's RPC deadline, so admission queueing never times a command out.
         #   dispatch  never connected, or admission refused  -> MachineUnavailable (retry)
         #             machine closed before admitting it     -> MachineTerminated
-        #             RPC deadline (the host backstop)       -> TIMED_OUT, machine closed
-        #             any other error                        -> unattributed outcome
+        #             this client's RPC deadline (backstop)  -> TIMED_OUT, machine closed
+        #             other errors, upstream deadlines too   -> unattributed outcome
         #   decide    reply without the command's exit status, including the WebSocket setup-failure text,
         #             which the Kubernetes client reports after an exec whose upgrade reply was lost
         #                                                    -> unattributed outcome
-        #             guest ``timeout`` killed the command   -> TIMED_OUT with its output so far, machine kept
+        #             guest-timed: ``exit`` record           -> that exit status
+        #             ``timer`` 124, or 137 at the limit     -> TIMED_OUT with its output so far, machine kept
+        #             no record, or any other ``timer``      -> unattributed outcome, machine closed
         #   capture   guest helper failed or sandbox gone    -> GuestHelperFailed / MachineTerminated
         #             any other error                        -> CommandOutcomeUnknown
         #   cleanup   any error or nonzero exit              -> logged; outcome unchanged
         # An unattributed outcome is CommandOutcomeUnknown, or MachineTerminated once the sandbox is gone.
         preview = shlex.join(command.argv)[:STUCK_EXEC_PREVIEW_CHARS]
         try:
+            started = time.monotonic()
             try:
                 response = await asyncio.to_thread(self._send, ["sh", "-c", script], exec_timeout, deadline)
             except MachineTerminated:
@@ -532,7 +557,7 @@ class IrisMachine:
             except Exception as error:
                 if _exec_was_refused(error) or never_connected(error):
                     raise MachineUnavailable(f"Iris exec was never sent: {error}") from error
-                if _deadline_expired(error):
+                if _local_deadline_expired(error):
                     # The guest process state is unknown, so the sandbox cannot be reused.
                     await self._close_because(
                         f"command {preview!r} got no exec reply within its "
@@ -543,12 +568,24 @@ class IrisMachine:
             if (failure := _command_failure(response)) is not None:
                 gone = any(marker in response.error for marker in DEAD_CONTAINER_MARKERS)
                 raise await asyncio.to_thread(self._unattributed_outcome, failure, gone)
-            exit_code: int | None = _reported_status(response.stdout)
+            exit_code: int | None = response.exit_code
             reason = ExitReason.EXITED
-            if exit_code is None and bounded and response.exit_code in GUEST_TIMEOUT_EXITS:
-                reason = ExitReason.TIMED_OUT
-            elif exit_code is None:
-                exit_code = response.exit_code  # The status shell never ran, or something else killed it.
+            if command.timeout is not None and timer:
+                records = _completion_records(response.stdout)
+                exit_code = records.get("exit")
+                timed_out = records.get("timer") == 124 or (
+                    records.get("timer") == 137 and time.monotonic() - started >= command.timeout
+                )
+                if exit_code is None and timed_out:
+                    reason = ExitReason.TIMED_OUT
+                elif exit_code is None:
+                    # A cut exec stream or a supervisor killed by something else: the command may still be running.
+                    state = f"timer {records['timer']}" if "timer" in records else f"exit {response.exit_code}"
+                    tail = response.stderr.strip()[-300:]
+                    detail = f"no completion record ({state})" + (f": {tail}" if tail else "")
+                    outcome = await asyncio.to_thread(self._unattributed_outcome, detail, False)
+                    await self._close_because(f"command {preview!r} ended with {detail}")
+                    raise outcome
             try:
                 stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
                 stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
@@ -714,12 +751,12 @@ class IrisMachineFactory:
                 else:
                     if status.state == TaskState.RUNNING:
                         # The workdir exec also probes the guest timeout, saving each machine an RPC.
-                        script = f'mkdir -p -- "$1" && {GUEST_TIMEOUT_PROBE}'
+                        script = f'mkdir -p -- "$1" && {GUEST_TIMER_PROBE}'
                         argv = ["sh", "-c", script, "shellbox", spec.workdir]
                         created = await asyncio.to_thread(machine._exec_sync, argv)
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
-                        machine._guest_timeout = created.stdout == "bounded"
+                        machine._guest_timer = _timer_paths(created.stdout)
                         return machine
                     if status.state is TaskState.KILLED:
                         raise MachineCancelled(f"Iris sandbox task was killed before running: {status.error_message}")
