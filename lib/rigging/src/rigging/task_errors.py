@@ -17,9 +17,9 @@ from pydantic import BaseModel, Field
 class ErrorCategory(StrEnum):
     """Semantic category for a persisted task exception."""
 
-    INFRASTRUCTURE = "infrastructure"  # Outside the agent; SkyRL excludes the sample.
-    AGENT = "agent"  # Attributable to the agent; SkyRL assigns zero reward.
-    PASSTHROUGH = "passthrough"  # Usable work remains; SkyRL keeps the verifier reward.
+    INFRASTRUCTURE = "infrastructure"  # Outside the agent; SkyRL masks by default.
+    AGENT = "agent"  # Attributable to the agent; SkyRL defaults to zero reward.
+    PASSTHROUGH = "passthrough"  # Usable work remains; SkyRL defaults to the verifier reward.
     UNKNOWN = "unknown"  # Requires the consumer's configured fallback.
 
 
