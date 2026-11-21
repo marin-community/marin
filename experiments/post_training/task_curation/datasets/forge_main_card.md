@@ -138,4 +138,7 @@ which dropped the zero padding from slots and gave two pairs of distinct tasks t
 The third adds the OpenMDW 1.1 license and omits the optional `integrity_contract` field when it is
 unset, so rows also load with TaskCompendium versions that predate it. The fourth (converter version
 `2026.11.21.1`) re-roots the workspace resources described under Known issues; every other field of
-every row is unchanged.
+every row is unchanged. The fifth (`2026.11.21.2`) preserves each task's authored golden control as
+private oracle resources on 1,024 tasks: `solution/solve.sh` rewrites the control's workspace files at
+their authored locations, and `solution/answer.txt` carries its reply where the grader reads the reply.
+The oracle role is private, so an agent never sees the answer; no other field changes.
