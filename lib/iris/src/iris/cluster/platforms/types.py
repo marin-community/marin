@@ -70,24 +70,18 @@ class Labels:
         self.iris_manual = f"iris-{prefix}-manual"
 
 
-def _port_lock_path(port: int) -> Path:
-    return Path(f"/tmp/iris/port_{port}")
+def find_free_port() -> int:
+    """Ask the kernel for an available ephemeral port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
-def find_free_port(start: int = -1) -> int:
-    """Find an available port.
-
-    Args:
-        start: Starting port for sequential scan. Default of -1 lets the kernel
-            pick a random ephemeral port, which avoids collisions when multiple
-            processes search for ports concurrently (e.g. pytest-xdist).
-    """
-    if start == -1:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
+@contextmanager
+def reserve_free_port(start: int) -> Iterator[int]:
+    """Reserve a port in the sequential scan range until the context exits."""
     for port in range(start, start + 1000):
-        lock = _port_lock_path(port)
+        lock = Path(f"/tmp/iris/port_{port}")
         try:
             os.kill(int(lock.read_text()), 0)
             continue  # port locked by a live process
@@ -98,25 +92,18 @@ def find_free_port(start: int = -1) -> int:
                 s.bind(("", port))
                 lock.parent.mkdir(parents=True, exist_ok=True)
                 lock.write_text(str(os.getpid()))
-                return port
             except OSError:
                 continue
-    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
-
-
-@contextmanager
-def reserve_free_port(start: int) -> Iterator[int]:
-    """Reserve a port until the caller's resource is closed."""
-    port = find_free_port(start)
-    lock = _port_lock_path(port)
-    try:
-        yield port
-    finally:
         try:
-            if lock.read_text() == str(os.getpid()):
-                lock.unlink()
-        except FileNotFoundError:
-            pass
+            yield port
+        finally:
+            try:
+                if lock.read_text() == str(os.getpid()):
+                    lock.unlink()
+            except FileNotFoundError:
+                pass
+        return
+    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
 def probe_outbound_ip() -> str:
