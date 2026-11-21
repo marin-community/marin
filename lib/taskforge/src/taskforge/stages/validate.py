@@ -247,7 +247,7 @@ async def run_adversary(
             if (shown := observation(event.value, spec.task)) is not None:
                 graded[digest(event.request.candidate)] = shown
 
-    visit = Visit(f"adversary:{name}", owner, machine, files, {"report": ReportTool(spec.task, graded)})
+    visit = Visit(f"adversary:{name}", owner, machine, lambda: files, {"report": ReportTool(spec.task, graded)})
     async with sitting(ctx, config.adversary, visit, resources) as session:
         ctx.observe(Resolved, remember)
         try:

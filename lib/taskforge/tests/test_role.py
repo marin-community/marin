@@ -39,7 +39,7 @@ async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() 
     assert [m.content for m in client.requests[0].conversation] == ["system", "user"]
     assert isinstance(outcome, Stopped) and outcome.detail == "done"
     with pytest.raises(ValueError, match="has no machine"):
-        async with sitting(ctx, role, Visit("review", "unused", None, ((PurePosixPath("/x"), b""),)), bundle):
+        async with sitting(ctx, role, Visit("review", "unused", None, lambda: ((PurePosixPath("/x"), b""),)), bundle):
             pass
 
 

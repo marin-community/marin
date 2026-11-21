@@ -30,7 +30,7 @@ from taskcompendium.runtime.resources import inline_resource
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import apply_decision
 from taskforge.effects.context import Context
-from taskforge.effects.events import Note, Resolved
+from taskforge.effects.events import Note, Resolved, ScopeEntered, ScopeExited
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
@@ -70,6 +70,7 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.env import WriteFiles
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
@@ -155,6 +156,40 @@ async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries
         files = bundle.envs.created[0].files
         assert files[PurePosixPath("/workspace/reference/static.txt")] == b"static"
         assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.proposal.header.id.encode()
+
+
+def unavailable_reference(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
+    raise Hold("reference data unavailable")
+
+
+# Review 2026-11-21: the role runner prepared the caller's files and the opening before it opened the machine and scope,
+# so a renderer hold created no machine and journalled nothing, and a prompt failure lost the recorded hydration. On n6
+# (d510505b69) both failures journal these rows and close the one machine.
+@pytest.mark.parametrize(
+    ("failure", "rows"),
+    [
+        ("renderer", [ScopeEntered, ScopeExited]),
+        ("prompt", [ScopeEntered, WriteFiles, Resolved, ScopeExited]),
+    ],
+)
+@pytest.mark.parametrize("revision", [False, True])
+async def test_an_author_visit_failing_before_its_first_model_call_journals_and_closes_its_machine(
+    workpiece: Workpiece, failure: str, rows: list[type[object]], revision: bool
+) -> None:
+    policy = load_policy(DEFAULTS_DIR)
+    setup = build_config(
+        policy.overlaid({"author.user": "{proposal} {undeclared}"}) if failure == "prompt" else policy, {}
+    )
+    if failure == "renderer":
+        setup = replace(setup, workspace=WorkspaceHydration(rendered=unavailable_reference))
+    log = EventLog()
+    ctx = Context(log=log)
+    bundle = resources(ctx)
+    with pytest.raises(Hold if failure == "renderer" else KeyError):
+        await author(ctx, workpiece if revision else workpiece.with_(submission=None), setup, bundle)
+    await ctx.drain()
+    assert [type(record.event) for record in log.records] == rows
+    assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
 
 
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:

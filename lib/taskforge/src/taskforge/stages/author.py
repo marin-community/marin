@@ -11,7 +11,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.harness.role import Fresh, Resume, Visit, sitting
+from taskforge.harness.role import Files, Fresh, Resume, Visit, sitting
 from taskforge.lowering import lowering_settings, requirements
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.proposal import render
@@ -75,35 +75,37 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
         packages=policy.setting("author.packages", tuple),
         workdir=str(workdir),
     )
-    files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
-    writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
-    submission = workpiece.submission
-    if submission is not None:
-        writes.extend(
-            (PurePosixPath("/", file.path), resource_bytes(file))
-            for file in (*submission.task.resources.all, *submission.task.resources.worker)
-        )
-        writes.extend(
-            (PurePosixPath("/tests", file.path), resource_bytes(file)) for file in submission.task.resources.verifier
-        )
-        writes.extend(
-            (
-                (workdir / "task.json", submission.task.model_dump_json().encode()),
-                (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
-            )
-        )
     proposal = render(workpiece.proposal)
-    writes.extend(
-        (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
-        for index, evidence in enumerate(workpiece.evidence)
-    )
-    writes.append((workdir / "proposal.json", proposal.encode()))
-    opening = (
-        Resume(workpiece.session)
-        if workpiece.session is not None
-        else Fresh(system_prompt(policy), policy.prompt("author.user").render(proposal=proposal))
-    )
-    # A round has one author visit, which a stage restart reconstructs on its fresh machine.
-    visit = Visit("author", f"author/{workpiece.round}", machine, tuple(writes))
+
+    def workspace() -> Files:
+        files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
+        writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
+        submission = workpiece.submission
+        if submission is not None:
+            writes.extend(
+                (PurePosixPath("/", file.path), resource_bytes(file))
+                for file in (*submission.task.resources.all, *submission.task.resources.worker)
+            )
+            writes.extend(
+                (PurePosixPath("/tests", file.path), resource_bytes(file)) for file in submission.task.resources.verifier
+            )
+            writes.extend(
+                (
+                    (workdir / "task.json", submission.task.model_dump_json().encode()),
+                    (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
+                )
+            )
+        writes.extend(
+            (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
+            for index, evidence in enumerate(workpiece.evidence)
+        )
+        writes.append((workdir / "proposal.json", proposal.encode()))
+        return tuple(writes)
+
+    # A round has one author visit, which a stage restart reconstructs on its fresh machine. The caller's files are
+    # prepared inside it and the opening after hydration, so either failing is journalled and its machine closed.
+    visit = Visit("author", f"author/{workpiece.round}", machine, workspace)
     async with sitting(ctx, config.author, visit, resources) as session:
-        return await session(opening)
+        if workpiece.session is not None:
+            return await session(Resume(workpiece.session))
+        return await session(Fresh(system_prompt(policy), policy.prompt("author.user").render(proposal=proposal)))

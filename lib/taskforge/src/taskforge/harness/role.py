@@ -72,17 +72,22 @@ class Answer:
 
 
 type Opening = Fresh | Resume | Answer
+type Files = tuple[tuple[PurePosixPath, bytes], ...]
+
+
+def no_files() -> Files:
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
 class Visit:
     """One sitting of a role: its scope, its sandbox owner and machine (``None``: no machine), the files hydrated
-    before its first model call, and tools bound to this visit alone."""
+    before its first model call, prepared inside the visit, and tools bound to this visit alone."""
 
     scope: str
     owner: str
     machine: EnvironmentRequirements | None
-    files: tuple[tuple[PurePosixPath, bytes], ...] = ()
+    files: Callable[[], Files] = no_files
     tools: Mapping[str, Tool[object]] = field(default_factory=dict)
 
 
@@ -117,14 +122,15 @@ async def sitting(
     The caller runs the session and reads its exit inside the scope (an adversary reproduces its claims there, and may
     run it again with an ``Answer`` to its report); the machine closes after the scope, however it ends.
     """
-    if visit.machine is None and visit.files:
-        raise ValueError(f"{visit.scope} hydrates files but has no machine")
     env = None if visit.machine is None else await resources.envs.create(host_requirements(visit.machine))
     try:
         async with ctx.scope(visit.scope, None if env is None else Opened(visit.owner, env.fingerprint().digest)):
+            files = visit.files()  # prepared in the visit, so its failure is journalled and its machine closed
+            if env is None and files:
+                raise ValueError(f"{visit.scope} hydrates files but has no machine")
             if env is not None:
                 install_env(ctx, env)
-                await ctx.emit(WriteFiles(visit.files))
+                await ctx.emit(WriteFiles(files))
             tools = {**role.tools, **visit.tools}
 
             async def session(opening: Opening) -> Exit:
