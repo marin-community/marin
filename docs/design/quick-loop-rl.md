@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. H100 task admission last checked November 20, 2026 at 8:32 p.m. PST.
+Draft for review. Accelerator admission last checked November 20, 2026 at 8:51 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -17,7 +17,7 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner on current `main` | Local ports cover the SPMD policy core, Snowball precision and rotary positions, and the JAX worker with one- and two-process checkpoint coverage. | Complete the SkyRL host adapter and a synchronous BATCH preset. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. The live child ends in `afd506ffbac0`. All five tasks are scheduling-gated. At 8:32 p.m., Kueue reported a shortfall of 17 GPUs and 17 InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. The live child ends in `afd506ffbac0`. All five tasks are scheduling-gated. At 8:51 p.m., Kueue reported a shortfall of 10 GPUs and 10 InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
 | Native online loop on current `main` | The local prototype completed both updates on one and four CPU devices. Each run consumed eight binary frames and sampled 128 tokens. The second rollout used the exact first published weight fingerprint. The maximum sampled-to-learner logprob difference was `4.06e-6`. | Run the four-TPUv4 gate and compare the current scorer to the prior bitwise fixture. |
 | Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
@@ -205,14 +205,19 @@ preset uses asynchronous rollouts, truncated importance sampling and HF
 export. Those features each need explicit learner support before carrying
 the new strategy into that preset. [Preset migration][preset-migration]
 
-A local two-process CPU run exposed a native Gloo write to stdout before
-the worker's protocol reply. Python's stdout redirection leaves native
-file descriptor writes on the frame stream. The current-main worker port
-separates those descriptors and passes the same checkpoint test. The frozen
-H100 source still has the original pipe setup. If startup reports a frame
-read error before initialization, inspect the first worker exception
-before attributing later rendezvous failures. GPU execution has yet to
-exercise this path.
+The unchanged frozen source reproduces a startup framing failure on two CPU
+Gloo processes with JAX and JAXLIB 0.11.0. Python stdout redirection leaves
+native writes on the frame stream, and the reader interprets the Gloo
+message as a frame length. The current-main worker port separates those
+file descriptors and passes the two-process test. In the H100 logs, inspect
+the first frame read error before attributing later rendezvous failures.
+
+A separate exact-pin CPU probe confirmed that a native child can receive
+SIGTERM when its spawning thread exits while the host remains alive.
+Check for this separately if a restored process exits immediately after
+a matching checkpoint receipt. The CPU probes establish two concrete
+diagnostics. CUDA/NCCL startup and the actual Ray actor's thread lifetime
+remain unverified on the frozen H100 job.
 
 [Exact smoke and comparison recipes][learner-status] ·
 [Frozen checkpoint validation code][frozen-worker]
@@ -226,8 +231,12 @@ snapshot is 766 commits behind the `main` used for this design, and includes
 unrelated Hero and Iris changes. [Source comparison][snowball-compare]
 
 The bounded native job was submitted on source `158bd86404` as one BATCH
-`v4-8` slice with four TPUv4 chips. The job archives its binary trajectory
-frames and update receipts in the Iris task output. [Native TPUv4 fixture][iris-native]
+`v4-8` slice with four TPUv4 chips. It was pending at the last admission
+check. On completion its Iris task output should contain the binary
+trajectory frames and update receipts. A later local scheduler slice
+also passed heterogeneous queue and slot-reuse replay on one and four CPU
+devices. The TPU job uses the earlier frozen source.
+[Native TPUv4 fixture][iris-native]
 
 Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
 and a deterministic grader with mixed rewards within a group. Submit four
