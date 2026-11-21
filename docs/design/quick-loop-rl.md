@@ -18,7 +18,7 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. All five Ray nodes joined with 40 H100s, and vLLM captured CUDA graphs. The learner failed during mesh initialization because JAX reported four CUDA slices and the frozen runtime assigned all devices to one slice. No update or acceptance receipt was recorded. | Qualify a corrected smoke with one logical `data` shard per host and eight local expert shards. The matched runs remain gated. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. All five Ray nodes joined with 40 H100s, and vLLM captured CUDA graphs. The learner failed during mesh initialization. JAX reported four CUDA slices, and the frozen runtime assigned all devices to one slice. No update or acceptance receipt was recorded. | Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. The rerun and matched runs are pending. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Distinct TPUv4 learner and serving hosts passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
@@ -360,6 +360,17 @@ message as a frame length. The worker at local revision `4a6d1e7a3e`
 separates those file descriptors and passed the two-process Gloo restart
 test. In the H100 logs, inspect the first frame read error before
 attributing later rendezvous failures.
+
+The frozen H100 run stopped in mesh construction before model load. The
+corrected CUDA layout keeps logical `data=4` across the four learner hosts
+and `expert=8` within each host. This preserves the data-axis sharding of
+Snowball parameters and Adam moments. The pinned model's storage layout puts
+about 27.9 GiB of persistent state on each H100 before activations and
+temporary buffers. The corrected branch preserves the binary learner
+protocol, separates native stdout from replies, and keeps the child process
+on its persistent IPC thread. The exact-version CPU tests verified fresh
+restore and continuation. The four-host CUDA run still needs to prove
+runtime placement, peak memory, publication, and a second update.
 
 A separate exact-pin CPU probe confirmed that a native child can receive
 SIGTERM when its spawning thread exits while the host remains alive.
