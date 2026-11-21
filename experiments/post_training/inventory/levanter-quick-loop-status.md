@@ -6,9 +6,10 @@ The learner-only integration and CPU proofs are ready. The first 40-H100 smoke,
 from `646ccb48641442cf3d9b3223f06c1bca0c5a2e0a`, failed before model loading:
 the GPU learner inherited `JAX_PLATFORMS=cpu` from its CPU coordinator.
 `fc9a60939b4bc40b34b4dce7ffdf3e3d33f47d70` fixes platform selection and checkpoint
-locality. Current-source GPU acceptance remains pending. The next smoke and
-matched comparison are authorized at BATCH priority, with no automatic retries;
-submission is pending at this snapshot.
+locality. Current-source GPU acceptance remains pending. The replacement smoke
+is submitted at BATCH priority from `6936528c55df0212ec8ccd1fa619361863b4c420`.
+At 16:03 PST, all five GPU tasks are still waiting for gang admission.
+The matched comparison remains gated on smoke acceptance.
 
 ## Scope and fixed recipe
 
@@ -39,7 +40,7 @@ Both arms preserve these inputs and settings:
   pass per batch, token-mean clipped PPO with symmetric `0.2` clipping; KL and
   entropy terms disabled.
 - Allocation: four eight-H100 learner hosts and one eight-H100 inference host in
-  `cw-us-east-02a`; the native mesh is data4/expert8. Automatic retries are zero.
+  `cw-us-east-02a`; the native mesh is data4/expert8. Automatic failure retries are zero.
 - Rollouts: the same task/grader definitions and backends, temperature `1.0`,
   top-p `1.0`, 24,576-token request window, and 8,192-token response limit.
   Evaluation uses the fixed panel before and after training, seed `20261020`,
@@ -92,11 +93,22 @@ independent source review passed for these fixes. The earlier broad suite had
 17 failures: six sandbox and ten router failures reproduced on clean main;
 one nested-launcher setup failure remained unclassified.
 
-## Authorized next runs
+## Current run and reproduction
+
+The active smoke is version `2026.11.20.5`, coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2`,
+with current GPU child suffix `users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-af5857383fd5`.
+Both accepted source bundles match the frozen `6936528c55` contents, and both
+jobs have actual BATCH priority. The coordinator was preempted once before GPU
+execution; Iris killed its first child and submitted the current replacement.
+The current gang remains scheduling-gated. Failure retries are zero; Iris
+preemption retries retain their defaults of 100 for the coordinator and 1,000
+for the child. These are separate retry budgets.
 
 Run from the repository with the required storage, evaluation, and judge
-credentials loaded. These commands submit new artifact versions on BATCH
-priority; each uses 40 H100s and zero automatic retries. The regional route
+credentials loaded. The commands below record the submitted smoke and planned
+comparison arms; choose a fresh unused artifact version for another attempt.
+Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
 It retains the parent actors and rollout engines.
