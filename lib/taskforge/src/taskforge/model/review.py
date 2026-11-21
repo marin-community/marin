@@ -119,8 +119,6 @@ class BandRules:
     def __post_init__(self) -> None:
         if not 0 <= self.low <= self.high <= 1:
             raise ValueError("the solve-rate band must satisfy 0 <= low <= high <= 1")
-        if self.accepted - {BandOutcome.IN_BAND, BandOutcome.TOO_EASY}:
-            raise ValueError("too-hard tasks cannot be accepted")
 
     def place(self, solve_rate: float) -> BandOutcome:
         if solve_rate < self.low:

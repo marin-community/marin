@@ -27,7 +27,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import Workpiece
+from taskforge.model.workpiece import Fallback, Workpiece
 from taskforge.stages.classify import CAUSE_DECISIONS
 
 
@@ -65,21 +65,25 @@ def tagged(band: BandOutcome) -> tuple[str, ...]:
     return () if band is BandOutcome.IN_BAND else (f"accepted_with: {band}",)
 
 
-RANK = {BandOutcome.IN_BAND: 0, BandOutcome.TOO_EASY: 1}
-"""Which acceptable placement makes the better fallback; between equals, the later submission."""
+def better(candidate: Fallback, stored: Fallback) -> Fallback:
+    """In band beats out of band; between equals, the later submission."""
+    return stored if stored.band is BandOutcome.IN_BAND and candidate.band is not BandOutcome.IN_BAND else candidate
 
 
-def fallback_after(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> str | None:
-    """The digest of the submission a revision of ``workpiece`` falls back to: the current one when it placed
-    acceptably and no worse than the stored fallback, otherwise the stored one."""
-    kept, current = workpiece.fallback, workpiece.submission
-    stored = None if kept is None else kept.submission.digest
-    if current is None or placement is None or placement not in band.accepted:
-        return stored
-    return current.digest if kept is None or RANK[placement] <= RANK[kept.band] else stored
+def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> Fallback | None:
+    """The one choice of the submission to fall back to, or accept: the stored fallback while the policy accepts its
+    band, against the current submission at ``placement`` when the policy accepts that."""
+    kept = workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
+    if workpiece.submission is None or placement is None or placement not in band.accepted:
+        return kept
+    current = Fallback(workpiece.submission, placement)
+    return current if kept is None else better(current, kept)
 
 
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    """Owner's ruling (2026-11-12): placement tags a task and never filters it. An out-of-band task gets one band-only
+    round within the shared budget and is then accepted tagged; a clean revision is placed on its own evidence and a
+    faulted one restores the fallback, named by digest and band."""
     result = workpiece.evidence[-1]
     decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
@@ -93,18 +97,22 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
             return Retry(cause, retries + 1)
     if not isinstance(decision, Modify):
         return decision
+    placement = decision.placement if decision.placement in band.accepted else None  # None: a fault or ineligible
+    final = workpiece.fallback is not None or workpiece.round >= budget.max_modify_rounds
+    chosen = fallback_for(workpiece, placement, band)
+    if (placement is not None and not final) or chosen is None:
+        return replace(decision, fallback=None if chosen is None else chosen.submission.digest)
     notes = exhausted_notes(result)
-    # One band-only round: after it a revision that still places acceptably is accepted with its placement, and one
-    # that leaves the band or has a fault restores the fallback, named by its digest.
-    if (kept := workpiece.fallback) is not None:
-        if (placement := decision.placement) is not None and placement in band.accepted:
-            return Accept(placement, (*tagged(placement), *notes))
-        restored = f"The revision left the acceptance band; restored submission {kept.submission.digest[:12]}"
-        return Accept(kept.band, (*tagged(kept.band), restored, *decision.findings, *notes), kept.submission.digest)
-    exhausted = workpiece.round >= budget.max_modify_rounds
-    if decision.placement is BandOutcome.TOO_EASY and decision.placement in band.accepted and exhausted:
-        return Accept(decision.placement, (*tagged(decision.placement), "Shared modification budget exhausted", *notes))
-    return replace(decision, fallback=fallback_after(workpiece, decision.placement, band))
+    if workpiece.submission is not None and chosen.submission.digest == workpiece.submission.digest:
+        why = (
+            "A clean revision is placed on its own evidence"
+            if workpiece.fallback
+            else "Shared modification budget exhausted"
+        )
+        return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes))
+    fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
+    why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
+    return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)
 
 
 def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decision:

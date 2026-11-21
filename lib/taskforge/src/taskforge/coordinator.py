@@ -10,6 +10,7 @@ again.
 
 import logging
 from collections.abc import Callable
+from functools import reduce
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
@@ -28,6 +29,7 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.exits import Decided, Validated
+from taskforge.stages.rules import better
 
 
 def reasons(error: BaseException) -> tuple[str, ...]:
@@ -61,13 +63,15 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
         decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
-        case Accept():
-            if decision.restore is not None and digest_of(wp.fallback) != decision.restore:
-                raise ValueError(f"Cannot restore {decision.restore}: the fallback is {digest_of(wp.fallback)}")
+        case Accept(band, _, restore):
+            if restore is not None and (
+                wp.fallback is None or (digest_of(wp.fallback), wp.fallback.band) != (restore, band)
+            ):
+                raise ValueError(f"Cannot restore {restore} at {band}: the fallback is {wp.fallback}")
             return wp.with_(
                 terminal=Terminal.ACCEPTED,
-                submission=wp.fallback.submission if wp.fallback and decision.restore else wp.submission,
-                accepted_with=None if decision.band is BandOutcome.IN_BAND else decision.band,
+                submission=wp.fallback.submission if wp.fallback and restore else wp.submission,
+                accepted_with=None if band is BandOutcome.IN_BAND else band,
             )
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
@@ -76,9 +80,9 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
         case Modify(findings, placement, fallback):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
-            current = wp.submission
-            kept = Fallback(current, placement) if current and placement and current.digest == fallback else wp.fallback
-            kept = kept if fallback else None
+            current = Fallback(wp.submission, placement) if wp.submission and placement else None
+            named = [option for option in (current, wp.fallback) if option and digest_of(option) == fallback]
+            kept = reduce(better, named) if named else None
             if digest_of(kept) != fallback:
                 raise ValueError(
                     f"Cannot keep {fallback} as the fallback: it is neither the submission nor the fallback"

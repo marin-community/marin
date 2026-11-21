@@ -327,11 +327,8 @@ def build_config(
     band = BandRules(
         policy.setting("band.low", float),
         policy.setting("band.high", float),
-        (
-            frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})
-            if policy.setting("band.accept_too_easy", bool)
-            else frozenset({BandOutcome.IN_BAND})
-        ),
+        frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_HARD, BandOutcome.TOO_EASY})
+        - (set() if policy.setting("band.accept_too_easy", bool) else {BandOutcome.TOO_EASY}),
     )
     return TaskforgeConfig(policy, author, adversary, default_review, band, budget)
 
