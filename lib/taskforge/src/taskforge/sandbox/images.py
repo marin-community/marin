@@ -4,8 +4,8 @@
 """Docker build contexts for task images, and the step that pins one as a registry image.
 
 A container task names its image only as a digest-pinned registry reference
-(``EnvironmentRequirements.docker_image``); both the laptop Docker backend and the Iris gVisor
-backend pull it. ``DockerBuild`` reuses TaskCompendium's ``DockerBuildContext``.
+(``EnvironmentRequirements.docker_image``); both the laptop Docker backend and the Iris SANDBOX
+backend (``Backend.GVISOR``) pull it. ``DockerBuild`` reuses TaskCompendium's ``DockerBuildContext``.
 An ``ImageBuilder`` builds the context for linux/amd64, pushes it, and returns the
 reference pinned by manifest digest. ``image_builder.IrisImageBuilder`` implements the builder as Iris jobs.
 """
