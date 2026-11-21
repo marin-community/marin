@@ -5,6 +5,7 @@
 
 
 import asyncio
+import itertools
 import json
 from collections.abc import Sequence
 from pathlib import PurePosixPath
@@ -171,7 +172,7 @@ async def reproduced(
     return finding, reasons
 
 
-def report_of(outcome: Exit) -> Returned[AdversaryReport] | None:
+def report_of(outcome: Exit | None) -> Returned[AdversaryReport] | None:
     if isinstance(outcome, Returned) and outcome.tool == "report" and isinstance(outcome.payload, AdversaryReport):
         return cast(Returned[AdversaryReport], outcome)
     return None
@@ -268,42 +269,40 @@ async def run_adversary(
             return AdversaryResult(
                 name, AdversaryStatus.FAILED, (), (reason,), continuation=stopped_at(owner, SearchEnd.HELD, outcome)
             )
-        findings: tuple[AdversaryFinding, ...] = ()
-        reasons: tuple[str, ...] = ()
-        how = "its session ended with a report and no reproduced finding"
-        continuation = stopped_at(owner, SearchEnd.REPORTED, outcome)
         revisions = config.policy.setting("adversary.max_revisions", int)
-        for revision in range(revisions + 1):
+        replays: list[tuple[AdversaryFinding, tuple[str, ...]]] = []
+        how = "its session ended with a report and no reproduced finding"
+        for revision in itertools.count(1):  # the first report is reproduced whatever the revision budget
             async with asyncio.TaskGroup() as group:
                 claims = [
-                    group.create_task(reproduced(ctx, spec, claim, len(findings) + index))
+                    group.create_task(reproduced(ctx, spec, claim, len(replays) + index))
                     for index, claim in enumerate(report.payload.findings)
                 ]
             results = [claim.result() for claim in claims]
-            # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
-            reasons += tuple(
-                f"reproducing {finding.claim!r} was inconclusive: {reason}"
-                for finding, failure in results
-                for reason in failure
-            )
-            findings += tuple(finding for finding, _ in results)
+            replays += results
             missed = tuple(finding for finding, failure in results if not failure and not counted(finding))
-            if not missed or revision == revisions:
+            if not missed or revision > revisions:
                 break
-            ctx.notify(Note(f"Adversary {name}: {len(missed)} finding(s) did not reproduce; revision {revision + 1}"))
+            ctx.notify(Note(f"Adversary {name}: {len(missed)} finding(s) did not reproduce; revision {revision}"))
             try:
-                revised = await session(Answer(report.session, replay_feedback(missed, revisions - revision - 1)))
+                revised = await session(Answer(report.session, replay_feedback(missed, revisions - revision)))
             except* OutputBudgetExhausted:
                 revised = None
-            if revised is None or (revision_report := report_of(revised)) is None:
-                # The last report stands, and so does the continuation at it.
-                how = f"its revision {revision + 1} ended without a report"
+            if (revised_report := report_of(revised)) is None:  # the last report stands
+                how = f"its revision {revision} ended without a report"
                 break
-            report, continuation = revision_report, stopped_at(owner, SearchEnd.REPORTED, revised)
+            report = revised_report
+        findings = tuple(finding for finding, _ in replays)
+        # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
+        reasons = tuple(
+            f"reproducing {f.claim!r} was inconclusive: {reason}" for f, failure in replays for reason in failure
+        )
         status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
         if not reasons and not any(finding.met for finding in findings):
             reasons = (no_finding(how),)
-        return AdversaryResult(name, status, findings, reasons, continuation=continuation)
+        return AdversaryResult(
+            name, status, findings, reasons, continuation=stopped_at(owner, SearchEnd.REPORTED, report)
+        )
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:

@@ -270,6 +270,27 @@ async def test_a_search_is_out_of_budget_only_after_its_revision_ends_without_a_
     )
 
 
+# Review 2026-11-21: with adversary.max_revisions=-1 the revision loop also skipped reproducing the report itself, so a
+# genuine false reject was accepted after zero fresh grades and saved no finding.
+async def test_a_zero_revision_budget_still_reproduces_the_report_and_a_negative_one_fails_at_wiring(
+    workpiece: Workpiece,
+) -> None:
+    policy = load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]})
+    with pytest.raises(ValueError, match=re.escape("adversary.max_revisions must be at least 0, not -1")):
+        build_config(policy.overlaid({"adversary.max_revisions": -1}), {})
+    setup = build_config(policy.overlaid({"adversary.max_revisions": 0}), {})
+    client = Briefed({"false_reject": [finding(Defect.FALSE_REJECT, "12.0", 0.0, 1.0)]})
+    log = EventLog()
+    ctx = Context(log=log)
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    fresh = [r.event for r in log.records if isinstance(r.event, GradeCandidate) and r.event.fresh_verifier]
+    assert len(client.requests) == 1 and [grade.candidate.reply for grade in fresh] == ["12.0"]
+    assert [(f.candidate.reply, f.met) for f in result.adversary[0].findings] == [("12.0", True)]
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify) and decision.findings == ("false_reject: 12.0 is graded 0.0, deserves 1.0",)
+
+
 def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
     """The default user prompt renders ``{brief}``, so every roster name must resolve to a brief."""
     with pytest.raises(

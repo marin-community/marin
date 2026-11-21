@@ -295,6 +295,8 @@ def build_config(
             f"adversary.user renders {{brief}}, but adversary.roster names {', '.join(unbriefed)} without a prompt "
             "adversary.brief.<name>"
         )
+    if (revisions := policy.setting("adversary.max_revisions", int)) < 0:
+        raise ValueError(f"adversary.max_revisions must be at least 0, not {revisions}")
     settings = lowering_settings(policy)
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
