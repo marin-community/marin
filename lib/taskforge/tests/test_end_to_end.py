@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast, override
 
+import httpx
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
 from lib.taskforge.tests.effect_fakes import local_records
@@ -99,6 +100,7 @@ from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.decision_model import (
+    ClefReader,
     DecisionModel,
     DecisionModelDown,
     DecisionModelHealth,
@@ -3395,7 +3397,7 @@ def asked(candidate: str) -> DecisionModelRead:
     )
 
 
-def probe_bundles(reads: list[str], count: int) -> list[Resources]:
+def probe_bundles(reads: list[str], count: int, reader: DecisionModelReader | None = None) -> list[Resources]:
     """Launch resources whose decision model reads through ``ProbeReader``: two slots, a 10 s wait, a 30 s request
     deadline, and a backoff that lasts until it is cancelled."""
 
@@ -3404,7 +3406,7 @@ def probe_bundles(reads: list[str], count: int) -> list[Resources]:
 
     policy = DecisionModelPolicy("clef@fixture-1", 2, 30.0, 10.0, 1.0, 1.0, 0.0)
     return [
-        replace(resources(Envs(), ()), decision_model=DecisionModel(ProbeReader(reads), policy, sleep=backoff))
+        replace(resources(Envs(), ()), decision_model=DecisionModel(reader or ProbeReader(reads), policy, sleep=backoff))
         for _ in range(count)
     ]
 
@@ -3428,6 +3430,58 @@ async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process
         driver_args.probe, driver_args.resume_held = True, resume
         codes.append(await driver.one(driver_args))
     assert (codes, reads) == ([driver.ANSWERED, 0, 0], ["12"])
+
+
+CLEF_BODIES: Mapping[str, httpx.Response] = {
+    "off-scale": httpx.Response(200, content=b'{"answers": {"whole": {"probabilities": {"0": Infinity, "1": 1}}}}'),
+    "forbidden": httpx.Response(403, text="forbidden"),
+    "malformed": httpx.Response(200, json={"unexpected": True}),
+}
+
+
+# Review 2026-11-21 (n10 follow-up 4): through the default reader, one 200 followed only by an off-scale level, an
+# HTTP 403 or a 200 without answers left the earlier answer standing, and the probe released its peers with the root
+# manual. Every dispatched read that fails records the failure, whatever its class; only the caller's own cancellation
+# of a read in flight leaves the earlier answer standing.
+@pytest.mark.parametrize(
+    "second, code", [("off-scale", 0), ("forbidden", 0), ("malformed", 0), ("cancelled", driver.ANSWERED)]
+)
+async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, second: str, code: int
+) -> None:
+    sent: list[str] = []
+
+    async def gateway(call: httpx.Request) -> httpx.Response:
+        candidate = json.loads(call.content)["state"]["z_candidate_answer"]
+        sent.append(candidate)
+        if candidate == "cancelled":
+            await asyncio.Event().wait()
+        probabilities = {"0": 0.0, "1": 1.0}
+        return CLEF_BODIES.get(candidate) or httpx.Response(
+            200, json={"answers": {"whole": {"probabilities": probabilities}}}
+        )
+
+    source = FixedEndpoint(GlmEndpoint("http://gateway/v1", "secret", Pool.HIGH))
+    reader = ClefReader(source, httpx.AsyncClient(transport=httpx.MockTransport(gateway)))
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), bundle.decision_model)
+        assert await ctx.emit(asked("12")) == 1.0
+        read = asyncio.create_task(ctx.emit(asked(second)))
+        while len(sent) < 2:
+            await asyncio.sleep(0)
+        if second == "cancelled":  # the caller leaves while its read is in flight
+            read.cancel()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await read
+        raise Hold("a sibling's refusal: a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles([], 1, reader))
+    driver_args.probe = True
+    assert await driver.one(driver_args) == code
+    held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held.terminal is Terminal.HELD and not driver.deferred(held) and sent == ["12", second]
 
 
 # Review 2026-11-21 (n10 follow-ups 2 and 3): a probe that read 200 and then met a 503 ended on a human hold yet

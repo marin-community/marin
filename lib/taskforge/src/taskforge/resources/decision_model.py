@@ -155,31 +155,34 @@ class DecisionModel:
     async def level(self, event: DecisionModelRead, notify: Notify) -> float:
         policy = self.policy
         delay, attempt, why = policy.backoff_initial, 1, f"none of its {policy.concurrency} read slots came free"
-        dispatched = False
         try:
-            async with asyncio.timeout(policy.unavailable_wait), self.gate:
+            async with asyncio.timeout(policy.unavailable_wait) as deadline, self.gate:
                 while True:
-                    why, dispatched = "its read went unanswered", True
-                    try:
+                    why = "its read went unanswered"
+                    try:  # the one physical call; its outcome is recorded here, whatever ends it
                         async with asyncio.timeout(policy.request_timeout):
                             level: object = await self.reader.read(event.request)
-                        self.down = None
                         top = len(event.request.levels) - 1  # TaskCompendium's level contract, checked before recording
                         if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= top:
                             raise OffScale(level)
-                        self.answered = True
+                    except BaseException as error:
+                        # Only the caller leaving is no evidence; the read's own deadline expiring in flight is one.
+                        if not isinstance(error, asyncio.CancelledError) or deadline.expired():
+                            self.answered = False
+                        if not isinstance(error, DecisionModelDown | TimeoutError):
+                            raise  # classified as before: a bug, an off-scale level, the caller's cancellation
+                        if isinstance(error, DecisionModelDown):
+                            reason, asked = str(error), error.retry_after
+                        else:
+                            reason, asked = f"no answer within {policy.request_timeout:g}s", 0.0
+                    else:
+                        self.down, self.answered = None, True
                         return level
-                    except DecisionModelDown as error:
-                        reason, asked = str(error), error.retry_after
-                    except TimeoutError:
-                        reason, asked = f"no answer within {policy.request_timeout:g}s", 0.0
-                    self.down, self.answered, dispatched = reason, False, False
+                    self.down = reason
                     notify(Retrying(event, attempt, reason))
                     await self.sleep(max(asked, delay))
                     delay, attempt = min(delay * 2, policy.backoff_maximum), attempt + 1
         except TimeoutError:
-            if dispatched:  # in flight at the deadline: an outage observation
-                self.answered = False
             last = why if self.down is None else f"last {self.down}"
             raise DecisionModelUnavailable(
                 f"{policy.model} gave no read within {policy.unavailable_wait:g}s: {last}"
