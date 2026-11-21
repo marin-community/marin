@@ -116,6 +116,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
     run_micro210(config)
     launch = submitted[0]
+    assert launch["skyrl"]["entrypoint"] == "generate"
+    assert launch["skyrl"]["trainer"]["placement"]["colocate_all"] is False
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
     assert launch["skyrl"]["terminal_bench"]["installed_agent"]["judge_model"] == "zai-org/GLM-5.3-Flash"
     assert all("test-together-key" not in str(value) for value in launch.values())
