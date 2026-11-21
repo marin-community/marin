@@ -19,6 +19,7 @@ from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.ragged_paged_attention_v3 import ragged_paged_attention as tpu_ragged_paged_attention_v3
 
 TPU_HEAD_ALIGNMENT = 128
+FUSED_KV_APPEND_MAX_TOKENS = 8
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3"]
 _TPU_KV_HEAD_GROUP = 8
 _FP32_QUERIES_PER_BLOCK = 128
@@ -153,9 +154,11 @@ def ragged_paged_attention_append(
     sm_scale: float,
     sliding_window: int | None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Append BF16 keys and values in query order and attend with RPA v3 on v5p."""
+    """Append BF16 keys and values during a small RPA v3 decode batch on v5p."""
     if jax.devices()[0].device_kind != "TPU v5":
         raise ValueError("Fused paged KV append requires TPU v5p")
+    if q.shape[0] > FUSED_KV_APPEND_MAX_TOKENS:
+        raise ValueError("Fused paged KV append is only supported for small decode batches")
     if q.dtype != k.dtype or q.dtype != v.dtype or q.dtype != kv_pages.dtype or q.dtype != jnp.bfloat16:
         raise ValueError("Fused paged KV append requires BF16 queries, keys, values, and cache pages")
     if q.shape[-1] != TPU_HEAD_ALIGNMENT or kv_pages.shape[1] != TPU_HEAD_ALIGNMENT:

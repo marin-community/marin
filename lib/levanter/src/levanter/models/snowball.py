@@ -43,6 +43,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.grug.attention import (
+    FUSED_KV_APPEND_MAX_TOKENS,
     AttentionMask,
     GrugAttentionImplementation,
     PagedAttentionImplementation,
@@ -2014,7 +2015,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         )
         kv_append = (
             self.config.inference_kv_append
-            if sample_indices is None and not capture_routes and tokens.shape[0] <= 8
+            if sample_indices is None and not capture_routes and tokens.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS
             else "separate"
         )
         if kv_append == "fused" and (

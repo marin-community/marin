@@ -124,6 +124,11 @@ The 594-output-token turn took 8.14 seconds. Across the measured requests,
 native p90 time to first token was 2.37 seconds and vLLM was 0.56 seconds.
 [Sampler trace](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p-decode-profile-analysis-20261121-v14) · [Fused KV check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-fused-kv-decode-v5p-20261121-v2)
 
+The fused append is scoped to small decode batches. A synthetic long prefill
+matched the cache contents for full-context attention. The sliding-window
+case differed from the separate cache update. Prefill uses the separate
+update for both attention schedules. [Prefill experiment](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-fused-kv-prefill-v5p-20261121-v1)
+
 The decode trace showed roughly 57 µs per layer per token to copy the layer's
 64 MiB KV shard out of the stacked buffer. The per-round layout splits the
 cache once, carries each layer's physical shard through the 32-token device
