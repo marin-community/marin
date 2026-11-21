@@ -135,7 +135,8 @@ def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, cap
 
 
 @pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
-def test_snowball_expert_sharded_cache_preserves_five_head_generation(serving_model):
+@pytest.mark.parametrize("expert_implementation", ("grouped", "split"))
+def test_snowball_expert_sharded_cache_preserves_five_head_generation(serving_model, expert_implementation):
     config = dataclasses.replace(
         serving_model.config, hidden_dim=160, num_heads=20, num_kv_heads=5, inference_decode_implementation="unrolled"
     )
@@ -156,7 +157,9 @@ def test_snowball_expert_sharded_cache_preserves_five_head_generation(serving_mo
         vocab, key = hax.Axis("vocab", 23), jax.random.key(41)
         model = SnowballLMHeadModel.init(vocab, config, key=key)
         model_cache = InferenceEngine.from_model_with_config(model, None, serving)
-        expert_config = dataclasses.replace(config, inference_kv_sharding="expert")
+        expert_config = dataclasses.replace(
+            config, inference_kv_sharding="expert", inference_expert_implementation=expert_implementation
+        )
         sharded = SnowballLMHeadModel.init(vocab, expert_config, key=key)
         expert_cache = InferenceEngine.from_model_with_config(sharded, None, serving)
         for request in (first, second):

@@ -100,6 +100,7 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
+SnowballDecodeExpertImplementation = Literal["grouped", "split"]
 SnowballGatedNormImplementation = Literal["native", "fixed_schedule"]
 SnowballRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
 SnowballQKRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
@@ -484,6 +485,7 @@ class SnowballConfig(HFCompatConfig):
     attention_implementation: Optional[GrugAttentionImplementation] = None
     inference_attention_implementation: PagedAttentionImplementation | None = None
     inference_decode_implementation: Literal["scan", "unrolled"] = "scan"
+    inference_expert_implementation: SnowballDecodeExpertImplementation = "grouped"
     inference_kv_sharding: Literal["model", "expert"] = "model"
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
@@ -1328,6 +1330,7 @@ class SnowballMoEMLP(eqx.Module):
         token_valid: jax.Array | None = None,
         route_capture: PreparedMoERouteCapture | None = None,
         capture_routes: bool = False,
+        expert_implementation: SnowballDecodeExpertImplementation = "grouped",
     ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -1380,13 +1383,13 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        routed_flat = self.expert_mlp(
+        expert_mlp = self.expert_mlp.decode_small_ep if expert_implementation == "split" else self.expert_mlp
+        routed_flat = expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             token_valid=token_valid,
             mesh=get_abstract_mesh(),
-            report_capacity_overflow=False,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = _activation_reshard(routed)
@@ -1977,6 +1980,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
+        expert_implementation = (
+            self.config.inference_expert_implementation
+            if expert_size > 1 and tokens.shape[0] == expert_size and sample_indices is None and not capture_routes
+            else "grouped"
+        )
         cache_axes = kv_cache.kv_pages.axes[1:]
 
         def inference_block(block):
@@ -2008,7 +2016,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
             mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
             if not capture_routes:
-                x = x + (block.mlp(mlp_in, token_valid=token_valid) + block.shared(mlp_in))
+                mlp_out = block.mlp(mlp_in, token_valid=token_valid, expert_implementation=expert_implementation)
+                x = x + (mlp_out + block.shared(mlp_in))
                 return (x, pages), None
             mlp_out, capture = block.mlp(mlp_in, token_valid=token_valid, capture_routes=True)
             return (x + (mlp_out + block.shared(mlp_in)), pages), capture

@@ -35,6 +35,7 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | [Native prototype, prompt-page reuse and fused full-context attention](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v10) | 12 | 4,133 | 21.83 | 31.46 |
 | [Native, expert-sharded KV heads](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v11) | 18 | 6,461 | 33.22 | 61.13 |
 | [Native prototype, split expert weights with replicated KV](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v12) | 13 | 4,505 | 24.33 | 36.53 |
+| [Native, expert-sharded KV and split expert weights](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v13) | 22 | 7,853 | 42.13 | 84.50 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -104,6 +105,13 @@ a 3.23-second time to first token. The trace measured about 88 ms per
 32-token round in full-vocabulary sort and gather operations.
 [KV sharding and trace](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p-decode-profile-analysis-20261121-v11)
 
+The split-expert path reads gate and up matrices only for active assignments
+in small expert-parallel decode batches. The synthetic balanced-route layer
+took 0.32 ms, compared with 1.22 ms for grouped dispatch with in-step weight
+packing. The full-checkpoint prototype used this path with sharded KV and
+completed the same 594-output-token turn in 9.97 seconds.
+[Expert microbenchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-small-ep4-v5p-20261121-v2) · [Matched AgentX run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v13)
+
 ### Reproduce the native diagnostic
 
 Run from the inference branch and point `iris_client` and `iris_config` to
@@ -120,7 +128,8 @@ workload=gs://marin-us-central1/tmp/ttl=30d/agentx-workload/95f345f596f40f84b64c
   -e JAX_PLATFORMS tpu -e LIBTPU_INIT_ARGS '--xla_tpu_scoped_vmem_limit_kib=50000' \
   -- uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
   --weights "$weights" --workload "$workload" --attention tpu_v3 --decode-layers unrolled \
-  --prefill-buckets 4096 8192 16384 32768 --prefix-cache last_prompt --kv-sharding expert
+  --prefill-buckets 4096 8192 16384 32768 --prefix-cache last_prompt \
+  --kv-sharding expert --decode-experts split
 ```
 
 The `tpu_v3` mode uses the pinned vLLM TPU fork's paged attention kernel with
