@@ -220,9 +220,11 @@ attempt as evidence. The workpiece holds as `Unreproducible` when an owner reope
 another request at a recorded position, changes an outcome (success, errno, exit status or read
 bytes), or returns normally before its recorded history ends.
 SIGTERM (an Iris cancel, a preemption, a lost node's grace period) is a crash. The command line's `driver.main`,
-never `one` or `run` called as library functions, handles it by exiting 143 at once: no cancellation, no final
-snapshot, no flushed output. Where the driver is its container's PID 1 the handler is what lets it exit at all, since
-the kernel drops a signal PID 1 has no handler for. `run` starts each `one` child with `--die-with-parent FD`, the
+the process entry point and not an embedding API (it leaves its handler installed), handles it by exiting 143 at
+once: no cancellation, no final snapshot, no flushed output. `one` and `run` called as library functions install
+nothing. Where the driver is its container's PID 1 the handler is what lets it exit at all, since the kernel drops a
+signal PID 1 has no handler for; so the immediate exit holds only from the moment `main` installs the handler, and a
+single SIGTERM delivered while the interpreter is still importing is lost (a later one exits). `run` starts each `one` child with `--die-with-parent FD`, the
 read end of one pipe that the parent alone holds open and never writes (the write end is not inheritable and the
 driver never forks without exec while holding it). The child checks the pipe for end of file before it reads or
 claims anything, then watches it from a thread, and exits 143 when it reads end of file, however its parent died,

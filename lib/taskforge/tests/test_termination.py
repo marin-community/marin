@@ -5,9 +5,13 @@
 and a relaunch reopens each root's last committed head. The process tests signal real driver processes
 (``termination_probe``); a probe's stdout reaches end of file only once it and every child are gone."""
 
+import asyncio
+import contextlib
+import fcntl
 import json
 import os
 import queue
+import resource
 import select
 import signal
 import subprocess
@@ -18,6 +22,7 @@ from argparse import Namespace
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -241,24 +246,48 @@ def test_unread_full_output_pipes_do_not_delay_the_exit(proposal: TaskProposal, 
         os.close(reader)
 
 
+HIGH = 1100
+"""A descriptor number above ``FD_SETSIZE`` (1024), which ``select.select`` refuses."""
+
+
 # Review 2026-11-21: a child started after its parent had died would see a closed pipe only once its watching thread
-# ran. It checks before anything else, so it claims nothing.
+# ran; it checks before anything else, so it claims nothing. A parent with many files open passed its pipe at fd 1030,
+# which the readiness check refused, so every proposal failed before it ran.
 @pytest.mark.timeout(300)
-def test_a_child_whose_parent_is_already_gone_claims_nothing(proposal: TaskProposal, tmp_path: Path) -> None:
+@pytest.mark.parametrize("descriptor", ["low", "high"])
+@pytest.mark.parametrize("writer", ["closed", "open"])
+def test_a_child_follows_its_pipe_at_any_descriptor(
+    proposal: TaskProposal, tmp_path: Path, descriptor: str, writer: str
+) -> None:
     sources = inputs(proposal, tmp_path)
     lifeline, kept = os.pipe()
-    os.close(kept)
+    if descriptor == "high":
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft <= HIGH:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, 4 * HIGH), hard))
+        high = fcntl.fcntl(lifeline, fcntl.F_DUPFD, HIGH)
+        os.close(lifeline)
+        lifeline = high
+        assert lifeline >= HIGH
+    if writer == "closed":
+        os.close(kept)
+    scenario = "block" if writer == "closed" else "resume"
     try:
-        code, _ = run_to_end_with(lifeline, argv("one", tmp_path), tmp_path / "first.log")
+        code = run_to_end_with(scenario, lifeline, argv("one", tmp_path), tmp_path / "first.log")
     finally:
         os.close(lifeline)
-    assert code == TERMINATED, (tmp_path / "first.log").read_text()[-4000:]
-    assert not roots(tmp_path, sources)[0].exists()
+        if writer == "open":
+            os.close(kept)
+    assert code == (TERMINATED if writer == "closed" else 0), (tmp_path / "first.log").read_text()[-4000:]
+    if writer == "closed":
+        assert not roots(tmp_path, sources)[0].exists()
+    else:
+        assert published_workpiece(roots(tmp_path, sources)[0]).terminal is Terminal.ACCEPTED
 
 
-def run_to_end_with(lifeline: int, arguments: list[str], log: Path) -> tuple[int, str]:
+def run_to_end_with(scenario: str, lifeline: int, arguments: list[str], log: Path) -> int:
     done = subprocess.run(
-        [sys.executable, "-m", MODULE, "child", "block", *arguments, "--die-with-parent", str(lifeline)],
+        [sys.executable, "-m", MODULE, "child", scenario, *arguments, "--die-with-parent", str(lifeline)],
         cwd=ROOT,
         pass_fds=(lifeline,),
         capture_output=True,
@@ -266,7 +295,81 @@ def run_to_end_with(lifeline: int, arguments: list[str], log: Path) -> tuple[int
         timeout=STARTUP,
     )
     log.write_text(done.stderr)
-    return done.returncode, done.stdout
+    return done.returncode
+
+
+STUBBORN = """import signal, sys
+from taskforge.driver import die_with_parent
+die_with_parent(int(sys.argv[1]))
+signal.pause()
+"""
+"""A child that follows only its pipe; started with SIGTERM ignored."""
+
+
+def is_open(descriptor: int) -> bool:
+    try:
+        os.fstat(descriptor)
+    except OSError:
+        return False
+    return True
+
+
+# Review 2026-11-21: an embedding caller cancelled run() while it waited for a child during cleanup; both ends of the
+# pipe stayed open after it returned, and the open writer kept the surviving child from ever reading end of file.
+@pytest.mark.timeout(300)
+async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_follows(
+    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, second = inputs(proposal, tmp_path, ("first", "second"))
+    second.write_text("{")  # malformed: run fails with a child outstanding and enters its cleanup
+    pipes: list[tuple[int, int]] = []
+    pipe, popen, children, terminated = os.pipe, subprocess.Popen, [], threading.Event()
+
+    def recorded() -> tuple[int, int]:
+        pipes.append(pipe())
+        return pipes[-1]
+
+    class Stubborn:
+        def __init__(self, command: list[str], **options: object) -> None:
+            fd = command[command.index("--die-with-parent") + 1]
+            ignore = partial(signal.signal, signal.SIGTERM, signal.SIG_IGN)
+            command = [sys.executable, "-c", STUBBORN, fd]
+            self.process = popen(command, cwd=ROOT, preexec_fn=ignore, **options)  # type: ignore[call-overload]
+            children.append(self.process)
+
+        def wait(self) -> int:
+            return self.process.wait()
+
+        def poll(self) -> int | None:
+            return self.process.poll()
+
+        def terminate(self) -> None:
+            terminated.set()
+            self.process.terminate()
+
+    monkeypatch.setattr(os, "pipe", recorded)
+    monkeypatch.setattr(driver.subprocess, "Popen", Stubborn)
+    flags = dict(zip(argv("run", tmp_path)[1::2], argv("run", tmp_path)[2::2], strict=True))
+    args = Namespace(
+        **{name.removeprefix("--").replace("-", "_"): value for name, value in flags.items() if name != "--concurrency"},
+        concurrency=2,
+        buckets=4096,
+        bucket_range=None,
+        ranks=(),
+        resume_held=False,
+    )
+    launch = asyncio.create_task(driver.run(args))
+    try:
+        assert await asyncio.to_thread(terminated.wait, STARTUP), "run never reached its cleanup"
+        launch.cancel()
+        with contextlib.suppress(asyncio.CancelledError, ValueError):
+            await launch
+        lifeline, kept = pipes[0]  # the driver's; each Popen makes its own pipes after it
+        assert not is_open(lifeline) and not is_open(kept)
+        assert await asyncio.to_thread(children[0].wait, STARTUP) == TERMINATED
+    finally:
+        for child in children:
+            child.kill()
 
 
 # Review 2026-11-21: a crash can land after a head's conditional write committed but before the driver heard back. The

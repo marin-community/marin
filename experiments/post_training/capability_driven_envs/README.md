@@ -48,7 +48,8 @@ prints the same list.
 | 143 | SIGTERM ended the driver, or the child's driver died (a crash) | relaunch the same manifest, partition and output root: it reopens each root's last committed head (paid work since then may be bought again; one relaunch need not finish) |
 
 The driver job fails when any child exits with a code other than 0, 3 or 75, apart from the probe's 10; a 10 from
-any other child is a failure. SIGTERM makes the driver exit 143 at once, and its children follow it however it died;
+any other child is a failure. SIGTERM makes a started driver exit 143 at once (as PID 1 it loses one delivered during its startup imports), and its
+children follow it however it died;
 exit 143 alone promises neither an Iris retry nor a particular budget, and sandbox pods are deleted asynchronously.
 
 Output roots follow the format fence and the rollout rule in the

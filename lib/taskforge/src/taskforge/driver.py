@@ -9,8 +9,10 @@ when the workpiece is held until the decision model answers again; with ``--prob
 reader's last outcome was a valid answer; and 1 on any other failure. ``run`` consumes a probe's 10 silently,
 releasing what it parked; it prints an OUTCOME line for every other nonzero child (a 10 from any child but the probe
 is a failure) and fails when any child exited other than 0, 3 or 75. SIGTERM is a crash: the process exits 143 at
-once, and each ``run`` child, which reads end of file from its parent's pipe, follows; a relaunch reopens each root's
-last committed head.
+once from the moment ``main`` has installed its handler (one SIGTERM while the interpreter still imports is lost when
+the driver is PID 1), and each ``run`` child, which reads end of file from its parent's pipe, follows; a relaunch
+reopens each root's last committed head. ``main`` is the process entry point, not an embedding API: it leaves its
+SIGTERM handler installed. ``one`` and ``run`` install nothing.
 """
 
 import argparse
@@ -303,14 +305,14 @@ async def run(args: argparse.Namespace) -> None:
             if parked and waiting is None and probe is None:
                 waiting = asyncio.create_task(recovery(policy))
     finally:
+        os.close(lifeline)  # first, so that neither end outlives this call and each child reads end of file
+        os.close(kept)
         if waiting is not None:
             waiting.cancel()
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, *([waiting] if waiting else []), return_exceptions=True)
-        os.close(lifeline)
-        os.close(kept)
     outcomes = " ".join(f"{label}={labels[label]}" for label, _ in OUTCOMES.values())
     print(
         f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} {outcomes}",
@@ -360,7 +362,8 @@ def cli() -> argparse.ArgumentParser:
 def die_with_parent(lifeline: int) -> None:
     """Exit 143 once ``lifeline``, a pipe the parent holds open and never writes, reads end of file: at once when the
     parent is already gone, else from a watching thread."""
-    if select.select([lifeline], [], [], 0)[0]:
+    (readable := select.poll()).register(lifeline, select.POLLIN)  # poll, unlike select, takes any descriptor
+    if readable.poll(0):
         os._exit(143)
     threading.Thread(target=lambda: os.read(lifeline, 1) or os._exit(143), daemon=True).start()
 
