@@ -7,11 +7,12 @@
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import Field, TypeAdapter
+from pydantic.json_schema import SkipJsonSchema
 from taskcompendium.grading_result import GradeResult
 
 from taskforge.model.controls import Candidate
@@ -89,6 +90,23 @@ class ReviewFinding:
     description: Text
     edit: Text
     citations: Annotated[tuple[Citation, ...], Field(min_length=1)]
+    groups: Annotated[SkipJsonSchema[tuple[tuple[Citation, ...], ...]], OMIT_NOTHING] = ()
+    """Stored only, never in a tool schema: when a report gave this finding in several independently valid versions,
+    each version's citations, of which ``citations`` is the union. Empty for one version, whose group is
+    ``citations``; each group is checked on its own against later evidence (``supports``)."""
+
+
+def supports(finding: ReviewFinding) -> tuple[tuple[Citation, ...], ...]:
+    """The independently sufficient citation groups of ``finding``."""
+    return finding.groups or (finding.citations,)
+
+
+def grouped(finding: ReviewFinding, groups: Sequence[tuple[Citation, ...]]) -> ReviewFinding:
+    """``finding`` supported by ``groups`` (distinct, in order): their union as its citations, kept as groups when
+    there is more than one."""
+    groups = tuple(dict.fromkeys(groups))
+    union = tuple(dict.fromkeys(c for group in groups for c in group))
+    return replace(finding, citations=union, groups=groups if len(groups) > 1 else ())
 
 
 def same(finding: ReviewFinding) -> tuple[str, str, str]:

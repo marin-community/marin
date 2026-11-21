@@ -329,7 +329,11 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A
   finding given both dispositions is refused. In every report, round or final, each submitted version of a
   finding is checked against the evidence first, and the versions that survive become one finding carrying
-  their distinct citations, so a stale copy never hides a valid one and the author answers one number.
+  their distinct citations, so a stale copy never hides a valid one and the author answers one number. The
+  finding keeps each surviving version's citations as its own group (`groups`, stored only when there are
+  several): shipped notes, an earlier finding an account blames and the earlier-claim recheck keep a finding
+  while any one group's citations all still occur, so a revision that changes one cited trial never takes down
+  the version citing another.
   As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
   `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
   finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:

@@ -82,6 +82,8 @@ from taskforge.model.review import (
     TrialAccount,
     TrialResult,
     ValidationResult,
+    grouped,
+    supports,
 )
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Terminal, Workpiece
@@ -993,7 +995,11 @@ def test_two_valid_versions_citing_different_trials_are_one_finding_carrying_bot
     ordinary = asyncio.run(ReportTool(index).run(ctx, ReportArgs((one, two), defect(1, 2))))
     for outcome in (final, ordinary):
         assert not isinstance(outcome, ToolResult), outcome.content
-        assert outcome.payload.findings == (replace(one, citations=(*one.citations, *two.citations)),)
+        (merged,) = outcome.payload.findings
+        assert merged.citations == (*one.citations, *two.citations) and supports(merged) == (
+            one.citations,
+            two.citations,
+        )
 
 
 @pytest.mark.parametrize("stale_first", [True, False])
@@ -1034,3 +1040,52 @@ async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskP
     wp = await run_workpiece(proposal, setup(), resumed, EventLog(replay_from=local_records(sink)), install=install)
     assert wp == done and not again.runs
     assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests
+
+
+# Review 2026-11-21 (n12 follow-up 3): one note in two versions, a quote trial 4 keeps and one only trial 6's first
+# confirmation attempt holds. Merged into one citation set, the note was dropped after a revision that kept trial 4.
+UNITS = "the prompt does not say which units"
+STABLE, SPECIFIC = found(4, FindingKind.AMBIGUOUS_PROMPT, UNITS), found(
+    6, FindingKind.AMBIGUOUS_PROMPT, UNITS, "attempt 1"
+)
+
+
+@pytest.mark.parametrize(
+    "versions",
+    [(STABLE, SPECIFIC), (SPECIFIC, STABLE), (STABLE,)],
+    ids=["stable first", "specific first", "stable only"],
+)
+async def test_a_note_ships_with_the_versions_the_revised_trials_still_support(
+    proposal: TaskProposal, versions: tuple[dict[str, object], ...]
+) -> None:
+    reviewer = Reviewer(finals=[([found(3, what="fix")], list(versions))])
+    wp = await run_workpiece(
+        proposal, setup(), bundle(Trials(), reviewer, (*script(), *RESUBMIT)), EventLog(), install=install
+    )
+    assert kinds(wp) == ["accept", "revise", "accept", "accept"]
+    first, last = wp.decisions[1], wp.decisions[-1]
+    assert isinstance(first, Revise) and isinstance(last, Accept)
+    assert [len(supports(note)) for note in first.notes] == [len(versions)]
+    assert [(n.description, [(c.source, c.quote) for c in n.citations], n.groups) for n in last.notes] == [
+        (UNITS, [("trial/4", "answers 12")], ())
+    ]
+
+
+def test_a_defect_account_citing_a_trial_an_earlier_version_still_supports_is_accepted() -> None:
+    stable, specific = (TypeAdapter(ReviewFinding).validate_python(v) for v in (STABLE, SPECIFIC))
+    earlier = grouped(stable, (stable.citations, specific.citations))  # as the first final report stored it
+    tool = FinalReportTool(failed_trials(4, 6), earlier=(earlier,))
+    accounts = (TrialAccount(4, Attribution.DEFECT, UNITS), TrialAccount(6, Attribution.SOLVER, "its own work"))
+    outcome = asyncio.run(tool.run(Context(log=EventLog()), FinalReportArgs((), (), accounts)))
+    assert not isinstance(outcome, ToolResult), outcome.content
+    blamed = (TrialAccount(4, Attribution.SOLVER, "its own work"), TrialAccount(6, Attribution.DEFECT, UNITS))
+    refused = asyncio.run(tool.run(Context(log=EventLog()), FinalReportArgs((), (), blamed)))
+    assert isinstance(refused, ToolResult) and "trial 6 is attributed to a task defect" in refused.content
+
+
+def test_one_version_stores_no_groups_and_several_round_trip_outside_the_tool_schema() -> None:
+    adapter, single = TypeAdapter(ReviewFinding), finding(1)
+    assert "groups" not in json.loads(adapter.dump_json(single))
+    merged = grouped(single, (single.citations, finding(2).citations))
+    assert adapter.validate_json(adapter.dump_json(merged)) == merged
+    assert "groups" not in json.dumps(TypeAdapter(FinalReportArgs).json_schema())

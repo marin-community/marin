@@ -26,7 +26,9 @@ from taskforge.model.review import (
     ReviewFinding,
     SolveReview,
     TrialAccount,
+    grouped,
     same,
+    supports,
 )
 
 PAGE_ROOM = 120
@@ -209,13 +211,17 @@ def citation_problem(evidence: Evidence, citation: Citation) -> str | None:
 def checked(
     evidence: Evidence, findings: Sequence[ReviewFinding]
 ) -> tuple[list[ReviewFinding], list[tuple[ReviewFinding, str]]]:
+    """Each finding kept with its citation groups (``supports``) whose citations all check against ``evidence``, or
+    dropped with every problem when none does: one group's failure never takes another's support with it."""
     kept, dropped = [], []
     for finding in findings:
-        problems = [problem for c in finding.citations if (problem := citation_problem(evidence, c)) is not None]
-        if problems:
-            dropped.append((finding, "; ".join(problems)))
+        problems = {
+            group: [p for c in group if (p := citation_problem(evidence, c)) is not None] for group in supports(finding)
+        }
+        if valid := [group for group, found in problems.items() if not found]:
+            kept.append(grouped(finding, valid))
         else:
-            kept.append(finding)
+            dropped.append((finding, "; ".join(p for found in problems.values() for p in found)))
     return kept, dropped
 
 
@@ -223,14 +229,15 @@ def consolidated(
     evidence: Evidence, findings: Sequence[ReviewFinding]
 ) -> tuple[list[ReviewFinding], list[tuple[ReviewFinding, str]]]:
     """``findings`` as one record per (``same``) finding: every submitted version is checked against ``evidence``
-    first, and the versions that survive become one finding, at its first surviving version, carrying their distinct
-    citations in order. Every version that fails is dropped with its reasons, as ``checked`` drops it."""
+    first, and the versions that survive become one finding, at its first surviving version: one number for the
+    author, the union of their citations, and each version's citations kept as its own group (``grouped``), so a
+    later check can keep a version another one's failure would otherwise take down. Every version that fails is
+    dropped with its reasons, as ``checked`` drops it."""
     kept, dropped = checked(evidence, findings)
     merged: dict[tuple[str, str, str], ReviewFinding] = {}
     for finding in kept:
         first = merged.setdefault(same(finding), finding)
-        new = tuple(c for c in finding.citations if c not in first.citations)
-        merged[same(finding)] = replace(first, citations=(*first.citations, *new))
+        merged[same(finding)] = grouped(first, (*supports(first), *supports(finding)))
     return list(merged.values()), dropped
 
 
@@ -250,7 +257,7 @@ def report(
     problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
-    kept, dropped = consolidated(evidence, findings)
+    kept, dropped = consolidated(evidence, [replace(f, groups=()) for f in findings])  # a reviewer sets no groups
     supported = (*kept, *checked(evidence, earlier)[0])  # an earlier claim is rechecked against these trials
     cited = {citation.source for finding in supported for citation in finding.citations}
     why = "".join(f" ({reason})" for _, reason in dropped)
