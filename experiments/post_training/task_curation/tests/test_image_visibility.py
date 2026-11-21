@@ -147,13 +147,20 @@ def test_shared_package_uses_the_most_restrictive_source_allowance():
     assert over_exposed.verdicts[0].sources == ("TaskTrove:display", "TaskTrove:plain")
 
 
-def test_private_always_source_refuses_even_an_org_private_package():
-    """A private_always source's image must not sit in any GHCR package."""
-    check = check_registry(
+def test_private_always_source_refuses_an_org_internal_package():
+    """A private_always source's image stays private; the org-internal tier is more open."""
+    allowed = check_registry(
         [map_row(source_columns(data_restriction=DataRestriction.PRIVATE_ALWAYS.value))],
         visibility=checker({"marin-community/rollout-images": "private"}),
     )
-    verdict = check.verdicts[0]
+    assert allowed.verdicts[0].outcome is CheckOutcome.MATCH
+    assert allowed.verdicts[0].actual is ImageVisibility.PRIVATE
+
+    over_exposed = check_registry(
+        [map_row(source_columns(data_restriction=DataRestriction.PRIVATE_ALWAYS.value))],
+        visibility=checker({"marin-community/rollout-images": "internal"}),
+    )
+    verdict = over_exposed.verdicts[0]
     assert verdict.outcome is CheckOutcome.OVER_EXPOSED
     assert verdict.allowance is ImageVisibility.PRIVATE
     assert verdict.actual is ImageVisibility.INTERNAL

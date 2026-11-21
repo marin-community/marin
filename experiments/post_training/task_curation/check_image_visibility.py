@@ -7,12 +7,11 @@ For every GHCR package the registry map references, this reads the package's
 actual visibility (``gh api /orgs/marin-community/packages/container/<name>``)
 and compares it with the most open visibility the image's sources allow. The
 allowance comes from the metadata the map already records, resolved the way the
-Atlas resolves it: a ``private_always`` data tier allows only private use — the
-image must not sit in any GHCR package, whose org scope is more open than the
-private store; a recorded ``public_display`` publication scope allows a public
-package; every other source allows org-internal use. GitHub.com GHCR reports
-``public`` and ``private`` only, so a GHCR-private marin-community package is
-org-internal on this scale (``private < internal < public``).
+Atlas resolves it: a ``private_always`` data tier allows only private use; a
+recorded ``public_display`` publication scope allows a public package; every
+other source allows org-internal use. GHCR visibility ranks on the same scale
+as the allowance (``private < internal < public``): a GHCR-private package is
+restricted to explicitly granted members, an org-internal one to every member.
 
 A package is over-exposed when its actual visibility is more open than the
 most restrictive source's allowance. References outside the audited org are
@@ -52,13 +51,13 @@ class ImageVisibility(StrEnum):
 OPENNESS = {ImageVisibility.PRIVATE: 0, ImageVisibility.INTERNAL: 1, ImageVisibility.PUBLIC: 2}
 
 GHCR_ACTUAL_VISIBILITY = {
-    "private": ImageVisibility.INTERNAL,
+    "private": ImageVisibility.PRIVATE,
     "internal": ImageVisibility.INTERNAL,
     "public": ImageVisibility.PUBLIC,
 }
-"""GitHub.com GHCR reports public/private only; a GHCR-private package is
-org-internal on this scale. An ``internal`` string (GitHub Enterprise) maps to
-the same rank."""
+"""GHCR visibility ranks on the same scale as the allowance: private is
+restricted to explicitly granted members, internal to the whole org, public
+to everyone."""
 
 
 class PackageVisibilityError(RuntimeError):
