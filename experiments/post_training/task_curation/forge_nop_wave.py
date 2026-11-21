@@ -38,9 +38,9 @@ HARBOR_PROJECT = Path("vendor/harbor").resolve()
 NOP_AGENT = "nop"
 
 
-def calibrated_packages(calibrated_root: Path) -> dict[str, Path]:
-    """Each task's last calibrated consumed package, keyed by task id."""
-    packages = {}
+def calibrated_packages(calibrated_root: Path) -> dict[str, tuple[Path, dict | None]]:
+    """Each task's last calibrated consumed package and the verifier allocation its trial ran."""
+    packages: dict[str, tuple[Path, dict | None]] = {}
     for task_dir in sorted(calibrated_root.iterdir()):
         if not task_dir.is_dir():
             continue
@@ -48,40 +48,41 @@ def calibrated_packages(calibrated_root: Path) -> dict[str, Path]:
             # The consumed package is the attempt's task directory: it carries task.toml.
             for package in attempt.iterdir():
                 if package.is_dir() and (package / "task.toml").is_file():
-                    packages[task_dir.name] = package
+                    result = attempt / "jobs" / "oracle" / "result.json"
+                    measured = None
+                    if result.is_file():
+                        document = json.loads(result.read_text())
+                        measured = (document.get("config") or {}).get("task", {}).get("verifier_execution_requirements")
+                    packages[task_dir.name] = (package, measured)
     return packages
 
 
-def measured_requirements(package: Path) -> tuple[ExecutionRequirements, ExecutionRequirements | None]:
-    """The consumed package's projected actor budget and its separate verifier budget."""
+def measured_requirements(package: Path) -> ExecutionRequirements:
+    """The consumed package's projected actor budget."""
     document = tomllib.loads((package / "task.toml").read_text())
     environment = document.get("environment") or {}
-    requirements = ExecutionRequirements(
+    return ExecutionRequirements(
         cpus=environment["cpus"],
         memory_mb=environment["memory_mb"],
         storage_mb=environment["storage_mb"],
         agent_timeout_sec=document["agent"]["timeout_sec"],
         verifier_timeout_sec=document["verifier"]["timeout_sec"],
     )
-    verifier = document.get("verifier", {}).get("environment") or {}
-    verifier_requirements = None
-    if verifier:
-        verifier_requirements = ExecutionRequirements(
-            cpus=verifier["cpus"],
-            memory_mb=verifier["memory_mb"],
-            storage_mb=verifier["storage_mb"],
-            agent_timeout_sec=document["agent"]["timeout_sec"],
-            verifier_timeout_sec=document["verifier"]["timeout_sec"],
-        )
-    return requirements, verifier_requirements
 
 
-def control_request(task_id: str, entry: dict, package: Path, output_root: Path) -> dict:
-    """One curation_control request: the frozen consumed package with no agent."""
-    requirements, verifier_requirements = measured_requirements(package)
+def control_request(task_id: str, entry: dict, package: Path, measured_verifier: dict | None, output_root: Path) -> dict:
+    """One curation_control request: the frozen consumed package with no agent.
+
+    The verifier allocation must match what the oracle trial consumed, so the
+    measured allocation travels from that trial's own config into this control's.
+    """
+    requirements = measured_requirements(package)
     return {
         "trial": {
-            "task": {"path": str(package)},
+            "task": {
+                "path": str(package),
+                **({"verifier_execution_requirements": measured_verifier} if measured_verifier is not None else {}),
+            },
             "agent": {"name": NOP_AGENT},
             "environment": {"type": "daytona", "kwargs": {"provisioning": "declarative"}},
             "trials_dir": str(output_root / "trials"),
@@ -95,9 +96,7 @@ def control_request(task_id: str, entry: dict, package: Path, output_root: Path)
             "runtime_sha256": entry.get("runtime_sha256"),
             "task_checksum": entry["task_checksum"],
             "execution_requirements": requirements.model_dump(mode="json"),
-            "verifier_execution_requirements": (
-                verifier_requirements.model_dump(mode="json") if verifier_requirements is not None else None
-            ),
+            "verifier_execution_requirements": measured_verifier,
         },
         "output_root": str(output_root),
         "native_setup": None,
@@ -152,18 +151,19 @@ def wave(
             continue
         if negative_control_applicability(task).value != "workspace":
             continue
-        package = packages.get(canonical_sha256(task_id))
-        if package is None:
+        selected_hash = canonical_sha256(task_id)
+        selected_pair = packages.get(selected_hash)
+        if selected_pair is None:
             raise ValueError(f"No calibrated package for a workspace-graded task: {task_id}")
-        selected[task_id] = (entry, package)
+        selected[task_id] = (entry, selected_pair)
     output_root.mkdir(parents=True, exist_ok=False)
     controls_path.parent.mkdir(parents=True, exist_ok=True)
     with controls_path.open("w") as controls:
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {}
-            for task_id, (entry, package) in selected.items():
+            for task_id, (entry, (package, measured_verifier)) in selected.items():
                 task_output = output_root / canonical_sha256(task_id)
-                request = control_request(task_id, entry, package, task_output)
+                request = control_request(task_id, entry, package, measured_verifier, task_output)
                 futures[pool.submit(run_control, request, task_output)] = task_id
             for future in concurrent.futures.as_completed(futures):
                 record = future.result()
