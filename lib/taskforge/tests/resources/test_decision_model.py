@@ -17,7 +17,7 @@ from iris.client.client import IrisContext, iris_ctx_scope
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
-from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
+from rolloutengine.models import LENGTH_STOP_REASON, GradedRollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.decision_model import DecisionModelRequest
 from taskcompendium.grading_result import Outcome
@@ -32,6 +32,7 @@ from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
+from taskforge.model.llm import FinishReason
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import AdversaryResult, AdversaryStatus, Cause, ControlResult, TrialResult
 from taskforge.model.workpiece import Submission, Workpiece
@@ -50,7 +51,7 @@ from taskforge.resources.decision_model import (
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author_reference, system_prompt
-from taskforge.stages.classify import replayable_grade
+from taskforge.stages.classify import grade_cause, replaced_refusals, replayable_grade
 from taskforge.stages.exits import Validated
 from taskforge.stages.validate import solver_batch, validate
 from taskforge.wiring import (
@@ -686,3 +687,51 @@ async def test_health_is_the_gateways_own_route_and_never_a_read(status: int, he
 
     assert await gateway(answer).health() is health
     assert paths == ["/v1/systemone/health"]
+
+
+async def length_stopped(
+    reader: FakeReader, sink: JsonlSink, history: Sequence[Record] = (), *, resume: bool = False
+) -> tuple[GradedRollout | DecisionModelUnavailable, int]:
+    """One solver slot whose answer, 12, stops at the generation limit, graded through ``reader``; replays ``history``
+    as a launch with or without ``--resume-held``."""
+    policy = overlaid().overlaid({"decision_model.unavailable_wait": 10.0})
+    solver = ScriptedProvider((segment("12", finish=FinishReason.LENGTH),))
+    replaces = replaced_refusals(history, resume)  # as the driver builds its log
+    ctx = Context(log=EventLog(sink=sink, replay_from=history, replayable=replayable_grade, replaces=replaces))
+    installed(policy, reader, solver, ctx, VirtualTime())
+    outcome: GradedRollout | DecisionModelUnavailable
+    try:
+        outcome = await ctx.emit(SolverRollout(decision_spec(policy), 0, 0))
+    except DecisionModelUnavailable as error:
+        outcome = error
+    await ctx.drain()
+    return outcome, len(solver.bodies)
+
+
+# Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded, and an off-scale level is a
+# grader infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made
+# no solver call and no read and republished the hold.
+async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_the_model_recovers(
+    tmp_path: Path,
+) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    failed, _ = await length_stopped(FakeReader(levels={"12": 7}), sink)
+    assert isinstance(failed, GradedRollout) and failed.rollout.stop_reason == LENGTH_STOP_REASON
+    assert grade_cause(failed.grade) is Cause.GRADER_INFRA
+    healthy = FakeReader()
+    graded, solved = await length_stopped(healthy, sink, local_records(sink), resume=True)
+    assert isinstance(graded, GradedRollout) and graded.grade.reward == 1.0 and grade_cause(graded.grade) is None
+    assert healthy.reads == [request("12")] and solved == 1
+
+
+async def test_a_503_on_a_length_stopped_answer_leaves_no_slot_and_an_unflagged_launch_reads_it(
+    tmp_path: Path,
+) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    deferred, _ = await length_stopped(FakeReader(down={"12"}), sink)
+    assert isinstance(deferred, DecisionModelUnavailable)
+    history = local_records(sink)
+    assert not [r for r in history if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)]
+    healthy = FakeReader()
+    graded, _ = await length_stopped(healthy, sink, history)
+    assert isinstance(graded, GradedRollout) and graded.grade.reward == 1.0 and healthy.reads == [request("12")]
