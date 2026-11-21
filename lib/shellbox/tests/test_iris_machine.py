@@ -1220,7 +1220,9 @@ OOM_KILLED = (TaskState.FAILED, "OOMKilled")
 # Review follow-ups 2026-11-21: a lone `timer 137` was read as the timer's KILL from host or guest elapsed time, so a
 # late reply, a failed clock read or a second status read that lost a confirmed OOM each kept or misclassified the
 # machine. A 137 cannot tell the timer's KILL from an independent one, so one status read decides between the task's
-# terminal cause and an unknown outcome, and the machine closes naming the timer's exit.
+# terminal cause and an unknown outcome, and the machine closes naming the timer's exit. A lone 124 is no better: uutils
+# `timeout` returns 124 for any end of the status shell during the grace, before the command has finished.
+@pytest.mark.parametrize("timer_rc", [137, 124])
 @pytest.mark.parametrize(
     "status,expected",
     [
@@ -1230,9 +1232,9 @@ OOM_KILLED = (TaskState.FAILED, "OOMKilled")
     ],
     ids=["running", "oom-then-connection-lost", "lookup-fails"],
 )
-def test_lone_timer_kill_closes_the_machine_after_one_status_read(tmp_path, status, expected) -> None:
+def test_lone_timer_record_closes_the_machine_after_one_status_read(tmp_path, status, expected, timer_rc) -> None:
     task = LocalTask(TaskState.RUNNING)
-    machine, job = local_machine(tmp_path, ReplyRpc("printf partial", "timer 137\n"), task)
+    machine, job = local_machine(tmp_path, ReplyRpc("printf partial", f"timer {timer_rc}\n"), task)
 
     async def scenario() -> None:
         await machine.run(Command(("true",), timeout=5))  # The guest has a coreutils timeout.
@@ -1242,7 +1244,9 @@ def test_lone_timer_kill_closes_the_machine_after_one_status_read(tmp_path, stat
         assert type(caught.value) is expected
         assert observed.calls == 1
         assert job.cancelled
-        with pytest.raises(MachineTerminated, match=r"'printf partial' ended with no completion record \(timer 137\)"):
+        with pytest.raises(
+            MachineTerminated, match=rf"'printf partial' ended with no completion record \(timer {timer_rc}\)"
+        ):
             await machine.run(Command(("true",)))
 
     asyncio.run(scenario())
@@ -1360,6 +1364,32 @@ def test_command_ignoring_term_closes_the_machine_at_the_kill(tmp_path, shell, m
             assert not (tmp_path / "late.txt").exists()
     finally:
         # The local harness has no container to end with the job, so it ends a survivor itself.
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
+# A status shell that ends during the grace leaves no exit record while its command may still run. GNU `timeout` then
+# exits 137 and uutils 124; neither is evidence that the command ended, so both close the machine.
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+def test_status_shell_ended_during_the_grace_closes_the_machine(tmp_path, shell) -> None:
+    timer = guest_timer(shell)
+    timer_rc = 137 if "GNU coreutils" in timer_version() else 124
+    script = "trap 'kill -KILL $PPID; sleep 0.5; exit 0' TERM; echo $$ > pid.txt; sleep 30 & wait"
+
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path)
+        machine._guest_timer = timer
+        with pytest.raises(CommandOutcomeUnknown, match=rf"no completion record \(timer {timer_rc}\)"):
+            await machine.run(Command(("sh", "-c", script), timeout=0.3))
+        assert job.cancelled
+        with pytest.raises(MachineTerminated, match=rf"\(timer {timer_rc}\)"):
+            await machine.run(Command(("true",)))
+
+    pid_file = tmp_path / "pid.txt"
+    try:
+        asyncio.run(scenario())
+    finally:
         if pid_file.exists():
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pid_file.read_text()), signal.SIGKILL)
