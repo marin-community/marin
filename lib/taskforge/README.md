@@ -165,6 +165,10 @@ Replay reuses recorded model results only while the re-executed commands return 
 was recorded; after the first difference, the remaining model calls run again.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
 its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+A workpiece process cancelled in-process publishes a terminal head only with the workpiece that
+reached it; one cancelled after its terminal event was written but before that workpiece came back
+publishes `terminal: null` over the full history, and the next launch replays it to the terminal
+workpiece without new model calls.
 
 While a driver is working on a workpiece, its head reads `terminal: null` with
 `published_at`; the hub's `job describe` for a finished federated driver can keep saying
