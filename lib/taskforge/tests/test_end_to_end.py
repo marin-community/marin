@@ -1835,8 +1835,8 @@ def rows(records: Sequence[Record]) -> list[Record]:
 
 
 FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
-"""The policy digest the n3 and n4 fixtures recorded. The default policy has since gained the two adversary briefs,
-which changes only that digest in an author-only journal."""
+"""The policy digest the ``N3_JOURNAL`` and ``N4_JOURNAL`` fixtures recorded. The default policy has since gained the
+two adversary briefs, which changes only that digest in an author-only journal."""
 
 
 def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
@@ -1936,13 +1936,14 @@ def plant_root(directory: Path, fixture: Path) -> Path:
     return directory
 
 
-# Review 2026-11-21: n7 resumed this n6 head, accepted a fresh empty adversary report and published a round-0 Accept
-# without the author repair, dropping the finding both verifier grades had confirmed and the Modify it caused.
+# Review 2026-11-21: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
+# a round-0 Accept without the author repair, dropping the finding both verifier grades had confirmed and the Modify
+# it caused.
 @pytest.mark.parametrize("resume_held", [True, False])
 async def test_a_format_3_root_needs_migration_before_claim_and_stays_untouched(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool
 ) -> None:
-    """The fixture is the whole root the n6 driver (d510505b69) published under ``{"adversary.roster":
+    """The fixture is the whole root the format-3 driver (d510505b69) published under ``{"adversary.roster":
     ["adversary"]}``: a finding with an expected reward band that both verifier grades confirmed, Modify, and the
     author held in round 1 (73 rows). Format 4 changed what an adversary finding means, so no reader resumes it."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), N6_MODIFY_HELD)
