@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import logging
+import os
 import shutil
 import sys
 import tarfile
@@ -89,7 +90,7 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpie
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand, ShellboxEnv
+from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand, ShellboxEnv, WriteFile
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
 from taskforge.resources.inference import InferenceClient, InferenceRequest
@@ -2707,3 +2708,101 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
     assert result.terminal is Terminal.ACCEPTED and result.session is not None
     assert [message.content for message in result.session.messages if message.tool_call_id == "read-proof"] == ["proof"]
     assert len(envs.created) == 2 and (envs.created[1] / "proof.txt").read_bytes() == b"proof"
+    # The faulted request stays unanswered, so no Failed outcome replays; only its replacement resolves.
+    records = history(destination)
+    writes = [r for r in records if isinstance(r.event, WriteFile) and r.event.path.name == "proof.txt"]
+    assert [[type(r.event) for r in records if r.answers == write.sequence] for write in writes] == [[], [Resolved]]
+    assert len({write.attempt for write in writes}) == 2  # the replacement is on the fresh sandbox's opening
+
+
+class ScratchController(SandboxController):
+    """A sandbox whose guest ``/tmp`` hydration archive lives under ``scratch`` instead."""
+
+    def __init__(self, root: Path, scratch: Path) -> None:
+        super().__init__(root, (), "")
+        self.scratch = scratch
+
+    @override
+    def exec_in_container(self, request: object, timeout_ms: int) -> SimpleNamespace:
+        relocated = str(self.scratch / "forge-hydration-")
+        command = [part.replace("/tmp/forge-hydration-", relocated) for part in request.command]  # type: ignore[attr-defined]
+        return super().exec_in_container(SimpleNamespace(command=command), timeout_ms)
+
+
+class HydrationEnvs(LocalIrisEnvs):
+    """Local Iris sandboxes whose hydration scratch is unwritable when ``locked``; ``blocked`` caller paths are made
+    directories, or, in a read-only parent, files the guest may not replace."""
+
+    def __init__(self, root: Path, *, locked: bool = False, blocked: Mapping[str, int] | None = None) -> None:
+        super().__init__(root, ())
+        self.locked, self.blocked = locked, dict(blocked or {})
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+        workdir = self.root / f"sandbox-{len(self.created)}"
+        scratch = self.root / f"scratch-{len(self.created)}"
+        workdir.mkdir(parents=True)
+        scratch.mkdir(0o500 if self.locked else 0o700)
+        for name, code in self.blocked.items():
+            if code == errno.EISDIR:
+                (workdir / name).mkdir(parents=True)
+            else:
+                (workdir / name).parent.mkdir(parents=True, mode=0o500)
+        self.created.append(workdir)
+        return ShellboxEnv(local_iris_machine(workdir, ScratchController(workdir, scratch)), "image", AsyncExitStack())
+
+
+REFERENCE = WorkspaceHydration(
+    tuple(inline_resource(f"workspace/reference/{n}.txt", f"ref {n}".encode()) for n in range(3))
+)
+
+
+def drafting_script() -> tuple[Completion, ...]:
+    drafts = Envs().commands["write-draft"].writes.items()
+    return (*(call("write_file", {"path": str(p), "content": d.decode()}, p.name) for p, d in drafts), *script()[2:])
+
+
+# Review 2026-11-21 (inherited follow-up): with guest /tmp unwritable, four-file hydration journalled EACCES for
+# Taskforge's own archive as the caller's failure, and every resume on a healthy sandbox held as unreproducible.
+async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    locked = HydrationEnvs(tmp_path / "locked", locked=True)
+    first = resources(locked, drafting_script())
+    serve(monkeypatch, first, workspace=REFERENCE)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    held = published_workpiece(destination)
+    assert held.terminal is Terminal.HELD and "Permission denied" in str(held.decisions[-1])
+    assert "bug:" not in str(held.decisions[-1]) and executions(first) == (0, 0)
+    assert not [r for r in history(destination) if isinstance(r.event, Failed)]
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    healthy = HydrationEnvs(tmp_path / "healthy")
+    resumed = resources(healthy, drafting_script())
+    serve(monkeypatch, resumed, workspace=REFERENCE)
+    await driver.one(driver_args)
+    workpiece = published_workpiece(destination)
+    assert workpiece.terminal is Terminal.ACCEPTED, workpiece.decisions[-1]
+    assert executions(resumed)[0] == len(drafting_script())
+    assert (healthy.created[0] / "reference" / "2.txt").read_bytes() == b"ref 2"
+
+
+# Control: a four-file hydration that fails on the caller's own destination stays the caller's defect, a bug hold with
+# the guest's error text and no journalled outcome, and a resume on the same sandbox shape fails the same way.
+@pytest.mark.parametrize("code", [errno.EISDIR, errno.EACCES], ids=errno.errorcode.get)
+async def test_hydration_failure_on_a_caller_path_stays_the_callers_and_repeats(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    blocked = {"reference/1.txt" if code == errno.EISDIR else "locked/1.txt": code}
+    hydration = WorkspaceHydration((*REFERENCE.static[:2], inline_resource("workspace/locked/1.txt", b"ref 1")))
+    for attempt in ("first", "resume"):
+        envs = HydrationEnvs(tmp_path / attempt, blocked=blocked)
+        serve(monkeypatch, attempt_resources := resources(envs, drafting_script()), workspace=hydration)
+        with pytest.raises(RuntimeError, match=f"Could not hydrate files: .*{os.strerror(code)}"):
+            await driver.one(driver_args)
+        destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+        workpiece = published_workpiece(destination)
+        assert workpiece.terminal is Terminal.HELD and "bug:" in str(workpiece.decisions[-1])
+        assert "Unreproducible" not in str(workpiece.decisions[-1]) and executions(attempt_resources) == (0, 0)
+        assert not [r for r in history(destination) if isinstance(r.event, Failed)]
+        driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
