@@ -38,7 +38,15 @@ from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Failed, Fingerprint, Note, ReplayPolicy, Resolved, StageCompleted, event_digest
-from taskforge.effects.issues import Hold, LogFailure, PublicationFailed, Restart, Superseded, Transient
+from taskforge.effects.issues import (
+    Hold,
+    LogFailure,
+    OutputBudgetExhausted,
+    PublicationFailed,
+    Restart,
+    Superseded,
+    Transient,
+)
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_client import EndpointSource
@@ -48,6 +56,7 @@ from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import (
     Abandon,
     Accept,
+    AdversaryStatus,
     BandOutcome,
     BandRules,
     Budget,
@@ -1959,3 +1968,58 @@ async def test_a_resumed_submit_never_accepts_bytes_the_sandbox_does_not_hold(
         assert envs.producers[0].physical == [MALFORMED]
         assert not resumed.inference.requests
         assert "Unreproducible" in str(workpiece.decisions[-1]) and "env.read_file" in str(workpiece.decisions[-1])
+
+
+class ExhaustedRole(Envs):
+    """Every machine prints ``alpha`` for ``ROLE``; its first ``exhausted`` runs exceed the output budget instead."""
+
+    def __init__(self, exhausted: int) -> None:
+        super().__init__()
+        self.exhausted = exhausted
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        env = await super().create(requirements)
+        env.commands = {**env.commands, ROLE: FakeCommand(CommandResult(0, "alpha\n", "", 0, False), {})}
+        envs, run = self, env.run
+
+        async def exhausting(cmd: str, *, timeout: float) -> CommandResult:
+            if cmd == ROLE and envs.exhausted:
+                envs.exhausted -= 1
+                env.executed.append(cmd)
+                raise OutputBudgetExhausted("output budget exhausted")
+            return await run(cmd, timeout=timeout)
+
+        env.run = exhausting  # type: ignore[method-assign]
+        return env
+
+
+# Review 2026-11-20: a resumed adversary whose recorded command exhausted the output budget consumed its position
+# unverified, so the search counted as EXHAUSTED evidence and the workpiece was accepted with no new model call.
+@pytest.mark.parametrize("exhausted", [1, STAGE_REPLAY_ATTEMPTS], ids=["once", "every stage replay"])
+async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_weaker_evidence(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, exhausted: int
+) -> None:
+    overlay = json.loads(Path(driver_args.policy).read_text())
+    Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["alpha"]}))
+    held = Adversaries(hold=True)
+    serve(monkeypatch, replace(resources(ExhaustedRole(0), script()), role_inference={"adversary": held}))
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published_workpiece(destination).terminal is Terminal.HELD and len(held.requests) == 2
+    adversary = Adversaries(hold=False, served=held.requests[:1])
+    envs = ExhaustedRole(exhausted)
+    resumed = replace(resources(envs, ()), inference=ServedOnce((), ()), role_inference={"adversary": adversary})
+    serve(monkeypatch, resumed)
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    await driver.one(driver_args)
+    workpiece = published_workpiece(destination)
+    assert executions(resumed) == (0, 0) and envs.exhausted == 0
+    statuses = [result.status for evidence in workpiece.evidence for result in evidence.adversary]
+    if exhausted == STAGE_REPLAY_ATTEMPTS:
+        assert workpiece.terminal is Terminal.HELD and not isinstance(workpiece.decisions[-1], Accept)
+        assert "unverified" in str(workpiece.decisions[-1]) and not adversary.requests
+        assert AdversaryStatus.EXHAUSTED not in statuses
+        return
+    assert workpiece.terminal is Terminal.ACCEPTED and statuses[-1] is AdversaryStatus.REPORTED
+    assert len(adversary.requests) == 1  # only the report turn is new

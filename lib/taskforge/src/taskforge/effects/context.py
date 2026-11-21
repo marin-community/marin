@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from taskforge.effects.events import Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
-from taskforge.effects.issues import Unreproducible
+from taskforge.effects.issues import Restart, Unreproducible
 from taskforge.effects.log import Attempt, EventLog, Missing, Opened, Record, cached
 
 type Executor = Callable[..., Awaitable[object]]
@@ -127,7 +127,8 @@ class Context:
     @asynccontextmanager
     async def scope(self, name: str, opens: Opened | None = None) -> AsyncIterator[None]:
         """A task-local scope; with ``opens``, one physical attempt at that environment owner, whose clean exit before
-        the owner's recorded history ends is ``Unreproducible``."""
+        the owner's recorded history ends is ``Unreproducible``, and with a recorded outcome still unverified a
+        ``Restart``."""
         owner = _Scope()
         chain = (*self._chain.get(), owner)
         entered = self._publish(self._log.append(ScopeEntered(name), opened=opens), chain)
@@ -137,8 +138,12 @@ class Context:
         try:
             yield
             await _join(owner.take)
-            if owner.attempt is not None and owner.attempt.position < len(owner.attempt.history):
-                raise Unreproducible(f"{owner.attempt.owner} returned before its recorded history ended")
+            if (attempt := owner.attempt) is not None:
+                # A recorded outcome left unverified is no frontier: reconstruct the owner again on a fresh machine.
+                if attempt.unanswered is not None and not isinstance(self._log.recorded(attempt.unanswered), Missing):
+                    raise Restart(f"{attempt.owner} left its recorded request {attempt.unanswered} unverified")
+                if attempt.position < len(attempt.history):
+                    raise Unreproducible(f"{attempt.owner} returned before its recorded history ended")
             failed = False
         finally:
             try:
