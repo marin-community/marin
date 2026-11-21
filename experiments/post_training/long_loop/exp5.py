@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve the held Exp5 setup with R1 SFT parallelism and special-token rates.
+"""Launch Exp5 SFT with R1 parallelism and special-token rates.
 
 The 2026-11-20 user decision restores R1's sqrt(32) token multiplier,
 reversing the earlier 1.0 ruling. SFT uses a 1000-step safety cap, 30 warmup
 steps and a peak plateau before its wall-clock-only cooldown.
-OpenResearcher's reserved share still prevents submission.
+OpenResearcher's reserved share prevents downstream RL submission.
 """
 
 import hashlib
@@ -79,7 +79,6 @@ INITIAL_EVAL_FILES = (
 # The inherited 64-group window apportions the prepared 0.95 to 14 SWE groups.
 # This diagnostic subset remains unlaunchable while the research slot is pending.
 PREPARATION_ROUTE_QUOTAS = {"agentic": 14, "nonagentic": 50}
-TERMINAL_STAGE = "archive"
 
 
 def prepared_curriculum() -> RlCurriculum:
@@ -138,11 +137,12 @@ def prepared_pools(resolved: dict) -> dict[str, ArtifactStep]:
 @click.option("--round", "round_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--source-revision", required=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
+@click.option("--stage", type=click.Choice(["sft", "archive"]), default="archive", show_default=True)
 @rl_build_options
-def main(round_path: Path, source_revision: str, validation_output: Path) -> ArtifactStep:
+def main(round_path: Path, source_revision: str, validation_output: Path, stage: str) -> ArtifactStep:
     context = click.get_current_context()
-    if context.params["do_run"]:
-        raise click.UsageError("Exp5 launch is on hold: OpenResearcher's 5% slot is not admitted; --run is disabled")
+    if context.params["do_run"] and stage != "sft":
+        raise click.UsageError("Exp5 RL is on hold: OpenResearcher's 5% slot is not admitted; use --stage sft")
     configure_coreweave_s3()
     spec = load_round(round_path)
     if not isinstance(spec, RoundSpec) or spec.pools != "exp5-prepared":
@@ -168,16 +168,16 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     curriculum = prepared_curriculum()
     resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     resolved["exp5_admission"] = {
-        "launch_ready": False,
-        "terminal_stage": TERMINAL_STAGE,
-        "launch_hold": "User review of Exp4 evaluation and unresolved OpenResearcher runtime",
+        "launch_ready": stage == "sft",
+        "terminal_stage": stage,
+        "launch_hold": None if stage == "sft" else "Unresolved OpenResearcher runtime",
         "target_shares": dict(TARGET_SHARES),
         "prepared_absolute_share": sum(curriculum.weights().values()),
         "reserved_share": sum(TARGET_SHARES[label] for label in PENDING_SOURCES),
         "pending_sources": dict(PENDING_SOURCES),
         "sampling_scope": (
-            "Static preparation only. A sampler would normalize the prepared 0.95; "
-            "--run is disabled so the reserved 0.05 cannot be redistributed."
+            "SFT creates no RL sampler. Downstream submission remains blocked so the "
+            "prepared 0.95 cannot redistribute the reserved 0.05."
         ),
         "science": "Reuse the exact qualified V7 science components; existing checked repairs are already present",
         "sft_ruling": {
@@ -218,7 +218,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
         HARDMATH_REPO: "nonagentic",
     }
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
-    pools = prepared_pools(resolved)
+    pools = prepared_pools(resolved) if stage != "sft" else None
     require_archive_binds_final_sft_checkpoint(resolved)
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps({key: value for key, value in resolved.items() if key != "resolved_sha256"}, sort_keys=True).encode()
@@ -226,7 +226,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     terminal = build_spec_graph(
         resolved,
         spec.version,
-        through=TERMINAL_STAGE,
+        through=stage,
         data_artifacts=pools,
         curriculum=curriculum,
         sft_release=handle,

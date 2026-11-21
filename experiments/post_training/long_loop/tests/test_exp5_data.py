@@ -3,6 +3,7 @@
 
 import json
 import math
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from taskcompendium.models import (
 
 from experiments.post_training.long_loop.exp5 import main, prepared_curriculum, prepared_pools
 from experiments.post_training.long_loop.exp5_data import hardmath_task, ifbench_row
+from experiments.post_training.long_loop.round_runner import load_round
 from experiments.post_training.task_curation.exp5_curriculum import (
     AGENTIC_TRAIN_SOURCE,
     HARDMATH_LABEL,
@@ -96,6 +98,40 @@ def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp
     )
     assert result.exit_code == 2
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.integration
+def test_exp5_sft_stage_constructs_only_training_and_its_inputs(tmp_path):
+    workspace = Path(__file__).resolve().parents[4]
+    round_path = Path(__file__).parents[1] / "rounds/exp5-setup.yaml"
+    spec = load_round(round_path)
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
+    result = CliRunner().invoke(
+        main,
+        [
+            "--round",
+            str(round_path),
+            "--source-revision",
+            revision,
+            "--validation-output",
+            str(tmp_path),
+            "--version",
+            spec.version,
+            "--stage",
+            "sft",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    graph = json.loads((tmp_path / "graph.json").read_text())
+    assert graph[-1]["stage"] == f"{spec.name}/sft"
+    assert not any(
+        row["stage"].endswith(("/rl", "/eval", "/archive", "/sft-hf")) or "prepared-" in row["stage"] for row in graph
+    )
+    resolved = json.loads((tmp_path / "resolved-plan.json").read_text())
+    assert resolved["exp5_admission"]["launch_ready"]
+    assert resolved["exp5_admission"]["pending_sources"]
+    assert math.isclose(resolved["exp5_admission"]["reserved_share"], 0.05)
+    assert resolved["execution"]["coordinator"]["priority"] == "production"
 
 
 def test_exp5_refuses_a_different_swe_population_before_constructing_training_inputs(monkeypatch):

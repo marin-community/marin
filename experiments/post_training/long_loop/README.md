@@ -26,15 +26,19 @@ pin `marin_revision` to the clean code commit; Iris bundles those explicit input
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
-## Exp5 preparation hold
+## Exp5 SFT release
 
 Exp5 setup reuses qualified V7, whose four science components already derive
 from the sealed accepted/repaired science release. It preserves Exp4's SWE
 bug-fix pool, adds the pinned Atlas IFBench training release and base HARDMath,
-and reserves five percent of RL rollout groups for OpenResearcher. The research
-source requires a newer task schema and the `openresearcher-bm25:v1` provider;
-it is excluded from the prepared pool. `exp5.py` unconditionally refuses `--run`
-before resolving any artifacts.
+and reserves five percent of RL rollout groups for OpenResearcher. Its retrieval
+service remains in qualification, so it is excluded from the prepared pool.
+`exp5.py --stage sft --run` submits only
+SFT and its input verification. It does not bind the RL pools or construct RL,
+handoff, evaluation or archive stages. Downstream submission remains blocked
+until OpenResearcher's runtime is admitted; its reserved share is not redistributed.
+Run the same command without `--run` first to validate the SFT graph and record
+the resolved plan. This check does not qualify the downstream RL stages.
 
 SFT uses Exp1/R1's context-8 mesh across 32 nodes, with an explicit size-one
 expert axis for native Snowball. The declared special-token multiplier is
