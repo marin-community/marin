@@ -8,11 +8,48 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import jmp
+import pytest
 
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
+
+
+@pytest.mark.parametrize("policy", ["p=bf16,c=bf16", "f32"])
+def test_optimizer_precision_does_not_change_native_step_input_dtypes(tmp_path, policy):
+    config = TrainerConfig(
+        id="stable-parameter-dtypes",
+        train_batch_size=1,
+        per_device_parallelism=1,
+        mp=jmp.get_policy(policy),
+        mesh=MeshConfig(axes={"data": 1, "model": 1, "replica": 1, "context": 1}),
+        tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+        require_accelerator=False,
+        log_jaxprs=False,
+        log_xla_hlo=False,
+    )
+    optimizer = optax.adam(0.1, mu_dtype=jnp.float32)
+    batch = hax.named(jnp.ones(1), hax.Axis("batch", 1))
+
+    def loss(model, batch, *, key=None):
+        return hax.mean((model - batch) ** 2).scalar()
+
+    def signature(state):
+        return [(value.shape, value.dtype, jax.typeof(value).weak_type) for value in jax.tree.leaves(state)]
+
+    with Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
+        state = TrainerState.init(optimizer, jnp.asarray(2.0), key=jax.random.key(0), mp=config.mp)
+        expected = signature(state)
+        first_loss = None
+        for _ in range(3):
+            info = trainer.train_step(state, batch)
+            state = info.state
+            if first_loss is None:
+                first_loss = info.loss
+            assert signature(state) == expected
+        assert int(state.step) == 3
+        assert info.loss < first_loss
 
 
 def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
@@ -29,6 +66,19 @@ def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
     assert state.model.dtype == jnp.float32
     np.testing.assert_allclose(state.model, 0.99, atol=2e-6)
     assert policy.cast_to_compute(state.model).dtype == jnp.bfloat16
+
+
+def test_skipped_optimizer_update_keeps_the_parameter():
+    def skip(grads, state, params=None, **kwargs):
+        return None, state
+
+    optimizer = optax.GradientTransformation(lambda params: (), skip)
+    policy = jmp.get_policy("p=bf16,c=bf16")
+    state = TrainerState.init(optimizer, jnp.asarray(2.0), key=jax.random.key(0), mp=policy)
+    updated, updates = state.take_step(jnp.asarray(1.0), key=state.training_key)
+    assert updates is None
+    assert updated.model.dtype == jnp.bfloat16
+    np.testing.assert_array_equal(updated.model, state.model)
 
 
 class WeightedBatch(eqx.Module):

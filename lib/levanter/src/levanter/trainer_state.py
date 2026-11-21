@@ -246,6 +246,8 @@ def take_train_step(
     - The optional objective function for certain optimizers.
     - quantized state updates (Gradient Overwrite) if applicable.
 
+    Optimizer updates use each parameter's stored dtype before application.
+
     Returns:
     - The updated model after applying the optimizer updates.
     - The updated optimizer state.
@@ -264,6 +266,12 @@ def take_train_step(
         obj_fn=obj_fun,
         loss=loss,
         learning_rate_scale=learning_rate_scale,
+    )
+    updates = jax.tree.map(
+        lambda update, param: None if update is None else update.astype(param.dtype),
+        updates,
+        trainable_model,
+        is_leaf=lambda value: value is None,
     )
     model = apply_updates(model, updates, overwrites)
 
