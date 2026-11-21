@@ -323,7 +323,7 @@ def _positive_symbol_match(expected: list, candidate: list, positive_symbols: tu
     from sympy.matrices.expressions import MatrixExpr  # noqa: PLC0415
 
     @timeout(_timeout())
-    def equal_under_assumptions(gold: Expr, target: Expr) -> bool:
+    def equal_under_assumptions(gold, target) -> bool:
         replacements = {
             symbol: Symbol(symbol.name, positive=True)
             for symbol in gold.free_symbols | target.free_symbols
