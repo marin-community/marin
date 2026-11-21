@@ -34,19 +34,21 @@ line; only the endpoint variable is passed by value.
 
 ## Exit codes
 
-Each driver runs every proposal in a `one` child and prints `OUTCOME <label> exit=<code> proposal=<path>` for a
-nonzero one:
+Each driver runs every proposal in a `one` child. It prints `OUTCOME <label> exit=<code> proposal=<path>` for every
+nonzero exit except a probe's 10, which it consumes silently. `uv run --frozen python -m taskforge.driver --help`
+prints the same list.
 
 | code | meaning | what to do |
 |---:|---|---|
 | 3 | another writer owns the root | nothing |
-| 4 | the root has another journal format | migrate it, then rerun the proposal |
+| 4 | the root has another journal format | rerun at a fresh output prefix (no migration ships in this repository) |
 | 5 | the root's journal is corrupt | move the root aside, then rerun |
 | 75 | held until the decision model answers again | nothing: every later launch enters it, and the driver parks it until the model's health route reports healthy |
-| 10 | a `--probe` child's own decision-model reader read a valid answer (gateways without the health route) | nothing: the driver releases the parked proposals |
+| 10 | a `--probe` child's own decision-model reader read a valid answer (gateways without the health route); no OUTCOME line | nothing: the driver releases the parked proposals |
 
-The driver job fails when any child exits other than 0, 3 or 75 (or a probe's 10).
+The driver job fails when any child exits with a code other than 0, 3 or 75, apart from the probe's 10; a 10 from
+any other child is a failure.
 
 Journal roots are format-fenced: a root written in any other journal format exits 4 with the root untouched,
-before anything is claimed, whether it is running, held or finished. Convert it once with the migration, or
-rebuild it.
+before anything is claimed, whether it is running, held or finished. No migration for Taskforge journals ships in
+this repository, so rebuild such proposals by launching with a fresh `--output` prefix.

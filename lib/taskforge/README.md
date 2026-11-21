@@ -79,7 +79,8 @@ The launcher's README has the command. Each proposal maps to `int(sha256(str(pro
 (4096), whatever prefix holds its capability directory; a driver processes its half-open `--bucket-range a:b` in manifest order.
 Keep `--buckets` fixed across relaunches, so that replacing some drivers with more or fewer covering the same
 span changes no other driver, output path, or resume behaviour. A preempted driver resumes from its published
-checkpoints. `taskforge.driver --help` lists the exit codes of a `one` child and when `run` fails.
+checkpoints. `uv run --frozen python -m taskforge.driver --help` lists the exit codes of a `one` child and when `run`
+fails.
 
 The driver prints every policy value it resolves next to the declared one (`POLICY key
 declared=… resolved=…`) and the model each role uses (`MODEL role=author model=… endpoint=…`).
