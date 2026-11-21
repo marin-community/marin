@@ -696,8 +696,11 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   installed v0 through v2, rejected stale requests after both updates and
   generated and evaluated under v2. The two-host TPUv4 replay reached the
   learner host, then timed out scheduling the serving host before the
-  cross-host proof began. A retry with the same source requests both hosts
-  together in one zone. Production-context memory remains to be qualified.
+  cross-host proof began. An atomic retry on the same source timed out
+  with both replicas still unassigned. That gang requires two compatible
+  ready workers in the same zone. The deployed autoscaler routes a gang
+  demand to a single matching slice and cannot provision two independent
+  one-VM slices for it. Production-context memory remains to be qualified.
   [TPUv4 tool-turn restart run][iris-native-tool-restart-tpu] ·
   [TPUv4 gang retry][iris-native-tool-gang-tpu]
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
