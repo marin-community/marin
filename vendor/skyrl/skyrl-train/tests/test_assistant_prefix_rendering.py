@@ -10,6 +10,8 @@ from skyrl_train.inference_engines.chat_template import assistant_prefix_token_i
 # The Marin chat template trims assistant content the same way.
 TRIMMING_TEMPLATE = "{% for m in messages %}<|{{ m.role }}|>{{ m.content | trim }}<|end|>{% endfor %}"
 KEEPING_TEMPLATE = "{% for m in messages %}<|{{ m.role }}|>{{ m.content }}<|end|>{% endfor %}"
+# Like the Marin chat template, a newline follows each role header.
+HEADER_NEWLINE_TEMPLATE = "{% for m in messages %}<|{{ m.role }}|>\n{{ m.content | trim }}<|end|>{% endfor %}"
 ASSISTANT_PREFIX_OPTIONS = {"extra_body": {"continue_final_message": True, "add_generation_prompt": False}}
 
 
@@ -45,6 +47,22 @@ def test_assistant_prefix_tokens_from_trimming_template_keep_trailing_whitespace
     # The newline merges into the bracket token, so a separately tokenized newline would not match.
     assert "]\n" in tokenizer.convert_ids_to_tokens(token_ids)
     assert token_ids == tokenizer.encode(prompt, add_special_tokens=False)
+
+
+@pytest.mark.parametrize("prefix", ["\n", "\n\n"], ids=["newline", "two-newlines"])
+@pytest.mark.parametrize(
+    "chat_template,header",
+    [(TRIMMING_TEMPLATE, "<|assistant|>"), (HEADER_NEWLINE_TEMPLATE, "<|assistant|>\n")],
+    ids=["bare-header", "header-newline"],
+)
+def test_whitespace_only_assistant_prefix_follows_the_header(chat_template, header, prefix):
+    tokenizer = bracket_tokenizer(chat_template)
+    messages = conversation(prefix)
+    user_turn = tokenizer.apply_chat_template(messages[:1], tokenize=False, return_dict=False)
+
+    token_ids = assistant_prefix_token_ids(tokenizer, messages, ASSISTANT_PREFIX_OPTIONS)
+
+    assert token_ids == tokenizer.encode(user_turn + header + prefix, add_special_tokens=False)
 
 
 @pytest.mark.parametrize(
