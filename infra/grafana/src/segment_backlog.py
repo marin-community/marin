@@ -12,8 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 # Interim: ListNamespaces reports only the total across levels, and the largest
-# healthy tables hold about 3,000 segments in L1-L3. Lower this when
-# `backlog_segments` can read an L0 count.
+# healthy tables hold about 3,000 segments in L1-L3. Lower this when the alert
+# can compare an L0 count.
 SEGMENT_BACKLOG_THRESHOLD = 10_000
 HEALTHY_SEGMENT_STATE = "healthy"
 BACKLOGGED_SEGMENT_STATE = "backlogged"
@@ -21,7 +21,7 @@ UNAVAILABLE_SEGMENT_STATE = "unavailable"
 
 
 @dataclass(frozen=True)
-class TableSegments:
+class TableStorageStats:
     """One table's storage statistics from ListNamespaces."""
 
     namespace: str
@@ -30,16 +30,11 @@ class TableSegments:
     byte_size: int
 
 
-def backlog_segments(table: TableSegments) -> int:
-    """Return the segment count the backlog threshold applies to."""
-    return table.segment_count
-
-
-def segment_backlog_alert_rows(cluster: str, tables: Sequence[TableSegments]) -> list[dict[str, object]]:
+def segment_backlog_alert_rows(cluster: str, tables: Sequence[TableStorageStats]) -> list[dict[str, object]]:
     """Return one explicit alert value per table."""
     rows: list[dict[str, object]] = []
     for table in sorted(tables, key=lambda table: table.namespace):
-        backlogged = backlog_segments(table) >= SEGMENT_BACKLOG_THRESHOLD
+        backlogged = table.segment_count >= SEGMENT_BACKLOG_THRESHOLD
         rows.append(
             {
                 "cluster": cluster,

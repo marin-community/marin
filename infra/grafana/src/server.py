@@ -165,7 +165,7 @@ from rl_execution_observability import rl_execution_dataset
 from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import check_window, collect_producers
 from runs_observability import runs_overview_dataset
-from segment_backlog import TableSegments, segment_backlog_alert_rows, segment_backlog_unavailable_rows
+from segment_backlog import TableStorageStats, segment_backlog_alert_rows, segment_backlog_unavailable_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -1140,7 +1140,7 @@ def create_app(
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
 
-    def table_segment_rows() -> tuple[TableSegments, ...]:
+    def table_segment_rows() -> tuple[TableStorageStats, ...]:
         _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
             "table_segments",

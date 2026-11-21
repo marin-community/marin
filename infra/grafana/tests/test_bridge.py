@@ -52,7 +52,7 @@ from loom_alerts import (
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
 from rl_producers import RL_PRODUCER_NAMESPACES
-from segment_backlog import SEGMENT_BACKLOG_THRESHOLD, TableSegments
+from segment_backlog import SEGMENT_BACKLOG_THRESHOLD, TableStorageStats
 from server import _dataset_source, create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -84,7 +84,7 @@ class FakeSource:
         raises: Exception | None = None,
         health: FinelogHealth | None = None,
         relay_status: tuple[RelaySenderStatus, ...] = (),
-        table_segments: tuple[TableSegments, ...] = (),
+        table_segments: tuple[TableStorageStats, ...] = (),
         table_segments_raises: Exception | None = None,
     ) -> None:
         self._table = table if table is not None else pa.table({})
@@ -124,7 +124,7 @@ class FakeSource:
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         return self._relay_status
 
-    def table_segments(self) -> tuple[TableSegments, ...]:
+    def table_segments(self) -> tuple[TableStorageStats, ...]:
         if self._table_segments_raises is not None:
             raise self._table_segments_raises
         return self._table_segments
@@ -1555,8 +1555,8 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
 
 def test_table_segment_routes_expose_counts_and_flag_only_the_backlogged_table():
     tables = (
-        TableSegments(namespace="log", segment_count=SEGMENT_BACKLOG_THRESHOLD, row_count=9, byte_size=4096),
-        TableSegments(namespace="iris.task", segment_count=328, row_count=7, byte_size=2048),
+        TableStorageStats(namespace="log", segment_count=SEGMENT_BACKLOG_THRESHOLD, row_count=9, byte_size=4096),
+        TableStorageStats(namespace="iris.task", segment_count=328, row_count=7, byte_size=2048),
     )
     client = _client(FakeSource(table_segments=tables))
 

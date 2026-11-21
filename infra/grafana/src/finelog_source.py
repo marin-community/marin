@@ -26,7 +26,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
 from google.api_core.retry import if_transient_error
 from relay_health import RelaySenderStatus, relay_sender_statuses
-from segment_backlog import TableSegments
+from segment_backlog import TableStorageStats
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class MetricSource(Protocol):
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
 
-    def table_segments(self) -> tuple[TableSegments, ...]: ...
+    def table_segments(self) -> tuple[TableStorageStats, ...]: ...
 
 
 class FinelogSource:
@@ -102,11 +102,11 @@ class FinelogSource:
         """Return the namespaces this deployment holds."""
         return frozenset(info.namespace for info in self._client.list_namespaces())
 
-    def table_segments(self) -> tuple[TableSegments, ...]:
+    def table_segments(self) -> tuple[TableStorageStats, ...]:
         """Return each table's storage statistics from one metadata RPC."""
         namespaces = self._classifying_unavailability(self._client.list_namespaces)
         return tuple(
-            TableSegments(
+            TableStorageStats(
                 namespace=info.namespace,
                 segment_count=info.segment_count,
                 row_count=info.row_count,
