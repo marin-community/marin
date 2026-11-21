@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """One process of the two-process context-refusal replay test: ``record DIR`` runs a workpiece whose provider refuses
-the author's first request for a full context window and persists the journal; ``replay DIR`` reloads it in a fresh
-process whose provider would answer, and runs the workpiece again. Each prints the terminal, the author's stop and how
-many provider calls it made."""
+the author's first request for a full context window and persists the journal; ``launch DIR`` and ``resume DIR``
+reload it in a fresh process whose provider would answer and run the workpiece again under the replay rule the driver
+builds without and with ``--resume-held``. Each prints the terminal, the author's stop and how many provider calls it
+made."""
 
 import asyncio
 import sys
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,11 +18,18 @@ from lib.taskforge.tests.resources.inference_fakes import Backend, provider_comp
 from lib.taskforge.tests.test_end_to_end import Envs, config, resources
 
 from taskforge.coordinator import run_workpiece
-from taskforge.effects.log import EventLog, JsonlSink
+from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.client import ContextExhausted
 from taskforge.model.review import Abandon
 from taskforge.resources.inference import GlmInference
+from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import install
+
+
+def driver_log(previous: Sequence[Record], *, resume: bool) -> EventLog:
+    """The log ``driver.one`` builds over a published stream; ``resume`` is its ``--resume-held``."""
+    del resume  # this revision's driver replays the same way with or without the flag
+    return EventLog(replay_from=previous, replayable=replayable_grade)
 
 
 async def main(mode: str, directory: Path) -> None:
@@ -28,7 +37,7 @@ async def main(mode: str, directory: Path) -> None:
     if mode == "record":
         backend, log = Backend((ContextExhausted("maximum context length exceeded", ()),)), EventLog(sink=sink)
     else:
-        backend, log = Backend((provider_completion(),)), EventLog(replay_from=await sink.read())
+        backend, log = Backend((provider_completion(),)), driver_log(await sink.read(), resume=mode == "resume")
     live = replace(resources(Envs(), ()), inference=GlmInference(backend, "provider"))
     wp = await run_workpiece(sample_proposal(), config("S"), live, log, install=install)
     (stop,) = wp.decisions

@@ -145,6 +145,17 @@ was recorded; after the first difference, the remaining model calls run again.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
 its `status.json` keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
 
+**Rollout rule: never resume a root with an earlier driver.** A context-window refusal of an agent's request
+(author, adversary or reviewer) is recorded in `events.jsonl` as a `context_exceeded` completion, so a resumed
+visit replays the stop. This revision and later ones read every row earlier drivers wrote; drivers before it
+cannot decode that row. Such a driver, resumed with `--resume-held` on a held root containing it, publishes a held
+workpiece describing its decode error over `workpiece.json` and `status.json`, and leaves `events.jsonl` untouched.
+No format number fences it: the older drivers predate every one, and so roots written by this revision or later must
+never be resumed by an earlier driver, and a rollback of the binary uses a fresh output prefix. If it happens anyway,
+an ordinary launch of this driver skips the root (it reads as published `held`) and leaves the decode error in place;
+a launch with `--resume-held` rebuilds the snapshot from the unchanged stream, equal to resuming the root had the
+older driver never touched it.
+
 While a driver is working on a workpiece, its `status.json` reads `terminal: null` with
 `upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
 `running` indefinitely, so judge progress by these files and by the driver's pods, not by job state.
