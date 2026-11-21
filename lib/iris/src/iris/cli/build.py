@@ -10,6 +10,7 @@ import click
 from rigging.provenance import Provenance
 
 from iris.cluster.provenance import provenance_to_env
+from iris.version import REVISION_DATE_ENV, iris_tree_date
 
 GHCR_DEFAULT_ORG = "marin-community"
 DEFAULT_CARGO_PROFILE = "fast"
@@ -260,9 +261,15 @@ def build_image(
             capture_output=not verbose,
         )
 
-    cmd = ["docker", "buildx", "build", "--platform", platform]
+    # --pull resolves base image tags against the registry. Without it the docker
+    # driver reuses the builder's local copy, and the registry layer cache then
+    # replays layers built on that stale base, missing base-image security fixes.
+    cmd = ["docker", "buildx", "build", "--pull", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"CARGO_PROFILE={cargo_profile}"])
+    # The image carries no `.git`, so the date the controller reports for itself
+    # has to be resolved here, against the tree being built.
+    cmd.extend(["--build-arg", f"{REVISION_DATE_ENV}={iris_tree_date(iris_root)}"])
     for key, value in provenance_to_env(provenance).items():
         cmd.extend(["--build-arg", f"{key}={value}"])
     for t in all_tags:

@@ -18,8 +18,6 @@ The run_once() flow splits into two phases:
 """
 
 import logging
-import urllib.error
-import urllib.request
 from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +25,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from finelog.client.log_client import Table
+from rigging.auth import TokenProvider
 from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.cluster.config import AutoscalerConfig, WorkerConfig
@@ -45,7 +44,7 @@ from iris.cluster.controller.autoscaler.provisioning import (
     classify_create_failure,
 )
 from iris.cluster.controller.autoscaler.recovery import (
-    load_autoscaler_checkpoint,
+    AutoscalerCheckpoint,
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import (
@@ -61,7 +60,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import (
@@ -70,6 +68,7 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceHandle,
     SliceStatus,
+    probe_worker_health,
 )
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
@@ -89,10 +88,6 @@ DEFAULT_CREATE_RATE_LIMIT = 60
 
 # How long the autoscaler waits for a worker /health response per probe.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
-
-# Bypass any HTTP_PROXY env var: worker addresses are private cluster IPs,
-# never reachable via an upstream proxy.
-_HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
 # timeouts would blow past evaluation_interval (10 s default).
@@ -131,21 +126,6 @@ def _run_io_batch(
     workers = min(max_workers, len(items))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=thread_name_prefix) as pool:
         return list(pool.map(issue, items))
-
-
-def _probe_worker_health(worker_url: str) -> bool:
-    """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
-
-    Returns True iff the response is 2xx.
-    """
-    try:
-        resp = _HEALTH_PROBE_OPENER.open(
-            f"{worker_url}/health",
-            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
-        )
-        return 200 <= resp.status < 300
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-        return False
 
 
 def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
@@ -200,6 +180,7 @@ class Autoscaler:
         evaluation_interval: Duration,
         platform: WorkerInfraProvider,
         base_worker_config: WorkerConfig | None = None,
+        worker_token_provider: TokenProvider | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
@@ -213,6 +194,7 @@ class Autoscaler:
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
+            worker_token_provider: Supplies current credentials when provisioning workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
             create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
                 shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
@@ -227,6 +209,7 @@ class Autoscaler:
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
+        self._worker_token_provider = worker_token_provider
         self._unresolvable_timeout = unresolvable_timeout
 
         # Project-wide slice-creation throttle, shared across all groups. Deferred
@@ -260,6 +243,7 @@ class Autoscaler:
         config: AutoscalerConfig,
         platform: WorkerInfraProvider,
         base_worker_config: WorkerConfig | None = None,
+        worker_token_provider: TokenProvider | None = None,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
         provisioning_table: Table | None = None,
     ) -> "Autoscaler":
@@ -270,6 +254,7 @@ class Autoscaler:
             config: Autoscaler configuration (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
+            worker_token_provider: Supplies current credentials when provisioning workers.
             make_draining_group: Builds a scale-to-zero group for a retired-but-live scale group
                 (see ``Autoscaler.__init__`` / ``restore_autoscaler_state``).
             provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning outcomes.
@@ -282,6 +267,7 @@ class Autoscaler:
             evaluation_interval=config.evaluation_interval,
             platform=platform,
             base_worker_config=base_worker_config,
+            worker_token_provider=worker_token_provider,
             make_draining_group=make_draining_group,
             provisioning_table=provisioning_table,
         )
@@ -504,7 +490,7 @@ class Autoscaler:
         # each outcome into state serially.
         outcomes = _run_io_batch(
             to_issue,
-            lambda req: self._issue_scale_up(req, timestamp),
+            self._issue_scale_up,
             max_workers=_CLOUD_OP_MAX_WORKERS,
             thread_name_prefix="scale-up",
         )
@@ -540,7 +526,7 @@ class Autoscaler:
                 reason=summary,
             )
 
-    def _issue_scale_up(self, request: _ScaleUpRequest, ts: Timestamp) -> _ScaleUpOutcome:
+    def _issue_scale_up(self, request: _ScaleUpRequest) -> _ScaleUpOutcome:
         """Submit one create and return the handle-or-error as data. Pure I/O.
 
         Runs inside the bounded issue fan-out, so it must not touch shared
@@ -554,7 +540,7 @@ class Autoscaler:
         try:
             logger.info("Scaling up %s: %s", group.name, request.reason)
             wc = self._per_group_worker_config(group)
-            handle = group.scale_up(worker_config=wc, timestamp=ts)
+            handle = group.scale_up(worker_config=wc)
             return _ScaleUpOutcome(request=request, handle=handle)
         except Exception as e:
             # Captured as data (not swallowed): _fold_scale_up classifies it,
@@ -604,7 +590,10 @@ class Autoscaler:
 
     def _per_group_worker_config(self, group: ScalingGroup) -> WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
-        return build_worker_config_for_group(self._base_worker_config, group.config)
+        config = build_worker_config_for_group(self._base_worker_config, group.config)
+        if config is not None and self._worker_token_provider is not None:
+            config.auth_token = self._worker_token_provider.get_token() or ""
+        return config
 
     def _register_slice_workers(
         self,
@@ -776,7 +765,7 @@ class Autoscaler:
         if probes:
             results = _run_io_batch(
                 probes,
-                lambda p: _probe_worker_health(p[3]),
+                lambda p: probe_worker_health(p[3], timeout=_HEALTH_PROBE_TIMEOUT_SECONDS),
                 max_workers=_HEALTH_PROBE_MAX_WORKERS,
                 thread_name_prefix="health-probe",
             )
@@ -875,15 +864,14 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._worker_registry.restore(workers)
 
-    def restore_from_db(self, db: ControllerDB, platform: WorkerInfraProvider) -> None:
-        """Reconcile DB-checkpointed autoscaler state against live cloud.
-
-        Reads scaling group and slice rows from proper DB tables,
-        reconciles each group against the cloud in parallel, and restores
-        tracked workers. Call at startup before loops begin.
-        """
-        checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, self._make_draining_group)
+    def restore(self, checkpoint: AutoscalerCheckpoint) -> None:
+        """Reconcile a controller-supplied checkpoint against live capacity."""
+        restored_workers = restore_autoscaler_state(
+            self._groups,
+            checkpoint,
+            self._platform,
+            self._make_draining_group,
+        )
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 
@@ -902,14 +890,6 @@ class Autoscaler:
             all_slices.extend(group_slices)
             groups.append(group_row)
         return AutoscalerState(slices=all_slices, groups=groups)
-
-    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get VM info by platform worker ID from the centralized worker registry."""
-        return self._worker_registry.vm_info(vm_id)
-
-    def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a VM by platform worker ID."""
-        return self._worker_registry.init_log(vm_id, tail)
 
     def job_feasibility(
         self,

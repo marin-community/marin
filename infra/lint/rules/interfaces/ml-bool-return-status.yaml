@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-bool-return-status
+lane: interfaces
+title: '`bool` return for a multi-outcome operation'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A `bool` return collapses distinct outcomes (success /
+  timeout / already-flushed) into one bit; callers can't distinguish them and
+  end up reading the implementation.
+
+  **When allowed:** Simple binary predicates (`exists()`, `is_ready()`) and
+  genuine pass/fail I/O (`write_atomic()` where retry is the only response to
+  failure).
+
+  **Bad example:**
+  ```python
+  def flush(self, timeout: float) -> bool:
+      # callers can't tell "nothing to flush" from "timed out". FlushResult enum is the fix.
+      ...
+  ```

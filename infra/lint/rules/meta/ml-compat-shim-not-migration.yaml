@@ -1,0 +1,37 @@
+schema_version: 1
+code: ml-compat-shim-not-migration
+lane: meta
+title: Back-compat shim left straddling instead of migrating callers
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Marin's house rule is explicit and unusually strong — NO BACKWARD
+  COMPATIBILITY; update all call sites. A shim (an alias, a dual-accepting union, a
+  `@property` forwarding an old name, "support both for now") is cheaper for the
+  author and more expensive for everyone after, and it tends to become permanent. The
+  local `ml-input-type-union` / `ml-speculative-abstraction` rules even *allow* a
+  one-release adapter — the whole-diff view is what sees the precondition that turns
+  "allowed adapter" into "should have been a migration": the surviving callers are
+  all in-repo and few.
+
+  Fire only when ALL surviving callers of the old form are inside this repo and
+  editable, their count is small enough to enumerate (≤~8), and the diff did NOT
+  already update them — list the call sites. Trigger on a visible alias/shim OR
+  surviving old-name references the PR left unmigrated. Anchor on the shim/alias line.
+
+  **When allowed:** The old form is a wire/serialized/published surface — a config
+  field read from YAML/checkpoint/`wandb` artifact/proto, or a symbol in a published
+  `marin-*` package's public API (those *are* published) — or the class participates
+  in (de)serialization (`from_dict`/`to_dict`/draccus/`asdict`); a caller lives in a
+  downstream repo; or a comment names a removal trigger and owner (the
+  AGENTS.md-sanctioned exception). When unsure the old name is purely internal,
+  suppress.
+
+  **Bad example:**
+  ```python
+  class Worker:
+      @property
+      def spec(self):                 # renamed spec → task_spec; 6 in-repo callers left
+          return self.task_spec       # on `.spec` → rename the 6 callers, delete the property.
+  ```
+
+  ## Cross-graph reasoning

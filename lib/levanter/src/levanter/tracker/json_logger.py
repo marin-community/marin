@@ -10,7 +10,7 @@ import jax
 import numpy as np
 
 from levanter.tracker import Tracker
-from levanter.tracker.tracker import TrackerConfig
+from levanter.tracker.tracker import NoopTracker, TrackerConfig
 from levanter.utils.jax_utils import jnp_to_python
 
 
@@ -22,7 +22,7 @@ def _to_jsonable(value: Any):
         return [_to_jsonable(v) for v in value]
     if is_dataclass(value):
         return {field.name: _to_jsonable(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, jax.Array):
+    if isinstance(value, jax.Array | np.ndarray):
         return jnp_to_python(value)
     if isinstance(value, np.integer):
         return int(value)
@@ -126,8 +126,10 @@ class JsonLoggerConfig(TrackerConfig):
     logger_name: str = "levanter.json_logger"
     level: int = logging.INFO
 
-    def init(self, run_id: Optional[str]) -> JsonLoggerTracker:
+    def init(self, run_id: Optional[str]) -> Tracker:
         del run_id
+        if jax.process_index() != 0:
+            return NoopTracker()
         log = logging.getLogger(self.logger_name)
         log.setLevel(self.level)
         return JsonLoggerTracker(log)

@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-time-sleep-in-test
+lane: cruft
+title: '`time.sleep()` in a test body'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** No `time.sleep()` in tests; inject `now=time.time()` or
+  mock time. Sleeping races the SUT instead of controlling it; the test goes
+  flaky under load.
+
+  **When allowed:** Genuinely time-bound integration tests (waiting on a
+  TPU bring-up) marked `@pytest.mark.slow` with a comment naming what the
+  wait is for.
+
+  **Bad example:**
+  ```python
+  def test_eventual_flush():
+      submit_event()
+      time.sleep(0.5)   # inject a clock, or poll with a deadline driven by a fake clock.
+      assert len(log) == 1
+  ```

@@ -21,10 +21,19 @@ from finelog.client import LogClient
 from finelog.client.log_client import Table
 from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_policy_json
 from finelog.embedded import require_embedded_server
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.auth import BearerTokenInjector, TokenProvider
 
+from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
+    CONTROLLER_JOB_CONFIG_NAMESPACE,
+    CONTROLLER_JOB_CONFIG_STORAGE_POLICY,
+    CONTROLLER_JOB_NAMESPACE,
+    CONTROLLER_JOB_STORAGE_POLICY,
+    CONTROLLER_TASK_ATTEMPT_NAMESPACE,
+    CONTROLLER_TASK_ATTEMPT_STORAGE_POLICY,
+    CONTROLLER_TASK_NAMESPACE,
+    CONTROLLER_TASK_STORAGE_POLICY,
     PROFILE_NAMESPACE,
     PROVISIONING_NAMESPACE,
     TASK_EVENT_NAMESPACE,
@@ -32,8 +41,12 @@ from iris.cluster.stats.tables import (
     TASK_STATE_NAMESPACE,
     TASK_STATS_NAMESPACE,
     WORKER_STATS_NAMESPACE,
+    IrisJob,
+    IrisJobConfig,
     IrisProfile,
     IrisProvisioning,
+    IrisTask,
+    IrisTaskAttempt,
     IrisTaskStat,
     IrisTaskState,
     IrisWorkerStat,
@@ -62,7 +75,22 @@ class LogStack:
     worker_stats_table: Table
     # iris.task_state rows from the controller's periodic per-root-job aggregate.
     task_state_table: Table
+    # iris.controller_db__*: durable copies of the controller DB's jobs, job_config, tasks and task_attempts.
+    job_table: Table
+    job_config_table: Table
+    task_table: Table
+    task_attempt_table: Table
     server: Any = None
+
+    def observability_row_tables(self, cluster: str) -> ObservabilityRowTables:
+        """The ``iris.controller_db__*`` tables, writing ``cluster`` on every row."""
+        return ObservabilityRowTables(
+            cluster=cluster,
+            job_table=self.job_table,
+            job_config_table=self.job_config_table,
+            task_table=self.task_table,
+            task_attempt_table=self.task_attempt_table,
+        )
 
     def close(self) -> None:
         self.client.close()
@@ -75,13 +103,13 @@ def build_log_stack(
     log_service_address: str,
     local_log_dir: Path,
     host: str,
-    worker_token: str | None,
+    worker_token_provider: TokenProvider | None,
 ) -> LogStack:
     """Connect to the log service (starting an in-process server if needed) and resolve tables.
 
     When ``log_service_address`` is empty, start a bundled native ``finelog_server``
     under ``local_log_dir`` and connect to it; otherwise connect to the externally
-    hosted server. ``worker_token``, when set, is attached as a bearer token so the
+    hosted server. ``worker_token_provider``, when set, is attached as a bearer token so the
     log server accepts controller-originated PushLogs/FetchLogs.
     """
     server = None
@@ -98,7 +126,7 @@ def build_log_stack(
         address = f"http://{resolve_external_host(host)}:{server.port}"
         logger.info("Local log server ready at %s (log_dir=%s)", address, local_log_dir)
 
-    interceptors = (BearerTokenInjector(StaticTokenProvider(worker_token), "authorization"),) if worker_token else ()
+    interceptors = (BearerTokenInjector(worker_token_provider, "authorization"),) if worker_token_provider else ()
     client = LogClient.connect(address, interceptors=interceptors)
     return LogStack(
         client=client,
@@ -109,5 +137,13 @@ def build_log_stack(
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
         worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
         task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
+        job_table=client.get_table(CONTROLLER_JOB_NAMESPACE, IrisJob, storage_policy=CONTROLLER_JOB_STORAGE_POLICY),
+        job_config_table=client.get_table(
+            CONTROLLER_JOB_CONFIG_NAMESPACE, IrisJobConfig, storage_policy=CONTROLLER_JOB_CONFIG_STORAGE_POLICY
+        ),
+        task_table=client.get_table(CONTROLLER_TASK_NAMESPACE, IrisTask, storage_policy=CONTROLLER_TASK_STORAGE_POLICY),
+        task_attempt_table=client.get_table(
+            CONTROLLER_TASK_ATTEMPT_NAMESPACE, IrisTaskAttempt, storage_policy=CONTROLLER_TASK_ATTEMPT_STORAGE_POLICY
+        ),
         server=server,
     )

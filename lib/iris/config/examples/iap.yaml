@@ -3,9 +3,9 @@
 #
 # The platform/controller/scale_groups below are shown as `local` purely so this
 # file validates and the auth.iap schema is easy to read in isolation. A real
-# IAP deployment fronts a gcp/coreweave controller with the ingress stood up via
-# lib/iris/scripts/iap_gclb.py (GCLB + IAP); copy the `auth:` block into that
-# cluster's config.
+# IAP deployment fronts a GCE controller with the GCLB declared by the aggregate
+# `marin` Pulumi stack (`provisioning.gcp.gclb`); copy the `auth:` block into that
+# cluster's config and add its route to the owning stack.
 #
 # Login + use:
 #   pip install "marin-iris[iap]"          # desktop OAuth flow needs this extra
@@ -44,12 +44,12 @@ auth:
     # programmatic_audiences:
     #   - REPLACE_WITH_IAP_SECURED_CLIENT_ID.apps.googleusercontent.com
     # Audience of IAP's signed X-Goog-IAP-JWT-Assertion header (the backend
-    # service resource path). When set, an IAP-authenticated caller is
+    # service resource path). The Program-first import keeps the existing ID in
+    # this config; when set, an IAP-authenticated caller is
     # authenticated as the asserted email, resolved to its provisioned role:
     # an admin_users / provisioned email gets full access with no `iris login`,
     # an unprovisioned browser gets the read-only `dashboard` role (view only,
-    # no submit/cancel/manage). The deploy script prints this; leave empty to
-    # disable implicit IAP auth.
+    # no submit/cancel/manage). Leave empty to disable implicit IAP auth.
     signed_header_audience: /projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID
   admin_users:
     - russell.power@gmail.com

@@ -19,6 +19,7 @@ top of the existing size / count caps.
 """
 
 from dataclasses import dataclass
+from typing import Self
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 
@@ -49,4 +50,13 @@ class StoragePolicy:
             max_segments=self.max_segments or 0,
             max_bytes=self.max_bytes or 0,
             max_age_seconds=self.max_age_seconds or 0,
+        )
+
+    @classmethod
+    def from_proto(cls, policy: stats_pb2.StoragePolicy) -> Self:
+        """Decode proto3 zero values as inherited defaults."""
+        return cls(
+            max_segments=policy.max_segments or None,
+            max_bytes=policy.max_bytes or None,
+            max_age_seconds=policy.max_age_seconds or None,
         )

@@ -33,6 +33,38 @@ def key():
     return jax.random.PRNGKey(42)
 
 
+@pytest.mark.parametrize(
+    "stage_weights",
+    [
+        {"present": 0.5, "missing": 0.5},
+        [(0, {"present": 1.0}), (10, {"present": 0.5, "missing": 0.5})],
+    ],
+    ids=["initial", "later-stage"],
+)
+def test_missing_weighted_source_raises_instead_of_dropping_its_samples(stage_weights):
+    with pytest.raises(ValueError, match="Weighted datasets are missing.*missing"):
+        MixtureDataset({"present": ListAsyncDataset([1, 2, 3])}, stage_weights, 10, key=key())
+
+
+@pytest.mark.asyncio
+async def test_integer_allocation_does_not_repeat_or_omit_examples():
+    block_size = 64_000
+    split = 1001
+    sources = {
+        "small": ListAsyncDataset(list(range(split))),
+        "large": ListAsyncDataset(list(range(split, block_size))),
+    }
+    mixture = MixtureDataset(
+        sources,
+        {"small": split / block_size, "large": (block_size - split) / block_size},
+        block_size,
+        key=key(),
+        randomize_blocks=False,
+    )
+    samples = await mixture.get_batch(list(range(block_size)))
+    assert sorted(samples) == list(range(block_size))
+
+
 class InfiniteCounterDataset(AsyncDataset[int]):
     async def async_len(self) -> int:
         raise ValueError("Infinite dataset has no length")
@@ -232,6 +264,16 @@ async def test_mixture_dataset_restart_rejects_empty_finite_dataset():
         await mixture_ds.get_batch([0])
 
 
+@pytest.mark.parametrize(
+    "start_offsets",
+    [{"ds1": 1, "ds2": 2}, {"ds1": 1, "ds2": 2, "ds3": 3, "typo": 4}],
+    ids=["missing", "extra"],
+)
+def test_mixture_dataset_start_offsets_must_name_exactly_the_active_datasets(start_offsets):
+    with pytest.raises(ValueError, match="start_offsets must name exactly"):
+        MixtureDataset(datasets(), weights(), block_size(), key=key(), start_offsets=start_offsets)
+
+
 @pytest.mark.asyncio
 async def test_mixture_dataset_respects_weights():
     w = weights()
@@ -295,6 +337,16 @@ def test_rescale_mixture_schedule_for_batch_schedule():
     expected_schedule = [(0, {"ds1": 0.5, "ds2": 0.5}), (100, {"ds1": 0.2, "ds2": 0.8})]
 
     assert rescaled_schedule == expected_schedule
+
+
+def test_rescale_mixture_schedule_counts_from_the_start_step():
+    mixture_schedule = [(0, {"ds1": 0.5, "ds2": 0.5}), (3, {"ds1": 0.2, "ds2": 0.8})]
+    batch_schedule = BatchSchedule([ScheduleStep(start=0, value=10), ScheduleStep(start=5, value=20)])
+
+    rescaled_schedule = rescale_mixture_schedule_for_batch_schedule(mixture_schedule, batch_schedule, start_step=4)
+
+    # The run starts at offset 40; stage step 3 is step 7, at offset 5 * 10 + 2 * 20 = 90.
+    assert rescaled_schedule == [(0, {"ds1": 0.5, "ds2": 0.5}), (50, {"ds1": 0.2, "ds2": 0.8})]
 
 
 # --- ConcatDataset tests ---

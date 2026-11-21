@@ -1,0 +1,31 @@
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+body { font: 16px system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 20px; }
+pre { white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 6px; border-bottom: 1px solid #aaa; }
+</style>
+<h1>__TITLE__</h1>
+<p>Counts describe candidate documents after the cluster split. Removed documents have a direct containment match.</p>
+<h2>Counts</h2><pre id="stats"></pre>
+<h2>Duplicate rule</h2><pre id="rule"></pre>
+<h2>Text limits</h2><pre id="limits"></pre>
+<h2>MinHash parameters</h2><pre id="params"></pre>
+<h2>Removed documents by source</h2>
+<table><thead><tr><th>Source</th><th>Removed</th></tr></thead><tbody id="sources"></tbody></table>
+<script>
+const data = __DATA__;
+for (const key of ["stats", "rule", "limits", "params"]) {
+  document.getElementById(key).textContent = JSON.stringify(data[key], null, 2);
+}
+for (const source of data.sources) {
+  const row = document.createElement("tr");
+  for (const value of [source.source, source.removed.toLocaleString()]) {
+    const cell = document.createElement("td");
+    cell.textContent = value;
+    row.appendChild(cell);
+  }
+  document.getElementById("sources").appendChild(row);
+}
+</script>

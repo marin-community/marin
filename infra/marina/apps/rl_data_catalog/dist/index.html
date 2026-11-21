@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sources · RL Data Atlas</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="common.js" defer></script><script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./" aria-current="page">By source</a><a href="curriculum.html">By curriculum</a></nav>
+  <section class="page-heading">
+    <div><h1>Sources</h1><p id="message" role="status" aria-live="polite">Loading sources…</p></div>
+    <button id="export" class="secondary">Export CSV</button>
+  </section>
+  <form id="filters" class="browse-controls" role="search">
+    <label class="search-control"><span>Find a source</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
+    <label><span>Catalog</span><select id="origin"><option value="all">All catalogs</option></select></label>
+    <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unprocessed">Not processed</option></select></label>
+    <label><span>Quality</span><select id="quality"><option value="all">All quality</option><option value="good">Good</option><option value="some_issues">Some issues</option><option value="bad">Bad</option><option value="unknown">Unknown</option><option value="unassessed">Not assessed</option></select></label>
+    <button id="clear-filters" class="text-button" type="button">Clear filters</button>
+  </form>
+  <section class="catalog">
+    <div class="table-scroller" tabindex="0" aria-label="Source inventory">
+      <table class="source-table"><caption class="sr-only">Individual sources, example counts, quality, and curriculum coverage</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
+      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or clear the filters.</p></div>
+    </div>
+    <footer class="table-footer"><span id="visible-count"></span><span>Open a source for details and evidence.</span></footer>
+  </section>
+  <details class="data-notes"><summary>About examples and quality</summary><p>Examples are successfully converted tasks before curation admission. A dash means the source has no processed examples in this release. Quality is the current sampled assessment of retained tasks; older reviews are in the archive.</p><p id="snapshot-info"></p></details>
+</main>
+<dialog id="details" aria-labelledby="detail-name">
+  <div class="drawer-header"><span>Source details</span><button id="close-details" class="close" aria-label="Close source details">×</button></div>
+  <h2 id="detail-name"></h2><p id="detail-notes"></p>
+  <div id="detail-links" class="detail-links"></div><div id="detail-fields"></div>
+</dialog>
+</body>
+</html>

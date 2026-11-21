@@ -3,7 +3,7 @@
 
 """Tests for worker environment probing."""
 
-import sys
+import io
 
 import iris.cluster.worker.env_probe as env_probe
 import pytest
@@ -11,13 +11,13 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
-    DefaultEnvironmentProvider,
     HardwareProbe,
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
     check_worker_health,
     construct_worker_id,
+    probe_hardware,
 )
 from iris.cluster.worker.worker import Worker, WorkerConfig
 
@@ -43,16 +43,15 @@ def _make_hardware(**overrides) -> HardwareProbe:
     return HardwareProbe(**defaults)
 
 
-def test_environment_provider_basic_probe(monkeypatch):
-    """Test that DefaultEnvironmentProvider produces valid WorkerMetadata."""
+def test_hardware_probe_builds_valid_metadata(monkeypatch):
+    """Probing real system resources produces valid WorkerMetadata."""
     monkeypatch.delenv("TPU_NAME", raising=False)
     monkeypatch.delenv("TPU_TYPE", raising=False)
     monkeypatch.delenv("TPU_WORKER_HOSTNAMES", raising=False)
     monkeypatch.delenv("TPU_WORKER_ID", raising=False)
     monkeypatch.delenv("IRIS_WORKER_ATTRIBUTES", raising=False)
 
-    provider = DefaultEnvironmentProvider()
-    metadata = provider.probe()
+    metadata = build_worker_metadata(probe_hardware())
 
     assert metadata.hostname
     assert metadata.ip_address
@@ -68,8 +67,8 @@ def test_environment_provider_basic_probe(monkeypatch):
     assert metadata.attributes[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
 
 
-def test_environment_provider_probes_tpu_metadata(monkeypatch):
-    """Provider should resolve TPU diagnostic metadata from GCP metadata service."""
+def test_hardware_probe_resolves_tpu_metadata(monkeypatch):
+    """Hardware probing resolves TPU diagnostic metadata from the GCP metadata service."""
     monkeypatch.delenv("TPU_NAME", raising=False)
     monkeypatch.delenv("TPU_TYPE", raising=False)
     monkeypatch.delenv("TPU_WORKER_HOSTNAMES", raising=False)
@@ -86,9 +85,9 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
         "attributes/tpu-env": "CHIPS_PER_HOST_BOUNDS: '2,2,1'\nOTHER: 'x'",
         "scheduling/preemptible": "FALSE",
     }
-    monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda key: metadata_values.get(key))
+    monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda key, **_: metadata_values.get(key))
 
-    metadata = DefaultEnvironmentProvider().probe()
+    metadata = build_worker_metadata(probe_hardware())
 
     # Diagnostic TPU fields are populated from probes
     assert metadata.tpu_name == "test-slice"
@@ -99,7 +98,26 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
     assert metadata.device.tpu.variant == "v5litepod-16"
 
 
-def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch):
+def test_hardware_probe_tpu_with_blank_worker_index_raises(monkeypatch):
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
+    monkeypatch.setattr(env_probe, "probe_outbound_ip", lambda: "10.0.0.1")
+    metadata_values = {
+        "attributes/accelerator-type": "v4-2048",
+        "name": "test-slice-w-3",
+        "attributes/agent-worker-number": "",
+    }
+
+    def open_metadata(request, **_kwargs):
+        path = request.full_url.split("/instance/", maxsplit=1)[1]
+        return io.BytesIO(metadata_values[path].encode())
+
+    monkeypatch.setattr(env_probe.urllib.request, "urlopen", open_metadata)
+
+    with pytest.raises(ValueError):
+        probe_hardware()
+
+
+def test_hardware_probe_ignores_tpu_env_vars_without_metadata(monkeypatch):
     """TPU env vars alone should not trigger TPU detection."""
     monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: False)
     monkeypatch.setenv("TPU_NAME", "env-slice")
@@ -109,7 +127,7 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     monkeypatch.setenv("TPU_CHIPS_PER_HOST_BOUNDS", "1,2,1")
     monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda _key: None)
 
-    metadata = DefaultEnvironmentProvider().probe()
+    metadata = build_worker_metadata(probe_hardware())
 
     assert metadata.tpu_name == ""
     assert metadata.tpu_worker_id == ""
@@ -332,11 +350,26 @@ def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
 # --- Network metrics ---
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
-def test_read_net_dev_bytes_returns_nonzero_on_linux():
+_PROC_NET_DEV = """\
+Inter-|   Receive                                    |  Transmit
+ face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed
+    lo: 9999999 1000 0 0 0 0 0 0 9999999 1000 0 0 0 0 0 0
+  eth0:  123456  100 0 0 0 0 0 0  654321  200 0 0 0 0 0 0
+  eth1:    1000   10 0 0 0 0 0 0    2000   20 0 0 0 0 0 0
+"""
+
+
+def test_read_net_dev_bytes_sums_non_loopback_interfaces(monkeypatch):
+    def fake_open(path, *args, **kwargs):
+        assert path == "/proc/net/dev"
+        return io.StringIO(_PROC_NET_DEV)
+
+    monkeypatch.setattr(env_probe, "open", fake_open, raising=False)
+
     recv, sent = _read_net_dev_bytes()
-    assert recv >= 0
-    assert sent >= 0
+
+    assert recv == 123456 + 1000
+    assert sent == 654321 + 2000
 
 
 def test_host_metrics_collector_network_writes_cumulative_bytes(monkeypatch):

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from iris.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
@@ -14,15 +15,15 @@ from rigging.redaction import REDACTED_VALUE
 from scripts.ci import iris_monitor
 
 
-class FakeIrisClient:
+class FakeClusterClient:
     def __init__(self, jobs: list[job_pb2.JobStatus]) -> None:
         self.jobs = jobs
         self.terminated: list[str] = []
 
-    def list_jobs(self, *, prefix: str) -> list[job_pb2.JobStatus]:
-        return [job for job in self.jobs if job.job_id.startswith(prefix)]
+    def list_jobs(self, *, query, **_kwargs):
+        return [job for job in self.jobs if job.job_id.startswith(query.job_id_prefix)]
 
-    def terminate(self, job_id: JobName) -> None:
+    def terminate_job(self, job_id: JobName) -> None:
         self.terminated.append(job_id.to_wire())
 
 
@@ -136,7 +137,7 @@ def test_wait_resource_exhaustion_shutdown_is_a_successful_warning(
     pending_reason: str,
 ) -> None:
     parent_job_id = "/runner/canary"
-    client = FakeIrisClient(
+    cluster = FakeClusterClient(
         [
             job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
             job_pb2.JobStatus(
@@ -146,6 +147,7 @@ def test_wait_resource_exhaustion_shutdown_is_a_successful_warning(
             ),
         ]
     )
+    client = IrisClient(cluster)
     github_output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
     monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(client))
@@ -170,7 +172,7 @@ def test_wait_resource_exhaustion_shutdown_is_a_successful_warning(
 
     assert result.exit_code == 0, result.output
     assert "::warning title=Canary resource exhaustion::" in result.output
-    assert client.terminated == [parent_job_id]
+    assert cluster.terminated == [parent_job_id]
     assert github_output.read_text().splitlines() == [
         f"job_id={parent_job_id}",
         "state=RESOURCE_EXHAUSTED",
@@ -198,7 +200,7 @@ def test_wait_non_silent_conditions_still_escalate(
     pending_reason: str,
 ) -> None:
     parent_job_id = "/runner/canary"
-    client = FakeIrisClient(
+    cluster = FakeClusterClient(
         [
             job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
             job_pb2.JobStatus(
@@ -208,6 +210,7 @@ def test_wait_non_silent_conditions_still_escalate(
             ),
         ]
     )
+    client = IrisClient(cluster)
     monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(client))
 
     result = CliRunner().invoke(
@@ -228,4 +231,101 @@ def test_wait_non_silent_conditions_still_escalate(
     )
 
     assert result.exit_code != 0
-    assert client.terminated == []
+    assert cluster.terminated == []
+
+
+def test_child_wait_timeout_shutdown_cancels_a_gang_whose_tasks_never_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A Kueue-gated gang reports a RUNNING job while every task is still BUILDING.
+    parent_job_id = "/runner/hero-canary"
+    cluster = FakeClusterClient(
+        [
+            job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
+            job_pb2.JobStatus(
+                job_id=f"{parent_job_id}/train",
+                state=job_pb2.JOB_STATE_RUNNING,
+                task_state_counts={"building": 16},
+            ),
+        ]
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(IrisClient(cluster)))
+
+    result = CliRunner().invoke(
+        iris_monitor.cli,
+        [
+            "wait",
+            "--job-id",
+            parent_job_id,
+            "--controller-url",
+            "http://iris.test",
+            "--poll-interval",
+            "0.01",
+            "--child-wait-timeout",
+            "0",
+            "--child-wait-timeout-policy",
+            "shutdown",
+            "--resource-exhaustion-policy",
+            "shutdown",
+            "--github-output",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert cluster.terminated == [parent_job_id]
+    assert "resource_exhausted=true" in github_output.read_text()
+
+
+@pytest.mark.parametrize("sequential", [False, True])
+def test_child_queue_deadline_resets_for_next_child_but_not_a_running_one(monkeypatch, sequential):
+    parent_id = "/runner/parity"
+    clock = {"now": 0.0}
+
+    class ProgressingCluster(FakeClusterClient):
+        def list_jobs(self, **kwargs):
+            finished = not sequential and clock["now"] >= 5
+            self.jobs = [
+                job_pb2.JobStatus(
+                    job_id=parent_id,
+                    state=job_pb2.JOB_STATE_SUCCEEDED if finished else job_pb2.JOB_STATE_RUNNING,
+                    has_children=True,
+                ),
+                job_pb2.JobStatus(
+                    job_id=f"{parent_id}/first",
+                    state=(
+                        job_pb2.JOB_STATE_SUCCEEDED
+                        if finished or (sequential and clock["now"] >= 2)
+                        else job_pb2.JOB_STATE_RUNNING
+                    ),
+                    task_state_counts={"running": 1},
+                ),
+            ]
+            if sequential and clock["now"] >= 2:
+                self.jobs.append(job_pb2.JobStatus(job_id=f"{parent_id}/second", state=job_pb2.JOB_STATE_PENDING))
+            return super().list_jobs(**kwargs)
+
+    cluster = ProgressingCluster([])
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **kwargs: nullcontext(IrisClient(cluster)))
+    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(iris_monitor.time, "sleep", lambda duration: clock.update(now=clock["now"] + duration))
+    result = iris_monitor.wait_for_child_job(
+        parent_id,
+        iris_config=None,
+        controller_url="http://iris.test",
+        poll_interval=1,
+        child_wait_timeout=2,
+        repo_root=Path.cwd(),
+        resource_exhaustion_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+        child_wait_timeout_policy=iris_monitor.ResourceExhaustionPolicy.SHUTDOWN,
+    )
+    if sequential:
+        assert cluster.terminated == [parent_id]
+        assert result.resource_exhaustion_reason is not None
+        assert clock["now"] >= 4  # The second child received its own full queue budget.
+    else:
+        assert cluster.terminated == []
+        assert result.status.state.value == "succeeded"
+        assert result.resource_exhaustion_reason is None
+        assert clock["now"] >= 5  # A running single child outlives the two-second queue budget.

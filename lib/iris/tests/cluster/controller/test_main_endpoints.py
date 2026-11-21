@@ -10,8 +10,40 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from iris.cluster.config import ClusterFinelogConfig, EndpointSpec, IrisClusterConfig
+from iris.cluster.config import (
+    AuthConfig,
+    ClusterFinelogConfig,
+    EndpointSpec,
+    IrisClusterConfig,
+    StorageConfig,
+    UserBudgetTier,
+)
+from iris.cluster.controller import main as controller_main
 from iris.cluster.controller.main import LOG_SERVER_ENDPOINT_NAME, _resolve_cluster_endpoints
+from iris.rpc import job_pb2
+from rigging.secrets import SecretResolutionError
+
+
+@pytest.mark.parametrize("directory", [None, "not-json", "{}", '{"human-999":"*@example.com"}'])
+def test_controller_with_unresolved_budget_leaves_persistent_state_untouched(
+    tmp_path: Path, monkeypatch, directory: str | None
+) -> None:
+    state = tmp_path / "controller-state"
+    remote = tmp_path / "remote-state"
+    if directory is None:
+        monkeypatch.delenv("TEST_PRINCIPAL_DIRECTORY", raising=False)
+    else:
+        monkeypatch.setenv("TEST_PRINCIPAL_DIRECTORY", directory)
+    config = IrisClusterConfig(
+        auth=AuthConfig(principal_directory="env:TEST_PRINCIPAL_DIRECTORY"),
+        storage=StorageConfig(remote_state_dir=remote.as_uri()),
+        user_budgets=[UserBudgetTier(user_ids=["principal:human-999"], max_band=job_pb2.PRIORITY_BAND_BATCH)],
+    )
+
+    with pytest.raises((ValueError, SecretResolutionError)):
+        controller_main.run_controller_serve(config, state_dir=state, fresh=True)
+    assert not state.exists()
+    assert not remote.exists()
 
 
 def test_resolve_does_not_require_log_server():

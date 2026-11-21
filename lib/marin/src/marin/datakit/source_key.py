@@ -6,7 +6,8 @@
 from typing import Annotated
 
 from pydantic import BeforeValidator, PlainSerializer, ValidationInfo
-from rigging.filesystem import StoragePath, StoreType, data_buckets, marin_prefix, prefix_join
+from rigging.filesystem.cluster_config import StoreType, data_buckets, marin_prefix
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY
 

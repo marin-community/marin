@@ -11,13 +11,22 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 1. Import Optax and OptimizerConfig:
 
     ```python
+    from dataclasses import dataclass
+
     import optax
-    from levanter.optim import OptimizerConfig
+    from levanter.optim.config import OptimizerConfig
     ```
 
-2. Define a new optimizer by subclassing `OptimizerConfig` and add optimizer-specific parameters as class variables:
+    Import `OptimizerConfig` from `levanter.optim.config`, not from the `levanter.optim`
+    package: the package body is a docstring so that draccus discovers each optimizer
+    submodule lazily, and it re-exports nothing.
+
+2. Define a new optimizer by subclassing `OptimizerConfig`, add optimizer-specific parameters as
+   fields, and register the class under an identifier. `OptimizerConfig` is a frozen dataclass, so
+   the subclass must be frozen too:
     ```python
-    @dataclass
+    @OptimizerConfig.register_subclass("adamax")
+    @dataclass(frozen=True)
     class AdamaxConfig(OptimizerConfig):
         beta1: float = 0.9
         beta2: float = 0.95
@@ -31,14 +40,6 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 
     ```python
     def build(self, num_train_steps):
-        print(f"Building optimizer: {self.__class__.__name__}")
-
-        # Register the optimizer class if not already registered
-        try:
-            OptimizerConfig.register_subclass("adamax")(AdamaxConfig)
-        except ValueError:
-            pass
-
         def _optimizer(learning_rate):
             components = []
 
@@ -79,10 +80,6 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 
     Note that `optax.inject_hyperparams` is a wrapper in Optax that can be used to pass schedules (or stateful hyperparameters) into the optimizer. This also allows us to log the learning rate in the tracker.
 
-    !!! note
-
-        You should also register your optimizer class with an identifier, as shown above.
-
 4. Use the optimizer in your training script. You can instantiate and pass it directly into your training config:
 
     ```python
@@ -92,11 +89,23 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
         epsilon=1e-8,
         max_grad_norm=1.0,
         weight_decay=0.1,
-        lr=1e-4
+        learning_rate=1e-4,
     )
     ```
 
-    and use it in `TrainLmConfig`:
+    In a Marin experiment, pass it as `train_lm`'s `optimizer` argument:
+
+    ```python
+    from marin.experiment.train import train_lm
+
+    checkpoint = train_lm(
+        ...
+        optimizer=optimizer,
+        ...
+    )
+    ```
+
+    To drive Levanter directly instead, use `TrainLmConfig`:
 
     ```python
     from levanter.main.train_lm import TrainLmConfig
@@ -107,25 +116,6 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
         ...
     )
     ```
-
-    Or inside a `SimpleTrainConfig`:
-
-    ```python
-    train_config = SimpleTrainConfig(
-        ...
-        optimizer_config=AdamaxConfig(
-            beta1=0.9,
-            beta2=0.95,
-            epsilon=1e-8,
-            max_grad_norm=1.0,
-            weight_decay=0.1,
-            lr=1e-4
-        ),
-        ...
-    )
-    ```
-
-    Then pass it into `default_train`, which will set the optimizer config correctly in the training step.
 
 That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
 

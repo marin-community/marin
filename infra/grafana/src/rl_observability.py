@@ -1,0 +1,527 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bounded RL run, node-GPU and recent-run datasets."""
+
+from dashboard_dataset import (
+    DashboardDataset,
+    SourceQuery,
+    bounded_bucket_ms,
+    validate_time_window,
+    validate_value,
+    validate_values,
+)
+from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, sql_string, sql_values
+
+RL_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+RL_GPU_MAX_WINDOW_MS = VLLM_DETAIL_MAX_WINDOW_MS
+RL_STRAGGLER_BUCKET_MS = 30 * 60 * 1000
+RL_MAX_POINTS = 360
+RL_MIN_BUCKET_MS = 30_000
+RL_MAX_CLUSTERS = 16
+RL_MAX_CLUSTER_LENGTH = 128
+RL_MAX_RUN_LENGTH = 512
+RL_MAX_CORE_ROWS = 100_000
+RL_MAX_ENGINE_ROWS = 100_000
+RL_MAX_GPU_ROWS = 50_000
+RL_MAX_RESULT_ROWS = 100_000
+RL_RECENT_MAX_ROWS = 20
+RL_RECENT_WINDOW_PADDING_MS = 60_000
+RL_GPU_ZOOM_MESSAGE = "Zoom to 7h or less for GPU detail."
+
+_CORE_NAMES = (
+    "phase_duration_seconds",
+    "ray_object_store_available_memory",
+    "ray_object_store_used_memory",
+    "ray_spill_manager_objects_bytes",
+)
+
+
+_DCGM_SERIES = (
+    "gpu_utilization_percent",
+    "gpu_sm_active_ratio",
+    "gpu_tensor_active_ratio",
+    "gpu_memory_used_bytes",
+    "gpu_nvlink_receive_bytes_per_second",
+    "gpu_pcie_receive_bytes_per_second",
+)
+_DCGM_COUNTERS = ("gpu_pcie_replay_errors",)
+_DCGM_DEVICE = ("gpu_power_watts", *_DCGM_COUNTERS)
+
+
+def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, end_ms: int) -> str:
+    """Attribute selected node buckets to the run with the most observations across all runs."""
+    return f"""selected_nodes AS (
+    SELECT DISTINCT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           node_name AS node
+    FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl' AND run_id = {run_sql} AND node_name <> ''
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+), run_node AS (
+    SELECT origin_cluster, t, node, run
+    FROM (
+        SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+               {bucket} AS t,
+               node_name AS node,
+               run_id AS run,
+               ROW_NUMBER() OVER (
+                   PARTITION BY COALESCE(NULLIF(cluster, ''), 'marin'), {bucket}, node_name
+                   ORDER BY COUNT(*) DESC, run_id
+               ) AS rn
+        FROM selected_nodes
+        JOIN "telemetry_v1.marinskyrl"
+          ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+         AND node_name = selected_nodes.node
+        WHERE service = 'marinskyrl' AND node_name <> ''
+          AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+        GROUP BY 1, 2, 3, 4
+    ) WHERE rn = 1
+)"""
+
+
+def rl_overview_dataset(
+    clusters: tuple[str, ...],
+    run: str,
+    start_ms: int,
+    end_ms: int,
+    requested_bucket_ms: int,
+    view: str | None = None,
+) -> DashboardDataset:
+    """Build the requested phase, Ray or engine source group, or all sources when view is None."""
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
+    validate_value("run", run, max_length=RL_MAX_RUN_LENGTH)
+    bucket_ms = bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=RL_MAX_WINDOW_MS,
+        max_window_error="RL overview range must not exceed 7 days",
+        min_bucket_ms=RL_MIN_BUCKET_MS,
+        max_points=RL_MAX_POINTS,
+    )
+    bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+    straggler_bucket = f"{start_ms} + (t - {start_ms}) - (t - {start_ms}) % {RL_STRAGGLER_BUCKET_MS}"
+    clusters_sql = sql_values(clusters)
+    run_sql = sql_string(run)
+    core_names = _CORE_NAMES
+    core_filter = ""
+    if view in ("critical_path", "straggler"):
+        core_names = ("phase_duration_seconds",)
+        core_filter = (
+            "\n      AND json_get(attributes_json, 'clock_domain') = 'critical_path'"
+            "\n      AND json_get(attributes_json, 'phase') IN ('rollout_or_inference_wait', 'train_step')"
+        )
+    elif view in ("ray_object_store", "ray_spill"):
+        core_names = tuple(name for name in _CORE_NAMES if name != "phase_duration_seconds")
+    core_sql = f"""
+WITH selected AS (
+    SELECT timestamp_ms AS t,
+           {bucket} AS bucket_t,
+           name,
+           execution_uid,
+           json_get(attributes_json, 'phase') AS phase,
+           json_get(attributes_json, 'outcome') AS outcome,
+           json_get(attributes_json, 'clock_domain') AS clock_domain,
+           json_get(attributes_json, 'metric_source') AS metric_source,
+           json_get(attributes_json, 'source_temporality') AS source_temporality,
+           json_get(attributes_json, 'state') AS state,
+           value
+    FROM "telemetry_v1.marinskyrl"
+    WHERE run_id = {run_sql}
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+      AND name IN ({sql_values(core_names)}){core_filter}
+), aggregates AS (
+    SELECT 'aggregate' AS statistic,
+       bucket_t AS t, name, execution_uid, phase, outcome, clock_domain,
+       metric_source, source_temporality, state,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(value) AS max_value,
+       CAST(NULL AS DOUBLE) AS p50,
+       CAST(NULL AS DOUBLE) AS p99
+    FROM selected
+    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10
+), phase_percentiles AS (
+    SELECT 'percentile' AS statistic,
+       {straggler_bucket} AS t, name,
+       CAST(NULL AS VARCHAR) AS execution_uid,
+       phase,
+       CAST(NULL AS VARCHAR) AS outcome,
+       clock_domain,
+       CAST(NULL AS VARCHAR) AS metric_source,
+       CAST(NULL AS VARCHAR) AS source_temporality,
+       CAST(NULL AS VARCHAR) AS state,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(value) AS max_value,
+       approx_percentile_cont(value, 0.5) AS p50,
+       approx_percentile_cont(value, 0.99) AS p99
+    FROM selected
+    WHERE name = 'phase_duration_seconds'
+      AND clock_domain = 'critical_path'
+      AND phase = 'rollout_or_inference_wait'
+    GROUP BY {straggler_bucket}, name, phase, clock_domain
+)
+SELECT * FROM aggregates
+UNION ALL SELECT * FROM phase_percentiles
+ORDER BY t, name, execution_uid
+LIMIT {RL_MAX_CORE_ROWS + 1}
+""".strip()
+    engine_sql = f"""
+WITH engine_rows AS (
+    SELECT * FROM "telemetry_v1.vllm" WHERE service = 'vllm'
+    UNION ALL
+    SELECT * FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm'
+), selected AS (
+    SELECT timestamp_ms, seq, service, run_id, execution_uid, node_name, process_index,
+           name, resource_attributes_json, attributes_json, value,
+           value - LAG(value) OVER (
+               PARTITION BY service, run_id, execution_uid, node_name, process_index,
+                            name, resource_attributes_json, attributes_json
+               ORDER BY timestamp_ms, seq
+           ) AS delta
+    FROM engine_rows
+    WHERE run_id = {run_sql}
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+      AND (name IN ('generation_tokens_total', 'prompt_tokens_total', 'num_requests_running',
+                    'num_requests_waiting', 'kv_cache_usage_perc', 'prefix_cache_hits_total',
+                    'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
+           OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
+)
+SELECT {bucket} AS t,
+       name,
+       json_get(attributes_json, 'finished_reason') AS finished_reason,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       SUM(GREATEST(delta, 0)) FILTER (WHERE delta IS NOT NULL) AS delta_sum
+FROM selected
+GROUP BY 1, 2, 3
+ORDER BY t, name, finished_reason
+LIMIT {RL_MAX_ENGINE_ROWS + 1}
+""".strip()
+    views = {
+        "critical_path": (
+            """
+SELECT t, phase || ' · ' || outcome AS series,
+       SUM(sum_value) / NULLIF(SUM(sample_count), 0) AS value
+FROM core
+WHERE statistic = 'aggregate'
+  AND name = 'phase_duration_seconds' AND clock_domain = 'critical_path'
+  AND phase IN ('rollout_or_inference_wait', 'train_step')
+GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "engine_tokens": (
+            f"""
+SELECT t,
+       SUM(CASE WHEN name = 'generation_tokens_total' THEN delta_sum END) / ({bucket_ms} / 1000.0) AS generation,
+       SUM(CASE WHEN name = 'prompt_tokens_total' THEN delta_sum END) / ({bucket_ms} / 1000.0) AS prompt
+FROM engine WHERE delta_sum IS NOT NULL GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "engine_queue": (
+            """
+SELECT t,
+       SUM(CASE WHEN name = 'num_requests_running' THEN sum_value END)
+           / NULLIF(SUM(CASE WHEN name = 'num_requests_running' THEN sample_count END), 0) AS running,
+       SUM(CASE WHEN name = 'num_requests_waiting' THEN sum_value END)
+           / NULLIF(SUM(CASE WHEN name = 'num_requests_waiting' THEN sample_count END), 0) AS waiting,
+       SUM(CASE WHEN name = 'kv_cache_usage_perc' THEN sum_value END)
+           / NULLIF(SUM(CASE WHEN name = 'kv_cache_usage_perc' THEN sample_count END), 0) AS kv_cache
+FROM engine GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "engine_latency": (
+            """
+SELECT t, replace(replace(name, '_sum', ''), '_count', '') AS series,
+       SUM(CASE WHEN name LIKE '%_sum' THEN delta_sum END)
+           / NULLIF(SUM(CASE WHEN name LIKE '%_count' THEN delta_sum END), 0) AS value
+FROM engine WHERE delta_sum IS NOT NULL AND (name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
+GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "engine_prefix_cache": (
+            """
+SELECT t, 'hit rate' AS series,
+       SUM(CASE WHEN name = 'prefix_cache_hits_total' THEN delta_sum END)
+           / NULLIF(SUM(CASE WHEN name = 'prefix_cache_queries_total' THEN delta_sum END), 0) AS value
+FROM engine WHERE delta_sum IS NOT NULL GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "engine_preemptions": (
+            "SELECT t, 'preemptions' AS series, SUM(delta_sum) AS value FROM engine "
+            "WHERE name = 'num_preemptions_total' AND delta_sum IS NOT NULL GROUP BY 1, 2 ORDER BY 1"
+        ),
+        "straggler": (
+            "SELECT t, 'p99 / p50' AS series, p99 / NULLIF(p50, 0) AS value FROM core "
+            "WHERE statistic = 'percentile' AND name = 'phase_duration_seconds' "
+            "AND clock_domain = 'critical_path' AND phase = 'rollout_or_inference_wait' ORDER BY 1"
+        ),
+        "engine_finish": (
+            "SELECT t, finished_reason AS series, SUM(delta_sum) AS value FROM engine "
+            "WHERE name = 'request_success_total' AND finished_reason IS NOT NULL "
+            "AND delta_sum IS NOT NULL GROUP BY 1, 2 ORDER BY 1"
+        ),
+        "ray_object_store": (
+            """
+SELECT t,
+       SUM(CASE WHEN name = 'ray_object_store_used_memory' THEN sum_value END)
+           / NULLIF(SUM(CASE WHEN name IN ('ray_object_store_used_memory',
+                                           'ray_object_store_available_memory')
+                             THEN sum_value END), 0)
+           AS object_store_used_fraction
+FROM core WHERE metric_source = 'ray' AND source_temporality = 'current_snapshot'
+GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "ray_spill": (
+            """
+SELECT t, COALESCE(state, 'unlabelled') AS series,
+       SUM(sum_value) / NULLIF(SUM(sample_count), 0) AS value
+FROM core
+WHERE name = 'ray_spill_manager_objects_bytes' AND metric_source = 'ray'
+  AND source_temporality = 'current_snapshot'
+GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+    }
+    sources = {
+        "core": SourceQuery("core", core_sql, RL_MAX_CORE_ROWS),
+        "engine": SourceQuery("engine", engine_sql, RL_MAX_ENGINE_ROWS),
+    }
+    source_group = "all"
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown RL overview view {view!r}")
+        source_groups = {
+            "critical_path": "phases",
+            "straggler": "phases",
+            "ray_object_store": "ray",
+            "ray_spill": "ray",
+        }
+        source_group = source_groups.get(view, "engine")
+        source_name = "engine" if source_group == "engine" else "core"
+        sources = {source_name: sources[source_name]}
+        views = {name: sql for name, sql in views.items() if source_groups.get(name, "engine") == source_group}
+    return DashboardDataset(
+        name="RL overview",
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms, source_group),
+        sources=tuple(sources.values()),
+        setup_sql=(),
+        views=views,
+        max_result_rows=RL_MAX_RESULT_ROWS,
+    )
+
+
+def rl_gpu_dataset(
+    clusters: tuple[str, ...],
+    run: str,
+    start_ms: int,
+    end_ms: int,
+    requested_bucket_ms: int,
+    view: str | None = None,
+) -> DashboardDataset:
+    """Build node-GPU detail or a zoom message for ranges longer than seven hours."""
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
+    validate_value("run", run, max_length=RL_MAX_RUN_LENGTH)
+    bucket_ms = bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=RL_MAX_WINDOW_MS,
+        max_window_error="RL GPU range must not exceed 7 days",
+        min_bucket_ms=RL_MIN_BUCKET_MS,
+        max_points=RL_MAX_POINTS,
+    )
+    if end_ms - start_ms > RL_GPU_MAX_WINDOW_MS:
+        message = sql_string(RL_GPU_ZOOM_MESSAGE)
+        status = f"'range_limit' AS status, {message} AS message"
+        series = f"SELECT {start_ms} AS t, {message} AS series, CAST(NULL AS DOUBLE) AS value, {status}"
+        views = {
+            "gpu_utilization": series,
+            "sm_activity": series,
+            "gpu_memory": (
+                f"SELECT {start_ms} AS t, CAST(NULL AS DOUBLE) AS mean_used_bytes, "
+                f"CAST(NULL AS DOUBLE) AS peak_used_bytes, {status}"
+            ),
+            "fabric_receive": series,
+            "pcie_faults": (
+                f"SELECT {message} AS node, CAST(NULL AS VARCHAR) AS gpu, "
+                "CAST(NULL AS DOUBLE) AS peak_power_watts, CAST(NULL AS DOUBLE) AS pcie_replay_increase, "
+                f"{status}"
+            ),
+        }
+        if view is not None and view not in views:
+            raise ValueError(f"unknown RL GPU view {view!r}")
+        return DashboardDataset(
+            name="RL GPU",
+            cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+            sources=(),
+            setup_sql=(),
+            views=views,
+            max_result_rows=RL_MAX_RESULT_ROWS,
+        )
+    bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+    clusters_sql = sql_values(clusters)
+    run_sql = sql_string(run)
+    dcgm_scope = f"timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"
+    device_identity_sql = f"""COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu"""
+    node_agent_from_sql = """FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node"""
+    series_names = _DCGM_SERIES
+    if view is not None:
+        series_names = tuple(name for name in _DCGM_SERIES if name != "gpu_utilization_percent")
+    gpu_sql = f"""
+WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
+    SELECT {device_identity_sql},
+           name,
+           value,
+           LAG(value) OVER (
+               PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
+               ORDER BY timestamp_ms, seq
+           ) AS previous_value
+    {node_agent_from_sql}
+    WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
+), gpu AS (
+    SELECT {device_identity_sql},
+           name,
+           AVG(value) AS mean_value,
+           MAX(value) AS max_value
+    {node_agent_from_sql}
+    WHERE name IN ({sql_values((*series_names, "gpu_power_watts"))}) AND {dcgm_scope}
+    GROUP BY 1, 2, 3, 4, 5
+    UNION ALL BY NAME
+    SELECT origin_cluster, t, node, gpu, name,
+           SUM(CASE WHEN value < previous_value THEN value ELSE value - previous_value END) AS increase
+    FROM counter_samples
+    GROUP BY 1, 2, 3, 4, 5
+), attributed AS (
+    SELECT gpu.* FROM run_node JOIN gpu USING (origin_cluster, t, node)
+    WHERE run_node.run = {run_sql}
+)
+SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
+       t, name, node, gpu,
+       CASE WHEN GROUPING(node) = 1 THEN AVG(mean_value) END AS mean_value,
+       CASE WHEN GROUPING(node) = 1 THEN SUM(mean_value) END AS total_value,
+       MAX(max_value) AS max_value,
+       CASE WHEN GROUPING(node) = 0 THEN SUM(increase) END AS increase
+FROM attributed
+GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
+HAVING (GROUPING(node) = 1 AND name IN ({sql_values(series_names)}))
+    OR (GROUPING(node) = 0 AND name IN ({sql_values(_DCGM_DEVICE)}))
+ORDER BY statistic, t, name
+LIMIT {RL_MAX_GPU_ROWS + 1}
+""".strip()
+    views = {
+        "sm_activity": (
+            "SELECT t, CASE name WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor pipe active' END AS series, "
+            "mean_value * 100.0 AS value FROM gpu WHERE statistic = 'series' "
+            "AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio') ORDER BY 1"
+        ),
+        "gpu_memory": (
+            "SELECT t, mean_value AS mean_used_bytes, max_value AS peak_used_bytes FROM gpu "
+            "WHERE statistic = 'series' AND name = 'gpu_memory_used_bytes' ORDER BY 1"
+        ),
+        "fabric_receive": (
+            "SELECT t, CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink receive' "
+            "ELSE 'PCIe receive' END AS series, total_value AS value FROM gpu WHERE statistic = 'series' "
+            "AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_pcie_receive_bytes_per_second') ORDER BY 1"
+        ),
+        "pcie_faults": (
+            f"""
+SELECT node, gpu,
+       MAX(CASE WHEN name = 'gpu_power_watts' THEN max_value END) AS peak_power_watts,
+       SUM(CASE WHEN name = 'gpu_pcie_replay_errors' THEN increase END) AS pcie_replay_increase
+FROM gpu WHERE statistic = 'device'
+GROUP BY 1, 2
+HAVING SUM(CASE WHEN name IN ({sql_values(_DCGM_COUNTERS)}) THEN increase END) > 0
+ORDER BY 4 DESC, node, gpu
+""".strip()
+        ),
+        "gpu_utilization": (
+            f"SELECT t, {run_sql} AS series, mean_value AS value FROM gpu "
+            "WHERE statistic = 'series' AND name = 'gpu_utilization_percent' ORDER BY t"
+        ),
+    }
+    source_group = "all"
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown RL GPU view {view!r}")
+        source_group = "utilization" if view == "gpu_utilization" else "detail"
+        views = {name: sql for name, sql in views.items() if (name == "gpu_utilization") == (view == "gpu_utilization")}
+        if view == "gpu_utilization":
+            # Average each device before combining devices, so scrape frequency
+            # cannot give one GPU or node more weight in the run-wide mean.
+            gpu_sql = f"""
+WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, gpu AS (
+    SELECT {device_identity_sql},
+           AVG(value) AS mean_value
+    {node_agent_from_sql}
+    WHERE name = 'gpu_utilization_percent' AND {dcgm_scope}
+    GROUP BY 1, 2, 3, 4
+)
+SELECT 'series' AS statistic, t, 'gpu_utilization_percent' AS name, AVG(mean_value) AS mean_value
+FROM run_node JOIN gpu USING (origin_cluster, t, node)
+WHERE run_node.run = {run_sql}
+GROUP BY t ORDER BY t
+LIMIT {RL_MAX_GPU_ROWS + 1}
+""".strip()
+    return DashboardDataset(
+        name="RL GPU",
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms, source_group),
+        sources=(SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),),
+        setup_sql=(),
+        views=views,
+        max_result_rows=RL_MAX_RESULT_ROWS,
+    )
+
+
+def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
+    """List recent RL runs with their training type and classification observation windows."""
+    validate_time_window(
+        start_ms,
+        end_ms,
+        max_window_ms=RL_MAX_WINDOW_MS,
+        max_window_error="recent RL run range must not exceed 7 days",
+    )
+    sql = f"""
+SELECT run_id AS run,
+       COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+       MAX(value) FILTER (WHERE name = 'policy_step') AS step,
+       COUNT(DISTINCT execution_uid) FILTER (WHERE name = 'policy_step') AS attempts,
+       GREATEST({start_ms}, MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS}) AS window_from_ms,
+       LEAST({end_ms}, MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS}) AS window_to_ms,
+       MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
+       MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
+FROM "telemetry_v1.marinskyrl"
+WHERE service = 'marinskyrl' AND name IN ('lifecycle', 'policy_step', 'rollout_call') AND run_id IS NOT NULL
+  AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+GROUP BY 1, 2 HAVING COUNT(*) FILTER (WHERE name = 'policy_step') > 0 ORDER BY last_seen DESC
+LIMIT {RL_RECENT_MAX_ROWS}
+""".strip()
+    return DashboardDataset(
+        name="Recent RL runs",
+        cache_key=(start_ms, end_ms),
+        sources=(SourceQuery("recent", sql, RL_RECENT_MAX_ROWS),),
+        setup_sql=(),
+        views={
+            "recent": (
+                """
+SELECT run, origin_cluster AS cluster, step, attempts,
+       window_from_ms, window_to_ms, last_seen AS "last seen",
+       CASE WHEN is_async = 1 THEN 'async' ELSE 'sync' END AS type
+FROM recent ORDER BY last_seen DESC
+""".strip()
+            )
+        },
+        max_result_rows=RL_RECENT_MAX_ROWS,
+    )

@@ -1,0 +1,18 @@
+# Async variant of snowball_mopd_ultra_32k.yaml; shared model, teacher and context settings live there.
+# Tested checkpoint allocation: 768 GB/node for this Snowball layout with CPU optimizer offload.
+defaults:
+- snowball_mopd_ultra_32k
+- _self_
+trainer:
+  algorithm:
+    policy_loss_type: importance_sampling
+    off_policy_correction: tis
+  max_steps: 4
+  ckpt_interval: 4
+  rollout_buffer:
+    max_staleness_steps: 1
+    batch_policy: rolling
+    max_in_flight: 96
+teacher_routing:
+  opd:
+    revision: snowball-mopd-ultra-async-32k-v1

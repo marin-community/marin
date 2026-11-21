@@ -11,21 +11,35 @@ browser fetches use relative URLs (``new URL(path, location.href)``) — the pro
 does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
 would escape the prefix.
 
-``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
-slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
-events end to end; brokered sessions return buffered JSON and reject streaming.
+``/v1/*`` requests and the root ``/tokenize`` route are reverse-proxied to whichever
+serving backend runs on the slice (see :mod:`marin.inference.backend`). Harbor uses
+``/tokenize`` for context accounting with the live model's chat template.
+Direct sessions preserve server-sent events end to end; brokered sessions return
+buffered JSON and reject streaming.
+``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
+``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
+command in a reconstructed ShellSim agent workspace. ``/web-search`` runs the
+optional Parallel web search tool when the server holds a Parallel API key; ``/info``
+reports whether it does. ``/chat-shares`` stores bounded, process-local snapshots
+for short chat links. ``/feedback`` saves a model-feedback report to Marin storage
+when the server has a feedback prefix.
 """
 
+import asyncio
 import dataclasses
 import importlib.resources
+import json
 import logging
+import secrets
 import socket
 import threading
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
+import shellsim
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -33,9 +47,26 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from marin.inference.chat_template_protocol import ChatTemplateProtocol
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
+from marin.inference.model_feedback import save_feedback_report
+from marin.inference.python_tool_routes import (
+    invoke_tool_response,
+    python_tool_definitions_response,
+    shell_workspace_response,
+)
+from marin.inference.repository_snapshot import repository_snapshot_response
+from marin.inference.shellsim_runtime import ToolRuntime
+from marin.inference.web_search import ParallelWebSearch, web_search_response
 
 logger = logging.getLogger(__name__)
+
+MAX_SHARED_CHAT_BYTES = 512 * 1024
+MAX_SHARED_CHATS = 128
+SHARED_CHAT_ID_BYTES = 12
+MAX_FEEDBACK_BYTES = 1024 * 1024
+# Per serving process; bounds what one dashboard URL holder can write to storage.
+MAX_FEEDBACK_REPORTS = 256
 
 
 @dataclass(frozen=True)
@@ -48,9 +79,80 @@ class ServingInfo:
     max_model_len: int | None
     dtype: str
     has_chat_template: bool
-    tpu_type: str
     endpoint: str
     streaming: bool = True
+    chat_template_protocol: ChatTemplateProtocol = field(default_factory=ChatTemplateProtocol)
+
+
+async def _json_object_body(request: Request, max_bytes: int, label: str) -> dict[str, object] | Response:
+    """Read a bounded JSON object body, or return the error response for the caller to send."""
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            return JSONResponse({"error": f"{label} is too large"}, status_code=413)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse({"error": f"{label} must be valid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": f"{label} must be a JSON object"}, status_code=400)
+    return payload
+
+
+@dataclass
+class _ChatShareStore:
+    max_bytes: int = MAX_SHARED_CHAT_BYTES
+    max_chats: int = MAX_SHARED_CHATS
+    id_bytes: int = SHARED_CHAT_ID_BYTES
+    chats: OrderedDict[str, bytes] = field(default_factory=OrderedDict)
+
+    async def create_response(self, request: Request) -> Response:
+        payload = await _json_object_body(request, self.max_bytes, "shared chat")
+        if isinstance(payload, Response):
+            return payload
+
+        share_id = secrets.token_urlsafe(self.id_bytes)
+        while share_id in self.chats:
+            share_id = secrets.token_urlsafe(self.id_bytes)
+        self.chats[share_id] = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if len(self.chats) > self.max_chats:
+            self.chats.popitem(last=False)
+        return JSONResponse({"id": share_id}, status_code=201, headers={"cache-control": "no-store"})
+
+    async def get_response(self, request: Request) -> Response:
+        payload = self.chats.get(request.path_params["share_id"])
+        if payload is None:
+            return JSONResponse({"error": "shared chat not found"}, status_code=404)
+        return Response(payload, media_type="application/json", headers={"cache-control": "no-store"})
+
+
+@dataclass
+class _FeedbackStore:
+    prefix: str
+    info: ServingInfo
+    max_bytes: int = MAX_FEEDBACK_BYTES
+    max_reports: int = MAX_FEEDBACK_REPORTS
+    saved: int = 0
+
+    async def create_response(self, request: Request) -> Response:
+        if self.saved >= self.max_reports:
+            return JSONResponse({"error": "this server has reached its feedback report limit"}, status_code=429)
+        report = await _json_object_body(request, self.max_bytes, "feedback report")
+        if isinstance(report, Response):
+            return report
+        if not str(report.get("description", "")).strip():
+            return JSONResponse({"error": "feedback report needs a description"}, status_code=400)
+        # Count before the write so concurrent requests cannot pass the limit together.
+        self.saved += 1
+        try:
+            location = await asyncio.to_thread(save_feedback_report, self.prefix, report, dataclasses.asdict(self.info))
+        except Exception:
+            self.saved -= 1
+            logger.exception("Could not save feedback report under %s", self.prefix)
+            return JSONResponse({"error": "could not save the feedback report"}, status_code=502)
+        logger.info("Saved feedback report %s", location)
+        return JSONResponse({"location": location}, status_code=201)
 
 
 def build_dashboard_app(
@@ -59,33 +161,47 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
+    worker_metrics_url: str | None = None,
+    shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
+    web_search: ParallelWebSearch | None = None,
+    feedback_prefix: str | None = None,
 ) -> Starlette:
-    """Build the Starlette app fronting a local serving backend.
+    """Build the dashboard and reverse proxy for a local serving backend.
 
     Args:
         upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
+        worker_metrics_url: Direct vLLM metrics URL when the API uses a router.
+        shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
+        web_search: Parallel credentials for the optional ``web_search`` tool; None disables it.
+        feedback_prefix: Storage prefix for model-feedback reports; None disables ``/feedback``.
     """
     state: dict[str, httpx.AsyncClient] = {}
+    chat_shares = _ChatShareStore()
+    feedback = None if feedback_prefix is None else _FeedbackStore(feedback_prefix, info)
 
     @asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
         state["client"] = httpx.AsyncClient(
             base_url=upstream_base_url,
             timeout=httpx.Timeout(request_timeout_seconds, connect=10.0),
         )
-        try:
-            yield
-        finally:
-            await state.pop("client").aclose()
+        async with httpx.AsyncClient() as web_search_client:
+            app.state.web_search_client = web_search_client
+            try:
+                yield
+            finally:
+                await state.pop("client").aclose()
 
     async def index(_request: Request) -> Response:
         return HTMLResponse(DASHBOARD_HTML)
 
     async def serving_info(_request: Request) -> Response:
-        return JSONResponse(dataclasses.asdict(info))
+        return JSONResponse(
+            {**dataclasses.asdict(info), "web_search": web_search is not None, "feedback": feedback is not None}
+        )
 
     async def health(_request: Request) -> Response:
         client = state["client"]
@@ -105,7 +221,7 @@ def build_dashboard_app(
         fwd_headers = forwardable_request_headers(request.headers)
         upstream_request = client.build_request(
             request.method,
-            request.url.path,
+            worker_metrics_url if request.url.path == "/metrics" and worker_metrics_url else request.url.path,
             params=dict(request.query_params),
             content=body,
             headers=fwd_headers,
@@ -131,16 +247,29 @@ def build_dashboard_app(
             media_type=upstream_response.headers.get("content-type"),
         )
 
-    return Starlette(
+    app = Starlette(
         routes=[
             Route("/", index),
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
+            Route("/chat-shares", chat_shares.create_response, methods=["POST"]),
+            Route("/chat-shares/{share_id}", chat_shares.get_response),
+            *([Route("/feedback", feedback.create_response, methods=["POST"])] if feedback else []),
+            Route("/tools", python_tool_definitions_response, methods=["POST"]),
+            Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
+            Route("/shell", shell_workspace_response, methods=["POST"]),
+            Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
+            Route("/web-search", web_search_response, methods=["POST"]),
+            Route("/metrics", proxy, methods=["GET"]),
+            Route("/tokenize", proxy, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,
     )
+    app.state.tool_runtime = ToolRuntime(shellsim_catalog)
+    app.state.web_search = web_search
+    return app
 
 
 def bind_serving_socket(host: str, port: int) -> socket.socket:

@@ -9,22 +9,22 @@ orchestrator opens a tunnel to the named Iris cluster and submits each compute
 stage as an Iris job using the Python client (no subprocess into the iris CLI),
 then publishes the result locally.
 
-  1. Scan stage    — Iris coordinator + N worker replicas walk every GCS
+  1. Scan stage: Iris coordinator + N worker replicas walk every bucket
                      prefix and write consolidated parquet segments to
                      STAGING_DIR (delegates to ``run_distributed`` in
-                     ``scan_gcs.py``).
-  2. Dedup stage   — Iris coordinator job runs a Zephyr ``group_by`` to
+                     ``scan_fs.py``).
+  2. Dedup stage: Iris coordinator job runs a Zephyr ``group_by`` to
                      collapse the raw parquets into one row per (bucket, name)
                      under STAGING_DIR/deduped. Pipeline construction lives
                      in this file (see ``_dedup_stage``).
-  3. Report stage  — Iris coordinator job reads the deduped parquets, builds a
+  3. Report stage: Iris coordinator job reads the deduped parquets, builds a
                      DuckDB rollup + week-over-week diff (see ``render_report``)
                      and writes ``report.md`` back into STAGING_DIR.
-  4. Publish       — Local: fetch ``report.md``, optionally push a gist
+  4. Publish: fetch ``report.md`` locally, optionally push a gist
                      (``--gist public|secret|none``) and/or post a summary with
                      the biggest increases/decreases to Discord (``--discord``).
 
-Prereqs (local / CI runner):
+Prereqs:
     - ``gh`` authenticated as the gist owner (for ``--gist``)
     - ``gcloud`` with GCS read access to fetch ``report.md`` back
     - The named cluster's controller is reachable (same tunnel machinery as
@@ -36,7 +36,6 @@ Usage:
     ./scripts/ops/storage/generate_report.py --workers 64
     ./scripts/ops/storage/generate_report.py --skip-scan          # reuse existing parquets
     ./scripts/ops/storage/generate_report.py --skip-scan --skip-dedup --skip-report  # just re-publish
-    # Weekly automation (see .github/workflows/ops-storage-report.yaml):
     ./scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 """
 
@@ -49,12 +48,13 @@ from pathlib import Path
 import click
 from fray.types import ResourceConfig
 from iris.cli.connect import open_iris_client
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
 from scripts.ops.storage.render_report import (
@@ -69,7 +69,7 @@ from scripts.ops.storage.render_report import (
     snapshot_path,
     write_snapshot,
 )
-from scripts.ops.storage.scan_gcs import run_distributed
+from scripts.ops.storage.scan_fs import run_distributed
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-scan"
 # Stable location for week-over-week snapshots, independent of the (often
@@ -95,7 +95,6 @@ def _scan_stage(staging_dir: str, workers: int) -> None:
     run_distributed(
         buckets=MARIN_BUCKETS,
         num_workers=workers,
-        project=None,
         staging_dir=staging_dir,
     )
 
@@ -284,6 +283,7 @@ def _submit_callable(
     cpu: float,
     memory: str,
     disk: str,
+    timeout: Duration,
     constraints: list[Constraint] | None = None,
 ) -> None:
     """Submit a Python callable as an Iris job and stream logs until completion."""
@@ -293,6 +293,7 @@ def _submit_callable(
         resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk),
         environment=EnvironmentSpec(env_vars={}),
         constraints=constraints,
+        timeout=timeout,
     )
     print(f"Submitted {name}: {job.job_id}", file=sys.stderr)
     job.wait(stream_logs=True, timeout=float("inf"))
@@ -312,6 +313,13 @@ def _submit_callable(
     help="GCS path used for parquet segments + report.md.",
 )
 @click.option("--workers", default=128, show_default=True, type=int, help="Number of Iris worker replicas for the scan.")
+@click.option(
+    "--job-timeout",
+    default=6 * 60 * 60,
+    show_default=True,
+    type=click.IntRange(min=1, max=24 * 60 * 60),
+    help="Maximum runtime in seconds for each Iris stage.",
+)
 @click.option(
     "--dedup-shards", default=64, show_default=True, type=int, help="Number of output shards for the dedup stage."
 )
@@ -356,6 +364,7 @@ def main(
     cluster: str,
     staging_dir: str,
     workers: int,
+    job_timeout: int,
     dedup_shards: int,
     skip_scan: bool,
     skip_dedup: bool,
@@ -372,6 +381,7 @@ def main(
     report_path = f"{staging_dir}/report.md"
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     run_id = run_id or today
+    timeout = Duration.from_seconds(job_timeout)
 
     with open_iris_client(cluster_name=cluster, workspace=REPO_ROOT) as client:
         if not skip_scan:
@@ -392,6 +402,7 @@ def main(
                 cpu=1,
                 memory="12GB",
                 disk="30GB",
+                timeout=timeout,
                 constraints=[preemptible_constraint(False)],
             )
 
@@ -405,6 +416,7 @@ def main(
                 cpu=1,
                 memory="4GB",
                 disk="30GB",
+                timeout=timeout,
             )
 
         if not skip_report:
@@ -423,6 +435,7 @@ def main(
                 memory="64GB",
                 # ~10 GB deduped download + DuckDB spill headroom.
                 disk="100GB",
+                timeout=timeout,
             )
 
     if gist_visibility == "none" and not discord_channel:

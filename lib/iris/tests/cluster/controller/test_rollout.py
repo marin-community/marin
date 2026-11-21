@@ -17,7 +17,7 @@ from iris.cluster.controller.rollout import (
     write_rollout_record,
 )
 from iris.cluster.controller.writes import meta_value_set
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 _MARKER_KEY = "test_rollout_marker"
 

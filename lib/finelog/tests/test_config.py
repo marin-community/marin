@@ -14,6 +14,7 @@ from finelog.deploy.config import (
     ForwardingConfig,
     GcpDeployment,
     JwtAuthLayer,
+    K8sCacheStorage,
     K8sDeployment,
     _bundled_config_dir,
     auth_policy_json,
@@ -134,6 +135,28 @@ def test_derive_endpoint_uri_k8s() -> None:
     uri, metadata = derive_endpoint_uri(cfg)
     assert uri == "k8s://finelog-x.iris"
     assert metadata == {"port": "10001"}
+
+
+def test_load_config_rejects_pvc_name_with_node_local_storage(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "node-local.yaml"
+    _write_config(
+        cfg_path,
+        """
+        name: finelog-node-local
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: s3://bucket/test
+        deployment:
+          k8s:
+            namespace: iris
+            cache_storage: node-local
+            storage_gb: 250
+            cache_pvc_name: finelog-cache
+        """,
+    )
+
+    with pytest.raises(ValueError, match="cache_pvc_name cannot be set with node-local cache storage"):
+        load_finelog_config(str(cfg_path))
 
 
 def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
@@ -301,9 +324,11 @@ def test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts() -> None:
         assert cluster in trusted, f"{name}: forwards as {cluster!r}, which no bundled hub's jwt layer trusts"
 
 
-def test_bundled_forwarding_configs_deploy_on_k8s() -> None:
-    """The gcp backend refuses forwarding — it can only reach the server through
-    world-readable startup-script metadata, which is no place for a signing key."""
+def test_bundled_forwarding_configs_use_node_local_k8s_storage() -> None:
+    """Keep every regional forwarder's best-effort buffer on node-local storage."""
     for name, cfg in _bundled_configs().items():
         if cfg.forwarding is not None:
             assert cfg.deployment.k8s is not None, f"{name}: forwards but deploys on gcp"
+            assert (
+                cfg.deployment.k8s.cache_storage is K8sCacheStorage.NODE_LOCAL
+            ), f"{name}: forwarding cache uses shared persistent storage"

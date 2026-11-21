@@ -23,6 +23,11 @@ from levanter.utils.profile_dirs import (
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
+    DEFAULT_BREAKDOWN_MODE,
+    DEFAULT_HOT_OP_LIMIT,
+    DEFAULT_WARMUP_STEPS,
+    BreakdownMode,
+    TraceSummaryContext,
     load_trace_payload,
     parse_complete_events,
     sha256_for_path,
@@ -142,9 +147,9 @@ def summarize_profile_artifact(
     profile_dir: Path,
     *,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
-    breakdown_mode: str = "exclusive_per_track",
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
+    breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE,
 ) -> ProfileSummary:
     """
     Summarize a downloaded profile directory into the normalized schema.
@@ -183,9 +188,9 @@ def summarize_trace(
     trace_path: Path,
     *,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
-    breakdown_mode: str = "exclusive_per_track",
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
+    breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE,
 ) -> ProfileSummary:
     """
     Summarize a single trace file into the normalized profile schema.
@@ -197,25 +202,25 @@ def summarize_trace(
         hot_op_limit: Maximum number of hot ops to include.
     """
     payload = load_trace_payload(trace_path)
-    display_time_unit = payload.get("displayTimeUnit")
-    all_events = payload.get("traceEvents", [])
-    if not isinstance(all_events, list):
-        raise ValueError(f"Trace at '{trace_path}' does not contain a list under 'traceEvents'.")
+    display_time_unit = payload.displayTimeUnit
+    all_events = payload.traceEvents
 
     parsed_events, process_names, thread_names = parse_complete_events(all_events)
     return summarize_complete_events(
         parsed_events,
-        source_format="perfetto_trace_json",
-        source_path=trace_path,
-        display_time_unit=display_time_unit if isinstance(display_time_unit, str) else None,
-        num_events_total=len(all_events),
-        process_names=process_names,
-        thread_names=thread_names,
-        trace_sha256=sha256_for_path(trace_path),
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
+        context=TraceSummaryContext(
+            source_format="perfetto_trace_json",
+            source_path=trace_path,
+            display_time_unit=display_time_unit,
+            num_events_total=len(all_events),
+            process_names=process_names,
+            thread_names=thread_names,
+            trace_sha256=sha256_for_path(trace_path),
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        ),
     )
 
 

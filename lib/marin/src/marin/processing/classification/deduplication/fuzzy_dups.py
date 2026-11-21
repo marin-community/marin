@@ -5,9 +5,9 @@
 
 Loads MinHash bucket attrs from each input, runs LSH-graph connected
 components globally across all inputs, and writes per-source attribute trees
-annotating every non-singleton cluster member. Each source's attr tree is
-co-partitioned with its underlying ``NormalizedData``, so
-:mod:`marin.processing.classification.consolidate` can join them directly.
+that identify every non-singleton cluster member. Each tree is co-partitioned
+with its underlying ``NormalizedData``. The full-text verification job consumes
+this candidate artifact.
 
 Per-document attr rows have schema::
 
@@ -17,12 +17,9 @@ Per-document attr rows have schema::
       is_cluster_canonical: bool,  # True for exactly one member per cluster
     }
 
-Rows are emitted for every member of a non-singleton cluster (canonical +
-non-canonicals). Singletons get no row, preserving the
-``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
-canonical-selection policy live in consolidate (e.g. the default
-``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
-than being baked in here.
+Rows are emitted for every member of a non-singleton cluster. Singletons get
+no row. The ``is_cluster_canonical`` field records the connected-components
+canonical for cluster diagnostics. It is not a verified duplicate decision.
 
 Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
 global dedup: re-running this job over the union of all per-dataset MinHash
@@ -31,12 +28,16 @@ artifacts produces fresh markers without re-reading any source text.
 
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
+import pyarrow as pa
+import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
+from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
+from zephyr.readers import iter_parquet_row_groups
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -47,14 +48,13 @@ from marin.datakit.copartitioned import (
     write_copartitioned_source_manifest,
 )
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
-from marin.execution.artifact import read_artifact
-from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
 FUZZY_DUPS_ATTR_DATA_VERSION = 4
+DEFAULT_CC_MAX_ITERATIONS = 10
+_MISSING_FILE_WRITERS = 32
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -151,15 +151,17 @@ def _strip_cc_prefix(record_id: str) -> str:
 def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
     """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
     for entry in entries:
-        for batch in _load_batches(entry.input_path, columns=["id", "buckets"]):
+        for batch in iter_parquet_row_groups(entry.input_path, columns=["id", "buckets"]):
             ids = batch["id"]
-            buckets_col = batch["buckets"]
+            # String-encoded and uint64 attrs must map to the same shuffle key: str and int
+            # keys never meet in the LSH group_by, so mixing them would silently drop links.
+            buckets_col = pc.cast(batch["buckets"], pa.list_(pa.uint64()))
             for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
                 if not doc_buckets.is_valid:
                     continue
                 cc_id = _cc_id(entry.source_tag, doc_id.as_py())
                 for b in doc_buckets.as_py():
-                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry.file_idx}
+                    yield {"bucket": b, "id": cc_id, "file_idx": entry.file_idx}
 
 
 # Key under which ``entries`` is staged via ``ZephyrContext.put`` for the
@@ -170,11 +172,21 @@ def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
 # instead means each worker fetches and caches the list once.
 _SHARED_ENTRIES_KEY = "fuzzy_dups_entries"
 
+_COUNTER_PREFIX = "dedup/fuzzy/document"
 
-def _make_per_shard_writer(counter_prefix: str):
+
+def _is_cluster_member(record: dict) -> bool:
+    """Filter predicate that drops singletons before the per-shard shuffle and counts them."""
+    if record["is_singleton"]:
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/singletons_skipped", 1)
+        return False
+    return True
+
+
+def _make_per_shard_writer():
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
-    Skips singletons entirely. For every non-singleton cluster member, writes
+    For every cluster member, writes
     ``{id, dup_cluster_id, is_cluster_canonical}``. Rows are
     already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
 
@@ -193,14 +205,11 @@ def _make_per_shard_writer(counter_prefix: str):
         def cluster_member_rows():
             nonlocal cluster_members, canonicals
             for record in records:
-                if record["is_singleton"]:
-                    counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", 1)
-                    continue
                 cluster_members += 1
-                counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", 1)
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", 1)
                 if record["is_canonical"]:
                     canonicals += 1
-                    counters.pipeline.update_counter(f"{counter_prefix}/canonicals", 1)
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/canonicals", 1)
                 yield {
                     "id": record["id"],
                     "dup_cluster_id": record["component_id"],
@@ -223,7 +232,7 @@ def compute_fuzzy_dups_attrs(
     *,
     inputs: list[MinHashAttrData],
     output_path: str,
-    cc_max_iterations: int = 10,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     cc_resume: bool = False,
     max_parallelism: int = MAX_IRIS_WORKER_REPLICAS,
     worker_resources: ResourceConfig | None = None,
@@ -244,8 +253,9 @@ def compute_fuzzy_dups_attrs(
 
     Exactly one member per cluster has ``is_cluster_canonical=True`` — the
     one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
-    Consolidate may honor that flag (default policy) or ignore it and apply
-    a custom per-``dup_cluster_id`` policy.
+    The full-text verifier compares this deterministic canonical first. It can
+    then compare retained local representatives that share LSH buckets. It does
+    not use this flag alone as a duplicate decision.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
@@ -337,7 +347,7 @@ def compute_fuzzy_dups_attrs(
         )
 
     ctx.put(_SHARED_ENTRIES_KEY, entries)
-    aggregator = _make_per_shard_writer(counter_prefix="dedup/fuzzy/document")
+    aggregator = _make_per_shard_writer()
 
     # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
     # so `component_id == id_norm` cheaply identifies the natural canonical.
@@ -355,6 +365,7 @@ def compute_fuzzy_dups_attrs(
                 "file_idx": r["file_idx"],
             }
         )
+        .filter(_is_cluster_member)
         .group_by(
             lambda r: r["file_idx"],
             sort_by=lambda r: r["id"],
@@ -369,6 +380,15 @@ def compute_fuzzy_dups_attrs(
         reduce_task_resources=reduce_task_resources,
     )
     shard_results = outcome.results
+    # A shard with no cluster members never reaches the reducer, so it gets its
+    # empty attribute file here; consumers resolve every shard to one. Each
+    # remote write is several round trips, so serial writes cost minutes at
+    # production shard counts.
+    written = {r["file_idx"] for r in shard_results}
+    missing = [entry.output_path for entry in entries if entry.file_idx not in written]
+    if missing:
+        with ThreadPoolExecutor(max_workers=_MISSING_FILE_WRITERS) as pool:
+            list(pool.map(lambda path: write_parquet_file([], path), missing))
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     # Aggregate per-source counters across shards for the final artifact.
@@ -387,31 +407,4 @@ def compute_fuzzy_dups_attrs(
         params=params,
         sources=sources,
         counters=dict(outcome.counters),
-    )
-
-
-def compute_fuzzy_dups_attrs_step(
-    *,
-    name: str,
-    minhash_steps: list[StepSpec],
-    cc_max_iterations: int = 10,
-    max_parallelism: int,
-    worker_resources: ResourceConfig | None = None,
-    coordinator_resources: ResourceConfig | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
-    return StepSpec(
-        name=name,
-        deps=list(minhash_steps),
-        fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
-            output_path=output_path,
-            cc_max_iterations=cc_max_iterations,
-            max_parallelism=max_parallelism,
-            worker_resources=worker_resources,
-            coordinator_resources=coordinator_resources,
-        ),
-        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": cc_max_iterations},
-        override_output_path=override_output_path,
     )

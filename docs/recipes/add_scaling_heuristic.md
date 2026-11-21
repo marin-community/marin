@@ -23,7 +23,8 @@ architecture. Dataset changes can usually reuse an existing heuristic.
 - **Validated scaling rules** confirmed at ~1e19 FLOPs and across the full isoflop range.
 - A **scaling ladder** training optimal models at larger budgets.
 - **Canary promotion** in `experiments/ferries/canary_ferry.py`.
-- A **running report** in `.agents/logbooks/<topic>.md`.
+- A **running experiment record** in the coordinating issue, W&B report, or
+  durable session channel.
 
 ## Key reference files
 
@@ -50,7 +51,7 @@ lib/marin/src/marin/scaling_laws/
 
 First, make sure the idea looks promising at one reference scale. Good signs include:
 
-- A Grug variant experiment (see `docs/recipes/change_grug.md`).
+- A Grug variant experiment (see `.agents/skills/change-grug/SKILL.md`).
 - A quick A/B at about 130M parameters against the current best setup.
 - Published results or supporting theory.
 

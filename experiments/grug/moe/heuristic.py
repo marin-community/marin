@@ -231,6 +231,7 @@ class MoeHeuristic:
             sliding_window=2048,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
+            cross_entropy_implementation="xla_fast_bwd" if hidden_size == 1280 else None,
         )
 
 

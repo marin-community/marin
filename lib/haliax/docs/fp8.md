@@ -142,6 +142,10 @@ you will get the gradient computation as normal, but you'll also get the updated
 This updated state needs to directly replace the state in the module (rather than be used for a gradient step), which is
 why you need to use the [haliax.quantization.partition_for_grad_overwrite][]
 
+During microbatch gradient accumulation, [haliax.quantization.accumulate_gradients][] sums ordinary gradients and
+delegates gradient-carried state to [haliax.quantization.CustomGradientAccumulation.accumulate][]. FP8 accumulation
+takes the maximum of the amax histories observed across microbatches and does not average scale or history state.
+
 The FP8 `dot_general` module is implemented in [haliax.quantization.Fp8DotGeneralOp][]. It's actually not that complicated:
 
 1) It holds a scaling factor and history of maximum values for each of (lhs, rhs, output) and updates them based on the
@@ -164,13 +168,14 @@ information on how it works.
 ## Functions
 
 ::: haliax.quantization.quantize_linear_layers
+::: haliax.quantization.accumulate_gradients
 ::: haliax.quantization.partition_for_grad_overwrite
 ::: haliax.quantization.apply_updates
 
 
 ## Interfaces
 ::: haliax.quantization.DotGeneralOp
-::: haliax.quantization.OverwriteWithGradient
+::: haliax.quantization.CustomGradientAccumulation
 
 ## Modules
 

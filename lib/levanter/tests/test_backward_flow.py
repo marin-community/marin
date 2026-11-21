@@ -4,7 +4,7 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from haliax.nn import ArrayStacked
+from levanter.layers.stacked import ArrayStacked
 
 import levanter.tracker
 from levanter.analysis.backward_flow import (

@@ -1,0 +1,10 @@
+name: finelog
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  # Use the shared repo venv, which contains finelog, iac, and the Pulumi providers.
+  # Run `uv sync --all-packages --extra deploy` before previewing or updating.
+  options:
+    virtualenv: ../../.venv
+description: Per-cluster Finelog servers on Kubernetes.

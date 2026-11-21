@@ -182,7 +182,7 @@ impl Bloom {
                 continue;
             }
             // If the other object is a Bloom, use the bitwise union
-            if let Ok(other) = other.downcast::<Bloom>() {
+            if let Ok(other) = other.cast::<Bloom>() {
                 let other = other.try_borrow()?;
                 self_.__ior__(&other)?;
             }
@@ -214,7 +214,7 @@ impl Bloom {
                 continue;
             }
             // If the other object is a Bloom, use the bitwise intersection
-            if let Ok(other) = other.downcast::<Bloom>() {
+            if let Ok(other) = other.cast::<Bloom>() {
                 let other = other.try_borrow()?;
                 self_.__iand__(&other)?;
             }
@@ -389,7 +389,7 @@ impl Bloom {
         other: &Bound<'_, PyAny>,
         f: impl FnOnce(&Bloom) -> PyResult<O>,
     ) -> PyResult<O> {
-        match other.downcast::<Bloom>() {
+        match other.cast::<Bloom>() {
             Ok(o) => {
                 let o = o.try_borrow()?;
                 check_compatible(self, &o)?;

@@ -43,7 +43,7 @@ def run_wedge_repro(config: WedgeReproConfig) -> None:
     # (PGLE / cuda_async allocator / command-buffer env) runs only in this child, not in
     # the CPU coordinator's import graph, and always before the JAX backend init in
     # initialize_jax() below. Matches minrepro_launch, which defers the same imports.
-    from iris.runtime.jax_init import initialize_jax  # noqa: PLC0415
+    from iris.jax.init import initialize_jax  # noqa: PLC0415
 
     from experiments.grug.recovery.minimal_wedge_repro import main  # noqa: PLC0415
 

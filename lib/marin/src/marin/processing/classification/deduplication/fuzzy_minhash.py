@@ -23,15 +23,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
-from marin.execution.artifact import read_artifact
-from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 MINHASH_ATTR_DATA_VERSION = 3
@@ -254,44 +252,4 @@ def compute_minhash_attrs(
         source_key=datakit_source_key(source.main_output_dir),
         attr_dir=attr_dir,
         counters=dict(outcome.counters),
-    )
-
-
-def compute_minhash_attrs_step(
-    *,
-    name: str,
-    normalize: StepSpec,
-    num_perms: int = 286,
-    num_bands: int = 26,
-    ngram_size: int = 5,
-    text_cap_chars: int | None = 500_000,
-    seed: int = 42,
-    worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that computes MinHash attrs from a normalize step."""
-    return StepSpec(
-        name=name,
-        deps=[normalize],
-        fn=lambda output_path: compute_minhash_attrs(
-            source=read_artifact(normalize.output_path, NormalizedData),
-            output_path=output_path,
-            num_perms=num_perms,
-            num_bands=num_bands,
-            ngram_size=ngram_size,
-            text_cap_chars=text_cap_chars,
-            seed=seed,
-            worker_resources=worker_resources,
-            max_workers=max_workers,
-        ),
-        hash_attrs={
-            "artifact_version": MINHASH_ATTR_DATA_VERSION,
-            "num_perms": num_perms,
-            "num_bands": num_bands,
-            "ngram_size": ngram_size,
-            "text_cap_chars": text_cap_chars,
-            "seed": seed,
-        },
-        override_output_path=override_output_path,
     )

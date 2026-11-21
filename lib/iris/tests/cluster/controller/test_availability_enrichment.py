@@ -13,7 +13,6 @@ from iris.cluster.constraints import (
     AttributeValue,
     WellKnownAttribute,
     availability_constraint,
-    availability_key,
     region_constraint,
 )
 from iris.cluster.controller.codec import constraints_to_json
@@ -22,7 +21,7 @@ from iris.cluster.controller.scheduling.policy import (
     enrich_workers_with_availability,
 )
 from iris.cluster.controller.scheduling.scheduler import WorkerSnapshot
-from iris.cluster.types import JobName, PendingTask, WorkerId
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, PendingTask, WorkerId, availability_key
 from rigging.timing import Timestamp
 
 
@@ -50,6 +49,7 @@ def _pending(constraints_json: str | None) -> PendingTask:
     return PendingTask(
         task_id=job_id.task(0),
         job_id=job_id,
+        submitting_user=LOCAL_ADMIN_SUBMITTER,
         backend_id="default",
         state=0,
         current_attempt_id=0,

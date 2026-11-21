@@ -12,39 +12,33 @@ On GCS, we use generation-based conditional writes for atomicity.
 """
 
 import contextlib
-import functools
-import json
 import logging
 import os
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from threading import Event, Thread
 from time import sleep
-from typing import TypeVar
 
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import prefix_join, url_to_fs
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
     LeaseLostError,
     create_lock,
     default_worker_id,
 )
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.step_status import (
+    STATUS_DEP_FAILED,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    get_status_path,
+    read_status_file,
+)
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
-STATUS_RUNNING = "RUNNING"
-STATUS_FAILED = "FAILED"
-STATUS_SUCCESS = "SUCCESS"
-STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 _LOCK_WAIT_LOG_INTERVAL = 5 * 60
-
-
-def get_status_path(output_path: str) -> str:
-    """Return the path of the status file associated with `output_path`."""
-    return prefix_join(output_path, ".executor_status")
 
 
 class StatusFile:
@@ -68,47 +62,7 @@ class StatusFile:
 
     @property
     def status(self) -> str | None:
-        """Read current status from status file.
-
-        The modern representation stores a single status token, but older
-        executors wrote JSON-line event logs. We support both until the legacy
-        files are gone.
-        """
-        if not self.fs.exists(self.path):
-            return None
-
-        with self.fs.open(self.path, "r") as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
-
-        if not lines:
-            return None
-
-        # New format: a single status token such as SUCCESS/RUNNING/etc.
-        if len(lines) == 1 and not lines[0].startswith("{"):
-            return lines[0]
-
-        # Legacy format: JSON event log, one object per line.
-        legacy_status = self._parse_legacy_status(lines)
-        if legacy_status:
-            return legacy_status
-
-        # Fall back to the last non-empty line if parsing fails.
-        return lines[-1]
-
-    @staticmethod
-    def _parse_legacy_status(lines: list[str]) -> str | None:
-        """Return the latest status from the deprecated JSON-lines format."""
-        last_status: str | None = None
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                status = event.get("status")
-                if isinstance(status, str):
-                    last_status = status
-        return last_status
+        return read_status_file(self.fs, self.path)
 
     def write_status(self, status: str) -> None:
         """Write the status file without changing lock ownership.
@@ -230,12 +184,12 @@ def should_run(
 
 
 # ---------------------------------------------------------------------------
-# Step-level distributed lock decorator
+# Step-level distributed lock
 # ---------------------------------------------------------------------------
 
 
 class StepAlreadyDone(Exception):
-    """Raised by ``step_lock`` / ``distributed_lock`` when the step has already succeeded."""
+    """Raised by ``step_lock`` when the step has already succeeded."""
 
 
 @contextlib.contextmanager
@@ -281,27 +235,3 @@ def step_lock(
         if lease_lost_event.is_set():
             raise LeaseLostError(f"Lease was lost during execution of {output_path}")
         status_file.release_lock()
-
-
-def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -> Callable[[str], T]:
-    """Decorator: wrap *fn* with lease-based distributed locking.
-
-    The lock is keyed on the *output_path* argument passed to *fn*.  If
-    another worker already completed the step (``STATUS_SUCCESS``),
-    ``StepAlreadyDone`` is raised so that the caller (typically
-    ``disk_cached``) can load the cached artifact instead.
-
-    While *fn* is executing a heartbeat thread refreshes the lock so that
-    other workers see it as active.
-
-    This decorator does **not** write status or save artifacts — that is the
-    responsibility of the caller.
-    """
-
-    @functools.wraps(fn)
-    def wrapper(output_path: str) -> T:
-        step_label = output_path.rsplit("/", 1)[-1]
-        with step_lock(output_path, step_label, force_run_failed=force_run_failed):
-            return fn(output_path)
-
-    return wrapper

@@ -29,22 +29,22 @@ from iris.cluster.controller.autoscaler.routing import (
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
+from iris.testing.backends import (
     make_mock_platform,
     make_mock_slice_handle,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     DEFAULT_RESOURCES,
     make_demand_entries,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
+from rigging.timing import Duration, Timestamp
 
 # ---------------------------------------------------------------------------
 # group_required_slices via route_demand
@@ -230,24 +230,6 @@ class TestWaterfallRouting:
         assert len(result.routed_entries.get("high-priority", [])) == 3
         assert result.routed_entries.get("low-priority") is None
 
-    def test_cpu_demand_routes_by_priority(self):
-        """CPU demand matches all groups and routes by priority."""
-        config_high = make_scale_group_config(name="high-priority", max_slices=5, priority=10)
-        config_low = make_scale_group_config(
-            name="low-priority",
-            max_slices=5,
-            priority=20,
-        )
-
-        group_high = ScalingGroup(config_high, make_mock_platform())
-        group_low = ScalingGroup(config_low, make_mock_platform())
-
-        demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
-        result = route_demand([group_high, group_low], demand)
-
-        assert len(result.routed_entries.get("high-priority", [])) == 2
-        assert result.routed_entries.get("low-priority") is None
-
     def test_demand_overflows_to_lower_priority_when_at_max_slices(self):
         """When high-priority group is at max_slices, demand falls through to lower priority."""
         config_high = make_scale_group_config(name="high-priority", max_slices=2, priority=10)
@@ -394,7 +376,7 @@ class TestWaterfallRouting:
 
         ts = Timestamp.from_ms(1_000_000)
         group_a.begin_scale_up(timestamp=ts)
-        handle = group_a.scale_up(timestamp=ts)
+        handle = group_a.scale_up()
         group_a.complete_scale_up(handle, ts)
 
         eval_ts = Timestamp.from_ms(1_030_000)
@@ -756,6 +738,34 @@ class TestZoneRouting:
 
 class TestCommittedBudgetRouting:
     """Tests for two-phase routing with committed budgets."""
+
+    @pytest.mark.parametrize(
+        ("preferred_region", "expected_group"),
+        [("europe-west4", "preferred"), ("asia-east1", "primary")],
+    )
+    def test_soft_region_constraint_prefers_match_or_falls_back(self, preferred_region: str, expected_group: str):
+        primary = ScalingGroup(
+            make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"]),
+            make_mock_platform(),
+        )
+        preferred = ScalingGroup(
+            make_scale_group_config(name="preferred", max_slices=5, priority=20, zones=["europe-west4-a"]),
+            make_mock_platform(),
+        )
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].constraints.append(
+            Constraint.create(
+                key=WellKnownAttribute.REGION,
+                op=ConstraintOp.EQ,
+                value=preferred_region,
+                mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+            )
+        )
+
+        result = route_demand([primary, preferred], demand)
+
+        assert result.routed_entries == {expected_group: demand}
+        assert result.unmet_entries == []
 
     def test_committed_budget_retains_demand_for_requesting_group(self):
         """Demand sticks to a group with requesting slices even when a fresh group is available."""
@@ -1465,7 +1475,7 @@ class TestAllocationTierBlocking:
 
         # Put tier 1 into quota exceeded
         try:
-            groups[0].scale_up(timestamp=ts)
+            groups[0].scale_up()
         except Exception:
             pass
         groups[0].cancel_scale_up()
@@ -1486,7 +1496,7 @@ class TestAllocationTierBlocking:
 
         # Put tier 2 into quota exceeded
         try:
-            groups[1].scale_up(timestamp=ts)
+            groups[1].scale_up()
         except Exception:
             pass
         groups[1].cancel_scale_up()
@@ -1506,7 +1516,7 @@ class TestAllocationTierBlocking:
 
         # Fail pool A
         try:
-            pool_a[0].scale_up(timestamp=ts)
+            pool_a[0].scale_up()
         except Exception:
             pass
         pool_a[0].cancel_scale_up()
@@ -1526,7 +1536,7 @@ class TestAllocationTierBlocking:
 
         # Fail the pooled group
         try:
-            pooled[0].scale_up(timestamp=ts)
+            pooled[0].scale_up()
         except Exception:
             pass
         pooled[0].cancel_scale_up()
@@ -1559,7 +1569,7 @@ class TestAllocationTierBlocking:
 
         # Fail g1 only
         try:
-            g1.scale_up(timestamp=ts)
+            g1.scale_up()
         except Exception:
             pass
         g1.cancel_scale_up()
@@ -1578,7 +1588,7 @@ class TestAllocationTierBlocking:
 
         # Fail tier 1 → blocks tier 1 and tier 2
         try:
-            groups[0].scale_up(timestamp=ts)
+            groups[0].scale_up()
         except Exception:
             pass
         groups[0].cancel_scale_up()

@@ -29,7 +29,8 @@ import logging
 import os
 import posixpath
 
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 

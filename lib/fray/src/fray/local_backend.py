@@ -25,6 +25,7 @@ from fray.types import (
     ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
+    EnvironmentConfig,
     JobRequest,
     JobStatus,
     ResourceConfig,
@@ -175,10 +176,20 @@ class LocalClient:
         name: str,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> "LocalActorHandle":
         """Create an in-process actor, returning a handle immediately."""
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class,
+            *args,
+            name=name,
+            count=1,
+            resources=resources,
+            actor_config=actor_config,
+            environment=environment,
+            **kwargs,
+        )
         return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
@@ -189,9 +200,10 @@ class LocalClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> ActorGroup:
-        """Create N in-process actor instances, returning a group handle."""
+        """Create N in-process actors; environment isolation requires the Iris backend."""
         handles: list[LocalActorHandle] = []
         jobs: list[LocalJobHandle] = []
         try:
@@ -283,6 +295,7 @@ class LocalActorMethod:
         """
         future: Future[Any] = Future()
         method_name = getattr(self._method, "__name__", repr(self._method))
+        context = contextvars.copy_context()
 
         def run():
             try:
@@ -292,7 +305,7 @@ class LocalActorMethod:
                 logger.warning("Actor method %r failed: %s", method_name, e, exc_info=True)
                 future.set_exception(e)
 
-        thread = threading.Thread(target=run, daemon=True)
+        thread = threading.Thread(target=context.run, args=(run,), daemon=True)
         thread.start()
         return future
 

@@ -1,0 +1,3 @@
+title = "Problem sets"
+description = "Browse a small collection of generated arithmetic problems."
+python_entrypoint = "server.app:create_api"

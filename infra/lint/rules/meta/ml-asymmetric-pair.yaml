@@ -1,0 +1,34 @@
+schema_version: 1
+code: ml-asymmetric-pair
+lane: meta
+title: Paired operation added without its counterpart
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Asymmetry is the classic source of leaks and stuck state — a
+  worker registered but never unregistered, a lock acquired on the happy path but not
+  released on error, a cache populated by a new writer with no eviction. Not visible
+  in any single hunk; visible only when you hold the lifecycle as a unit, because the
+  missing half often belongs in a sibling teardown elsewhere in the change.
+
+  Fire only on a recognized symmetric verb pair (closed vocabulary:
+  register/unregister, open/close, acquire/release, subscribe/unsubscribe,
+  start/stop, add/remove, serialize/deserialize, incref/decref, enter/exit,
+  connect/disconnect, lock/unlock). Grep the whole tree for the counterpart verb on
+  the same receiver and confirm it is absent everywhere, not just in the diff — the
+  "close" half often lives in a sibling teardown in an unchanged file. Phrase as a
+  question ("adds `subscribe`; is the `unsubscribe` present on the drain path?").
+  Anchor on the unpaired "open" call.
+
+  **When allowed:** The resource is handed to a context manager / `ExitStack` /
+  framework / arena that owns teardown; an idempotent fire-and-forget registration
+  (`atexit`, a signal handler, a metric) with no conventional counterpart; the
+  counterpart demonstrably already exists outside the diff; a value that legitimately
+  outlives the function.
+
+  **Bad example:**
+  ```python
+  def subscribe(self, cb):
+      self._subscribers.add(cb)
+  # ...the diff's close()/unsubscribe() never .discard(cb) → add the symmetric removal,
+  # or hold subscribers behind a context manager / weakref so the pair can't drift.
+  ```

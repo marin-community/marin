@@ -1,0 +1,24 @@
+schema_version: 1
+code: ml-missing-protocol
+lane: interfaces
+title: Variant-flag dispatch where a Protocol fits
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A class that branches on `self.kind == "memory"` vs
+  `"disk"` is reinventing subclassing badly. Two flavors implementing a
+  Protocol scale; a growing list of `if` branches doesn't.
+
+  **When allowed:** When there really are only two variants and they share
+  ≥80% of their body. Once a third variant appears, refactor.
+
+  **Bad example:**
+  ```python
+  class TreeCache:
+      def __init__(self, mode: str):
+          self.mode = mode
+
+      def get(self, k):
+          if self.mode == "memory": ...
+          elif self.mode == "disk": ...
+          elif self.mode == "s3":   ...   # third branch → protocol time.
+  ```

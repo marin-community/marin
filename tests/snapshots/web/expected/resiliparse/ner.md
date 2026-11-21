@@ -257,7 +257,7 @@ $${\varphi}_{c}({y}_{c},{x}_{c})=\exp (\underset{a}{}{\lambda}_{a}\text{}{f}_{a}
 
 ## References
 
-1. **MUC-7 Named Entity Task Definition (Version 3.5)** [PDF](https://aclanthology.org/M98-1028.pdf "")  
+1. **MUC-7 Named Entity Task Definition (Version 3.5)** [PDF](https://aclanthology.org/M98-1028.pdf)  
 Nancy Chinchor. 1998. In Seventh Message Understanding Conference (MUC-7).
 2. **Probabilistic Graphical Models: Principles and Techniques - Adaptive Computation and Machine Learning**  
 Daphne Koller and Nir Friedman. 2009. The MIT Press.
@@ -267,47 +267,47 @@ Judea Pearl. 1988. Morgan Kaufmann Publishers Inc, San Francisco, CA, USA.
 Hagit Shatkay, Stephen Edwards, W John Wilbur, and Mark Boguski. 2000. In Proceedings of the International Conference on Intelligent Systems for Molecular Biology, 317–328.
 5. **Information Extraction Using Hidden Markov Models**  
 Timothy Robert Leek. 1997. Master’s Thesis, UC San Diego.
-6. **Information Extraction with HMMs and Shrinkage** [PDF](https://www.aaai.org/Papers/Workshops/1999/WS-99-11/WS99-11-006.pdf "")  
+6. **Information Extraction with HMMs and Shrinkage** [PDF](https://www.aaai.org/Papers/Workshops/1999/WS-99-11/WS99-11-006.pdf)  
 Dayne Freitag and Andrew McCallum. 1999. In Papers from the AAAI-99 Workshop on Machine Learning for Information Extraction (AAAI Techinical Report WS-99-11), 31–36.
 7. **A Tutorial on Hidden Markov Models and Selected Applications in Speech Recognition**  
 Lawrence R Rabiner. 1989. Proceedings of the IEEE 77, 2: 257–286. https://doi.org/10.1109/5.18626
-8. **An Algorithm that Learns What’s in a Name** [PDF](https://link.springer.com/content/pdf/10.1023/A:1007558221122.pdf "")  
+8. **An Algorithm that Learns What’s in a Name** [PDF](https://link.springer.com/content/pdf/10.1023/A:1007558221122.pdf)  
 Daniel M. Bikel, Richard Schwartz, and Ralph M. Weischedel. 1999. Machine Learning 34, 1: 211–231. https://doi.org/10.1023/A:1007558221122
 9. **Error Bounds for Convolutional Codes and an Asymptotically Optimum Decoding Algorithm**  
 A. Viterbi. 1967. IEEE Transactions on Information Theory 13, 2: 260–269.
-10. **Appendix A.4 — Decoding: The Viterbi Algorithm** [PDF](https://web.stanford.edu/~jurafsky/slp3/A.pdf "")  
+10. **Appendix A.4 — Decoding: The Viterbi Algorithm** [PDF](https://web.stanford.edu/~jurafsky/slp3/A.pdf)  
 Daniel Jurafsky and James H. Martin. 2021. In Speech and Language Processing. 8–10.
-11. **Introduction to the CoNLL-2003 Shared Task: Language-Independent Named Entity Recognition** [PDF](https://aclanthology.org/W03-0419.pdf "")  
+11. **Introduction to the CoNLL-2003 Shared Task: Language-Independent Named Entity Recognition** [PDF](https://aclanthology.org/W03-0419.pdf)  
 Erik F. Tjong Kim Sang and Fien De Meulder. 2003. In Proceedings of the Seventh Conference on Natural Language Learning at HLT-NAACL 2003, 142–147.
-12. **Maximum Entropy Markov Models for Information Extraction and Segmentation** [PDF](http://www.ai.mit.edu/courses/6.891-nlp/READINGS/maxent.pdf "")  
+12. **Maximum Entropy Markov Models for Information Extraction and Segmentation** [PDF](http://www.ai.mit.edu/courses/6.891-nlp/READINGS/maxent.pdf)  
 Andrew McCallum, Dayne Freitag, and Fernando C. N. Pereira. 2000. In Proceedings of the Seventeenth International Conference on Machine Learning (ICML ’00), 591–598.
-13. **Maximum Entropy Models for Antibody Diversity** [Link](https://www.pnas.org/doi/abs/10.1073/pnas.1001705107 "")  
+13. **Maximum Entropy Models for Antibody Diversity** [Link](https://www.pnas.org/doi/abs/10.1073/pnas.1001705107)  
 Thierry Mora, Aleksandra M. Walczak, William Bialek, and Curtis G. Callan. 2010. Proceedings of the National Academy of Sciences 107, 12: 5405–5410. https://doi.org/10.1073/pnas.1001705107
-14. **Human Behavior Modeling with Maximum Entropy Inverse Optimal Control** [PDF](https://www.aaai.org/Papers/Symposia/Spring/2009/SS-09-04/SS09-04-016.pdf "")  
+14. **Human Behavior Modeling with Maximum Entropy Inverse Optimal Control** [PDF](https://www.aaai.org/Papers/Symposia/Spring/2009/SS-09-04/SS09-04-016.pdf)  
 Brian Ziebart, Andrew Maas, J. Bagnell, and Anind Dey. 2009. In Papers from the 2009 AAAI Spring Symposium, Technical Report SS-09-04, Stanford, California, USA, 92–97.
-15. **On Discriminative vs. Generative Classifiers: A comparison of logistic regression and naive Bayes** [PDF](https://proceedings.neurips.cc/paper/2001/file/7b7a53e239400a13bd6be6c91c4f6c4e-Paper.pdf "")  
+15. **On Discriminative vs. Generative Classifiers: A comparison of logistic regression and naive Bayes** [PDF](https://proceedings.neurips.cc/paper/2001/file/7b7a53e239400a13bd6be6c91c4f6c4e-Paper.pdf)  
 Andrew Ng and Michael Jordan. 2001. In Advances in Neural Information Processing Systems.
 16. **Inducing Features of Random Fields**  
 S. Della Pietra, V. Della Pietra, and J. Lafferty. 1997. IEEE Transactions on Pattern Analysis and Machine Intelligence 19, 4: 380–393. https://doi.org/ 10.1109/34.588021
 17. **Une Approche théorique de l’Apprentissage Connexionniste: Applications à la Reconnaissance de la Parole**  
 Léon Bottou. 1991. Université de Paris X.
-18. **Conditional Random Fields: Probabilistic Models for Segmenting and Labeling Sequence Data** [PDF](http://www.aladdin.cs.cmu.edu/papers/pdfs/y2001/crf.pdf "")  
+18. **Conditional Random Fields: Probabilistic Models for Segmenting and Labeling Sequence Data** [PDF](http://www.aladdin.cs.cmu.edu/papers/pdfs/y2001/crf.pdf)  
 John D. Lafferty, Andrew McCallum, and Fernando C. N. Pereira. 2001. In Proceedings of the Eighteenth International Conference on Machine Learning (ICML ’01), 282–289.
-19. **The Label Bias Problem** [Link](https://awni.github.io/label-bias/ "")  
+19. **The Label Bias Problem** [Link](https://awni.github.io/label-bias/)  
 Awni Hannun. 2019. Awni Hannun — Writing About Machine Learning.
-20. **Discriminative Probabilistic Models for Relational Data** [Link](https://arxiv.org/abs/1301.0604 "")  
+20. **Discriminative Probabilistic Models for Relational Data** [Link](https://arxiv.org/abs/1301.0604)  
 Ben Taskar, Pieter Abbeel, and Daphne Koller. 2013. https://doi.org/10.48550/ARXIV.1301.0604
-21. **Accurate Information Extraction from Research Papers using Conditional Random Fields** [Link](https://aclanthology.org/N04-1042 "")  
+21. **Accurate Information Extraction from Research Papers using Conditional Random Fields** [Link](https://aclanthology.org/N04-1042)  
 Fuchun Peng and Andrew McCallum. 2004. In Proceedings of the Human Language Technology Conference of the North American Chapter of the Association for Computational Linguistics: HLT-NAACL 2004, 329–336.
-22. **Discriminative Fields for Modeling Spatial Dependencies in Natural Images** [PDF](https://proceedings.neurips.cc/paper/2003/file/92049debbe566ca5782a3045cf300a3c-Paper.pdf "")  
+22. **Discriminative Fields for Modeling Spatial Dependencies in Natural Images** [PDF](https://proceedings.neurips.cc/paper/2003/file/92049debbe566ca5782a3045cf300a3c-Paper.pdf)  
 Sanjiv Kumar and Martial Hebert. 2003. In Advances in Neural Information Processing Systems.
-23. **Multiscale Conditional Random Fields for Image Labeling** [Link](https://ieeexplore.ieee.org/document/1315232 "")  
+23. **Multiscale Conditional Random Fields for Image Labeling** [Link](https://ieeexplore.ieee.org/document/1315232)  
 Xuming He, R.S. Zemel, and M.A. Carreira-Perpinan. 2004. In Proceedings of the 2004 IEEE Computer Society Conference on Computer Vision and Pattern Recognition, 2004, CVPR 2004, II–II. https://doi.org/10.1109/CVPR.2004.1315232
-24. **Conditional Random Fields as Recurrent Neural Networks** [Link](https://ieeexplore.ieee.org/document/7410536 "")  
+24. **Conditional Random Fields as Recurrent Neural Networks** [Link](https://ieeexplore.ieee.org/document/7410536)  
 Shuai Zheng, Sadeep Jayasumana, Bernardino Romera-Paredes, Vibhav Vineet, Zhizhong Su, Dalong Du, Chang Huang, and Philip H. S. Torr. 2015. In 2015 IEEE International Conference on Computer Vision (ICCV). https://doi.org/10.1109/iccv.2015.179
-25. **Convolutional CRFs for Semantic Segmentation** [Link](https://arxiv.org/abs/1805.04777 "")  
+25. **Convolutional CRFs for Semantic Segmentation** [Link](https://arxiv.org/abs/1805.04777)  
 Marvin T. T. Teichmann and Roberto Cipolla. 2018. https://doi.org/10.48550/arxiv.1805.04777
-26. **RNA Secondary Structural Alignment with Conditional Random Fields** [Link](https://academic.oup.com/bioinformatics/article/21/suppl_2/ii237/227803?login=false "")  
+26. **RNA Secondary Structural Alignment with Conditional Random Fields** [Link](https://academic.oup.com/bioinformatics/article/21/suppl_2/ii237/227803?login=false)  
 Kengo Sato and Yasubumi Sakakibara. 2005. Bioinformatics 21: ii237–ii242. https://doi.org/10.1093/bioinformatics/bti1139
 27. **Protein Fold Recognition Using Segmentation Conditional Random Fields (SCRFs)**  
 Yan Liu, Jaime Carbonell, Peter Weigele, and Vanathi Gopalakrishnan. 2006. J. Comput. Biol. 13, 2: 394–406.

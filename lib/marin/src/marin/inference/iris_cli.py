@@ -3,7 +3,7 @@
 
 """Iris subcommand for ``marin-serve``.
 
-Submits a single Iris job that boots a serving backend on a single-host TPU or GPU slice and
+Submits a single Iris job that boots a serving backend on a TPU slice or GPU allocation and
 registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
 stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
 
@@ -35,6 +35,7 @@ endpoint is ready, the command always mints and prints an endpoint-scoped capabi
 import contextlib
 import importlib.metadata
 import logging
+import math
 import re
 import shlex
 import time
@@ -45,29 +46,20 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
-from fray.types import ANY_REGION, ResourceConfig, create_environment
+from fray.iris_backend import FrayIrisClient, convert_constraints, convert_resources, resolve_coscheduling
+from fray.types import ANY_REGION, GpuConfig, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
-from iris.cli.job import parse_gpu_spec
-from iris.client import IrisClient, Job
-from iris.cluster.constraints import (
-    CLUSTER_CONSTRAINT_KEY,
-    Constraint,
-    ConstraintOp,
-    preemptible_constraint,
-    region_constraint,
-)
+from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
+from iris.client.client import IrisClient, Job
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
-    ResourceSpec,
-    gpu_device,
     is_job_finished,
-    tpu_device,
 )
-from iris.rpc import job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
+from rigging.secrets import resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.inference.config import (
@@ -75,14 +67,21 @@ from marin.inference.config import (
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
+    InferenceWorkerConfig,
     IrisConfig,
     LevanterEngineConfig,
     ServedModelConfig,
+    ServingGeometry,
     VllmEngineConfig,
     VllmLauncherType,
+    VllmRouterConfig,
     VllmSource,
+    load_vllm_metric_family_additions,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
+from marin.inference.iris_tpu_vllm import RAY_PORTS
+from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
+from marin.inference.vllm_release import load_vllm_gpu_release
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
@@ -93,6 +92,8 @@ _GPU_WORKER_EXTRAS: tuple[str, ...] = ()
 _LEVANTER_TPU_EXTRAS = ("tpu",)
 _LEVANTER_GPU_EXTRAS = ("gpu",)
 _ENDPOINT_READY_POLL_SECONDS = 5.0
+_BROKER_WORKER_TIMEOUT_FRACTION = 0.9
+_BROKER_LEASE_TIMEOUT_FRACTION = 0.95
 
 # Options that only mean something to one backend, by Click parameter name. Passing one to the
 # other backend is a mistake worth failing on, but several carry non-None defaults, so only a
@@ -100,7 +101,11 @@ _ENDPOINT_READY_POLL_SECONDS = 5.0
 _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
+    "vllm_release": "--vllm-release",
+    "session_router": "--session-router",
+    "data_parallel_size": "--data-parallel-size",
     "vllm_args": "--vllm-arg",
+    "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
 }
 _LEVANTER_ONLY_OPTIONS = {
@@ -123,9 +128,8 @@ class ServingPlan:
     """How to serve on this slice: which backend, on what device, in which worker environment."""
 
     engine: VllmEngineConfig | LevanterEngineConfig
-    device: job_pb2.DeviceConfig
     worker_extras: tuple[str, ...]
-    tpu_type: str | None = None
+    tpu_types: tuple[str, ...] = ()
     gpu_type: str | None = None
     gpu_count: int | None = None
 
@@ -153,6 +157,8 @@ def _resolve_serving_plan(
     """
     if vllm_source is VllmSource.MARIN_FORK and (gpu is None or backend != "vllm"):
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
+    if vllm.router is not None and (gpu is None or backend != "vllm"):
+        raise click.ClickException("--session-router requires --gpu with the vLLM backend")
     if gpu is not None:
         if not in_checkout:
             raise click.ClickException(
@@ -163,32 +169,40 @@ def _resolve_serving_plan(
             gpu_type, gpu_count = parse_gpu_spec(gpu)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        device = gpu_device(gpu_type, gpu_count)
         if backend == "levanter":
-            return ServingPlan(
-                levanter, device, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count
-            )
+            return ServingPlan(levanter, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
         # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a prebuilt
         # --task-image, which is expected to ship its own vLLM on PATH.
         if task_image is None:
             source = vllm_source
             version = cuda_vllm_version if source is VllmSource.UPSTREAM else None
             vllm = replace(vllm, launcher=VllmLauncherType.CUDA, source=source, version=version)
-        return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
+        return ServingPlan(vllm, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
 
-    topology = get_tpu_topology(tpu)
-    if topology.vm_count != 1:
-        raise click.ClickException(
-            f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
-            f"single-host slices only (e.g. v6e-8, v5litepod-8)."
-        )
-    device = tpu_device(tpu)
+    tpu_types = tuple(build_tpu_alternatives(tpu))
+    if not tpu_types:
+        raise click.ClickException("--tpu must specify at least one TPU variant.")
+    try:
+        ResourceConfig.with_tpu(tpu_types)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for tpu_type in tpu_types:
+        topology = get_tpu_topology(tpu_type)
+        if topology.vm_count != 1 and backend != "vllm":
+            raise click.ClickException(
+                f"{tpu_type!r} is a multi-host slice (vm_count={topology.vm_count}); the Levanter backend supports "
+                f"single-host slices only (e.g. v6e-8, v5litepod-8)."
+            )
     if backend == "levanter":
-        return ServingPlan(levanter, device, (*_LEVANTER_TPU_EXTRAS, *extras), tpu_type=tpu)
+        return ServingPlan(
+            levanter,
+            (*_LEVANTER_TPU_EXTRAS, *extras),
+            tpu_types=tpu_types,
+        )
     # The forked TPU vLLM always runs from an isolated uvx env (it is not in the workspace lock),
     # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
     vllm = replace(vllm, launcher=VllmLauncherType.TPU)
-    return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
+    return ServingPlan(vllm, ("tpu", *extras), tpu_types=tpu_types)
 
 
 def _default_job_name(model: str) -> str:
@@ -216,6 +230,43 @@ def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> 
         f'uv venv "$IRIS_VENV" --python {WORKER_PYTHON_VERSION}\n'
         f'uv pip install --python "$IRIS_VENV" --link-mode symlink --torch-backend cpu {shlex.quote(spec)}\n'
     )
+
+
+def _prepared_direct_service(
+    service: IrisServiceConfig,
+    placement: ResourceConfig,
+    workspace_dir: Path | None,
+    client: IrisClient,
+    secrets: dict[str, str],
+) -> IrisServiceConfig:
+    regions = placement.regions
+    if not placement.target_cluster and (
+        isinstance(placement.device, GpuConfig) or not regions or len(regions) != 1 or ANY_REGION in regions
+    ):
+        click.echo(
+            "Warning: skipping CPU model preparation because the serving cache location is not pinned; "
+            "weights will download on the serving worker. Set --target-cluster for GPUs, or a single --region for TPUs.",
+            err=True,
+        )
+        return service
+    setup_scripts = None if workspace_dir is not None else [_checkout_free_setup_script(_marin_core_version(), ())]
+    environment = create_environment(
+        workspace=str(workspace_dir or Path.cwd()),
+        setup_scripts=setup_scripts,
+        secrets={name: value for name, value in secrets.items() if name == "HF_TOKEN"},
+    )
+    click.echo("Preparing Hugging Face weights on CPU before reserving accelerators...")
+    try:
+        model, engine = prepare_hf_models(
+            service.model,
+            service.engine,
+            replace(service.iris, worker_resources=placement),
+            client=FrayIrisClient.from_iris_client(client),
+            environment=environment,
+        )
+    except ModelPreparationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return replace(service, model=model, engine=engine)
 
 
 def _resolve_chat_template(spec: str | None) -> str | None:
@@ -283,6 +334,34 @@ def _mint_and_print_capability_url(
     click.echo("")
 
 
+def _wait_and_report_endpoint(
+    client: IrisClient,
+    job: Job,
+    endpoint: str,
+    wait_timeout: float,
+    proxy_url: str,
+    dashboard_url: str | None,
+    timeout_hours: float,
+) -> None:
+    """Wait, mint the scoped URL, and hold the tunnel independently of submission planning."""
+    click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
+    _wait_for_endpoint(client, job, endpoint, wait_timeout)
+    click.echo("")
+    click.echo(f"READY — dashboard: {proxy_url}/")
+    click.echo(f"        OpenAI:    {proxy_url}/v1")
+    if dashboard_url:
+        click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
+    click.echo("")
+    # Mint after the endpoint registers (the controller resolves the row for owner authz),
+    # so the token is bound to a live endpoint.
+    _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+    click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
+    with contextlib.suppress(KeyboardInterrupt):
+        while True:
+            time.sleep(3600)
+    click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
+
+
 @click.command(context_settings={"show_default": True})
 @click.argument("model")
 @click.option(
@@ -295,7 +374,14 @@ def _mint_and_print_capability_url(
 @click.option(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
 )
-@click.option("--tpu", default="v6e-8", help="Single-host TPU slice type (e.g. v6e-8, v5litepod-8).")
+@click.option(
+    "--tpu",
+    default="v6e-8",
+    help=(
+        "Single-host TPU slice type. Pass compatible comma-separated variants "
+        "(e.g. v6e-8,v5litepod-8) to use whichever has capacity."
+    ),
+)
 @click.option(
     "--gpu",
     default=None,
@@ -330,6 +416,19 @@ def _mint_and_print_capability_url(
     help="Levanter backend: fraction of device HBM the KV cache may claim.",
 )
 @click.option("--tensor-parallel-size", type=int, default=None, help="TP size (default: auto from heads + chips).")
+@click.option(
+    "--data-parallel-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Total native GPU DP ranks; ranks per task are GPUs per task divided by TP size.",
+)
+@click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
+@click.option(
+    "--vllm-release",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Published vLLM GPU release manifest for this deployment.",
+)
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
 @click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
 @click.option(
@@ -340,8 +439,8 @@ def _mint_and_print_capability_url(
     "--proxy-timeout",
     type=float,
     default=600.0,
-    help="Seconds the controller proxy waits for a single completion before returning 504. "
-    "Raise for long reasoning generations; the shorter proxy default cuts those off.",
+    help="Seconds allowed for a completion through the controller proxy. Brokered worker and "
+    "request-lease timeouts scale with this value; raise it for long generations.",
 )
 @click.option(
     "--region",
@@ -361,6 +460,12 @@ def _mint_and_print_capability_url(
     help="Use the request broker for one instance; multiple instances always use it.",
 )
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
+@click.option(
+    "--vllm-metrics-config",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="TOML file of additional vLLM metric families to forward.",
+)
 @click.option(
     "--vllm-version",
     default=DEFAULT_CUDA_VLLM_VERSION,
@@ -388,6 +493,15 @@ def _mint_and_print_capability_url(
     help="Override the task container image. On the GPU path this bypasses the isolated "
     "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
+@click.option(
+    "--secret",
+    "secret_sources",
+    multiple=True,
+    type=(str, str),
+    help="Deliver a named secret to the serving job as a file (NAME SOURCE), e.g. "
+    "--secret PARALLEL_API_KEY env:PARALLEL_API_KEY. Can be repeated.",
+)
+@click.option("--dry-run", is_flag=True, help="Print resources, gang placement and named ports without submitting.")
 @click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
 @click.option(
     "--wait-timeout",
@@ -413,6 +527,9 @@ def main(
     page_size: int,
     hbm_utilization: float,
     tensor_parallel_size: int | None,
+    data_parallel_size: int | None,
+    session_router: bool,
+    vllm_release: Path | None,
     dtype: str,
     cache_ttl_days: int,
     no_cache: bool,
@@ -426,10 +543,13 @@ def main(
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
+    vllm_metrics_config: Path | None,
     vllm_version: str,
     vllm_source: str,
     extras: tuple[str, ...],
     task_image: str | None,
+    secret_sources: tuple[tuple[str, str], ...],
+    dry_run: bool,
     wait: bool,
     wait_timeout: float,
 ) -> None:
@@ -458,6 +578,8 @@ def main(
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
 
+    extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
+
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
     plan = _resolve_serving_plan(
         backend=backend,
@@ -473,18 +595,50 @@ def main(
             # --wait-timeout for a slow-booting model actually takes effect.
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
+            extra_metric_families=extra_metric_families,
+            router=(
+                VllmRouterConfig(
+                    request_timeout_seconds=max(VllmRouterConfig.request_timeout_seconds, math.ceil(proxy_timeout))
+                )
+                if session_router
+                else None
+            ),
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,
     )
+    if vllm_release is not None:
+        if task_image is not None or vllm_source_enum is not VllmSource.MARIN_FORK:
+            raise click.ClickException("--vllm-release requires --vllm-source marin-fork and no --task-image")
+        assert isinstance(plan.engine, VllmEngineConfig)
+        plan = replace(plan, engine=replace(plan.engine, release=load_vllm_gpu_release(vllm_release)))
+
+    geometry = None
+    if data_parallel_size is not None:
+        if plan.gpu_count is None or backend != "vllm" or tensor_parallel_size is None:
+            raise click.ClickException("native DP geometry requires --gpu, --backend vllm and --tensor-parallel-size")
+        if tensor_parallel_size < 1:
+            raise click.ClickException("--tensor-parallel-size must be positive")
+        geometry = ServingGeometry(
+            tensor_parallel_size=tensor_parallel_size,
+            data_parallel_size=data_parallel_size,
+            pipeline_parallel_size=1,
+            gpus_per_task=plan.gpu_count,
+        )
 
     brokered = broker or instances > 1
+    if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
+        raise click.ClickException("multi-host TPU serving requires one instance and no broker")
     broker_config = (
         BrokerConfig(
+            worker=InferenceWorkerConfig(
+                request_timeout_seconds=proxy_timeout * _BROKER_WORKER_TIMEOUT_FRACTION,
+            ),
             proxy=InferenceProxyConfig(
                 request_timeout_seconds=proxy_timeout,
                 readiness_timeout_seconds=wait_timeout,
             ),
+            request_lease_timeout_seconds=proxy_timeout * _BROKER_LEASE_TIMEOUT_FRACTION,
             max_retries_preemption=max_retries_preemption,
         )
         if brokered
@@ -500,10 +654,11 @@ def main(
             disk=disk,
             image=task_image,
             regions=worker_regions,
+            replicas=geometry.task_count if geometry is not None else 1,
         )
     else:
         worker_resources = ResourceConfig.with_tpu(
-            plan.tpu_type or tpu,
+            plan.tpu_types,
             cpu=cpu,
             ram=memory,
             disk=disk,
@@ -532,6 +687,7 @@ def main(
         cache_ttl_days=0 if no_cache else cache_ttl_days,
         endpoint_ready_timeout_seconds=wait_timeout,
         max_retries_preemption=max_retries_preemption,
+        serving_geometry=geometry,
     )
     service = IrisServiceConfig(
         model=model_config,
@@ -544,24 +700,45 @@ def main(
         controller_proxy_timeout_seconds=proxy_timeout,
     )
 
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
     if workspace_dir is None:
         outer_extras = () if brokered else plan.worker_extras
-        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)])
+        environment = EnvironmentSpec(
+            setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)],
+            secrets=secrets,
+        )
     else:
-        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
+        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras, secrets=secrets)
 
-    constraints: list[Constraint] = []
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not
     # have the requested accelerator slice. Direct serves still place the server in --region.
+    submission_regions = None
     if region and not brokered:
-        regions = [r.strip() for r in region.split(",") if r.strip()]
-        if regions:
-            constraints.append(region_constraint(regions))
-    if target_cluster:
-        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
+        submission_regions = [r.strip() for r in region.split(",") if r.strip()] or None
     if brokered:
-        constraints.append(preemptible_constraint(False))
+        submission_resources = ResourceConfig.with_cpu(
+            cpu=2,
+            ram="8g",
+            disk="20g",
+            preemptible=False,
+            target_cluster=target_cluster,
+        )
+    else:
+        submission_resources = replace(
+            worker_resources,
+            regions=submission_regions,
+            target_cluster=target_cluster,
+        )
+    constraints = convert_constraints(submission_resources)
+    replicas = submission_resources.replicas
+    coscheduling = resolve_coscheduling(submission_resources, replicas)
+    ports = ["http", *RAY_PORTS] if plan.tpu_types and not brokered and replicas > 1 else ["http"]
+    if dry_run:
+        click.echo(f"resources: {submission_resources}")
+        click.echo(f"replicas: {replicas}; coscheduling: {coscheduling}")
+        click.echo(f"ports (Iris allocates values per host): {ports}")
+        return
 
     endpoint_cluster = cluster if controller is None else None
     with connect_controller(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
@@ -569,16 +746,16 @@ def main(
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
+            if not brokered:
+                service = _prepared_direct_service(service, submission_resources, workspace_dir, client, secrets)
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_iris_service, service),
                 name=job_name,
-                resources=(
-                    ResourceSpec(cpu=2, memory="8g", disk="20g")
-                    if brokered
-                    else ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=plan.device)
-                ),
+                resources=convert_resources(submission_resources),
                 environment=environment,
-                ports=["http"],
+                ports=ports,
+                replicas=replicas,
+                coscheduling=coscheduling,
                 constraints=constraints or None,
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
@@ -595,7 +772,7 @@ def main(
             if gpu is not None:
                 click.echo(f"  gpu          {plan.gpu_type}x{plan.gpu_count}")
             else:
-                click.echo(f"  tpu          {tpu}")
+                click.echo(f"  tpu          {','.join(plan.tpu_types)}")
             if target_cluster:
                 click.echo(f"  target       {target_cluster}")
             click.echo(f"  endpoint     {endpoint}")
@@ -606,31 +783,24 @@ def main(
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
-                click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
+                click.echo(f"  cancel with  iris --cluster {cluster} job cancel {job}")
             else:
-                click.echo(f"  stop with    iris --controller-url {controller_url} job stop {job}")
+                click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {job}")
             click.echo("")
 
             if not wait:
                 click.echo("Submitted without waiting; no capability URL was minted.")
                 return
 
-            click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
-            _wait_for_endpoint(client, job, endpoint, wait_timeout)
-            click.echo("")
-            click.echo(f"READY — dashboard: {proxy_url}/")
-            click.echo(f"        OpenAI:    {proxy_url}/v1")
-            if dashboard_url:
-                click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
-            click.echo("")
-            # Mint after the endpoint registers (the controller resolves the row for owner authz),
-            # so the token is bound to a live endpoint.
-            _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
-            click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
-            with contextlib.suppress(KeyboardInterrupt):
-                while True:
-                    time.sleep(3600)
-            click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
+            _wait_and_report_endpoint(
+                client,
+                job,
+                endpoint,
+                wait_timeout,
+                proxy_url,
+                dashboard_url,
+                timeout_hours,
+            )
 
 
 if __name__ == "__main__":

@@ -28,7 +28,8 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
-from rigging.filesystem import marin_temp_bucket, prefix_join
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (

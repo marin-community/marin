@@ -11,8 +11,6 @@ and TPU slices via GcpService.
 import logging
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -40,7 +38,6 @@ from iris.cluster.platforms.gcp.handles import (
 from iris.cluster.platforms.gcp.service import (
     CAPACITY_TYPE_LABEL,
     CAPACITY_TYPE_RESERVED_VALUE,
-    CloudGcpService,
     GcpService,
     TpuCreateRequest,
     VmCreateRequest,
@@ -60,6 +57,7 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceHandle,
     generate_slice_suffix,
+    probe_worker_health,
 )
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
@@ -67,6 +65,11 @@ from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
 from iris.cluster.worker.env_probe import construct_worker_id
 
 logger = logging.getLogger(__name__)
+
+# How long a bootstrap poll waits for a worker /health response per probe. The
+# poll is serial over a slice's workers, so it is more patient than the
+# autoscaler's fanned-out liveness probe.
+_BOOTSTRAP_HEALTH_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 def _spawn_bootstrap_thread(
@@ -254,8 +257,8 @@ class GcpWorkerProvider:
         gcp_config: GcpPlatformConfig,
         label_prefix: str,
         worker_port: int,
+        gcp_service: GcpService,
         ssh_config: SshConfig | None = None,
-        gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
         self._registry_mirrors = gcp_config.registry_mirrors
@@ -264,7 +267,7 @@ class GcpWorkerProvider:
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
-        self._gcp: GcpService = gcp_service or CloudGcpService(project_id=self._project_id)
+        self._gcp = gcp_service
 
     @property
     def gcp_service(self) -> GcpService:
@@ -436,6 +439,7 @@ class GcpWorkerProvider:
             boot_disk_type=DEFAULT_BOOT_DISK_TYPE,
             image_family="debian-12",
             image_project="debian-cloud",
+            network_tags=tuple(gcp.network_tags),
         )
 
         logger.info("Creating GCE instance: %s (zone=%s, type=%s)", config.name, zone, machine_type)
@@ -551,7 +555,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
+                lambda: _run_tpu_bootstrap(self._gcp, handle),
             )
 
         return handle
@@ -610,7 +614,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
+                lambda: _run_tpu_bootstrap(self._gcp, handle),
             )
 
         return handle
@@ -691,12 +695,12 @@ class GcpWorkerProvider:
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[GcpSliceHandle | GcpVmSliceHandle]:
+    ) -> list[SliceHandle]:
         """List TPU and VM slices across zones, optionally filtered by labels."""
         if self._gcp.mode == ServiceMode.LOCAL:
-            return self._gcp.get_local_slices(labels)  # type: ignore[return-value]
+            return self._gcp.get_local_slices(labels)
 
-        handles: list[GcpSliceHandle | GcpVmSliceHandle] = []
+        handles: list[SliceHandle] = []
 
         tpu_infos = self._gcp.tpu_list(zones, labels)
         for tpu in tpu_infos:
@@ -862,7 +866,6 @@ def _raise_if_create_failed(gcp_service: GcpService, handle: GcpSliceHandle) -> 
 
 def _run_tpu_bootstrap(
     gcp_service: GcpService,
-    project_id: str,
     handle: GcpSliceHandle,
     poll_interval: float = 10.0,
     ip_wait_timeout: float | None = None,
@@ -947,7 +950,9 @@ def _run_tpu_bootstrap(
 
     while not health_deadline.expired():
         for worker_id, worker_url in worker_urls:
-            if worker_id not in healthy_workers and _probe_worker_health(worker_url):
+            if worker_id in healthy_workers:
+                continue
+            if probe_worker_health(worker_url, timeout=_BOOTSTRAP_HEALTH_PROBE_TIMEOUT_SECONDS):
                 healthy_workers.add(worker_id)
                 logger.info("Worker %s is healthy", worker_id)
 
@@ -1000,15 +1005,6 @@ def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> No
         logger.warning("No Cloud Logging entries found for %s", handle.slice_id)
 
 
-def _probe_worker_health(worker_url: str) -> bool:
-    """Probe the worker's HTTP health endpoint. Returns True if healthy."""
-    try:
-        resp = urllib.request.urlopen(f"{worker_url}/health", timeout=5)
-        return resp.status == 200
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-        return False
-
-
 def _run_vm_slice_bootstrap(
     gcp_service: GcpService,
     handle: GcpVmSliceHandle,
@@ -1048,7 +1044,7 @@ def _run_vm_slice_bootstrap(
 
     while not bootstrap_deadline.expired():
         # Primary signal: HTTP health probe
-        if _probe_worker_health(worker_url):
+        if probe_worker_health(worker_url, timeout=_BOOTSTRAP_HEALTH_PROBE_TIMEOUT_SECONDS):
             logger.info("Worker health probe succeeded for VM slice %s", handle.slice_id)
             break
 

@@ -17,7 +17,9 @@ class LocalInferenceSession:
     model: RunningModel
     backend_name: str
     tensor_parallel_size: int | None
+    chat_template_content: str | None
     _served: ServedModel
+    metrics_url: str | None = None
 
     def check_alive(self) -> None:
         """Raise when the local backend has stopped serving."""
@@ -44,7 +46,9 @@ def local_inference(
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
+        tokenizer=model.tokenizer,
         revision=model.revision,
+        tokenizer_revision=model.effective_tokenizer_revision,
     )
     if isinstance(engine, VllmEngineConfig):
         # Import only the selected implementation; Levanter pulls in JAX and Transformers.
@@ -66,5 +70,7 @@ def local_inference(
             ),
             backend_name=backend.name,
             tensor_parallel_size=model.tensor_parallel_size,
+            chat_template_content=served.chat_template_content,
             _served=served,
+            metrics_url=served.metrics_url,
         )
