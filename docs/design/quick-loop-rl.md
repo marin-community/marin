@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 2:25 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 2:43 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,11 +18,11 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue is waiting for GPU and InfiniBand quota to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 24 more H100 and 24 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Two CPU hosts also passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
-| Typed binary protocol | Native serving commands and reply metadata use protobuf. Generation replies carry bounded, detached binary replay frames. The protocol passed two optimizer updates on one TPUv4 host. The learner command pipe uses pickle, and expert-block publication uses NCCL. | Verify native serving across accelerator hosts. Migrate the learner envelope after learner acceptance. |
+| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Native serving passed two TPUv4 optimizer updates. The typed learner reproduced exact CPU restart and expert-block publication. | Verify cross-host native serving and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
@@ -128,11 +128,12 @@ acknowledged serving installation. [Checkpoint and publication checks][learner-s
 
 Use a checked-in protobuf schema for commands, receipts and route metadata.
 Use a bounded length-delimited frame with a header and contiguous little-endian
-tensor bytes. For each tensor the header specifies a field ID, dtype, shape,
-offset and byte count. Keep the codec importable in both the SkyRL and Levanter
-environments without importing Torch or JAX. Include a protocol version,
-message kind, request or trajectory ID, and policy identity. Use stable dtype
-codes and define exactly which ordered bytes enter the payload digest.
+tensor bytes. The header identifies each tensor and specifies its dtype,
+shape and byte count. Segment order determines offsets in the learner pipe.
+Keep the codec importable in both the SkyRL and Levanter environments without
+importing Torch or JAX. Include a protocol version, message kind, request or
+trajectory ID, and policy identity. Use stable dtype codes and define exactly
+which ordered bytes enter the payload digest.
 
 The rollout message contains the exact rendered token sequence, including
 tool observations, and token spans for prompt, assistant and tool turns.
@@ -155,13 +156,23 @@ and selected experts. A full 512-answer update can have large capture volume
 at the production context limit. Measure serialized bytes, peak host memory
 and encode/decode latency before expanding capture coverage.
 
-Use the binary format on the first cross-process native replay integration.
-Keep historical replay fixtures readable where their qualification requires
-it. Migrate the existing trusted per-host pickle pipe in a separate change
-after the matched learner arms. Test round trips across both runtime
-environments, exact token and tensor bytes, invalid lengths and versions,
-stale policy identities, truncated frames and restart after publication.
-[Current learner pipe][worker-pipe] · [Current replay encoding][replay]
+The maintained learner at `63fb947665` uses the typed pipe for all 13
+subprocess commands, including the four expert-block publication commands.
+A 64-bit frame length carries up to 16 GiB, with a 2 MiB protobuf header
+limit and at most 128 MiB per binary segment. The writer sends each tensor,
+replay frame or weight block separately. A framing test counted the writes
+for a logical 6.7 GiB inventory batch without allocating that batch.
+It checks length encoding and segmentation. Peak memory and latency at 67B
+still need live measurement.
+
+On CPU, the typed learner reproduced exact native restart state and live
+replay after an interrupted checkpoint write. Two real Torch Gloo receivers
+also received 7,876,160 bytes each per policy version across two versions,
+with zero byte differences from the prior build after a real optimizer
+update. H100 vLLM and NCCL remain accelerator gates. The frozen smoke and
+matched learner runs keep the existing learner pipe.
+[Typed learner source and proof receipts][typed-learner-source] ·
+[Frozen learner pipe][worker-pipe] · [Replay encoding][replay]
 
 A local process-boundary proof at `9fc0fd8afd` sent four generated frames
 through a Unix socket with one unacknowledged frame at a time. A separate
@@ -731,6 +742,7 @@ arms. [Prior timing comparison][timing]
 [native-install-retry-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.14%2Finstall-retry-source-and-tests.tar.zst
 [native-callback-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.15%2Fcallback-recovery-reproduction.tar.zst
 [native-durable-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.16%2Fdurable-checkpoint-recovery.tar.zst
+[typed-learner-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.17%2Ftyped-learner-wire.tar.zst
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
