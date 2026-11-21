@@ -425,13 +425,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     importlib.import_module("levanter.main.train_lm").main(train_config)
 
 
-def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function in the current process."""
-    config, train_config, env = _prepare_training_run(config)
-    _apply_env_to_process(env)
-    importlib.import_module("levanter.main.train_dpo").main(train_config)
-
-
 def check_train_config_paths(train_config: object, resources: ResourceConfig) -> None:
     """Check that all GCS paths in ``train_config`` are in the same region as the VM.
 

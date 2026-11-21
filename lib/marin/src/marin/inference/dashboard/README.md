@@ -82,16 +82,18 @@ tags embedded in prose remain inline. This preserves custom tags such as
 dashboard.
 
 Choose **Share chat** to store a snapshot in the dashboard process and copy a
-link whose URL fragment contains its 16-character ID. The link length does not
-grow with the transcript. The snapshot includes the title, model name, user and
-assistant message text, and assistant errors. It excludes reasoning, tool calls,
+link whose URL fragment contains its 16-character ID. If the browser denies
+clipboard access, the dashboard shows a selectable link and a **Copy link**
+button. The link length does not grow with the transcript. The snapshot includes
+the title, model name, user and assistant message text, and assistant errors. It
+excludes reasoning, tool calls,
 tool results, the system prompt, custom template instructions, Python tool
 source, shell workspace, and unparsed raw protocol fields. The share operation
 does not redact excluded data that was copied into included message text or an
 error.
 
 The UTF-8 JSON request body for each snapshot is limited to 512 KiB. An
-oversized snapshot is rejected, and the share button reports **Copy failed**.
+oversized snapshot is rejected, and the share button reports **Share failed**.
 The dashboard process retains the newest 128 snapshots in memory. A snapshot is
 unavailable after it is evicted or the serving process restarts. Opening a valid
 link fetches the snapshot from the same dashboard process, saves it in that
@@ -119,7 +121,8 @@ workers go to `s3://marin-us-east-02a/marin/model-feedback/`, and reports from
 GCP workers go to `gs://marin-eval-metadata/model-feedback/`, one object per
 report under a `YYYY-MM-DD/` folder. The button appears only for
 `marin-serve iris` jobs. Each serving process accepts up to 256 reports of at
-most 1 MiB each.
+most 1 MiB each. Saved reports appear in EvalDash's Playground Reports tab after
+its next ingest pass, within about ten minutes.
 
 ## Custom Python tools
 

@@ -41,6 +41,20 @@ submission's provenance — :meth:`Provenance.capture` prefers it over shelling 
 """
 
 
+# The JSON type each field may hold in ``Provenance.to_json`` output.
+_JSON_FIELD_TYPES: dict[str, tuple[type, ...]] = {
+    "tree_hash": (str,),
+    "base_commit": (str,),
+    "dirty": (bool,),
+    "branch": (str, type(None)),
+    "built_by": (str, type(None)),
+    "git_remote": (str, type(None)),
+    "created_at": (str,),
+    "command_line": (list,),
+}
+_REQUIRED_JSON_FIELDS = frozenset({"tree_hash", "base_commit", "dirty"})
+
+
 @dataclass(frozen=True)
 class Provenance:
     """Identity, human context, and launch context of a built artifact.
@@ -125,21 +139,36 @@ class Provenance:
 
     @classmethod
     def from_json(cls, raw: str) -> "Provenance":
-        d = json.loads(raw)
-        built_by = d.get("built_by")
-        if built_by is not None and not isinstance(built_by, str):
-            # built_by feeds per-user namespacing; a non-string is a malformed payload,
-            # not an identity.
-            raise TypeError(f"built_by must be a string or null, got {type(built_by).__name__}")
+        """Parse what :meth:`to_json` writes.
+
+        Raises ``ValueError`` for anything else: text that is not JSON or is nested
+        too deeply to parse, a value that is not an object, a missing required
+        field, or a field of the wrong type. A malformed payload is not an identity:
+        ``built_by`` feeds per-user namespacing, and callers fall back on error.
+        """
+        try:
+            d = json.loads(raw)
+        except RecursionError as error:
+            raise ValueError("provenance JSON is nested too deeply to parse") from error
+        if not isinstance(d, dict):
+            raise ValueError(f"provenance must be a JSON object, got {type(d).__name__}")
+        for name, types in _JSON_FIELD_TYPES.items():
+            if name in d and not isinstance(d[name], types):
+                raise ValueError(f"provenance field {name} has type {type(d[name]).__name__}")
+            if name in _REQUIRED_JSON_FIELDS and name not in d:
+                raise ValueError(f"provenance is missing {name}")
+        command_line = d.get("command_line", [])
+        if not all(isinstance(arg, str) for arg in command_line):
+            raise ValueError("provenance command_line must be a list of strings")
         return cls(
             tree_hash=d["tree_hash"],
             base_commit=d["base_commit"],
-            dirty=bool(d["dirty"]),
+            dirty=d["dirty"],
             branch=d.get("branch"),
-            built_by=built_by,
+            built_by=d.get("built_by"),
             git_remote=d.get("git_remote"),
             created_at=d.get("created_at", ""),
-            command_line=tuple(d.get("command_line", ())),
+            command_line=tuple(command_line),
         )
 
     def to_json(self) -> str:
@@ -171,7 +200,7 @@ def _provenance_from_env() -> Provenance | None:
         return None
     try:
         return Provenance.from_json(raw)
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except ValueError:
         logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
         return None
 

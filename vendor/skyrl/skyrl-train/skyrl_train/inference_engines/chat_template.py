@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,23 +16,40 @@ SINGLE_TOOL_CALL_TEMPLATE_ERROR = "This template expects exactly one tool call p
 def assistant_prefix_token_ids(
     tokenizer: PreTrainedTokenizerBase, messages: list[dict[str, Any]], options: dict[str, Any]
 ) -> list[int]:
-    """Render an unfinished assistant message with the serving chat template."""
+    """Render an unfinished assistant message with the serving chat template.
+
+    The prompt keeps the prefix's trailing whitespace because graders score the stored prefix joined with the
+    continuation.
+    """
     template = dict(options["extra_body"])
     if template.pop("continue_final_message") is not True or template.pop("add_generation_prompt") is not False:
         raise ValueError("Assistant prefix rendering requires continuation without a new generation prompt")
     template_kwargs = {**options.get("chat_template_kwargs", {}), **template.pop("chat_template_kwargs", {})}
     if template:
         raise ValueError(f"Unsupported assistant prefix rendering fields: {sorted(template)}")
-    rendered = tokenizer.apply_chat_template(
+    render = partial(
+        tokenizer.apply_chat_template,
         messages,
         tools=options.get("tools"),
-        tokenize=True,
         return_dict=False,
         add_generation_prompt=False,
         continue_final_message=True,
         **template_kwargs,
     )
-    return cast(list[int], rendered)
+    prefix = messages[-1]["content"]
+    trailing_whitespace = prefix[len(prefix.rstrip()) :]
+    if not trailing_whitespace:
+        return cast(list[int], render(tokenize=True))
+    # Hugging Face drops the prefix's trailing whitespace when the template trims message content. Tokenize the
+    # restored text as a whole: the whitespace can merge with the preceding characters into one token.
+    text = cast(str, render(tokenize=False))
+    if not text.endswith(prefix):
+        # Leading whitespace may stay trimmed; it does not border the continuation.
+        stripped = prefix.strip()
+        if not stripped or not text.endswith(stripped):
+            raise ValueError("The chat template changed the assistant prefix beyond trimming its whitespace")
+        text += trailing_whitespace
+    return tokenizer.encode(text, add_special_tokens=False)
 
 
 def template_error_from_exception(error: BaseException) -> TemplateError | None:

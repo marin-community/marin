@@ -3,17 +3,25 @@
 
 import hashlib
 import json
-from contextlib import contextmanager
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 import yaml
-from marin.execution.lazy import StepContext, lower
+from marin.execution.artifact import read_record
+from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.micro210 import micro210_step, run_micro210
-from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
+from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.evaluation.micro210 import PREPARED_INPUTS, PREPARED_INPUTS_VERSION, micro210_step, run_micro210
+from experiments.evaluation.micro210_policy import (
+    LEGACY_POLICY_REFERENCE,
+    POLICY_REFERENCE,
+    Micro210Model,
+    micro210_evaluation,
+    read_micro210_policy,
+)
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 
@@ -44,6 +52,11 @@ def test_micro210_model_rejects_mutable_references(identity, revision):
         Micro210Model("s3://test/latest", identity, "test/tokenizer", revision)
 
 
+def test_default_policy_references_pin_immutable_hugging_face_revisions():
+    for reference in (LEGACY_POLICY_REFERENCE, POLICY_REFERENCE):
+        assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
+
+
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
     tmp_path, monkeypatch, policy_reference
 ):
@@ -66,9 +79,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
-    counterpart_key = tmp_path / "counterpart-key"
-    counterpart_key.write_text("test-counterpart-key")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
         "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
@@ -86,32 +96,37 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             deps=step.deps,
         )
     )
-    config = replace(config, counterpart_api_key=(f"file:{counterpart_key}",))
     submitted = []
 
-    @contextmanager
-    def serve_judge(_config):
-        submitted.append("judge")
-        yield SimpleNamespace(
-            model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://judge.test/v1", api_key="test"))
-        )
+    def resolve_key(spec):
+        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
+        return SimpleNamespace(value="test-together-key")
+
+    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
-        assert env_vars == {"JUDGE_API_KEY": "test", "OPENAI_API_KEY": "test-counterpart-key"}
+        assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
         submitted.append(yaml.safe_load(skyrl.launch_config_yaml))
         return None
 
-    monkeypatch.setattr("experiments.evaluation.micro210.remote_inference", serve_judge)
+    def refuse_hosted_judge(*args, **kwargs):
+        raise AssertionError("API judging must not prepare or provision a hosted judge")
+
+    monkeypatch.setattr("marin.inference.iris.prepare_inference", refuse_hosted_judge)
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
     run_micro210(config)
+    launch = submitted[0]
+    assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
+    assert launch["skyrl"]["terminal_bench"]["installed_agent"]["judge_model"] == "zai-org/GLM-5.3-Flash"
+    assert all("test-together-key" not in str(value) for value in launch.values())
     record = json.loads((output / "canonical-evaluation.json").read_text())
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
     assert (
-        submitted[1]["skyrl"]["generator"]["eval_sampling_params"]
+        submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
-    assert "eval_override_storage_mb" not in submitted[1]["skyrl"]["terminal_bench"]["harbor"]
-    assert submitted[1]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
+    assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
     altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
     submitted.clear()
@@ -140,3 +155,54 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74")
     plan = lower(step)
     assert "fixture/final-eval@2026.11.18.74" in plan.fingerprint_payload
+
+
+@pytest.mark.parametrize("change", ["digest", "byte_size"])
+def test_policy_reference_verifies_hash_and_size(policy_reference, change):
+    bad = replace(policy_reference, **({"sha256": "0" * 64} if change == "digest" else {"byte_size": 1}))
+    with pytest.raises(ValueError, match="hash mismatch"):
+        read_micro210_policy(bad)
+    assert read_micro210_policy(policy_reference)["evaluation"]["judge"]["model"] == MICRO210_JUDGE.model
+
+
+@pytest.mark.parametrize(
+    "previous_version,previous_digest", [("2026.11.18", "old-task-digest"), ("2026.11.20", "fixture-tasks")]
+)
+def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
+    tmp_path, monkeypatch, previous_version, previous_digest
+):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    old_inputs = tmp_path / "old-inputs"
+    new_inputs = tmp_path / "new-inputs"
+    old_inputs.mkdir()
+    new_inputs.mkdir()
+    run(
+        ArtifactStep.adopt(
+            "evaluation/micro210/prepared", previous_version, str(old_inputs), config={"sha256": previous_digest}
+        )
+    )
+    monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(new_inputs))
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/new-policy",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    run(prepared)
+    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / previous_version))
+    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
+    assert old_record.source == str(old_inputs)
+    assert old_record.config == {"sha256": previous_digest}
+    assert new_record.source == str(new_inputs)
+    assert new_record.config == {"sha256": "fixture-tasks"}
+
+
+def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/prepared-source",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    assert prepared.adopt_source == PREPARED_INPUTS
+    assert re.fullmatch(r"hf://datasets/open-athena/micro210-prepared-tasks@[0-9a-f]{40}", PREPARED_INPUTS)
