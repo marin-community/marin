@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 12:14 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 12:29 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. Kueue reported no placement for the queued five-task gang on its requested InfiniBand topology. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations for the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The BF16 learner used reference attention at 256 tokens. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact verification of the installed compute weights. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
@@ -264,11 +264,12 @@ it is queued and follow the coordinator if Iris retries the child.
   transfer equality within a version.
 - Require zero mismatched bytes for the installed vLLM weight versions and
   nonempty generation stamped by the serving backend with the new policy.
-  Verify all eight expected receivers for each publication. Require stamp 2
+  Verify expert-block receiver participants 32–39 for each publication. Require stamp 2
   on generation after version 1 and stamp 3 on final evaluation after
   version 2. Require a terminal native checkpoint at step 2, exact model,
   Adam, RNG, step and averaging fingerprints after fresh learner-process
   restore, and the further optimizer update after restore.
+  [Expert-block participant numbering][frozen-receiver-numbering]
 - After acceptance, run the planned 25-update Megatron/vLLM and Levanter/vLLM
   arms with distinct artifact versions and publication verification enabled in
   both. Hold the initializer, Snowball 100k selection `2026.11.04`, optimizer, 24,576-token request window, 8,192-token
@@ -284,12 +285,26 @@ Levanter policy configuration. Submission follows smoke acceptance.
 
 For each arm, collect Finelog rows for the successful child and attempt.
 The trainer mirrors its metrics as `WANDB_MIRROR` events. Match them by
-optimizer step with the rollout and update completion lines. The frozen
-evaluator writes per-dataset rows beneath `exports/dumped_evals`.
-Verify both arms evaluated the same 100 task IDs at the initial and final
-steps. Check attempted and scored counts and verifier coverage before
-comparing fixed-panel reward. Keep incomplete panels visible in the
-report.
+optimizer step with the rollout and update completion lines. Check that
+each arm starts at step 0, completes steps 1–25, and commits the step-25
+checkpoint. Require acknowledgement from the expected receivers at version
+25 and generation with stamp 26 during the final evaluation.
+Report admitted groups, generated tokens and consumed loss tokens
+separately. Filtering can change the workload each learner sees.
+Measure training and publication wall time from the initial evaluation
+result to the acknowledgement of version 25. Report allocation wall time
+separately.
+
+The frozen evaluator writes per-dataset rows beneath `exports/dumped_evals`
+with ordinal UIDs assigned after prompt-length filtering. Verify that no
+rows were dropped from the pinned validation Parquet and that each of the
+100 expected UIDs appears exactly once per panel. Compare sources and
+prompt tokens across both arms at steps 0 and 25. Recompute
+`eval/all/avg_verifier_score` from verified row verdicts and reconcile it
+with the aggregate dump and the trainer log. Compare paired rewards only
+with 100 verified scores per panel. Report incomplete panels with their
+attempted and verified counts.
+[Frozen evaluator UID assignment][frozen-validation-uid] · [Pinned validation panel in Filer][frozen-validation-panel]
 
 Current `main` uses the `experiments.post_training.rl` runner and named
 Snowball presets. The local port adds `levanter-smoke`, `learner-control`
@@ -595,7 +610,10 @@ arms. [Prior timing comparison][timing]
   consumers.
 
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
-[iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a4f09610f02b
+[iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a8ae164919e7
+[frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
+[frozen-validation-panel]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04%2Fvalidation.parquet
+[frozen-receiver-numbering]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/weight_sync/expert_block/schedule.py#L117-L118
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
 [timing]: https://github.com/marin-community/marin/issues/11190
 [launch]: ../references/rl-launching.md
