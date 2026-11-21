@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, replace
+import os
+from collections.abc import Iterator, Mapping
+from dataclasses import asdict, fields, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -17,7 +19,15 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
+from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
+from marin.execution.artifact import (
+    RECORD_FILENAME,
+    Artifact,
+    is_mutable_version,
+    read_record,
+    result_type_name,
+    validate_path_segment,
+)
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import (
@@ -33,9 +43,10 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
-from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
+from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, read_skyrl_launch_config
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
@@ -77,7 +88,7 @@ BATCH_SETTINGS = {
     "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
 
-RUNNER_KEYS = frozenset(
+_DERIVED_RECIPE_KEYS = frozenset(
     {
         "entrypoint",
         "trainer.resume_mode",
@@ -85,14 +96,24 @@ RUNNER_KEYS = frozenset(
         "trainer.placement",
         "trainer.callbacks",
         "trainer.ckpt_interval",
+        "trainer.checkpoint_retention",
+        "trainer.checkpoint_keep_every",
         "trainer.hf_save_interval",
-        "generator.trajectory_retention",
-        "generator.run_engines_locally",
+        "trainer.hf_export_checkpoint",
+        "trainer.rollout_buffer.groups_per_family",
+        "generator.enable_http_endpoint",
+        "generator.num_inference_engines",
+        "generator.inference_engine_tensor_parallel_size",
+        "generator.inference_engine_pipeline_parallel_size",
+        "generator.inference_engine_data_parallel_size",
+        "generator.inference_engine_expert_parallel_size",
     }
 )
+RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {"generator.trajectory_retention", "generator.run_engines_locally"}
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
+        "trainer.hf_hub_repo_id",
         "trainer.logger",
         "trainer.project_name",
         "context_budget",
@@ -196,6 +217,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     if preset.gated:
         owned_keys |= _GATED_KEYS
     owners = {
+        "Harbor evaluation requires generator.enable_http_endpoint": (
+            preset.harbor is not None and generator.get("enable_http_endpoint") is False
+        ),
         "use the preset's declared owned keys": any(has(path) for path in owned_keys),
         "network transport is fixed by the preset recipe": any(
             key.startswith("NCCL_") for key in values.get("extra_env", {})
@@ -226,6 +250,19 @@ def artifact_prefix(cluster: str) -> str:
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
 
 
+def run_prefix(preset: Preset) -> str:
+    cluster = preset.recipe.layout.cluster
+    prefix = artifact_prefix(cluster)
+    if preset.output_ttl_days is None:
+        return prefix
+    output = os.environ.get("MARIN_PREFIX") or marin_temp_bucket(preset.output_ttl_days, source_prefix=prefix)
+    scheme = StoragePath(prefix).scheme
+    output_scheme = StoragePath(output).scheme
+    if scheme and output_scheme != scheme:
+        raise click.BadParameter(f"run output for {cluster} must use {scheme} storage, got {output_scheme or 'local'}")
+    return output
+
+
 def selection_artifact(value: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
@@ -238,7 +275,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable model version")
-    root = run_path(preset.recipe.layout.cluster, name, version)
+    root = _source_run_path(preset, name, version, RESOLVED_LAUNCH_FILENAME, RECORD_FILENAME)
     record = read_record(root)
     if (StoragePath(root) / RESOLVED_LAUNCH_FILENAME).exists() or (
         record is not None and record.result_type == result_type_name(SkyRLRun)
@@ -256,6 +293,41 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     )
 
 
+def recovery_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
+    """Pin the newest retained recovery checkpoint and starting model from a stopped run."""
+    name, separator, version = value.rpartition("@")
+    if not name or not separator or is_mutable_version(version):
+        raise click.BadParameter("use NAME@VERSION with an immutable run version")
+    try:
+        validate_path_segment("name", name)
+        validate_path_segment("version", version)
+    except ValueError as error:
+        raise click.BadParameter(str(error)) from error
+    output = _source_run_path(preset, name, version, RESOLVED_LAUNCH_FILENAME)
+    try:
+        config = read_skyrl_launch_config(output)
+        root = StoragePath(config["artifacts"]["checkpoint_root"])
+        step = int((root / "latest_ckpt_global_step.txt").read_text().strip())
+        checkpoint = root / f"global_step_{step}"
+        committed = step > 0 and (checkpoint / "trainer_state.pt").exists()
+    except (FileNotFoundError, KeyError, ValueError):
+        committed = False
+    if not committed:
+        raise click.BadParameter(
+            f"no committed native checkpoint for {name}@{version}. "
+            "Checkpoint availability follows the source run's retention period."
+        )
+    recorded = config.get("inputs", {}).get("model")
+    model = (
+        ResolvedModelLocator(**{field.name: recorded[field.name] for field in fields(ResolvedModelLocator)})
+        if recorded
+        else None
+    )
+    return presets.StoredResume(
+        artifact_name=name, artifact_version=version, step=step, checkpoint=str(checkpoint), model=model
+    )
+
+
 def stored_initializer(source: SkyRLModelSource, *, preset: Preset) -> StoredInitializer:
     """Record a model producer's identity and selector without reading its output."""
     step = source.step
@@ -264,7 +336,7 @@ def stored_initializer(source: SkyRLModelSource, *, preset: Preset) -> StoredIni
     values = dict(
         artifact_name=step.name,
         artifact_version=step.version,
-        artifact_root=step.path(artifact_prefix(preset.recipe.layout.cluster)),
+        artifact_root=step.path(run_prefix(preset)),
         fingerprint_payload=step.fingerprint_payload(),
     )
     if isinstance(source, SkyRLPolicyModel):
@@ -306,8 +378,23 @@ def model_from_reference(source: StoredInitializer, *, resolved: ResolvedModelLo
     )
 
 
-def run_path(cluster: str, name: str, version: str) -> str:
-    return str(StoragePath(artifact_prefix(cluster)) / name / version)
+def run_path(preset: Preset, name: str, version: str) -> str:
+    return str(StoragePath(run_prefix(preset)) / name / version)
+
+
+def _source_run_path(preset: Preset, name: str, version: str, *record_names: str) -> str:
+    output = StoragePath(run_path(preset, name, version))
+    ttl = preset.output_ttl_days
+    if ttl is None or any((output / record).exists() for record in record_names):
+        return str(output)
+    durable = artifact_prefix(preset.recipe.layout.cluster)
+    temporary = marin_temp_bucket(ttl, source_prefix=durable)
+    for prefix in dict.fromkeys((durable, temporary)):
+        candidate = StoragePath(prefix) / name / version
+        if candidate != output and candidate.scheme == output.scheme:
+            if any((candidate / record).exists() for record in record_names):
+                return str(candidate)
+    return str(output)
 
 
 def utc_millis(value: str) -> int:
@@ -320,32 +407,57 @@ def _training_config(
     settings: tuple[str, ...],
 ) -> RecipePatch:
     recipe = preset.recipe
-    micro_batch, in_flight = recipe.layout.workload.batch_parameters(recipe.config)
+    authored = recipe.config.to_skyrl()
+    if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
+        raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
+    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe.config)
     geometry = asdict(recipe.layout.megatron)
     budget = recipe.config.context_budget
     assert budget is not None
     if recipe.fixed_reply_tokens is not None:
         budget = budget.replace(max_new_tokens_per_turn=recipe.fixed_reply_tokens)
-    config = recipe.config.merge(
+    trainer = sections.Trainer(
+        max_steps=preset.updates or 1,
+        micro_forward_batch_size_per_gpu=micro_batch,
+        eval_interval=max(1, preset.updates) if preset.evaluations else -1,
+        resume_mode="latest" if preset.checkpoints != "none" else "none",
+        ckpt_interval=0,
+        hf_save_interval=-1,
+        policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
+        ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
+    )
+    if preset.checkpoints != "none":
+        trainer = trainer.replace(checkpoint_retention=preset.checkpoints)
+    if preset.keep_every is not None:
+        trainer = trainer.replace(checkpoint_keep_every=preset.keep_every)
+    if preset.export == "best":
+        trainer = trainer.replace(hf_export_checkpoint="best")
+    if recipe.training_plan is not None:
+        training_geometry = {}
+        for key, value in recipe.training_plan.config_values().items():
+            if key.startswith("trainer."):
+                set_path(training_geometry, key, value)
+        recipe_config = recipe.config.merge(RecipePatch.from_document(training_geometry))
+    else:
+        recipe_config = recipe.config
+    config = recipe_config.merge(
         RecipePatch(
             context_budget=budget,
-            trainer=sections.Trainer(
-                max_steps=preset.updates or 1,
-                micro_forward_batch_size_per_gpu=micro_batch,
-                eval_interval=max(1, preset.updates) if preset.evaluations else -1,
-                resume_mode="latest" if preset.checkpoint_every else "none",
-                policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
-                ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
-                rollout_buffer=sections.RolloutBuffer(
-                    max_in_flight=in_flight,
-                ),
-            ),
+            trainer=trainer,
             generator=sections.Generator(
                 sampling_params=sections.SamplingParams(ignore_eos=recipe.fixed_reply_tokens is not None),
             ),
         ),
     )
-    return apply_settings(config, settings, preset)
+    config = apply_settings(config, settings, preset)
+    if settings:
+        try:
+            presets.validate_agentic_recipe(config)
+        except ValueError as error:
+            raise click.BadParameter(str(error)) from error
+    if preset.harbor is not None:
+        config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
+    return config
 
 
 def _refuse_judged(summary: dict, filename: str) -> None:
@@ -359,6 +471,7 @@ def run_spec(
     name: str,
     tasks: ArtifactStep | None = None,
     init: SkyRLModelSource | None = None,
+    resume: presets.StoredResume | None = None,
     settings: tuple[str, ...] = (),
     model_name: str | None = None,
 ) -> SkyRLSpec:
@@ -369,24 +482,47 @@ def run_spec(
     batch_changes = {
         field: value for key, field in BATCH_SETTINGS.items() if (value := get_path(authored, key)) is not MISSING
     }
-    if batch_changes:
-        workload = preset.recipe.layout.workload.with_batches(batch_changes)
-        preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, workload=workload)))
-        micro_batch, in_flight = workload.batch_parameters(config)
-        derived = {}
-        if get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
-            derived["micro_forward_batch_size_per_gpu"] = micro_batch
-        if get_path(explicit, "trainer.rollout_buffer.max_in_flight") is MISSING:
-            derived["rollout_buffer"] = {"max_in_flight": in_flight}
-        config = config.merge(RecipePatch.from_document({"trainer": derived}))
-    default, selection = task_selections(preset, tasks)
-    _refuse_judged(selection_summary(selection), "train")
-    chosen = preset.evaluations
     workload = preset.recipe.layout.workload
+    if batch_changes:
+        workload = workload.with_batches(batch_changes)
+        preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, workload=workload)))
+    micro_batch, in_flight = workload.batch_parameters(config)
+    derived = {}
+    if batch_changes and get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
+        derived["micro_forward_batch_size_per_gpu"] = micro_batch
+    if get_path(authored, "trainer.rollout_buffer.max_in_flight") is MISSING:
+        derived["rollout_buffer"] = {"max_in_flight": in_flight}
+    config = config.merge(RecipePatch.from_document({"trainer": derived}))
+    default, selection = task_selections(preset, tasks)
+    summary = selection_summary(selection)
+    _refuse_judged(summary, "train")
+    harness_by_dataset = get_path(authored, "environment.task_sessions.task_spec.harness_by_dataset")
+    harnesses = harness_by_dataset if isinstance(harness_by_dataset, Mapping) else {}
+    if missing_harnesses := sorted(
+        dataset for dataset in summary.get("harness_graded_datasets", ()) if harnesses.get(dataset) != "harbor_trial"
+    ):
+        raise click.BadParameter(
+            f"training datasets with harness graders require harbor_trial in harness_by_dataset: "
+            f"{', '.join(missing_harnesses)}"
+        )
+    chosen = preset.evaluations
+    if preset.batch_mix is not None:
+        assert isinstance(workload, presets.Training)
+        try:
+            groups = preset.batch_mix.groups(
+                workload.plan.train_batch_size, set(summary.get("training_family_counts", {}))
+            )
+        except ValueError as error:
+            raise click.BadParameter(str(error)) from error
+        config = config.merge(
+            RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
+        )
     preset = preset.with_updates(config.trainer.max_steps)
-    model = preset.model if init is None else init
-    selects_best = preset.checkpoint_every or (preset.export_hf and config.trainer.hf_export_checkpoint == "best")
-    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster)) if selects_best else None
+    model = (resume.model if resume is not None else None) or init or preset.model
+    initial_model_uri = None
+    if preset.checkpoints == "best":
+        prefix = run_prefix(preset)
+        initial_model_uri = model.uri if isinstance(model, ResolvedModelLocator) else model.step.path(prefix)
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -454,9 +590,32 @@ def run_spec(
             gpu_variant=preset.recipe.layout.gpu_variant,
             role_plan=plan,
         ),
-        retention=preset.retention,
+        retention=(
+            replace(preset.retention, checkpoints_in_run_output=True)
+            if preset.output_ttl_days is not None
+            else preset.retention
+        ),
         seed=preset.seed,
+        starting_checkpoint=(
+            ArtifactStep.adopt(
+                f"{resume.artifact_name}/resume/step-{resume.step}", resume.artifact_version, resume.checkpoint
+            )
+            if resume is not None
+            else None
+        ),
     )
+
+
+def _recipe_env(value: object) -> Iterator[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key.endswith("_env") and isinstance(child, str):
+                yield child
+            else:
+                yield from _recipe_env(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _recipe_env(child)
 
 
 def run_step(
@@ -464,7 +623,15 @@ def run_step(
 ) -> ArtifactStep[SkyRLRun]:
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
+    config = yaml.safe_load(spec.config_yaml)
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
+    if preset.output_ttl_days is not None:
+        required_env += ("MARIN_PREFIX",)
+    if preset.harbor is not None:
+        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
+    elif get_path(config, "terminal_bench.installed_agent") is not MISSING:
+        required_env += (DAYTONA_TARGET_ENV,)
+    required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,
         IrisSkyRLExecution(
@@ -482,8 +649,9 @@ def run_step(
             wandb_entity=wandb_entity or preset.wandb_entity,
             required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+            role_topology=layout.role_topology,
         ),
-        export_hf=preset.export_hf,
+        export_hf=preset.export != "none",
     )
 
 

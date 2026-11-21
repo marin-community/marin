@@ -44,7 +44,7 @@ def reasons(error: BaseException) -> tuple[str, ...]:
 
 
 STAGE_REPLAY_ATTEMPTS = 3
-"""Bound interrupted-stage reconstruction; effect executors alone own retries."""
+"""Bound consecutive interrupted reconstructions of one stage visit; effect executors alone own retries."""
 
 
 def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Policy) -> Workpiece:
@@ -144,6 +144,8 @@ async def run_workpiece(
                         raise
                     stage_attempts[key] = attempt + 1  # replay the interrupted stage
                 else:
+                    # A completed visit resets the budget, so a same-round re-entry starts with a full one.
+                    stage_attempts.pop(key, None)
                     previous_round = wp.round
                     wp, following = advance(wp, stage, result, config)
                     if wp.round != previous_round:

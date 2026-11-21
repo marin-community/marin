@@ -74,12 +74,11 @@ async def adversary_result(
         result = None
         try:
             result = await run_adversary(ctx, workpiece, config, resources, spec, name)
-        except* OutputBudgetExhausted:
-            await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
         except* Hold as error:
             result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
         if result is not None:
             return result
+        await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
     return exhausted(name, SearchLimit.OUTPUT_BUDGET)
 
 
@@ -108,9 +107,20 @@ async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClai
     )
 
 
+async def reproduced(
+    ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim
+) -> tuple[AdversaryFinding, tuple[str, ...]]:
+    """Reproduce one claim; an inconclusive reproduction keeps the claim and candidate ungraded, with why."""
+    try:
+        return await claim_result(ctx, spec, claim), ()
+    except (OutputBudgetExhausted, Hold) as error:
+        return AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False), failure_reasons(error)
+
+
 async def run_adversary(
     ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources, spec: TaskRolloutSpec, name: str
-) -> AdversaryResult:
+) -> AdversaryResult | None:
+    """One adversary search and the reproduction of its claims; ``None`` when the search ran out of output."""
     requested = (
         spec.task.environment_requirements
         if spec.task_machine is not None
@@ -152,7 +162,13 @@ async def run_adversary(
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
-            outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
+            try:
+                outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
+            except* OutputBudgetExhausted:
+                # Only the search session's own output counts as an exhausted search, never claim reproduction.
+                outcome = None
+            if outcome is None:
+                return None
             if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
                 return exhausted(name, SearchLimit.CONTEXT_WINDOW)
             if (
@@ -168,8 +184,16 @@ async def run_adversary(
                 return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
             report = outcome.payload
             async with asyncio.TaskGroup() as group:
-                findings = [group.create_task(claim_result(ctx, spec, claim)) for claim in report.findings]
-            return AdversaryResult(name, AdversaryStatus.REPORTED, tuple(finding.result() for finding in findings))
+                claims = [group.create_task(reproduced(ctx, spec, claim)) for claim in report.findings]
+            results = [claim.result() for claim in claims]
+            # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
+            reasons = tuple(
+                f"reproducing {finding.claim!r} was inconclusive: {reason}"
+                for finding, failure in results
+                for reason in failure
+            )
+            status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
+            return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
     finally:
         await close_resource(env.close, ctx.emit)
 

@@ -20,8 +20,10 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
     Command,
+    CommandOutcomeUnknown,
     ExecSetupFailed,
     ExitReason,
+    GuestPathError,
     Machine,
     MachineCancelled,
     MachineFactory,
@@ -34,7 +36,7 @@ from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, digest
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
+from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
 from taskforge.resources.execution import Notify, retry_effect
 from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
 
@@ -127,8 +129,17 @@ BACKSTOP = 30.0
 """Machine deadline beyond the command timeout: the kill-after grace plus exec and capture latency."""
 
 
+# ShellSim 0.1.39's path error text. It reports ENOENT, not ENOTDIR, for a read below a regular file.
 SIMULATION_ERRNOS = {
-    os.strerror(code).lower(): code for code in (errno.EISDIR, errno.ENOTDIR, errno.EACCES, errno.ENOENT)
+    "no such file or directory": errno.ENOENT,
+    "not a directory": errno.ENOTDIR,
+    "is a directory": errno.EISDIR,
+    "permission denied": errno.EACCES,
+    "too many levels of symbolic links": errno.ELOOP,
+    "file name too long": errno.ENAMETOOLONG,
+    "file exists": errno.EEXIST,
+    "directory not empty": errno.ENOTEMPTY,
+    "read-only filesystem": errno.EROFS,
 }
 
 
@@ -156,13 +167,19 @@ class ShellboxEnv(RecordedEnv):
             yield
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
             raise _machine_issue(error) from error
+        except CommandOutcomeUnknown as error:
+            # Retrying in place could run the command twice; a stage replay issues it once on a fresh machine.
+            raise Restart(f"command outcome unknown: {error}") from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment operation did not resolve") from error
-        except OSError as error:
-            # Path failures carry an errno; report them against the path the caller asked for.
-            if path is None or error.errno is None:
+        except GuestPathError as error:
+            # Report the guest's errno against the path the caller asked for.
+            if error.errno is None:
                 raise
-            raise OSError(error.errno, os.strerror(error.errno), str(path)) from error
+            raise OSError(error.errno, os.strerror(error.errno), str(path or error.filename)) from error
+        except OSError as error:
+            # Any other OS error is the host's own I/O, such as staging a transfer, never the caller's path.
+            raise Hold(f"environment host I/O failed: {describe_exception(error)}") from error
         except SimulationError as error:
             # ShellSim reports path failures as "<strerror>: <path>" text only.
             message, _, name = str(error).partition(": ")

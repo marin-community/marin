@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import errno
 import json
+import os
 from contextlib import AsyncExitStack
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -11,9 +13,9 @@ from typing import override
 import httpx
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
+from lib.taskforge.tests.resources.iris_fakes import LocalController, local_iris_machine
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
-from rolloutengine.test_support import arithmetic_task, rollout_limits
-from shellbox.backends.iris.machine import ExecOutput, IrisMachine
+from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
@@ -52,6 +54,7 @@ from taskforge.resources.env import (
     ReadFile,
     RunCommand,
     ShellboxEnv,
+    ShellboxEnvFactory,
     WriteFile,
     read_file,
     run_command,
@@ -59,7 +62,9 @@ from taskforge.resources.env import (
 )
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import Engine
+from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.resources.web import ParallelWeb, WebFetch, WebSearch, fetch, search
+from taskforge.stages.author import install_env
 
 pytestmark = pytest.mark.asyncio
 
@@ -458,26 +463,69 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
     assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]
 
 
-class MissingPathIrisMachine(IrisMachine):
-    """An Iris sandbox whose every exec fails as Debian's dash does when a redirect source is missing."""
-
-    def __init__(self) -> None:
-        pass
-
-    @override
-    async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
-        return ExecOutput(exit_code=2, stdout="", stderr="sh: 1: cannot open /tests/grade.py: No such file\n")
+def iris_env(ctx: Context, workdir: Path, controller: LocalController) -> ShellboxEnv:
+    env = ShellboxEnv(local_iris_machine(workdir, controller), "image", AsyncExitStack(), str(workdir))
+    install_env(ctx, env)
+    return env
 
 
-async def test_reading_a_missing_path_on_iris_is_tool_feedback(tmp_path: Path) -> None:
+# Review 2026-11-20: Iris reported ENOENT below a regular file and below a directory it cannot search.
+@pytest.mark.parametrize(
+    "path,code", [("grade.py", errno.ENOENT), ("present.txt/child", errno.ENOTDIR), ("locked/grade.py", errno.EACCES)]
+)
+async def test_reading_a_refused_path_on_iris_is_tool_feedback_with_its_errno(
+    tmp_path: Path, path: str, code: int
+) -> None:
+    if code == errno.EACCES and os.geteuid() == 0:
+        pytest.skip("root searches every directory")
+    (tmp_path / "present.txt").write_text("present")
+    (tmp_path / "locked").mkdir(mode=0o600)
     ctx = Context(log=EventLog())
-    env = ShellboxEnv(MissingPathIrisMachine(), "image", AsyncExitStack(), str(tmp_path))
-    ctx.resource(env, env.fingerprint)
-    ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
-    result = await ReadFileTool()(ctx, {"path": "grade.py"})
+    iris_env(ctx, tmp_path, LocalController())
+    try:
+        result = await ReadFileTool()(ctx, {"path": path})
+    finally:
+        (tmp_path / "locked").chmod(0o700)
     await ctx.drain()
-    assert isinstance(result, ToolResult) and result.content.startswith("File operation failed:")
-    assert "grade.py" in result.content
+    assert result == ToolResult(f"File operation failed: [Errno {code}] {os.strerror(code)}: '{path}'")
+
+
+# Review 2026-11-20: a missing transfer helper and a full host disk reached the model as path errors.
+@pytest.mark.parametrize("failure", ["guest helper", "host disk"])
+async def test_file_tool_infrastructure_failures_are_not_author_feedback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    (tmp_path / "present.txt").write_text("present")
+    ctx = Context(log=EventLog())
+    iris_env(ctx, tmp_path, LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; "))
+    if failure == "guest helper":
+        with pytest.raises(RuntimeError, match="wc: not found"):
+            await ReadFileTool()(ctx, {"path": "present.txt"})
+    else:
+
+        def full_disk(self: Path, data: bytes) -> int:
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(self))
+
+        monkeypatch.setattr(Path, "write_bytes", full_disk)
+        with pytest.raises(Hold, match="No space left on device"):
+            await WriteFileTool()(ctx, {"path": "notes.txt", "content": "valid"})
+    await ctx.drain()
+
+
+# Review 2026-11-20: a ShellSim symlink loop crashed the workpiece with a raw SimulationError.
+async def test_reading_a_shellsim_symlink_loop_is_tool_feedback() -> None:
+    ctx = Context(log=EventLog())
+    requirements = EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR)
+    env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5).create(requirements)
+    install_env(ctx, env)
+    try:
+        await ctx.emit(RunCommand("ln -s /workspace/loop /workspace/loop", 5))
+        result = await ReadFileTool()(ctx, {"path": "/workspace/loop"})
+    finally:
+        await env.close()
+    await ctx.drain()
+    loop = os.strerror(errno.ELOOP)
+    assert result == ToolResult(f"File operation failed: [Errno {errno.ELOOP}] {loop}: '/workspace/loop'")
 
 
 async def test_read_file_ranges_are_bytes_before_text_or_base64_decoding() -> None:

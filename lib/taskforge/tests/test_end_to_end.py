@@ -23,7 +23,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from taskforge import checkpoint, driver
 from taskforge.config import TaskforgeConfig
-from taskforge.coordinator import advance, run_workpiece
+from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import Hold, Restart, Transient
@@ -39,6 +39,7 @@ from taskforge.model.review import (
     BandOutcome,
     BandRules,
     Budget,
+    Cause,
     Decision,
     Incomplete,
     Modify,
@@ -57,6 +58,7 @@ from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Decided
+from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, install
 
 
@@ -233,6 +235,37 @@ async def test_unavailable_control_grade_is_regraded_on_validation_retry(proposa
     wp = await run_workpiece(proposal, config(), bundle, EventLog(replayable=replayable_grade), install=install)
     assert [type(decision) for decision in wp.decisions] == [Retry, Accept]
     assert wp.terminal == Terminal.ACCEPTED
+
+
+class FlakySolver(Engine):
+    """Trial 0 raises ``Restart`` the given number of times for each validation attempt index."""
+
+    def __init__(self, failures: dict[int, int]) -> None:
+        self.failures = failures
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        assert run_id is not None
+        trial, attempt = (int(part) for part in run_id.split(":")[-2:])
+        if trial == 0 and self.failures.get(attempt, 0):
+            self.failures[attempt] -= 1
+            raise Restart("solver sandbox preempted")
+        return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.GRADED, float(trial % 2 == 0)))
+
+
+# Review 2026-11-20: a same-round validation retry inherited the earlier visit's replay attempts and held.
+async def test_stage_replay_budget_restarts_after_each_completed_stage(proposal: TaskProposal) -> None:
+    def retry_once(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+        if any(isinstance(decision, Retry) for decision in workpiece.decisions):
+            return default_review(workpiece, band, budget)
+        return Retry(Cause.AGENT_TIMEOUT, 1)
+
+    solver = FlakySolver({0: STAGE_REPLAY_ATTEMPTS - 1, 1: 1})
+    bundle = resources(Envs(), script())
+    bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=solver))
+    wp = await run_workpiece(proposal, replace(config(), review=retry_once), bundle, EventLog(), install=install)
+    assert [type(decision) for decision in wp.decisions] == [Retry, Accept]
+    assert wp.terminal == Terminal.ACCEPTED and not any(solver.failures.values())
 
 
 @pytest.fixture
