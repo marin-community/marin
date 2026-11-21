@@ -117,8 +117,11 @@ GUEST_TIMER_PROBE = (
 # A guest-timed command reports on the exec's stdout, which it never sees: its shell writes ``exit <code>`` when the
 # command, run in a subshell so ``exit`` or ``exec`` cannot end the reporter, finishes; the outer shell then writes
 # ``timer <code>`` once ``timeout`` itself has returned. A reply with neither, such as the controller cutting an open
-# exec stream, says nothing about the command.
-TIMED_COMMAND = '("$@") 3>&-; echo "exit $?" >&3'
+# exec stream, says nothing about the command. The reporter catches TERM so that ``timeout``, which watches only it,
+# keeps waiting while the command outlives the TERM and sends the KILL at the grace. A caught signal is reset to its
+# default in the subshell; an ignored one (``trap '' TERM``) would be inherited by the command. The command's stderr
+# arrives on fd 4, so the reporter's own notices, such as a shell's ``Terminated`` line, stay out of its capture.
+TIMED_COMMAND = 'trap : TERM; ("$@") 2>&4 3>&- 4>&-; echo "exit $?" >&3'
 COMPLETION_RECORD = re.compile(r"(exit|timer) (\d+)")
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
@@ -520,10 +523,8 @@ class IrisMachine:
         # The guest bounds a command that has a timeout and keeps the machine, as Docker and Daytona do. Without a
         # coreutils ``timeout`` the exec's RPC deadline is the timeout itself, and expiry closes the machine.
         timer = () if command.timeout is None else await self._timer()
-        redirects = (
-            f"< {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
-        )
+        stdin_redirect = f"< {shlex.quote(stdin_path) if command.stdin else '/dev/null'}"
+        redirects = f"{stdin_redirect} > {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         cwd = shlex.quote(command.cwd or self.spec.workdir)
         script = f"{exports}\ncd {cwd} || exit 1\n{shlex.join(command.argv)} {redirects}"
         # An exec without a positive deadline falls back to the controller's short Kubernetes default.
@@ -533,7 +534,8 @@ class IrisMachine:
             script = (
                 f'{exports}\ncd {cwd} || {{ echo "exit 1"; exit 1; }}\n'
                 f"{timeout_path} -k {GUEST_KILL_GRACE_SECONDS} {command.timeout} {sh_path} -c "
-                f'{shlex.quote(TIMED_COMMAND)} shellbox {shlex.join(command.argv)} 3>&1 {redirects}; echo "timer $?"'
+                f"{shlex.quote(TIMED_COMMAND)} shellbox {shlex.join(command.argv)} 3>&1 {stdin_redirect} "
+                f'> {shlex.quote(stdout_path)} 4> {shlex.quote(stderr_path)}; echo "timer $?"'
             )
             exec_timeout = command.timeout + GUEST_KILL_GRACE_SECONDS + GUEST_EXEC_MARGIN_SECONDS
         elif command.timeout is not None:
@@ -548,8 +550,11 @@ class IrisMachine:
         #   decide    reply without the command's exit status, including the WebSocket setup-failure text,
         #             which the Kubernetes client reports after an exec whose upgrade reply was lost
         #                                                    -> unattributed outcome
-        #             guest-timed: ``exit`` record           -> that exit status
-        #             ``timer 124``                          -> TIMED_OUT with its output so far, machine kept
+        #             guest-timed: ``timer 124``             -> TIMED_OUT with its output so far, machine kept, even
+        #                                                       beside the ``exit`` record of the TERMed command:
+        #                                                       the reporter exits with echo's status, so only the
+        #                                                       timer exits 124
+        #             ``exit`` record                        -> that exit status
         #             no record, or any other ``timer``      -> unattributed outcome, machine closed; a 137 cannot
         #                                                       tell the timer's KILL from an independent one
         #   capture   guest helper failed or sandbox gone    -> GuestHelperFailed / MachineTerminated
@@ -581,8 +586,8 @@ class IrisMachine:
             if command.timeout is not None and timer:
                 records = _completion_records(response.stdout)
                 exit_code, timer_rc = records.get("exit"), records.get("timer")
-                if exit_code is None and timer_rc == 124:
-                    reason = ExitReason.TIMED_OUT
+                if timer_rc == 124:
+                    exit_code, reason = None, ExitReason.TIMED_OUT
                 elif exit_code is None:
                     # A cut exec stream or a supervisor killed by something else: the command may still be running.
                     state = f"timer {timer_rc}" if timer_rc is not None else f"exit {response.exit_code}"

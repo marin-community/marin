@@ -1052,13 +1052,22 @@ def test_cut_exec_stream_is_never_a_guest_timeout(tmp_path, state, error_message
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("signal_name", ["KILL", "TERM"])
-def test_status_shell_killed_before_the_limit_is_an_unknown_outcome(tmp_path, signal_name) -> None:
+def test_status_shell_killed_before_the_limit_is_an_unknown_outcome(tmp_path) -> None:
     async def scenario() -> None:
         machine, job = local_machine(tmp_path)
-        with pytest.raises(CommandOutcomeUnknown, match=f"timer {128 + getattr(signal, 'SIG' + signal_name)}"):
-            await machine.run(Command(("sh", "-c", f"kill -{signal_name} $PPID"), timeout=30))
+        with pytest.raises(CommandOutcomeUnknown, match=f"timer {128 + signal.SIGKILL}"):
+            await machine.run(Command(("sh", "-c", "kill -KILL $PPID"), timeout=30))
         assert job.cancelled
+
+    asyncio.run(scenario())
+
+
+def test_status_shell_outlives_a_stray_term_and_records_the_exit(tmp_path) -> None:
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path)
+        result = await machine.run(Command(("sh", "-c", "kill -TERM $PPID; exit 3"), timeout=30))
+        assert (result.reason, result.exit_code) == (ExitReason.EXITED, 3)
+        assert not job.cancelled
 
     asyncio.run(scenario())
 
@@ -1254,14 +1263,21 @@ def test_ordinary_timeout_needs_only_the_timer(tmp_path) -> None:
 
 # Review follow-up 2026-11-21: argv that is a shell builtin ran in the status shell itself, so `exit` and `exec`
 # ended it before it wrote the command's record. At the base the argv was joined into the script and they worked.
+def guest_timer(shell: str) -> tuple[str, str]:
+    """The coreutils ``timeout`` and ``shell`` paths a guest probe would report, or a skip when either is absent."""
+    timeout_path, shell_path = shutil.which("timeout"), shutil.which(shell)
+    if timeout_path is None or shell_path is None:
+        pytest.skip(f"{shell} or a coreutils timeout is not installed")
+    return timeout_path, shell_path
+
+
 @pytest.mark.parametrize("shell", ["dash", "bash"])
 def test_timed_commands_keep_their_own_exit_status_in_dash_and_bash(tmp_path, shell) -> None:
-    if not (shell_path := shutil.which(shell)) or not shutil.which("timeout"):
-        pytest.skip(f"{shell} or a coreutils timeout is not installed")
+    timer = guest_timer(shell)
 
     async def scenario() -> None:
         machine, job = local_machine(tmp_path)
-        machine._guest_timer = (shutil.which("timeout"), shell_path)  # type: ignore[assignment]
+        machine._guest_timer = timer
         cases = [
             (Command(("exit", "7"), timeout=5), 7, b""),
             (Command(("exit", "124"), timeout=5), 124, b""),
@@ -1279,6 +1295,81 @@ def test_timed_commands_keep_their_own_exit_status_in_dash_and_bash(tmp_path, sh
         assert time.monotonic() - started < 2  # A background child does not hold the reply.
         with pytest.raises(GuestHelperFailed):  # Inherited: capture reads a file the failed `cd` never created.
             await machine.run(Command(("true",), cwd=str(tmp_path / "missing"), timeout=5))
+        assert not job.cancelled
+
+    asyncio.run(scenario())
+
+
+class RecordingRpc(LocalRpc):
+    """Runs each exec locally and keeps the raw stdout of every command exec."""
+
+    def __init__(self) -> None:
+        self.replies: list[str] = []
+
+    def exec_in_container(self, request, timeout_ms):
+        response = super().exec_in_container(request, timeout_ms)
+        if is_command_exec(request.command[-1]):
+            self.replies.append(response.stdout)
+        return response
+
+
+def wait_until_gone(pid: int, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+# Review 2026-11-21: the status shell died on the timer's TERM, so `timeout` exited 124 without its KILL, and a
+# command that ignored TERM kept running beside the next command on a machine reported as safely timed out.
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+def test_command_ignoring_term_is_killed_at_the_grace_and_closes_the_machine(tmp_path, shell, monkeypatch) -> None:
+    timer = guest_timer(shell)
+    monkeypatch.setattr(iris_backend, "GUEST_KILL_GRACE_SECONDS", 1)
+
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path)
+        machine._guest_timer = timer
+        script = "echo $$ > pid.txt; trap '' TERM; sleep 2; echo survived > late.txt"
+        with pytest.raises(CommandOutcomeUnknown, match=r"timer 137"):
+            await machine.run(Command(("sh", "-c", script), timeout=0.3))
+        assert job.cancelled
+        with pytest.raises(MachineTerminated, match=r"no completion record \(timer 137\)"):
+            await machine.run(Command(("true",)))
+
+    asyncio.run(scenario())
+    # The KILL reached the command's shell, so the file it would write after its sleep can never appear.
+    assert wait_until_gone(int((tmp_path / "pid.txt").read_text()), seconds=5)
+    assert not (tmp_path / "late.txt").exists()
+
+
+# Only the timer exits 124: after its TERM the status shell records the command's status and exits with echo's.
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+@pytest.mark.parametrize(
+    "script,timeout,reason,exit_code,records",
+    [
+        ("printf prefix; sleep 30", 0.3, ExitReason.TIMED_OUT, None, ["exit 143", "timer 124"]),
+        ("printf prefix; trap 'exit 0' TERM; sleep 30 & wait", 0.3, ExitReason.TIMED_OUT, None, ["exit 0", "timer 124"]),
+        ("printf prefix; exit 143", 5, ExitReason.EXITED, 143, ["exit 143", "timer 0"]),
+        ("printf prefix; exit 124", 5, ExitReason.EXITED, 124, ["exit 124", "timer 0"]),
+    ],
+    ids=["ignores-nothing", "handles-term", "exits-143", "exits-124"],
+)
+def test_only_the_timer_record_makes_a_timeout(tmp_path, shell, script, timeout, reason, exit_code, records) -> None:
+    timer = guest_timer(shell)
+    rpc = RecordingRpc()
+
+    async def scenario() -> None:
+        machine, job = local_machine(tmp_path, rpc)
+        machine._guest_timer = timer
+        result = await machine.run(Command(("sh", "-c", script), timeout=timeout))
+        assert (result.reason, result.exit_code, result.stdout) == (reason, exit_code, b"prefix")
+        assert rpc.replies[0].splitlines() == records
+        assert (await machine.run(Command(("echo", "open"), timeout=5))).stdout == b"open\n"
         assert not job.cancelled
 
     asyncio.run(scenario())
