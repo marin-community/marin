@@ -676,15 +676,16 @@ class Trainer:
                 logger.info(
                     "SFT_STEP rank=%d phase=start step=%d learning_rate_scale=%g budget_deadline=%s",
                     jax.process_index(),
-                    int(state.step) + 1,
+                    int(state.step),
                     scale,
                     self.config.training_budget.deadline_epoch_seconds if self.config.training_budget else None,
                 )
                 info = self.train_step(state, example, learning_rate_scale=scale)
                 logger.info(
-                    "SFT_STEP rank=%d phase=completed step=%d learning_rate_scale=%g duration=%g loss=%g",
+                    "SFT_STEP rank=%d phase=completed step=%d completed_updates=%d learning_rate_scale=%g duration=%g loss=%g",
                     jax.process_index(),
                     info.step,
+                    info.next_step,
                     scale,
                     info.step_duration,
                     info.loss,
