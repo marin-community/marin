@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference, FakeWeb
-from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider, segment
+from lib.taskforge.tests.resources.inference_fakes import Backend, ScriptedProvider, provider_completion, segment
 from rolloutengine.models import GradedRollout, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
@@ -19,9 +19,10 @@ from verifyit.spec import JudgeSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
-from taskforge.effects.issues import Restart
+from taskforge.effects.issues import ContextExceeded, Restart
 from taskforge.effects.log import EventLog, Record
-from taskforge.llm.client import Progress, Segment
+from taskforge.llm.client import ContextExhausted, Progress, Segment
+from taskforge.llm.client import FinishReason as ProviderFinish
 from taskforge.llm.policy import GLM_5_3, ModelProfile
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
@@ -29,7 +30,7 @@ from taskforge.model.llm import Completion
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
-from taskforge.resources.inference import InferenceRequest
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.judge import JudgeEngine
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.wiring import build_resources, install
@@ -203,3 +204,48 @@ def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role
     ):
         build_resources(policy, providers, {}, FakeWeb({}, {}))
     assert not any(provider.bodies for provider in providers.values())
+
+
+ANSWER = replace(
+    provider_completion(), content="SCORE: 1", tool_calls=(), finish_reason=ProviderFinish.STOP, continuations=0
+)
+
+
+# Review 2026-11-21 (n12 follow-up 3): a context refusal recorded inside the shared inference resource cached the
+# judge's refusal, so after the provider recovered the same grade made no call and raised again.
+@pytest.mark.parametrize("injected", [True, False], ids=["injected client", "provider"])
+async def test_a_judge_context_refusal_is_asked_again_once_the_provider_recovers(injected: bool) -> None:
+    refusal = ContextExhausted("maximum context length exceeded", ())
+    first: InferenceClient = (
+        FakeInference((ContextExceeded(refusal.body),), identity="judge")
+        if injected
+        else GlmInference(Backend((refusal,)), "judge")
+    )
+    task = arithmetic_task(grader=verifyit_package(JudgeSpec(references=("12",), exact_gate=False)).grader)
+    policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"})
+    spec = lower_with_settings(task, lowering_settings(policy), {})
+    history: tuple[Record, ...] = ()
+    for recovered in (False, True):
+        healthy, backend = FakeInference((Completion("SCORE: 1"),), identity="judge"), Backend((ANSWER,))
+        client = (healthy if injected else GlmInference(backend, "judge")) if recovered else first
+        log = EventLog(replay_from=history)
+        ctx = Context(log=log)
+        bundle = replace(
+            resources(ctx),
+            grading=GradingResource(rollout_engine({}, command_timeout=None), "judge"),
+            role_inference={"judge": client},
+        )
+        install(ctx, bundle)
+        grade = ctx.emit(GradeCandidate(spec, Candidate("Twelve"), fresh_verifier=recovered))
+        if not recovered:
+            with pytest.raises(ContextExceeded):
+                await grade
+            await ctx.drain()
+            resolved = [r.event for r in log.records if isinstance(r.event, Resolved)]
+            assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
+            history = log.records
+            continue
+        result = await grade
+        await ctx.drain()
+        calls = len(healthy.requests) if injected else len(backend.calls)
+        assert (result.status, result.reward, calls) == (Outcome.GRADED, 1.0, 1)
