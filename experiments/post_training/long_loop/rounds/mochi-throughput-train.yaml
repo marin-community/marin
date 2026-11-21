@@ -23,8 +23,8 @@ rl:
     num_inference_engines: 1
     inference_engine_tensor_parallel_size: 1
     inference_engine_pipeline_parallel_size: 1
-    inference_engine_data_parallel_size: 12
-    inference_engine_expert_parallel_size: 12
+    inference_engine_data_parallel_size: 16
+    inference_engine_expert_parallel_size: 16
     train_batch_size: 32
     policy_mini_batch_size: 32
     micro_train_batch_size_per_gpu: 1
@@ -186,7 +186,7 @@ rl:
       max_num_batched_tokens: 8192
       enforce_eager: false
       gpu_memory_utilization: 0.85
-      max_num_seqs: 32
+      max_num_seqs: 64
       enable_http_endpoint: false
       error_handling:
         enable_error_classification: true
