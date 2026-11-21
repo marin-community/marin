@@ -39,7 +39,6 @@ from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import grade, read_output
 from verifyit.spec import ExactSpec, JsonSchemaSpec, MathSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
