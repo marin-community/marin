@@ -121,6 +121,8 @@ def _publish_data_manifest(*, output: str, sha256: str, bucket: str = _DATA_BUCK
     if hashlib.sha256(contents).hexdigest() != sha256:
         raise ValueError(f"{_MIXTURE_NAME} data manifest does not match its SHA-256 pin")
     # A regional copy keeps every object path and changes only the bucket.
+    if bucket.endswith("/"):
+        raise ValueError(f"bucket must not end with '/': {bucket}")
     contents = contents.replace(f"{_DATA_BUCKET}/".encode(), f"{bucket}/".encode())
     directory = StoragePath(output)
     directory.mkdirs()
