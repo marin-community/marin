@@ -302,19 +302,20 @@ the new strategy into that preset. [Preset migration][preset-migration]
 The unchanged frozen source reproduces a startup framing failure on two CPU
 Gloo processes with JAX and JAXLIB 0.11.0. Python stdout redirection leaves
 native writes on the frame stream, and the reader interprets the Gloo
-message as a frame length. The current-main worker port separates those
-file descriptors and passes the two-process test. In the H100 logs, inspect
-the first frame read error before attributing later rendezvous failures.
+message as a frame length. The worker at local revision `4a6d1e7a3e`
+separates those file descriptors and passed the two-process Gloo restart
+test. In the H100 logs, inspect the first frame read error before
+attributing later rendezvous failures.
 
 A separate exact-pin CPU probe confirmed that a native child can receive
 SIGTERM when its spawning thread exits while the host remains alive.
 Check for this separately if a restored process exits immediately after
 a matching checkpoint receipt. The CPU probes establish two concrete
 diagnostics. A local serial Ray probe kept the creating thread and child
-alive between method calls. The current-main port creates the child on its
-persistent IPC thread and passed single- and two-process host restart
-tests. CUDA/NCCL startup and restart remain unverified on the frozen H100
-job.
+alive between method calls. Revision `4a6d1e7a3e` creates the child on its
+persistent IPC thread. Its CPU restart tests covered fresh learner and
+host processes. CUDA/NCCL startup and restart remain unverified on the
+frozen H100 job.
 
 [Exact smoke and comparison recipes][learner-status] ·
 [Frozen checkpoint validation code][frozen-worker]
