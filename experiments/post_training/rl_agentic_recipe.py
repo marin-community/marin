@@ -6,8 +6,8 @@
 from dataclasses import replace
 from fractions import Fraction
 
+from rigging.task_errors import DEFAULT_RETRY_EXCLUSIONS
 from skyrlrecipe import RecipePatch, sections
-from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
 from experiments.post_training.rl_presets import HARBOR_EVALUATION, BatchMix, Preset
 from experiments.post_training.task_curation.task_health import task_health_step

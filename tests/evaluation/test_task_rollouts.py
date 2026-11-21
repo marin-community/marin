@@ -145,7 +145,7 @@ def run_config():
 @pytest.mark.asyncio
 async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, published_corpora, run_config):
     async def model(_request):
-        raise RuntimeError("model adapter bug")
+        raise RuntimeError("model adapter bug") from ConnectionError("connection reset")
 
     output = str(tmp_path / "unexpected-error")
     with pytest.raises(ExceptionGroup) as failure:
@@ -156,9 +156,11 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
     failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert failed
     assert all((row["retry"], row["outcome"]) == (0, "infra_error") for row in failed)
-    assert all(
-        json.loads(reader.read_blob(row["result_blob"]))["failure"]["exception_type"] == "RuntimeError" for row in failed
-    )
+    failures = [json.loads(reader.read_blob(row["result_blob"]))["failure"] for row in failed]
+    assert all(record["exception_type"] == "RuntimeError" for record in failures)
+    assert all(record["cause_type"] == "ConnectionError" for record in failures)
+    assert all(record["operation"] == "model" for record in failures)
+    assert all(record["retry_disposition"] == "transient" for record in failures)
 
 
 @pytest.mark.asyncio

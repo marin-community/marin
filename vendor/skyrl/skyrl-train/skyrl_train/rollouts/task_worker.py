@@ -1,5 +1,6 @@
 """TaskCompendium execution and projection into SkyRL training batches."""
 
+
 import asyncio
 import math
 import os
@@ -10,11 +11,13 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
+from rigging.task_errors import ErrorIdentity, RetryDisposition, error_category, exception_identity, record_retry_disposition
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from shellbox.backends.daytona.errors import daytona_error_identity
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -30,7 +33,6 @@ from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
     RolloutContractError,
-    RolloutFailure,
     RolloutOperation,
     Prompt,
     TaskRolloutSpec,
@@ -43,7 +45,7 @@ from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
-from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -54,7 +56,6 @@ from skyrl_train.rollouts.harbor_tasks import (
     HARBOR_MACHINE_BACKEND,
     HARBOR_EVAL_MACHINE_BACKEND,
     HarborTaskSettings,
-    harbor_grading_failure,
     shape_harbor_rollouts,
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
@@ -82,8 +83,10 @@ from skyrl_train.rollouts.training_record import (
     TrainingRollout,
     reject_malformed_reasoning,
     training_rollout,
+    rollout_with_verifier_failure,
 )
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.task_error_handling import ErrorHandlingConfig
+from skyrl_train.task_errors import ERROR_CATEGORIES, TASK_MACHINE_ERROR, TEMPLATE_ERROR, TIMED_OUT_DIAGNOSTIC
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -222,12 +225,43 @@ async def _model_turn(
     )
 
 
-def _failed_rollout(
-    interruption: GradedRolloutInterrupted,
-    lowered: TaskRolloutSpec,
-) -> TrainingRollout:
-    """Retain verified turns and safe diagnostics for the training policy."""
-    task = lowered.task
+def _machine_diagnostics(error: TaskMachineError) -> dict[str, Any]:
+    """Return only provider metadata allowed in rollout diagnostics."""
+    assert error.__cause__ is not None
+    diagnostics: dict[str, Any] = {}
+    diagnostics["machine_operation"] = error.operation.value
+    provider_error = error.__cause__
+    if isinstance(provider_error, DaytonaError):
+        rate_limits = {
+            name.lower(): int(value)
+            for name, value in (provider_error.headers or {}).items()
+            if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
+            and isinstance(value, str)
+            and value.isascii()
+            and value.isdecimal()
+            and len(value) <= 12
+        }
+        if rate_limits:
+            diagnostics["provider_rate_limits"] = rate_limits
+        # This identifies an SDK call, not the HTTP phase of a compound operation.
+        diagnostics["provider_sdk_call"] = "unknown"
+        nested_error: BaseException | None = provider_error
+        seen = set()
+        while nested_error is not None and id(nested_error) not in seen:
+            seen.add(id(nested_error))
+            traceback = nested_error.__traceback__
+            while traceback is not None:
+                frame = traceback.tb_frame
+                call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
+                if call in DAYTONA_DIAGNOSTIC_CALLS:
+                    diagnostics["provider_sdk_call"] = ".".join(call)
+                traceback = traceback.tb_next
+            # The SDK translates HTTP errors with `raise ... from None`.
+            nested_error = nested_error.__cause__ or nested_error.__context__
+    return diagnostics
+
+
+def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
     error = interruption.__cause__
     assert isinstance(error, Exception)
     if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
@@ -236,41 +270,17 @@ def _failed_rollout(
         error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
     ):
         raise error
+    failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
     exception_type = type(error).__name__
-    diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
+    diagnostics = {TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
+        failure = failure.model_copy(update={
+            "retry_disposition": provider.retry_disposition,
+            "provider_status_code": provider.provider_status_code,
+        })
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
-        diagnostics["cause_error_type"] = type(error.__cause__).__name__
-        diagnostics["machine_operation"] = error.operation.value
-        provider_error = error.__cause__
-        if isinstance(provider_error, DaytonaError):
-            if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:
-                diagnostics["provider_status_code"] = provider_error.status_code
-            rate_limits = {
-                name.lower(): int(value)
-                for name, value in (provider_error.headers or {}).items()
-                if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
-                and isinstance(value, str)
-                and value.isascii()
-                and value.isdecimal()
-                and len(value) <= 12
-            }
-            if rate_limits:
-                diagnostics["provider_rate_limits"] = rate_limits
-            # This identifies an SDK call, not the HTTP phase of a compound operation.
-            diagnostics["provider_sdk_call"] = "unknown"
-            nested_error: BaseException | None = provider_error
-            seen = set()
-            while nested_error is not None and id(nested_error) not in seen:
-                seen.add(id(nested_error))
-                traceback = nested_error.__traceback__
-                while traceback is not None:
-                    frame = traceback.tb_frame
-                    call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
-                    if call in DAYTONA_DIAGNOSTIC_CALLS:
-                        diagnostics["provider_sdk_call"] = ".".join(call)
-                    traceback = traceback.tb_next
-                # The SDK translates HTTP errors with `raise ... from None`.
-                nested_error = nested_error.__cause__ or nested_error.__context__
+        diagnostics.update(_machine_diagnostics(error))
     if isinstance(error, TimeoutError):
         exception_type = {
             RolloutOperation.ATTEMPT: "TrialTimeoutError",
@@ -279,16 +289,14 @@ def _failed_rollout(
             RolloutOperation.GRADE: "VerifierTimeoutError",
         }.get(interruption.operation, "AgentTimeoutError")
     elif isinstance(error, TemplateError):
-        exception_type = "TemplateError"
-        diagnostics["cause_error_type"] = type(error).__name__
+        exception_type = TEMPLATE_ERROR
     elif isinstance(error, TaskMachineError):
-        exception_type = "TaskMachineError"
+        exception_type = TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
         exception_type = VERIFIER_RUNTIME_ERROR
-        diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
@@ -297,6 +305,34 @@ def _failed_rollout(
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
         exception_type = "VerifierTimeoutError"
+    disposition = failure.retry_disposition
+    if disposition is not RetryDisposition.PERMANENT:
+        if isinstance(error, TimeoutError):
+            disposition = record_retry_disposition(exception_type, None, failure.provider_status_code)
+        elif exception_type != failure.exception_type:
+            disposition = RetryDisposition.UNKNOWN
+    return failure.model_copy(
+        update={
+            "exception_type": exception_type,
+            "category": error_category(exception_type, categories=ERROR_CATEGORIES),
+            "diagnostics": diagnostics,
+            "cause_type": failure.cause_type
+            or (failure.exception_type if exception_type != failure.exception_type else None),
+            "retry_disposition": disposition,
+        }
+    )
+
+
+def _failed_rollout(
+    interruption: GradedRolloutInterrupted,
+    lowered: TaskRolloutSpec,
+) -> TrainingRollout:
+    """Retain verified turns and safe diagnostics for the training policy."""
+    task = lowered.task
+    error = interruption.__cause__
+    assert isinstance(error, Exception)
+    failure = _interruption_identity(interruption)
+    exception_type = failure.exception_type
     rollout = training_rollout(GradedRollout(interruption.rollout, interruption.grade), lowered)
     if (
         interruption.operation == RolloutOperation.ADVANCE
@@ -329,7 +365,7 @@ def _failed_rollout(
         rollout,
         grade=grade,
         stop_reason="error",
-        failure=RolloutFailure(exception_type, diagnostics),
+        failure=failure,
     )
 
 
@@ -554,7 +590,7 @@ class TaskRolloutWorker:
                     )
                 if harbor is None:
                     return result
-                result = harbor_grading_failure(result)
+                result = rollout_with_verifier_failure(result)
                 delay = harbor.retry_delay(result.failure, retries)
                 if delay is None:
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})

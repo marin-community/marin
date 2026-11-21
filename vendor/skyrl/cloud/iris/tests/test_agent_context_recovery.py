@@ -2,10 +2,13 @@
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime
+
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from harbor.models.trial.result import ExceptionInfo
 from fastapi.testclient import TestClient
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
@@ -117,7 +120,12 @@ class HarborTrials:
                         break
             return SimpleNamespace(
                 trial_uri="fixture/trial",
-                exception_info=None if self.trial_error is None else SimpleNamespace(exception_type=self.trial_error),
+                exception_info=None if self.trial_error is None else ExceptionInfo(
+                    exception_type=self.trial_error,
+                    exception_message="fixture",
+                    exception_traceback="",
+                    occurred_at=datetime(2026, 1, 1),
+                ),
                 verifier_result=SimpleNamespace(rewards={"reward": 0.75}),
             )
 
