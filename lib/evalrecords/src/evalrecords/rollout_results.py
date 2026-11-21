@@ -7,6 +7,7 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 from finestore.eval import ARCHIVE_SAMPLES_TABLE
 from finestore.reader import ReadView
@@ -253,6 +254,49 @@ def _published_selection(
     return selection or published
 
 
+@dataclass(frozen=True)
+class BenchmarkScores:
+    """One benchmark's summary protocol, dataset snapshots, reduced metrics and trial coverage in an archive."""
+
+    protocol: EvaluationProtocol
+    datasets: tuple[str, ...]
+    metrics: dict[str, float]
+    coverage: TaskCoverage
+
+
+def benchmark_scores(reader: ReadView) -> dict[str, BenchmarkScores]:
+    """Reduce each benchmark's declared metrics over the latest finished attempt per logical trial.
+
+    Each metric is reduced with its protocol's summary kind. The archive must hold a run descriptor.
+    """
+    payload = reader.read_blob(RUN_OBJECT)
+    assert payload is not None
+    protocols = {
+        entry["dataset"]: EvaluationProtocol.model_validate(entry["protocol"])
+        for entry in json.loads(payload)["datasets"]
+    }
+    attempts = terminal_attempts(reader)
+    samples = {(row["trial_id"], row["doc_id"]): row for row in logical_samples(reader)}
+    coverage = evaluation_coverage(reader)
+    groups = defaultdict(list)
+    for dataset, protocol in protocols.items():
+        groups[protocol.benchmark].append(dataset)
+    scores = {}
+    for name, datasets in groups.items():
+        protocol = protocols[datasets[0]]
+        for dataset in datasets[1:]:
+            other = protocols[dataset]
+            if other.model_dump(exclude={"expected_population"}) != protocol.model_dump(exclude={"expected_population"}):
+                raise ValueError(f"Inconsistent summary protocols for benchmark {name}")
+        scores[name] = BenchmarkScores(
+            protocol,
+            tuple(datasets),
+            _benchmark_summary(protocol, datasets, attempts, samples, reader.root),
+            coverage[name],
+        )
+    return scores
+
+
 def score_curated_record(record: EvalRunRecord) -> EvalRunRecord:
     """Derive benchmark scores from one FineStore snapshot, leaving the producer record unchanged.
 
@@ -265,30 +309,24 @@ def score_curated_record(record: EvalRunRecord) -> EvalRunRecord:
     payload = reader.read_blob(RUN_OBJECT)
     if payload is None:
         return record
-    run = json.loads(payload)
-    protocols = {entry["dataset"]: EvaluationProtocol.model_validate(entry["protocol"]) for entry in run["datasets"]}
-    manifests = {entry["dataset"]: entry["manifest"] for entry in run["datasets"]}
-    attempts = terminal_attempts(reader)
-    samples = {(row["trial_id"], row["doc_id"]): row for row in logical_samples(reader)}
-    coverage = evaluation_coverage(reader)
-    groups = defaultdict(list)
-    for dataset, protocol in protocols.items():
-        groups[protocol.benchmark].append(dataset)
-    metrics, tasks = {}, []
-    for name, datasets in groups.items():
-        protocol = protocols[datasets[0]]
-        for dataset in datasets[1:]:
-            other = protocols[dataset]
-            if other.model_dump(exclude={"expected_population"}) != protocol.model_dump(exclude={"expected_population"}):
-                raise ValueError(f"Inconsistent summary protocols for benchmark {name}")
-        metrics[name] = _benchmark_summary(protocol, datasets, attempts, samples, record.results_path)
-        tasks.append(_task_ref(name, protocol, [manifests[dataset] for dataset in datasets], coverage[name]))
-    selection = _published_selection(record.evaluation.curated.selection, protocols, manifests, groups)
+    manifests = {entry["dataset"]: entry["manifest"] for entry in json.loads(payload)["datasets"]}
+    scores = benchmark_scores(reader)
+    metrics = {name: score.metrics for name, score in scores.items()}
+    tasks = [
+        _task_ref(name, score.protocol, [manifests[dataset] for dataset in score.datasets], score.coverage)
+        for name, score in scores.items()
+    ]
+    selection = _published_selection(
+        record.evaluation.curated.selection,
+        {dataset: score.protocol for score in scores.values() for dataset in score.datasets},
+        manifests,
+        {name: list(score.datasets) for name, score in scores.items()},
+    )
     return record.model_copy(
         update={
             "metrics": metrics,
             "canonical_metrics": metrics,
-            "coverage": coverage,
+            "coverage": {name: score.coverage for name, score in scores.items()},
             "evaluation": record.evaluation.model_copy(
                 update={
                     "tasks": tuple(tasks),
