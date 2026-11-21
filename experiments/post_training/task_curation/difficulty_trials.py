@@ -124,7 +124,6 @@ def _normalized_lock(lock: str) -> str:
     return "".join(line for line in lock.splitlines(keepends=True) if not _LOCK_TEMPDIR_COMMENT.match(line))
 
 
-@cache
 def _declared_lock(environment: Environment) -> str | None:
     """The declared environment's compiled lock content, or None when its lock cannot compile."""
     # The image-build module pulls in the Marin execution graph, which the Harbor runtime
@@ -147,6 +146,7 @@ def _declared_lock(environment: Environment) -> str | None:
         return None
 
 
+@cache
 def declared_grader_machine_image(lock_url: str) -> str | None:
     """The composed toolchain image for a frozen lock-only grader environment, when one is declared.
 
