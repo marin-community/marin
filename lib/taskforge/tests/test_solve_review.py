@@ -8,9 +8,11 @@ import re
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from pathlib import Path
 from typing import override
 
 import pytest
+from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.fake_resources import resources as stage_resources
 from lib.taskforge.tests.proposal_fakes import sample_proposal
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
@@ -26,7 +28,7 @@ from lib.taskforge.tests.test_end_to_end import (
     unexpected_runtime,
 )
 from pydantic import TypeAdapter
-from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
+from rolloutengine.models import ConversationRecord, GradedRollout, Model, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
@@ -34,16 +36,16 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge import checkpoint, driver
 from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import Resolved
+from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
 from taskforge.effects.issues import ContextExceeded, LogFailure
-from taskforge.effects.log import EventLog
+from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
 from taskforge.harness.tools.evidence import PAGE_ROOM, ReadTool, SearchTool
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion
+from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -395,3 +397,60 @@ def test_a_round_without_review_fields_keeps_its_bytes() -> None:
     assert b"review" not in VALIDATION_RESULT.dump_json(plain)
     decision = json.loads(TypeAdapter(Accept).dump_json(Accept(BandOutcome.IN_BAND)))
     assert not {"missing", "notes"} & set(decision)
+
+
+def lowered() -> TaskRolloutSpec:
+    return lower_with_settings(arithmetic_task(), lowering_settings(load_policy(DEFAULTS_DIR)), {})
+
+
+async def test_a_cold_reload_of_the_journal_replays_the_review_with_zero_calls(tmp_path: Path) -> None:
+    """Review 2026-11-21 (n11 P1): a reloaded grade came back with its detail keys sorted, which changed the rendered
+    evidence and its version, so a default-policy resume paid the reviewer again."""
+    grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2, "b": 3}})
+    rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    log = EventLog(sink=sink)
+    await log.record(
+        Resolved(SolverRollout(lowered(), 1, 0), (Fingerprint("rollouts", "d", ReplayPolicy.CACHE),), rollout)
+    )
+    first = await reviewed(
+        FakeInference((call("list_evidence", {}, "l"), report())), (TRIALS[0], (TrialResult(1, grade), rollout)), log
+    )
+    await log.persist()
+    records = local_records(sink)
+    reloaded = next(pair[1] for record in records if (pair := solver_rollout(record.event)) is not None)
+    cold = FakeInference(())
+    again = await reviewed(cold, (TRIALS[0], (TrialResult(1, reloaded.grade), reloaded)), EventLog(replay_from=records))
+    assert again == first and not cold.requests
+
+
+def parallel(first: str, second: str) -> GradedRollout:
+    """One assistant turn with two tool calls, then their replies naming ``first`` and ``second``."""
+    calls = [{"id": name, "type": "function", "function": {"name": "check", "arguments": "{}"}} for name in "ab"]
+    messages = (
+        {"role": "user", "content": "Solve the task."},
+        {"role": "assistant", "content": "", "tool_calls": calls},
+        {"role": "tool", "tool_call_id": first, "content": "PASS"},
+        {"role": "tool", "tool_call_id": second, "content": "FAIL"},
+    )
+    grade = GradeResult(Outcome.GRADED, 0.0)
+    return GradedRollout(Rollout("run-1", (ConversationRecord(messages, (), (), (), None),), "stop"), grade)
+
+
+def test_a_tool_reply_keeps_the_call_it_answers() -> None:
+    """Review 2026-11-21 (n11): two parallel calls whose replies swapped ids rendered identically."""
+    one, other = (evidence(SUBMISSION, ((TRIALS[1][0], parallel(*ids)),), OUTPUT_CHARS) for ids in ("ab", "ba"))
+    assert one.version != other.version
+    assert "tool (reply to a):\nPASS" in one.sources["trial-1"].parts[2]
+
+
+async def test_two_parallel_evidence_reads_replay_cold_with_zero_calls(tmp_path: Path) -> None:
+    reads = tuple(
+        ToolCall(f"r{start}", "read_evidence", json.dumps({"source": "trial-1", "start": start})) for start in (1, 2)
+    )
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    log = EventLog(sink=sink)
+    first = await reviewed(FakeInference((Completion("", reads, FinishReason.TOOL_CALLS), report())), log=log)
+    await log.persist()
+    cold = FakeInference(())
+    assert await reviewed(cold, log=EventLog(replay_from=local_records(sink))) == first and not cold.requests

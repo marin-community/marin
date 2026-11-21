@@ -42,16 +42,24 @@ class Kind:
 ROUND = Kind("solve_review", ReportTool)
 
 
+def canonical(value: object) -> str:
+    """Structured values as sorted JSON: the journal reloads mappings key-sorted, so live and resumed text agree."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
 def render_message(message: Mapping[str, object]) -> str:
-    parts = [f"{message.get('role', '?')}:"]
+    """One recorded message; a tool call keeps its id and a reply names the call it answers, so swapping two
+    parallel replies changes the text."""
+    reply = message.get("tool_call_id")
+    parts = [f"{message.get('role', '?')}" + (f" (reply to {reply})" if reply else "") + ":"]
     for key in ("reasoning_content", "reasoning"):
         if isinstance(reasoning := message.get(key), str) and reasoning:
             parts.append(f"[reasoning] {reasoning}")
     if content := message.get("content"):
-        parts.append(content if isinstance(content, str) else json.dumps(content, default=str))
+        parts.append(content if isinstance(content, str) else canonical(content))
     calls = message.get("tool_calls")
     for call in calls if isinstance(calls, list) else ():
-        parts.append(f"[tool call] {json.dumps(call.get('function', call) if isinstance(call, Mapping) else call)}")
+        parts.append(f"[tool call] {canonical(call)}")
     return "\n".join(parts)
 
 
@@ -66,7 +74,7 @@ def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
     grade = TypeAdapter(GradeResult | None).dump_python(trial.grade, mode="json")
     parts = (
         *messages,
-        "grader:\n" + json.dumps({"cause": trial.cause, "detail": trial.detail, "grade": grade}, default=str),
+        "grader:\n" + canonical({"cause": trial.cause, "detail": trial.detail, "grade": grade}),
     )
     if rollout is None or not messages:
         why = (
