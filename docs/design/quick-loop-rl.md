@@ -18,13 +18,13 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.5` failed during mesh setup. Run `2026.11.20.8` timed out reading checkpoint shards. Run `2026.11.20.9` finished reading the checkpoint and failed converting it to the learner layout. XLA requested a 45.31 GiB allocation. All three attempts ended before an optimizer update. | Load tensors in the learner's parameter layout, then repeat the smoke. The matched runs depend on smoke acceptance. |
+| 40-H100 learner smoke | Run `2026.11.20.5` failed during mesh setup. Run `2026.11.20.8` timed out reading checkpoint shards. Run `2026.11.20.9` finished reading the checkpoint and failed converting it to the learner layout. All three attempts ended before an optimizer update. Iris accepted `2026.11.20.10`, which loads tensors in the learner's parameter layout. | Verify initialization, two updates, receiver bytes, generation and fresh-process recovery. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
-[Quick-loop branch status][learner-status] · [H100 retry coordinator][iris-smoke-retry] ·
+[Quick-loop branch status][learner-status] · [H100 layout retry coordinator][iris-smoke-layout] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
 [Snowball qualification report][snowball-status] ·
 [Historical quick-loop timing][timing]
@@ -306,14 +306,23 @@ The last learner completed all 39 checkpoint shard reads. The following
 reported that it replicated transposed expert tensors while moving from the
 32-way shape-based staging layout to eight expert shards and four hidden
 shards. The run ended before learner initialization or an optimizer update.
-The next candidate will place HF tensors in the destination parameter layout,
-accounting for the checkpoint's axis order before it transfers each shard.
 [Failed GPU child][iris-smoke-retry-child] · [Verified failure evidence][h100-layout-failure]
 
-The retry handoff contains the `2026.11.20.9` source bundle and its acceptance
-and comparison tools. The earlier handoff preserves the `2026.11.20.8` learner
-source and held serving comparison. The restored serving plans reproduce the
-original artifact roots with a repository-local Git tree abbreviation.
+Iris accepted `2026.11.20.10` on source `0ecb355467`. The loader derives
+source tensor shardings from the model's export transforms and uses them
+when placing safetensors on the learner mesh. In a CPU compile of all 502
+tensors on 32 logical devices using JAX 0.11.0, the new layout removed
+92,904,574,212 bytes of compiler temporaries, 370 all-gathers and 52
+all-to-alls. A small sharded checkpoint verified BF16-to-FP32 import and
+weight parity. The frozen artifact preview matches `2026.11.20.9` after
+normalizing versioned paths and identities. The GPU run verifies how this
+layout behaves with the production checkpoint and hardware.
+[Layout retry coordinator][iris-smoke-layout] · [Frozen source and compiler evidence][h100-layout-handoff]
+
+The prior handoffs preserve the `2026.11.20.9` and `2026.11.20.8` source,
+along with the held serving comparison. The restored serving plans reproduce
+the original artifact roots with a repository-local Git tree abbreviation.
+[Shard-local retry handoff][h100-retry-handoff] · [Earlier handoff][launch-handoff]
 [Retry source and audit tools][h100-retry-handoff] · [Earlier handoff][launch-handoff]
 
 - Verify all learner ranks select CUDA and load
@@ -343,9 +352,9 @@ original artifact roots with a repository-local Git tree abbreviation.
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
 
-Both 25-update recipes passed offline preflight on `988a376b05` with the
-regional task selection pinned. Re-pin both recipes to the accepted smoke
-source before launch.
+Both 25-update recipes passed offline preflight on `0ecb355467` with the
+regional task selection pinned. The normalized launch plans and artifact
+fingerprints match the previous preflight.
 After the smoke passes its receipt and weight-change audits, submit the
 Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
 Use the same regional route and publication verification for both. The
@@ -370,7 +379,7 @@ and consumed loss tokens separately. Filtering can change the workload each
 learner sees.
 Measure training and publication wall time from the initial evaluation
 result to the acknowledgement of version 25. Report allocation wall time
-separately. [Matched-run auditor and tests][h100-retry-handoff]
+separately. [Matched-run auditor and tests][h100-layout-handoff]
 
 The frozen evaluator writes per-dataset rows beneath `exports/dumped_evals`
 with ordinal UIDs assigned after prompt-length filtering. Verify that no
@@ -992,10 +1001,12 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-rerun]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.8-coordinator-5050ee06
 [iris-smoke-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.9-coordinator-151d77eb
 [iris-smoke-retry-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.9-coordinator-151d77eb%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.9-aa8d6bc47005
+[iris-smoke-layout]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.10-coordinator-c66407b6
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
 [h100-retry-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.9%2Fh100-learner-retry.tar.zst
 [h100-layout-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.9%2Fobserved-failure.json
+[h100-layout-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.10%2Fh100-parameter-layout-retry.tar.zst
 [frozen-validation-panel]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04%2Fvalidation.parquet
 [frozen-receiver-numbering]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/weight_sync/expert_block/schedule.py#L117-L118
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
