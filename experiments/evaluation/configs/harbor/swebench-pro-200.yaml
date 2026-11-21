@@ -14,6 +14,7 @@ retry:
     - SandboxBuildFailedError
     - ContainerRegistryThrottledError
     - AgentSetupTimeoutError
+    - DaytonaConnectionError
     - DaytonaTimeoutError
     - RuntimeServiceError
   exclude_exceptions: []
