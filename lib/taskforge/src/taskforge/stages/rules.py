@@ -67,21 +67,15 @@ def tagged(band: BandOutcome) -> tuple[str, ...]:
     return () if band is BandOutcome.IN_BAND else (f"accepted_with: {band}",)
 
 
-def better(candidate: Fallback, stored: Fallback) -> Fallback:
-    """In band beats out of band; between equals, the later submission."""
-    return stored if stored.band is BandOutcome.IN_BAND and candidate.band is not BandOutcome.IN_BAND else candidate
-
-
 def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> Fallback | None:
-    """The one choice of the submission to fall back to, or accept: the stored fallback while the policy accepts its
-    band, against the current submission at ``placement`` when the policy accepts that. Returning the stored object
-    itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot tell rounds
-    apart."""
-    kept = workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
-    if workpiece.submission is None or placement is None or placement not in band.accepted:
-        return kept
-    current = Fallback(workpiece.submission, placement)
-    return current if kept is None else better(current, kept)
+    """The one choice of the submission to fall back to, or accept: the current submission at ``placement`` when the
+    policy accepts that, else the stored fallback while the policy accepts its band. Owner's ruling (2026-11-13): "A
+    band change is never a regression. Only real faults or an author stopping revert to the fallback." Returning the
+    stored object itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot
+    tell rounds apart."""
+    if workpiece.submission is not None and placement is not None and placement in band.accepted:
+        return Fallback(workpiece.submission, placement)
+    return workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
 
 
 def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
@@ -128,8 +122,11 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
     notes = exhausted_notes(result)
     if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
+        stored = workpiece.fallback
         why = (
-            "Clean revision placed on its own evidence" if workpiece.fallback else "Shared modification budget exhausted"
+            f"Clean revision placed {chosen.band}, not {stored.band}: a placement change is tagged, not reverted"
+            if stored
+            else "Shared modification budget exhausted"
         )
         return accepted(Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes)), workpiece)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"

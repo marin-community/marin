@@ -746,7 +746,7 @@ def test_a_clean_revision_that_changes_placement_is_accepted_on_its_own_evidence
     final = reviewed(first.with_(submission=harder, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
     assert final.submission == harder and decision.restore is None and final.accepted_with is BandOutcome.TOO_HARD
-    assert "Clean revision placed on its own evidence" in decision.reasons
+    assert "Clean revision placed too_hard, not too_easy: a placement change is tagged, not reverted" in decision.reasons
 
 
 def test_a_faulted_revision_restores_the_fallback_by_digest_with_its_band(workpiece: Workpiece) -> None:
@@ -766,18 +766,19 @@ def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Wo
     stored = workpiece.submission
     assert stored is not None
     current = revised(stored, "current")
-    # A stored in-band fallback beats a new too-easy candidate.
+    # Owner's ruling (2026-11-13): a band change is never a regression; a clean too-easy revision of an in-band
+    # fallback is accepted as the revision, tagged, and only a fault restores the fallback.
     final = reviewed(
         workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.IN_BAND), evidence=(evidence(3),))
     )
     decision = accepted(final)
     assert (decision.band, decision.restore, final.submission, final.accepted_with) == (
-        BandOutcome.IN_BAND,
-        stored.digest,
-        stored,
+        BandOutcome.TOO_EASY,
         None,
+        current,
+        BandOutcome.TOO_EASY,
     )
-    # Equal ranks: the later submission.
+    # Out of band on both sides: the later submission.
     assert fallback_for(
         workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD)),
         BandOutcome.TOO_EASY,
@@ -804,10 +805,10 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
         apply_decision(
             stored, Accept(BandOutcome.TOO_HARD, (), stored.fallback.submission.digest), setup.budget, setup.policy
         )
-    # Two candidates with one digest: the in-band placement is never overwritten with too easy.
+    # Two candidates with one digest: the current submission at its own placement, as the review rule chose it.
     same = wp.with_(fallback=Fallback(submission, BandOutcome.IN_BAND))
     kept = apply_decision(same, Modify(("x",), BandOutcome.TOO_EASY, submission.digest), setup.budget, setup.policy)
-    assert kept.fallback == Fallback(submission, BandOutcome.IN_BAND)
+    assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY)
 
 
 # Review 2026-11-21: the exhausted-budget acceptance dropped the missing-slot denominator of its Modify.

@@ -10,7 +10,6 @@ again.
 
 import logging
 from collections.abc import Callable
-from functools import reduce
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
@@ -29,7 +28,6 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.exits import Decided, Validated
-from taskforge.stages.rules import better
 from taskforge.stages.solve_review import finding_lines
 
 
@@ -83,7 +81,7 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                 raise ValueError("Cannot revise without an author session")
             current = Fallback(wp.submission, placement) if wp.submission and placement else None
             named = [option for option in (current, wp.fallback) if option and digest_of(option) == fallback]
-            kept = reduce(better, named) if named else None
+            kept = named[0] if named else None  # the current submission over a stored one of its digest
             if digest_of(kept) != fallback:
                 raise ValueError(
                     f"Cannot keep {fallback} as the fallback: it is neither the submission nor the fallback"
