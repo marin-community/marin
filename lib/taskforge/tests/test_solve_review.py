@@ -112,9 +112,10 @@ async def reviewed(
     reviewer: FakeInference,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]] = TRIALS,
     log: EventLog | None = None,
+    settings: Mapping[str, object] | None = None,
 ) -> SolveReview:
     ctx = Context(log=log or EventLog())
-    policy = load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": OUTPUT_CHARS})
+    policy = load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": OUTPUT_CHARS, **(settings or {})})
     bundle = replace(stage_resources(ctx), envs=NoMachines(), role_inference={"solve_review": reviewer})
     return await solve_review(ctx, build_config(policy, {}), bundle, sample_proposal(), SUBMISSION, trials)
 
@@ -454,3 +455,15 @@ async def test_two_parallel_evidence_reads_replay_cold_with_zero_calls(tmp_path:
     await log.persist()
     cold = FakeInference(())
     assert await reviewed(cold, log=EventLog(replay_from=local_records(sink))) == first and not cold.requests
+
+
+async def test_an_opening_without_the_version_slot_still_misses_on_changed_evidence() -> None:
+    """Review 2026-11-21 (n11 P1): a legal user prompt without ``{version}`` replayed a stale review after a solver's
+    answer changed from 9 to 8; the evidence version is part of the request whatever the template renders."""
+    overlay = {"solve_review.user": "{task}\n{proposal}\n{evidence}"}
+    log = EventLog()
+    await reviewed(FakeInference((report(),)), log=log, settings=overlay)
+    changed = (TRIALS[0], trial(1, 0.0, LONG, "I answer 8."))
+    missed = FakeInference(())
+    with pytest.raises(RuntimeError, match="Fake inference script exhausted"):
+        await reviewed(missed, changed, EventLog(replay_from=log.records), settings=overlay)

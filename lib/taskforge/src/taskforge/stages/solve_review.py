@@ -152,7 +152,8 @@ async def solve_review(
 ) -> SolveReview:
     """Review ``trials`` of ``submission``; emits only the reviewer's inference effects.
 
-    The opening names the index's version, so changed evidence never replays a recorded review.
+    The opening ends with the index's version whatever the policy's template renders, so changed evidence never
+    replays a recorded review.
     """
     policy = config.policy
     index = evidence(submission, trials, policy.setting("tools.output_chars", int))
@@ -169,8 +170,8 @@ async def solve_review(
             task=task_manifest(submission.task),
             proposal=render(proposal),
             evidence=listing,
-            version=index.version,
-        ),
+        )
+        + f"\n\nEvidence version: {index.version}",  # outside the template, so no overlay can drop it
     )
     async with sitting(
         ctx,

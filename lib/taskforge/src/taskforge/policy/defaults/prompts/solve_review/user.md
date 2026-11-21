@@ -4,5 +4,5 @@ Task manifest (resource paths, byte sizes and roles; payloads omitted; read file
 Proposal the task was built from:
 {proposal}
 
-Evidence version {version}, its sources:
+Evidence sources:
 {evidence}
