@@ -2716,6 +2716,13 @@ Planning rechecks missing-artifact URIs. Sources whose Python
 `requirements.lock` files have been restored can re-enter measurement.
 
 A local `reconcile` starts one interactive Iris CPU controller in `cw-rno2a`.
+Pass `--secrets-env /path/to/credentials.env` to load the controller credentials
+from an explicit dotenv file. The launcher resolves `GLM_BULK_TOKEN`,
+`TOGETHER_API_KEY`, `HF_TOKEN`, `DAYTONA_DATA_API_KEY`, `CW_KEY_ID` and
+`CW_KEY_SECRET` before submission. File values take precedence over Iris secret
+mounts in `/run/rigging/secrets` and the environment.
+The controller reads source declarations in one catalog query. A catalog connection failure
+is logged and retried after 60 seconds, before any attempt submission.
 The controller uses `CONTAINER_PROFILE_PRIVILEGED`, matching its attempt and
 repair children. Iris task tokens can delegate this profile only when the
 submitting parent job declares the same profile. A default-profile parent fails

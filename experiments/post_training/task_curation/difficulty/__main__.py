@@ -82,6 +82,7 @@ def main() -> None:
         command.add_argument("--provider-available", action="append", type=Solver, default=[])
         if name == "reconcile":
             command.add_argument("--once", action="store_true")
+            command.add_argument("--secrets-env", type=Path, help="Load controller credentials from this dotenv file")
             command.add_argument("--gpu-hour-budget", type=float, required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -141,6 +142,7 @@ def main() -> None:
             frozenset(args.provider_available),
             digest([action_id(action) for action in actions]),
             args.gpu_hour_budget,
+            args.secrets_env,
         )
         return
     if args.command == "plan":

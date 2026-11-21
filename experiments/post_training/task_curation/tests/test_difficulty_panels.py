@@ -85,10 +85,7 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
     served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
 
     def query(_sql, params):
-        if params:
-            return {"rows": [{"declaration": served["declaration"]}]}
-        minimal = {key: served["declaration"][key] for key in ("current_release", "pipeline", "actor_census_input")}
-        return {"rows": [{"id": served["id"], "declaration": minimal}]}
+        return {"rows": [served]}
 
     monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)
     ledger = str(tmp_path / "ledger")

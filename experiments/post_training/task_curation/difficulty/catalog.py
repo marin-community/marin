@@ -58,9 +58,7 @@ def served_catalog(
     """Keep every served source; unmatched pins need a fresh frozen task panel."""
     query = applet_query(DEFAULT_MARINA_URL, applet_id, token_provider=token_provider)
     declarations = query(
-        "SELECT id, jsonb_build_object('current_release', declaration->'current_release', "
-        "'pipeline', declaration->'pipeline', 'actor_census_input', declaration->'actor_census_input') "
-        "AS declaration FROM atlas_sources WHERE load_id = "
+        "SELECT id, declaration FROM atlas_sources WHERE load_id = "
         "(SELECT load_id FROM atlas_current WHERE name = 'latest') ORDER BY id",
         {},
     )["rows"]
@@ -78,14 +76,7 @@ def served_catalog(
         if match is not None:
             sources.append(match)
             continue
-        (full,) = query(
-            "SELECT declaration FROM atlas_sources WHERE load_id = "
-            "(SELECT load_id FROM atlas_current WHERE name = 'latest') AND id=:source_id",
-            {"source_id": row["id"]},
-        )["rows"]
-        if any(full["declaration"][key] != declaration[key] for key in declaration):
-            raise ValueError("Served declaration changed while resolving its missing panel")
-        sources.append(CatalogSource(row["id"], revision, (), "", "", json.dumps(full["declaration"], sort_keys=True)))
+        sources.append(CatalogSource(row["id"], revision, (), "", "", json.dumps(declaration, sort_keys=True)))
     if len({canonical_source_id(source.source_id) for source in sources}) != len(sources):
         raise ValueError("Served catalog contains duplicate source identities")
     return sources
