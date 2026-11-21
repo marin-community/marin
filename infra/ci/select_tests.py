@@ -169,8 +169,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-# Five Marin legs keep the native RL owners within the pytest session budget.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 5}
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
