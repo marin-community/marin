@@ -517,6 +517,11 @@ class ControlPin:
     commit: str
     revision: str
     replicates: int
+    retries: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.retries and (len(self.retries) != self.replicates or any(retry < 0 for retry in self.retries)):
+            raise ValueError("control pin retries must give a nonnegative number for each replicate")
 
 
 @dataclass(frozen=True)

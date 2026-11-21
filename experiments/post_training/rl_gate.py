@@ -877,8 +877,14 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
     return pin
 
 
+def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) -> str:
+    name = control_name(pin.preset, pin.commit, index, table=table)
+    retry = pin.retries[index] if pin.retries else 0
+    return f"{name}-retry{retry}" if retry else name
+
+
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
+    return recipe.run_path(preset, _pinned_control_name(pin, index, table=table), pin.revision)
 
 
 def _gate_artifact(
@@ -894,11 +900,13 @@ def _gate_artifact(
 ) -> ArtifactStep[GateReport]:
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
     name += "-defaults-" + fingerprint_hash(
-        canonical_json((defaults.fingerprint(), defaults.runtime_args, Provenance.capture(recipe.REPO_ROOT).tree_hash))
+        canonical_json(
+            (defaults.fingerprint(), defaults.runtime_args, pin, Provenance.capture(recipe.REPO_ROOT).tree_hash)
+        )
     )
     controls = tuple(
         (
-            f"{control_name(pin.preset, pin.commit, index, table=table)}@{pin.revision}",
+            f"{_pinned_control_name(pin, index, table=table)}@{pin.revision}",
             control_path(preset, pin, index, table=table),
         )
         for index in range(pin.replicates)
@@ -1011,7 +1019,7 @@ def command(table: ModelPresets) -> click.Command:
             if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
                 raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
-            candidate_name = control_name(pin.preset, pin.commit, index, table=table)
+            candidate_name = _pinned_control_name(pin, index, table=table)
         name, separator, version = candidate_name.partition("@")
         source = recipe.run_path(preset, name, version if separator else preset.revision)
         namespace = user_owned_name(
