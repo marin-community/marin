@@ -30,14 +30,26 @@ class MeshConfig:
     param_mapping: logical -> physical axis (or axes) for parameters and opt states
     """
 
-    axes: Mapping[str, int] = field(default_factory=dict)
-    dcn_axes: Mapping[str, int] = field(default_factory=dict)
+    axes: Mapping[str, int] | None = None
+    dcn_axes: Mapping[str, int] | None = None
 
     # Typically you should only set these fields in config, and only read the resolved_* properties.
     batch_axis_name: str | None = "batch"
     shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
+
+    def __post_init__(self):
+        # Keep concrete defaults in serialized recipes without treating them as caller overrides.
+        axes, dcn_axes = self.axes, self.dcn_axes
+        if axes is None:
+            object.__setattr__(
+                self, "axes", {k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in (dcn_axes or {})}
+            )
+        if dcn_axes is None:
+            object.__setattr__(
+                self, "dcn_axes", {k: v for k, v in DEFAULT_DCN_AXIS_SPEC.items() if k not in (axes or {})}
+            )
 
     @cached_property
     def resolved_compute_mapping(self) -> ResourceMapping:
@@ -81,6 +93,8 @@ class MeshConfig:
             raise ValueError(f"num_devices ({num_devices}) must be divisible by num_slices ({num_slices})")
 
         per_slice = num_devices // num_slices
+
+        assert self.axes is not None and self.dcn_axes is not None
 
         # An explicit network placement replaces that axis's default placement.
         axes = {**{k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in self.dcn_axes}, **self.axes}
