@@ -1,14 +1,15 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 10:22 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 10:39 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
 67B-A2B Snowball checkpoint on verifiable tasks from the Snowball 100k task
 selection. Once that combination passes the full-model smoke and the matched
-comparison, qualify Levanter's Snowball engine as the rollout backend. Advance
-native inference in parallel when the learner work is waiting on capacity or
-results. Use a typed binary protocol for internal rollout and learner traffic.
+comparison, qualify Levanter's Snowball engine as the rollout backend. Develop
+and test the native backend in parallel. The single-host native probe can run
+when it can get H100 capacity without delaying the learner jobs. Use a typed
+binary protocol for internal rollout and learner traffic.
 
 ## Status
 
@@ -16,11 +17,11 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | --- | --- | --- |
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
-| Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. The first learner task was still scheduling-gated at 10:22 p.m. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
-| Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. A separate CPU proof restored and installed both optimizer updates in a serving subprocess, with fresh KV for each version. | Connect the native backend and publication to the deployed rollout service. |
-| Native inventory backend | The local SkyRL Ray controller admitted two policy windows with a real isolated serving process and binary tool turns. The candidate expert-sharded layout passed a bounded eight-device CPU loop. | Render the native inventory launcher, then qualify multi-host installation and the pinned checkpoint at production context. |
+| Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. The first learner task was still scheduling-gated at 10:39 p.m. Kueue reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
+| Native online loop based on `main` | Two updates passed on four TPUv4 chips at `ff1fc5e833` with queued generation and local cache installation. A separate CPU proof installed both optimizer updates in a serving subprocess with fresh KV. | Verify the deployed handoff from four learner hosts to one serving host. |
+| Native inventory backend | The local SkyRL Ray controller admitted two policy windows with binary tool turns. Both inventory presets render and pass the Iris driver checks locally. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Separate Snowball serving and learner processes exchanged protobuf and binary tensor frames through two updates. Native SkyRL trajectory rows carry those frame bytes. The existing learner pipe uses a binary pickle envelope, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the deployed native service boundary. Migrate the learner envelope after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -171,8 +172,9 @@ acknowledged only after replacing its KV state. It generated 64 targets at
 each of versions 0, 1 and 2. The largest raw score difference was
 `4.29e-6`. A wrong digest and stale identities were rejected. After the
 failed install, the active policy reproduced its earlier frames
-byte-for-byte. Both proofs ran on one and four CPU devices. Deployed
-service integration and distributed publication remain open.
+byte-for-byte. Both proofs ran on one and four CPU devices. See the local
+controller and multi-process publication checks for the next integration
+boundary.
 
 The real learner worker now publishes immutable, weights-only TensorStore
 snapshots through its command path at `457bde3a3d`. Each learner process
@@ -183,6 +185,34 @@ inference. CPU tests with one and two learner processes verified steps
 bitwise-identical next update after learner restore. The digest includes
 the publisher's shard layout. A single serving host can verify the same
 receipt on a different local layout.
+
+The local `snowball_rl` artifact main at `2a8cbaf1c7` renders two-update
+presets named `levanter-inventory-native` and `levanter-inventory-vllm`.
+Both use four eight-H100 learner hosts and one eight-H100 serving host.
+They share the pinned initializer and tokenizer, the `2026.11.19.1` task
+selection, and a fixed 100-task panel. This pair qualifies the maintained
+inventory launcher. The frozen 25-update learner comparison uses its
+original selection and remains a separate experiment.
+
+The launcher takes the native serving device count and EP/TP dimensions
+from the role plan. It places immutable snapshots in the launch attempt's
+regional temporary storage and optimizer recovery in the checkpoint store.
+Iris is configured to provision the same locked Levanter environment on
+all five nodes. The native bootstrap checks that SkyRL can import the host
+client and that the isolated JAX interpreter can import the binary endpoint.
+These checks passed on CPU with JAX and JAXLIB 0.11.0. GPU startup remains a
+qualification step.
+
+The first deployed install uses regional TensorStore as a correctness
+baseline. It writes the learner's FP32 weights and verifies the restored
+FP32 slices before casting to BF16 on serving. Verification of each rank's
+installed BF16 shards remains open. At 67.078B parameters one write and one
+full read move about 537 GB of logical weight data per publication, or
+13.4 TB over 25 updates before compression, initialization and retries.
+Measure upload, restore, byte verification and cache allocation separately.
+If publication dominates update time, the serving compute view is the first
+candidate for a smaller payload. Any transport change must preserve the
+install barrier and verified tensor identity.
 
 The serving endpoint at `74414c2cdb` uses the existing bounded Marin
 worker pipe. The host client works without JAX or Torch. It passes exact
@@ -328,8 +358,9 @@ paged and replay paths. On four CPU devices its two scoring profiles
 produced the same tokens, scores and installed weight digests as the native
 parent. The capture format still requires contiguous valid request positions.
 
-Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
-and a deterministic grader with mixed rewards within a group. Submit four
+The bounded gate uses the supported four-row, 256-token TPUv4 layout, a
+single-turn task and a deterministic grader with mixed rewards within a
+group. It submits four
 single-choice requests with distinct seeds under the same prompt ID.
 Use the existing RLOO-N calculation and Levanter `PolicyLearner` through
 `PolicyBatch`. Assemble a batch whose route tensors can be sliced and sharded
@@ -434,16 +465,21 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   the second snapshot. That controller test used a deterministic weight
   perturbation. The learner and IPC tests separately exercised real
   optimizer changes.
-- Wire the typed inventory recipe and Iris bootstrap to that controller.
-  The recipe schema still declares only vLLM. The native arm needs a
-  shared snapshot root and an isolated Levanter environment on its
-  dedicated serving host. Exercise multi-host acknowledgement, tool and
-  infrastructure failure masks, and restart across that deployment
-  boundary. [Exact chat continuation][chat-continuation]
-- Qualify native evaluation with the inventory's temperature of 0.6 and
-  top-p of 0.95. Keep its transformed sampler probabilities separate from the
-  raw-policy evidence required by native training and use the same fixed
-  panel, policy revision and evaluation decoding settings in both arms.
+- Use the two-update inventory launcher to verify the cross-host
+  acknowledgement from the four learner hosts to the serving host. Check
+  exact tool tokens and infrastructure failure masks on the same deployed
+  path. Exercise continuation across a tool call with a separate two-turn
+  probe because the inventory preset uses a one-turn budget. Restart the
+  learner and serving processes from a durable checkpoint and verify that
+  the next rollout uses the restored policy.
+  [Exact chat continuation][chat-continuation]
+- During native training, fixed-panel evaluation uses a separate binary
+  sampling call bound to the installed weight digest. A local isolated
+  CPU test matched an independently configured local sampler's token IDs and
+  transformed logprobs at temperature 0.6, top-p 0.95 and seed 20261020.
+  This call omits training replay frames. First check evaluation on the same
+  pinned checkpoint on H100. Then run the fixed panel at the same optimizer
+  steps using each arm's own acknowledged policy.
 - Load the pinned 67B checkpoint on the intended serving hardware. Qualify
   real context and batch sizes, expert sharding, precision, peak memory,
   compile time and sustained serving. Measure serve/score drift under the
@@ -456,8 +492,9 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   and cost, time per admitted group and optimizer update, and fixed-panel
   reward. For group throughput, divide total elapsed time from opening
   each policy's rollout leases to completing group admission by the actual
-  admitted group count across those steps. Keep the existing per-update
-  wall time and record publication separately. Use trajectory timings to
+  admitted group count across those steps. Use the `Rollout batch completed`
+  count, `timing/wait_for_generation_buffer`, `timing/step`, and
+  `timing/sync_weights` from the trainer. Use trajectory timings to
   distinguish generation, tool execution and grading. In the prior FP8 run,
   mean decode time fell 13%, the wait for rollout groups rose 6.1 minutes
   and time to the same evaluation target rose 5.7 minutes.
