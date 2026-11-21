@@ -268,6 +268,8 @@ class NativePolicyRuntime:
         source = config["model"]
         projection_dtype = _projection_dtype(runtime)
         model = _load_model(config, self.trainer)
+        # Finish import resharding before allocating the full Adam state.
+        jax.block_until_ready(model)
         self.state = self.trainer.initial_state(
             jax.random.PRNGKey(config["seed"]), model=model, is_trainable=_trainable_filter(model)
         )

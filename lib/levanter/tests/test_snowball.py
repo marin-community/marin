@@ -38,6 +38,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
@@ -258,6 +259,59 @@ def test_snowball_torch_compatible_state_dict_roundtrip():
     assert sd.keys() == loaded_sd.keys()
     for key, value in sd.items():
         np.testing.assert_array_equal(np.asarray(loaded_sd[key]), np.asarray(value))
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize("source_dtype", [jnp.float32, jnp.bfloat16])
+def test_snowball_public_import_consumes_owned_buffers_preserving_fp32_values_and_sharding(
+    tmp_path, monkeypatch, source_dtype
+):
+    with use_test_devices(4) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 2, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        tokenizer = Tokenizer(
+            models.WordLevel(vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
+        )
+        fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
+        config = _tiny_config(vocab_size=64, num_layers=2)
+        converter = config.hf_checkpoint_converter().replaced(tokenizer=fast)
+        with jax.set_mesh(mesh):
+            reference = SnowballLMHeadModel.init(Axis("vocab", 64), config, key=random.key(51))
+            expected = {
+                key: np.asarray(value.astype(source_dtype).astype(jnp.float32))
+                for key, value in reference.to_state_dict().items()
+            }
+            converter.save_pretrained(
+                reference, str(tmp_path), dtype=source_dtype, save_tokenizer=False, save_reference_code=False
+            )
+            # Compare the public import's full layout with direct native decoding
+            # of real, independently read HF tensors on the same staging mesh.
+            direct = reference.from_state_dict(converter.load_state_dict(str(tmp_path), dtype=jnp.float32))
+            jax.block_until_ready(direct)
+            expected_specs = [leaf.sharding.spec for leaf in jax.tree.leaves(direct) if eqx.is_array(leaf)]
+            owned_inputs = {}
+            load_weights = HFCheckpointConverter.load_state_dict
+
+            def capture_weight_io(self, *args, **kwargs):
+                tensors = load_weights(self, *args, **kwargs)
+                owned_inputs.update(tensors)
+                return tensors
+
+            monkeypatch.setattr(HFCheckpointConverter, "load_state_dict", capture_weight_io)
+            restored = converter.load_pretrained(
+                SnowballLMHeadModel, ref=str(tmp_path), config=config, axis_mapping={}, dtype=jnp.float32
+            )
+            jax.block_until_ready(restored)
+            restored_sd = restored.to_state_dict()
+            assert restored_sd.keys() == expected.keys()
+            for key, value in restored_sd.items():
+                assert value.dtype == jnp.float32
+                np.testing.assert_array_equal(np.asarray(value), expected[key])
+            assert [leaf.sharding.spec for leaf in jax.tree.leaves(restored) if eqx.is_array(leaf)] == expected_specs
+            assert any(array.is_deleted() for array in owned_inputs.values()), "import retained every owned HF buffer"
 
 
 def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output(tmp_path):

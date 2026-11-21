@@ -994,7 +994,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
             return lev_model
 
         load_from_state_dict = haliax.named_jit(
-            load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
+            load_from_state_dict,
+            axis_resources=axis_mapping,
+            out_axis_resources=axis_mapping,
+            donate_args=(False, True),
         )
         lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
         lev_model = load_from_state_dict(lev_model, state_dict)

@@ -3,15 +3,12 @@
 November 21, 2026 (PST).
 
 The learner-only integration and CPU proofs are ready; H100 acceptance remains
-pending. Smoke `2026.11.21.4`, from `c44f448e651a014de3cf06048102aaf2047c7af0`,
-progressed to real Snowball weight reads on all four native learner hosts, then
-exceeded the 1,800-second initialization deadline. One host still had unfinished
-multi-GB loader chunks shortly before the deadline. Native Snowball initialization,
-updates, publication, generation, and checkpoint continuation remain unverified
-on H100. Fresh smoke `2026.11.21.5` is submitted at BATCH priority from
-`832147b475a17ed9c803e8cbbb901203c85bccdd`, with a one-hour native initialization
-budget. At 13:27 PST its CPU coordinator was running; no GPU child had yet been
-discovered. The matched comparison is gated on smoke acceptance.
+pending. Smoke `2026.11.21.5`, from `832147b475a17ed9c803e8cbbb901203c85bccdd`,
+failed during model initialization with a 45.28-GiB GPU allocation request in
+`jit_load_from_state_dict`. A targeted import-memory fix passes local checks
+and independent review. Native Snowball initialization, updates, publication, generation,
+and checkpoint continuation remain unverified on H100. The matched comparison
+is gated on smoke acceptance.
 
 ## Scope and fixed recipe
 
@@ -65,7 +62,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `2026.11.20.1` failed the device-count guard; `2026.11.20.5` failed mesh validation; `2026.11.21.1` failed while reading an initialization response frame. Smoke `2026.11.21.4` reached real weight loading on all four learner hosts, then exceeded its initialization deadline. No model initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
+| Actual H100 | Earlier smokes exposed device selection, mesh validation, response framing, and initialization timeout failures. Smoke `2026.11.21.5` reached HF model conversion, then failed a 45.28-GiB GPU allocation. No all-rank initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
 | Publication and resume | CPU Gloo replay and fresh-process native checkpoint transactions passed, including exact model, Adam, RNG, step, and model-averaging fingerprints. Four native child/host restart cases passed. | H100 NCCL/vLLM receiver replay with zero byte mismatches, subsequent nonempty generation stamped with the updated policy, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
@@ -158,10 +155,36 @@ frame at the deadline was not captured. All five GPU pods are gone; the original
 exception and resolved configuration were collected, with no uploaded task
 archives to fetch.
 
-Fresh smoke `2026.11.21.5` was submitted through coordinator
+Smoke `2026.11.21.5` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.5-coordinator-4be6473c`.
 Its actual coordinator priority is BATCH, and its accepted source archive matches
-all 4,582 frozen entries, including 41 required runtime files. Native initialization
+all 4,582 frozen entries, including 41 required runtime files. Its child suffix
+was `users-dlwh-checkpoints-snowball-inventory-2026.11.21.5-ae02721e5e1a`; it
+ran at BATCH priority after one automatic gang preemption. It failed at
+`2026-11-21T21:48:02.250Z` with `RESOURCE_EXHAUSTED`, requesting 45.28 GiB in
+`jit_load_from_state_dict`. The error surfaced while synchronizing a router-bias
+fingerprint transfer after asynchronous import; that does not establish that
+the small fingerprint itself caused the large allocation. This is a concrete
+GPU memory failure, separate from the earlier parent IPC `MemoryError`.
+All five GPU pods are gone, and the coordinator is failed. No uploaded task
+archives were available; the original exception and resolved config were collected.
+
+The targeted fix donates the importer's owned HF state-dict buffers and waits
+for the imported model before allocating Adam state. Previously the donation
+flag covered only an abstract template. A tiny CPU compiler probe showed zero
+aliased bytes before that correction and 68,816 afterward, while retaining
+exact FP32 values and final shardings. This is local evidence of buffer reuse;
+the repaired source still requires an H100 fit check.
+
+The public import regression passes for FP32 and BF16 serialized weights with
+exact promoted-FP32 values, unchanged final shardings, and consumption of owned
+inputs. The old donation setting fails that ownership check. Three related HF
+converter checks and four real CPU update/checkpoint/restart cases pass, as does
+a shared-storage Torch checkpoint probe. A shape-only census gives 9.30 GiB of
+FP32 model parameters per device on data4/expert8; it excludes optimizer state,
+import scratch, activations, and allocator overhead, and does not prove H100 fit.
+
+The next smoke, `2026.11.21.6`, is not submitted. Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch
 and finalization. Ordinary RPCs retain their 1,800-second limit. This changes
@@ -173,8 +196,8 @@ import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
 No successful accelerator rerun is established by this record.
 Run from the repository with the required storage, evaluation, and judge
-credentials loaded. The smoke command records the submitted attempt; use a
-fresh unused version for another attempt.
+credentials loaded. The smoke command below is planned; freeze and record its
+source before submission.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
@@ -183,7 +206,7 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.5 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.6 \
   --learner levanter --steps 2 --verify-publication \
   --validate-native-checkpoint --coordinator-route regional --run
 ```
