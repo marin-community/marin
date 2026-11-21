@@ -356,7 +356,8 @@ full-vocabulary profile and fused forward diagnostic on four TPUv4 chips.
 The three installed weight digests were distinct, the second group
 used step 1, and the 128 sampled scores matched within `4.29e-6`. This
 qualifies fresh local KV state across updates. The separate CPU publication
-proof covers the process boundary, and multi-rank publication remains open.
+proof covers the process boundary. Publication across accelerator hosts
+remains open.
 [TPUv4 queue and cache proof][iris-native-install]
 
 The integrated proof archive is
