@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import json
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -14,8 +16,11 @@ from evalrecords.records import JudgeIdentity, TaskEvidence
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
+from finestore.testing.simulated_s3 import SimulatedS3, simulated_s3
 from fray.local_backend import LocalClient
+from marin.rollouts import evaluation
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity, run_evaluation
+from rigging.filesystem import factory
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood
@@ -209,6 +214,93 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_and_task
     assert sum(row["grading"]["score"] == 1 for row in samples) == 8
     assert sum((row["doc_id"], row["trial_id"]) == (completed["doc_id"], completed["trial_id"]) for row in samples) == 1
     assert calls == 9
+
+
+@contextlib.contextmanager
+def simulated_archive_storage() -> Iterator[SimulatedS3]:
+    """Serve ``s3://`` archives from simulated S3 while published corpora stay on local disk."""
+    local_open_url, local_url_to_fs = factory.open_url, factory.url_to_fs
+    with simulated_s3(latency=0.0) as fs, pytest.MonkeyPatch.context() as patcher:
+        simulated_open_url, simulated_url_to_fs = factory.open_url, factory.url_to_fs
+        patcher.setattr(
+            factory,
+            "open_url",
+            lambda url, mode="rb", **kwargs: (simulated_open_url if url.startswith("s3://") else local_open_url)(
+                url, mode, **kwargs
+            ),
+        )
+        patcher.setattr(
+            factory,
+            "url_to_fs",
+            lambda url, **kwargs: (simulated_url_to_fs if url.startswith("s3://") else local_url_to_fs)(url, **kwargs),
+        )
+        yield fs
+
+
+def red_turn() -> ModelTurn:
+    return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+
+@pytest.mark.asyncio
+async def test_driver_commits_concurrent_attempts_in_batches(published_corpora, run_config):
+    async def model(_request):
+        await asyncio.sleep(0.01)
+        return red_turn()
+
+    config = run_config.model_copy(update={"concurrency": 12, "source_limit": 3})
+    with simulated_archive_storage():
+        await run_evaluation(published_corpora, "s3://evaluation-test/batched", config, model, machine_factories={})
+        reader = ReadView("s3://evaluation-test/batched")
+        samples = list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE))
+        attempt_rows = list(reader.iter_rows(ATTEMPTS_TABLE))
+
+    # Two corpora x three rows x two trials; committing each attempt's start and finish separately
+    # would stamp its 24 attempt rows with 24 distinct commits.
+    assert len(samples) == 12 and len(attempt_rows) == 24
+    assert all(row["grading"]["score"] == 1 for row in samples)
+    assert len({row["_commit"] for row in attempt_rows}) < len(samples)
+
+
+@pytest.mark.asyncio
+async def test_driver_keeps_requesting_while_a_commit_is_blocked(published_corpora, run_config, monkeypatch):
+    monkeypatch.setattr(evaluation, "WRITE_BATCH_INTERVAL", 0.01)
+    attempts = 12
+    calls = 0
+    commit_blocked = threading.Event()
+    release = threading.Event()
+    released_while_blocked = []
+
+    async def model(_request):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.02)
+        return red_turn()
+
+    async def release_after_every_request():
+        await asyncio.to_thread(commit_blocked.wait, 10)
+        while calls < attempts:
+            await asyncio.sleep(0.01)
+        release.set()
+
+    config = run_config.model_copy(update={"concurrency": 2, "source_limit": 3})
+    with simulated_archive_storage() as fs:
+        put_object = fs.put_object
+
+        def block_first_attempt_write(path, data):
+            if ATTEMPTS_TABLE in path and not commit_blocked.is_set():
+                commit_blocked.set()
+                # A commit made on the event loop would stop requests, so nothing would set release.
+                released_while_blocked.append(release.wait(timeout=5))
+            put_object(path, data)
+
+        fs.put_object = block_first_attempt_write
+        async with asyncio.timeout(20):
+            requests = asyncio.create_task(release_after_every_request())
+            await run_evaluation(published_corpora, "s3://evaluation-test/blocked", config, model, machine_factories={})
+            await requests
+
+    assert released_while_blocked == [True]
+    assert calls == attempts
 
 
 def convert_mixed_row(row: RawRow, _context: ConversionContext):
