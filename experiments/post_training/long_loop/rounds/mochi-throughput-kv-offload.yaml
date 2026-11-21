@@ -213,6 +213,7 @@ rl:
         enable_return_routed_experts: true
         kv_offloading_size: 160
         kv_offloading_backend: native
+        enable_cumem_allocator: true
       sampling_params:
         temperature: 0.7
         top_p: 1.0
