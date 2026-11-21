@@ -32,6 +32,7 @@ from marin.processing.tokenize.attributes import TokenizedAttrData, iter_tokeniz
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
+from experiments.datakit.store import datakit_store
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
     ClusteredStoreData,
@@ -239,6 +240,13 @@ def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
 @pytest.mark.parametrize("fuzzy_exempt", [False, True])
 def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch, fuzzy_exempt):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    def unavailable_process_pool(*args, **kwargs):
+        raise RuntimeError("Partition subprocesses are unavailable")
+
+    # The default schedules one input shard per task. Those tasks can write
+    # their caches even when the worker cannot start a partition subprocess.
+    monkeypatch.setattr(datakit_store, "ProcessPoolExecutor", unavailable_process_pool)
     tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
 
