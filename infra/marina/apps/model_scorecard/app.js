@@ -13,22 +13,46 @@ function headerText(name) {
   return name.replace(/(bench|plus)$/, "\u200b$1");
 }
 
-function scoreCell(cell, column) {
+function percent(part, whole) {
+  return `${Math.round((100 * part) / whole)}%`;
+}
+
+function trialsLine(trials, minCompletion) {
+  const line = element("span", { class: "trials" });
+  const completion = element("span", {}, percent(trials.scored, trials.attempted));
+  if (trials.scored < minCompletion * trials.attempted) completion.className = "low-completion";
+  line.append(completion, ` · ${percent(trials.timeouts, trials.attempted)} t/o`);
+  return line;
+}
+
+function trialsText(trials, minCompletion) {
+  const unscored = trials.attempted - trials.scored;
+  return [
+    `Trials: ${trials.scored} of ${trials.attempted} scored (${percent(trials.scored, trials.attempted)}; ` +
+      `Marin's bar is ${percent(minCompletion, 1)})`,
+    `${trials.timeouts} hit the agent time limit and score 0`,
+    `${unscored} failed in infrastructure and are unscored`,
+  ];
+}
+
+function scoreCell(cell, column, minCompletion) {
   const td = element("td", { "data-col": column });
   if ("missing" in cell) {
     td.className = "missing";
     td.textContent = "–";
     return td;
   }
-  td.className = `scored ${cell.label}`;
+  td.className = `scored ${cell.label}${cell.suspect ? " suspect" : ""}`;
   const link = element("a", { href: cell.link.url, target: "_blank", rel: "noopener" });
   link.append(element("span", { class: "score" }, cell.score.toFixed(2)));
-  if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
+  if (cell.suspect) link.append(element("span", { class: "suspect-mark", "aria-label": "suspect" }, "!"));
+  else if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
+  if (cell.trials) link.append(trialsLine(cell.trials, minCompletion));
   td.append(link);
   return td;
 }
 
-function tooltipLines(model, evalName, cell) {
+function tooltipLines(model, evalName, cell, minCompletion) {
   const lines = [[`${model.name} · ${evalName}`, "tip-title"]];
   if ("missing" in cell) {
     lines.push(["No score"]);
@@ -36,6 +60,8 @@ function tooltipLines(model, evalName, cell) {
     return lines;
   }
   lines.push([cell.score.toFixed(2), "tip-score"], [LABEL_TEXT[cell.label]]);
+  if (cell.suspect) lines.push([`Suspect: ${cell.suspect}`, "tip-suspect"]);
+  if (cell.trials) lines.push(...trialsText(cell.trials, minCompletion).map((text) => [text]));
   if (cell.note) lines.push([cell.note]);
   lines.push([LINK_TEXT[cell.link.kind]]);
   if (cell.run_id) lines.push([cell.run_id, "tip-id"]);
@@ -61,9 +87,9 @@ function renderBody(table, data) {
   data.models.forEach((model, row) => {
     const tr = body.appendChild(element("tr", { "data-row": row }));
     const name = element("th", { class: "model", scope: "row" });
-    name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.hf_repo }, model.name));
+    name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.location }, model.name));
     tr.append(name);
-    data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column)));
+    data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column, data.min_completion)));
   });
   return body;
 }
@@ -92,7 +118,7 @@ function attachHover(body, headers, data) {
     const model = data.models[Number(row.dataset.row)];
     const evalName = data.evals[column];
     tooltip.replaceChildren(
-      ...tooltipLines(model, evalName, model.cells[evalName]).map(([text, cls]) =>
+      ...tooltipLines(model, evalName, model.cells[evalName], data.min_completion).map(([text, cls]) =>
         element("div", cls ? { class: cls } : {}, text),
       ),
     );

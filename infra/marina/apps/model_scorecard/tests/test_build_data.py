@@ -66,6 +66,7 @@ def test_run_cell_scores_on_0_100_scale_and_links_to_evaldash() -> None:
 
     model = scorecard["models"][0]
     assert model["url"] == "https://huggingface.co/org/model/tree/abc123"
+    assert model["location"] == "org/model"
     assert model["cells"]["math500"] == {
         "score": 97.86,
         "label": "unofficial",
@@ -95,6 +96,22 @@ def test_source_in_a_run_directory_links_to_evaldash() -> None:
     assert link.url == f"https://marina.oa.dev/evaldash/runs/{RUN_ID}"
 
 
+def test_agentic_source_cell_carries_its_trial_counts() -> None:
+    uri = f"s3://marin-us-east-02a/marin/evals/{RUN_ID}/results/harbor_jobs/job"
+    trials = {"attempted": 500, "scored": 454, "timeouts": 204}
+    cell = {"source": uri, "score": 43.612, "label": "unofficial", "trials": trials, "suspect": "Run failed"}
+
+    scorecard = build_scorecard(manifest({"math500": cell}), lambda _: record())
+
+    assert scorecard["models"][0]["cells"]["math500"] == {
+        "score": 43.61,
+        "label": "unofficial",
+        "link": {"kind": "evaldash", "url": f"https://marina.oa.dev/evaldash/runs/{RUN_ID}"},
+        "suspect": "Run failed",
+        "trials": trials,
+    }
+
+
 def test_source_outside_a_run_directory_links_to_filer() -> None:
     uri = "s3://marin-us-east-02a/marin/evals/ablations/regrade-1/results/math500/model.json"
     link = source_link(uri)
@@ -115,3 +132,18 @@ def test_source_outside_a_run_directory_links_to_filer() -> None:
 def test_run_cell_rejects_failed_or_mismatched_runs(fetched: EvalRunRecord, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         build_scorecard(manifest({"math500": {"run_id": RUN_ID, "label": "official"}}), lambda _: fetched)
+
+
+CHECKPOINT = "s3://bucket/exports/model/step-1"
+
+
+def test_checkpoint_row_matches_runs_by_location_and_links_to_filer() -> None:
+    cells = {"math500": {"run_id": RUN_ID, "label": "unofficial", "suspect": "known grading problem"}}
+    scorecard = build_scorecard(
+        {"evals": ["math500"], "models": [{"name": "Model", "location": CHECKPOINT, "cells": cells}]},
+        lambda _: record(location=f"{CHECKPOINT}/", revision=None),
+    )
+
+    model = scorecard["models"][0]
+    assert unquote(model["url"].removeprefix("https://filer.marina.oa.dev/#")) == CHECKPOINT
+    assert model["cells"]["math500"]["suspect"] == "known grading problem"

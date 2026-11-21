@@ -10,6 +10,7 @@
   --link: #7cb4f5;
   --unofficial: #d29922;
   --official: #3fb950;
+  --suspect: #f85149;
   font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text-primary);
   background: var(--surface-0);
@@ -61,7 +62,7 @@ a:focus-visible {
 
 table {
   width: 100%;
-  min-width: 1500px;
+  min-width: 1800px;
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 2px;
@@ -139,6 +140,41 @@ td.unofficial {
 
 td.missing {
   color: var(--text-muted);
+}
+
+td.suspect .score {
+  color: var(--text-muted);
+  text-decoration: line-through dotted var(--suspect);
+}
+
+.suspect-mark {
+  margin-left: 2px;
+  color: var(--suspect);
+  font-weight: 800;
+}
+
+.tooltip .tip-suspect {
+  color: var(--suspect);
+  font-weight: 600;
+}
+
+.trials {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.trials-sample {
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.trials .low-completion {
+  color: var(--suspect);
+  font-weight: 600;
 }
 
 .note-mark {
