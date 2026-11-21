@@ -56,11 +56,19 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart | Hold:
     return Transient(message) if retryable else Restart(message)
 
 
+STARTUP = frozenset({RolloutOperation.START, RolloutOperation.PREPARE})
+"""Where a rollout fails before its first model turn; only there does its executor retry it."""
+
+
 @dataclass(frozen=True, slots=True)
 class RolloutResource:
+    """``startup_attempts`` bounds the attempts of a rollout that keeps failing before its first model turn; it is
+    scheduling, so it stays out of the fingerprint."""
+
     engine: Engine
     model: Model
     config_digest: str
+    startup_attempts: int
 
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("rollouts", self.config_digest, ReplayPolicy.CACHE)
@@ -71,8 +79,11 @@ class RolloutResource:
                 event.spec, self.model, run_id=f"{event.spec.task.id}:{event.trial}:{event.attempt}"
             )
         except RolloutInterrupted as error:
-            raise interruption(error) from error
+            issue = interruption(error)
+            if isinstance(issue, Transient) and error.operation not in STARTUP:
+                issue = Restart(str(issue))  # the model has acted: running it again is a new trial, not a retry
+            raise issue from error
 
 
 async def run_rollout(event: SolverRollout, resource: RolloutResource, *, notify: Notify) -> GradedRollout:
-    return await retry_effect(event, lambda: resource.run(event), notify)
+    return await retry_effect(event, lambda: resource.run(event), notify, resource.startup_attempts)

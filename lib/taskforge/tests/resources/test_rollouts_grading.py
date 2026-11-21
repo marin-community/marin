@@ -45,14 +45,17 @@ from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
 from taskforge.effects.log import EventLog, Opened
 from taskforge.harness.protocol import ToolResult as ToolReply
+from taskforge.harness.role import install_env
 from taskforge.harness.tools.grade import GradeTool
 from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
+from taskforge.policy import load_policy
+from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources import execution
 from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
-from taskforge.harness.role import install_env
 
 
 def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None:
@@ -86,7 +89,7 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     cause.__cause__ = RuntimeError("ImagePullBackOff: registry.example.com/" + "a" * 400)
     interrupted.__cause__ = cause
     engine = FakeEngine((interrupted,))
-    resource = RolloutResource(engine, twelve, "test-config")
+    resource = RolloutResource(engine, twelve, "test-config", 3)
     decision = Transient if operation == RolloutOperation.START else Restart
     with pytest.raises(decision) as failure:
         await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2))
@@ -95,6 +98,32 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     assert str(failure.value) == f"Rollout interrupted during {operation}: {detail}"
     assert "ImagePullBackOff" in str(failure.value)
     assert engine.run_ids == ["arithmetic:4:2"]
+
+
+# Owner's rule 2026-11-21: only a failure before the solver's first model turn is retried by its executor; once the
+# model has acted, running it again is a new trial, so the failure restarts its slot instead.
+@pytest.mark.parametrize("operation", tuple(RolloutOperation))
+async def test_only_a_rollout_failing_before_its_first_model_turn_retries_within_the_policy_bound(
+    operation: RolloutOperation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def instant(_delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(execution, "sleep", instant)
+    bound = load_policy(DEFAULTS_DIR).setting("solver.startup_attempts", int)
+    unavailable = RolloutInterrupted(Rollout("trial", (), "interrupted"), operation)
+    unavailable.__cause__ = MachineUnavailable("controller unavailable")
+    engine = FakeEngine((unavailable,) * (bound + 1))
+    notes: list[Event[None]] = []
+    with pytest.raises(Restart, match="controller unavailable"):
+        await run_rollout(
+            SolverRollout(rollout_spec(arithmetic_task()), 0, 0),
+            RolloutResource(engine, twelve, "config", bound),
+            notify=notes.append,
+        )
+    startup = operation in (RolloutOperation.START, RolloutOperation.PREPARE)
+    assert len(engine.run_ids) == (bound if startup else 1) and bound == 3
+    assert len(notes) == (bound - 1 if startup else 0) and all(isinstance(note, Retrying) for note in notes)
 
 
 async def test_grading_runs_real_engine_without_inference() -> None:
@@ -170,7 +199,7 @@ async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> 
     ctx = Context(log=EventLog())
     spec = rollout_spec(arithmetic_task())
     if solver:
-        resource = RolloutResource(engine, twelve, "cut-test")
+        resource = RolloutResource(engine, twelve, "cut-test", 3)
         ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), resource)
         event = SolverRollout(spec, 0, 0)
     else:

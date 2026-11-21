@@ -244,6 +244,7 @@ def build_resources(
             verifiers.rollouts,
             partial(solver_turn, solver, sampling),
             digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + judged),
+            policy.setting("solver.startup_attempts", int),
         ),
         GradingResource(verifiers.grades, digest((execution, *judged)) if judged else execution, base_engine),
         Ids(),
@@ -319,7 +320,9 @@ def build_config(
         adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
     )
     budget = Budget(
-        policy.setting("budget.max_modify_rounds", int), policy.setting("budget.max_validation_retries", int)
+        policy.setting("budget.max_modify_rounds", int),
+        policy.setting("budget.max_validation_retries", int),
+        policy.setting("budget.max_missing_trials", int),
     )
     band = BandRules(
         policy.setting("band.low", float),

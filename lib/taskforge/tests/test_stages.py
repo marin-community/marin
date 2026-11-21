@@ -67,7 +67,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.env import WriteFiles
@@ -76,7 +76,7 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
 from taskforge.stages.review import review
-from taskforge.stages.rules import default_review
+from taskforge.stages.rules import default_review, fallback_after
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
 from taskforge.wiring import build_config, submit_gate
 
@@ -573,7 +573,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
 async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(workpiece.submission.digest, (), (), ())
-    current = workpiece.with_(too_easy_baseline=workpiece.submission, evidence=(evidence,))
+    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY), evidence=(evidence,))
     expected = Modify(("Custom reviewer requires another change",))
 
     def custom_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Modify:
@@ -697,7 +697,8 @@ def test_hardening_accepts_or_restores_baseline(
     original = workpiece.submission
     assert original is not None
     pending = reviewed(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
-    assert pending.round == 2 and pending.too_easy_baseline == original and pending.terminal is None
+    assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY)
+    assert pending.terminal is None
     first = pending.decisions[-1]
     assert (
         isinstance(first, Modify)
@@ -713,8 +714,83 @@ def test_hardening_accepts_or_restores_baseline(
     assert final.terminal is Terminal.ACCEPTED and final.round == 2
     assert final.submission == (original if revert else updated)
     decision = final.decisions[-1]
-    assert isinstance(decision, Accept) and decision.revert is revert
+    assert isinstance(decision, Accept) and decision.restore == (original.digest if revert else None)
     assert final.accepted_with is (None if solved == 2 else BandOutcome.TOO_EASY)
+
+
+def revised(submission: Submission, label: str) -> Submission:
+    return replace(submission, task=submission.task.model_copy(update={"labels": {"revision": label}}))
+
+
+# Owner's ruling: an out-of-band revision restores the best earlier in-band submission, bound to its digest.
+@pytest.mark.parametrize("bad", ["too_hard", "fault"])
+def test_a_bad_revision_restores_the_right_earlier_submission_by_its_digest(workpiece: Workpiece, bad: str) -> None:
+    hard = workpiece.submission
+    assert hard is not None
+    first = reviewed(workpiece.with_(evidence=(evidence(0),)))  # too hard: revised, but no fallback
+    assert first.round == 1 and first.fallback is None
+    easy = revised(hard, "easier")
+    second = reviewed(first.with_(submission=easy, evidence=(*first.evidence, evidence(3))))  # too easy: the fallback
+    assert second.round == 2 and second.fallback == Fallback(easy, BandOutcome.TOO_EASY)
+    assert isinstance(step := second.decisions[-1], Modify) and step.fallback == easy.digest
+    regressed = evidence(0) if bad == "too_hard" else evidence(3, controls_met=False)
+    final = reviewed(second.with_(submission=revised(easy, "harder"), evidence=(*second.evidence, regressed)))
+    decision = final.decisions[-1]
+    assert isinstance(decision, Accept) and decision.restore == easy.digest
+    assert final.terminal is Terminal.ACCEPTED and final.submission == easy != hard
+    assert final.accepted_with is BandOutcome.TOO_EASY and "accepted_with: too_easy" in decision.reasons
+    assert f"The revision left the acceptance band; restored submission {easy.digest[:12]}" in decision.reasons
+    assert WORKPIECE.validate_json(WORKPIECE.dump_json(final)) == final
+
+
+def test_the_fallback_is_the_best_acceptable_placement_then_the_latest(workpiece: Workpiece) -> None:
+    stored = workpiece.submission
+    assert stored is not None
+    current = revised(stored, "current")
+    both = frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})
+    for kept, placement, accepted, expected in (
+        (BandOutcome.IN_BAND, BandOutcome.TOO_EASY, both, stored),
+        (BandOutcome.TOO_EASY, BandOutcome.IN_BAND, both, current),
+        (BandOutcome.TOO_EASY, BandOutcome.TOO_EASY, both, current),
+        (BandOutcome.TOO_EASY, BandOutcome.TOO_HARD, both, stored),
+        (BandOutcome.TOO_EASY, None, both, stored),
+        (BandOutcome.IN_BAND, BandOutcome.TOO_EASY, frozenset({BandOutcome.IN_BAND}), stored),
+    ):
+        wp = workpiece.with_(submission=current, fallback=Fallback(stored, kept))
+        assert fallback_after(wp, placement, BandRules(0.25, 0.75, accepted)) == expected.digest
+    assert fallback_after(workpiece, BandOutcome.TOO_HARD, BandRules(0.25, 0.75, both)) is None
+
+
+def test_a_decision_naming_another_fallback_digest_is_refused(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    wp = workpiece.with_(session=Conversation((Message(Role.SYSTEM, "author"),), ()))
+    with pytest.raises(ValueError, match="Cannot restore"):
+        apply_decision(wp, Accept(BandOutcome.TOO_EASY, (), "elsewhere"), setup.budget, setup.policy)
+    with pytest.raises(ValueError, match="Cannot keep"):
+        apply_decision(wp, Modify(("harder",), BandOutcome.TOO_EASY, "elsewhere"), setup.budget, setup.policy)
+
+
+@pytest.mark.parametrize("cause", [Cause.HELD, Cause.AGENT_TIMEOUT, Cause.NO_GRADE])
+def test_a_solver_slot_without_a_score_holds_by_policy_and_is_never_read_as_a_zero(
+    workpiece: Workpiece, cause: Cause
+) -> None:
+    zero = GradeResult(Outcome.GRADED, 0.0) if cause is Cause.AGENT_TIMEOUT else None  # what a timed-out run graded
+    absent = TrialResult(2, zero, cause, "Hold: request rejected" if cause is Cause.HELD else "")
+    result = replace(evidence(3), solver=(*evidence(3).solver[:2], absent))
+    wp = workpiece.with_(evidence=(result,))
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    assert setup.budget.max_missing_trials == 0  # the default: any missing slot holds the round
+    held = default_review(wp, setup.band, setup.budget)
+    assert isinstance(held, Retry if cause is not Cause.HELD else Incomplete)
+    if cause is Cause.HELD:
+        assert "solver trial 2: Hold: request rejected" in held.reasons
+    tolerant = build_config(load_policy(DEFAULTS_DIR).overlaid({"budget.max_missing_trials": 1}), {})
+    placed = default_review(wp, tolerant.band, tolerant.budget)
+    # Placed over the two scored slots, both solved: too easy. Read as a zero, 2 of 3 would be in band.
+    assert isinstance(placed, Modify) and placed.placement is BandOutcome.TOO_EASY
+    assert placed.findings[0].startswith("2 of 2 trials solved: too_easy")
+    assert "1 of 3 solver trials have no score; placed over 2" in placed.findings
 
 
 @pytest.mark.parametrize("exhausted", [False, True])
@@ -727,7 +803,7 @@ def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None
     final = reviewed(current)
     if exhausted:
         assert final.terminal is Terminal.ACCEPTED and final.round == 2 and final.submission == workpiece.submission
-        assert final.too_easy_baseline is None and final.accepted_with is BandOutcome.TOO_EASY
+        assert final.fallback is None and final.accepted_with is BandOutcome.TOO_EASY
         assert (
             isinstance(final.decisions[-1], Accept)
             and "Shared modification budget exhausted" in final.decisions[-1].reasons

@@ -30,6 +30,7 @@ CAUSE_DECISIONS = MappingProxyType(
         Cause.NO_GRADE: Retry,
         Cause.BUDGET_EXHAUSTED: Reject,
         Cause.GENERATION_LIMIT: Incomplete,
+        Cause.HELD: Incomplete,
         Cause.GRADER_MISSING_REWARD: Modify,
         Cause.GRADER_EMPTY_REWARD: Modify,
         Cause.GRADER_INVALID_REWARD: Modify,

@@ -33,6 +33,14 @@ class Submission:
 
 
 @dataclass(frozen=True, slots=True)
+class Fallback:
+    """The submission a revision that leaves the acceptance band falls back to, and where it placed."""
+
+    submission: Submission
+    band: BandOutcome
+
+
+@dataclass(frozen=True, slots=True)
 class Conversation:
     messages: tuple[Message, ...]
     tool_schemas: tuple[ToolSchema, ...]
@@ -54,7 +62,7 @@ class WorkpieceChanges(TypedDict, total=False):
     evidence: tuple[ValidationResult, ...]
     decisions: tuple[Decision, ...]
     terminal: Terminal | None
-    too_easy_baseline: Submission | None
+    fallback: Fallback | None
     accepted_with: BandOutcome | None
 
 
@@ -68,7 +76,7 @@ class Workpiece:
     evidence: tuple[ValidationResult, ...] = ()
     decisions: tuple[Decision, ...] = ()
     terminal: Terminal | None = None
-    too_easy_baseline: Submission | None = None
+    fallback: Fallback | None = None
     accepted_with: BandOutcome | None = None
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":

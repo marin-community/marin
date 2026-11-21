@@ -15,14 +15,16 @@ type Notify = Callable[[Event[None]], None]
 MAX_ATTEMPTS = 3
 
 
-async def retry_effect[T](event: Event[T], operation: Callable[[], Awaitable[T]], notify: Notify) -> T:
+async def retry_effect[T](
+    event: Event[T], operation: Callable[[], Awaitable[T]], notify: Notify, attempts: int = MAX_ATTEMPTS
+) -> T:
     attempt = 1
     delay = 1.0
     while True:
         try:
             return await operation()
         except Transient as error:
-            if attempt == MAX_ATTEMPTS:
+            if attempt >= attempts:
                 raise Restart(f"{type(event).__name__} exhausted its retry budget: {error}") from error
             notify(Retrying(event, attempt, str(error)))
             await sleep(delay)

@@ -210,7 +210,7 @@ SPEC = rollout_spec(arithmetic_task(), trace=TraceMode.MESSAGES, model_turn_time
 def solver(model: ModelClient) -> RolloutResource:
     """The real solver path: RolloutEngine's shell harness calling ``solver_turn`` on ``model``."""
     engine = RolloutEngine({}, {"shell": ShellHarness(command_timeout=None)})
-    return RolloutResource(engine, partial(solver_turn, model, LLMPolicy()), "solver")
+    return RolloutResource(engine, partial(solver_turn, model, LLMPolicy()), "solver", 3)
 
 
 async def rollout(model: ModelClient, spec: TaskRolloutSpec = SPEC) -> GradedRollout:

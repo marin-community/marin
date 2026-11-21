@@ -7,7 +7,8 @@
 import asyncio
 import itertools
 import json
-from collections.abc import Sequence
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import PurePosixPath
 from typing import cast
 
@@ -19,7 +20,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
+from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, describe_exception
 from taskforge.harness.protocol import Returned, Stopped, StopReason
 from taskforge.harness.role import Answer, Files, Fresh, Visit, sitting
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
@@ -67,15 +68,70 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
 
 
 async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
+    """One slot's ``SolverRollout``: a held one is typed missing evidence; a restart propagates and records nothing."""
     for retry in range(2):
-        result = None
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
-        except* OutputBudgetExhausted:
+        except OutputBudgetExhausted:
             ctx.notify(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
-        if result is not None:
-            return TrialResult(trial, result.grade, trial_cause(result, spec.task))
+            continue
+        except Hold as error:
+            return TrialResult(trial, None, Cause.HELD, "; ".join(failure_reasons(error)))
+        return TrialResult(trial, result.grade, trial_cause(result, spec.task))
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
+
+
+async def solver_batch(
+    ctx: Context,
+    spec: TaskRolloutSpec,
+    phase: str,
+    attempt: int,
+    existing: Sequence[int],
+    target: int,
+    *,
+    concurrency: int,
+    heartbeat: float,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> tuple[TrialResult, ...]:
+    """Fill ``phase``'s ``existing`` trial indices up to ``target`` with slots numbered past them, each its own
+    ``SolverRollout`` of ``attempt``, so no two phases' slots share an identity.
+
+    ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
+    enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
+    re-executes only it.
+    """
+    first = max(existing, default=-1) + 1
+    gate, running = asyncio.Semaphore(concurrency), dict[int, float]()
+
+    async def slot(trial: int) -> TrialResult | Restart:
+        async with gate:
+            running[trial] = clock()
+            try:
+                return await solver_result(ctx, spec, trial, attempt)
+            except Restart as error:
+                return error
+            finally:
+                del running[trial]
+
+    async def beat() -> None:
+        while True:
+            await sleep(heartbeat)
+            now = clock()
+            listed = "".join(f" [trial {trial} {now - started:.0f}s]" for trial, started in running.items())
+            ctx.notify(Note(f"Solver {phase} attempt {attempt}: {len(running)} running{listed}"))
+
+    ticker = asyncio.create_task(beat())
+    try:
+        async with asyncio.TaskGroup() as group:
+            slots = [group.create_task(slot(trial)) for trial in range(first, first + target - len(existing))]
+    finally:
+        ticker.cancel()
+        await asyncio.gather(ticker, return_exceptions=True)
+    results = [slot.result() for slot in slots]
+    if restarts := [result for result in results if isinstance(result, Restart)]:
+        raise BaseExceptionGroup(f"Solver {phase} slots restart", restarts)
+    return tuple(result for result in results if isinstance(result, TrialResult))
 
 
 async def adversary_result(
@@ -334,7 +390,18 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
                 group.create_task(control_result(ctx, spec, index, control))
                 for index, control in enumerate(submission.controls)
             ]
-            solver = [group.create_task(solver_result(ctx, spec, trial, len(workpiece.evidence))) for trial in range(k)]
+            solver = group.create_task(
+                solver_batch(
+                    ctx,
+                    spec,
+                    "validation",
+                    len(workpiece.evidence),
+                    (),
+                    k,
+                    concurrency=config.policy.setting("solver.concurrency", int),
+                    heartbeat=config.policy.setting("solver.heartbeat_interval", float),
+                )
+            )
             adversary = [
                 group.create_task(
                     adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name))
@@ -344,7 +411,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
         return Validated(
             ValidationResult(
                 submission.digest,
-                tuple(trial.result() for trial in solver),
+                solver.result(),
                 tuple(control.result() for control in controls),
                 tuple(result.result() for result in adversary),
             )

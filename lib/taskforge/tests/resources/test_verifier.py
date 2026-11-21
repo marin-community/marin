@@ -5,12 +5,13 @@ import asyncio
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import override
+from typing import Any, cast, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
 from lib.taskforge.tests.stage_fakes import OVER_CREDITED
-from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.models import GradedRollout, Model, ModelRequest, ModelTurn, Rollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
     Backend,
@@ -37,12 +38,12 @@ from taskforge.lowering import (
     requirements,
     rollout_engine,
 )
-from taskforge.model.controls import Candidate, RewardBand
+from taskforge.model.controls import Candidate
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.rollouts import RolloutResource, SolverRollout
+from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.resources.verifier import RoundVerifier
-from taskforge.stages.validate import claim_result
+from taskforge.stages.validate import claim_result, solver_batch
 
 SCRIPT = b"""
 from pathlib import Path
@@ -172,7 +173,7 @@ async def test_grades_and_solver_share_clean_machine_and_rehydrate_resources() -
         for expected, candidate in [(1, event()), (1, event()), (0, event(SCRIPT.replace(b"== '12'", b"== '9'")))]:
             result = await resource.grade(candidate)
             assert result.reward == expected, result
-        solver = RolloutResource(pool.rollouts, twelve, "test")
+        solver = RolloutResource(pool.rollouts, twelve, "test", 3)
         result = await solver.run(SolverRollout(event().spec, 0, 0))
         assert result.grade.reward == 1
         assert result.grade.diagnostics["verifier_lease"] == 4
@@ -283,9 +284,7 @@ async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
     ctx = Context(log=EventLog())
     ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
     candidate = event()
-    finding = await claim_result(
-        ctx, candidate.spec, AdversaryClaim("passes", candidate.candidate, OVER_CREDITED)
-    )
+    finding = await claim_result(ctx, candidate.spec, AdversaryClaim("passes", candidate.candidate, OVER_CREDITED))
     await ctx.drain()
     assert not finding.met and finding.grade is not None and finding.grade.reward == 0
     assert len(shared.run_ids) == len(fresh.run_ids) == 1
@@ -385,6 +384,59 @@ async def test_solver_machines_run_concurrently_before_shared_grading() -> None:
     finally:
         await pool.close()
     assert all(machine.closed for machine in factory.machines)
+
+
+class Admissions:
+    """The round verifier's engine, recording the run of every attempt it starts."""
+
+    def __init__(self, engine: RolloutEngine) -> None:
+        self.engine, self.started = engine, list[str]()
+        self.machine_factories = engine.machine_factories
+
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, **options: Any) -> GradedRollout:
+        self.started.append(options["run_id"])
+        return await self.engine.run_task(spec, model, **options)
+
+
+async def test_batch_slots_generate_before_verifier_admission_and_a_grade_is_admitted_before_its_attempt() -> None:
+    """A solver slot leases the verifier inside its grading, so its wait counts against its verifier deadline and
+    never holds back generation; a replayed candidate leases it before its attempt starts, outside every deadline."""
+    factory = CountedFactory()
+    pool, resource = setup(factory)
+    admissions = Admissions(pool.engine)
+    pool.engine = cast(RolloutEngine, admissions)
+    candidate = event()
+    task = candidate.spec.task.model_copy(update={"environment_requirements": requirements(image=None)})
+    spec = candidate.spec.model_copy(update={"task": task, "task_machine": machine_runtime(backend="shellsim")})
+    generated, everyone = [0], asyncio.Event()
+
+    async def model(request: ModelRequest) -> ModelTurn:
+        generated[0] += 1
+        if generated[0] == 3:
+            everyone.set()
+        return await twelve(request)
+
+    ctx = Context(log=EventLog())
+    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(pool.rollouts, model, "test", 3))
+    await pool.lock.acquire()  # a grade holds the verifier
+    held = True
+    try:
+        slots = asyncio.create_task(solver_batch(ctx, spec, "validation", 0, (), 3, concurrency=3, heartbeat=300.0))
+        await asyncio.wait_for(everyone.wait(), 30)  # each slot generated while the verifier was held
+        grade = asyncio.create_task(resource.grade(candidate))
+        await asyncio.sleep(0)  # the grade runs up to its admission
+        assert sorted(admissions.started) == ["arithmetic:0:0", "arithmetic:1:0", "arithmetic:2:0"]
+        pool.lock.release()
+        held = False
+        results, graded = await slots, await grade
+        assert len(admissions.started) == 4 and admissions.started[3].endswith(":grade:0")
+        leases = [trial.grade.diagnostics["verifier_lease"] for trial in results if trial.grade is not None]
+        assert graded.reward == 1 and sorted((*leases, graded.diagnostics["verifier_lease"])) == [1, 2, 3, 4]
+    finally:
+        if held:
+            pool.lock.release()
+        await pool.close()
+    await ctx.drain()
 
 
 async def test_shared_verifier_cleanup_warns_and_releases_ownership(monkeypatch: pytest.MonkeyPatch) -> None:

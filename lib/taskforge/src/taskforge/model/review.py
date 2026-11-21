@@ -33,6 +33,8 @@ class Cause(StrEnum):
     INVALID_TASK = "invalid_task"
     VERIFIER_SKIPPED = "verifier_skipped"
     NO_GRADE = "no_grade"
+    HELD = "held"
+    """A solver slot whose effect held: typed missing evidence, never a failed trial."""
 
 
 class BandOutcome(StrEnum):
@@ -49,9 +51,11 @@ class RejectKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Accept:
+    """``restore`` names, by digest, the earlier submission accepted in place of the current one."""
+
     band: BandOutcome
     reasons: tuple[str, ...] = ()
-    revert: bool = False
+    restore: str | None = None
     kind: Literal["accept"] = "accept"
 
 
@@ -64,8 +68,11 @@ class Reject:
 
 @dataclass(frozen=True, slots=True)
 class Modify:
+    """``fallback`` names, by digest, the submission the next round falls back to."""
+
     findings: tuple[str, ...]
     placement: BandOutcome | None = None
+    fallback: str | None = None
     kind: Literal["modify"] = "modify"
 
 
@@ -123,6 +130,7 @@ class TrialResult:
     trial: int
     grade: GradeResult | None
     cause: Cause | None = None
+    detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +284,8 @@ class ValidationResult:
 class Budget:
     max_modify_rounds: int
     max_validation_retries: int
+    max_missing_trials: int
+    """Solver slots a round may lack and still be placed over its scored ones; more hold it."""
 
 
 VALIDATION_RESULT = TypeAdapter(ValidationResult)
