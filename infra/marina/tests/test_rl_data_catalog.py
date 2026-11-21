@@ -164,6 +164,47 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 pytestmark = pytest.mark.usefixtures("isolated_admission_census")
 
 
+def test_history_checksums_cover_each_confidence_load_and_detect_archived_edits(catalog_query, tmp_path):
+    root = str(tmp_path / "confidence-history")
+    publish_sample(root, "confidence-history")
+    load_catalog(CurationCatalog(root), catalog_query)
+    for load in ("archived", "current", "empty"):
+        catalog_query(
+            "INSERT INTO curriculum_loads(load_id,release_id,release_uri,manifest) "
+            "VALUES (:load,:load,'s3://fixture/release.json','{}')",
+            {"load": load},
+        )
+    catalog_query(
+        "INSERT INTO curriculum_confidence VALUES "
+        "('archived','z','placement','math','algebra',ARRAY[9,3]),"
+        "('archived','a','denominator','','',ARRAY[10,10]),"
+        "('current','a','denominator','','',ARRAY[11,11])",
+        {},
+    )
+    expected = catalog_query(
+        "SELECT l.load_id,"
+        "(SELECT COUNT(*) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS vectors,"
+        "(SELECT md5(COALESCE(string_agg(md5(to_jsonb(v)::text),'' ORDER BY v.scope_id,v.metric,"
+        "v.subject_id,v.node_id),'')) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS checksum "
+        "FROM curriculum_loads l ORDER BY l.load_id",
+        {},
+    )["rows"]
+    observed_loads = []
+
+    def bounded_query(sql, parameters):
+        if "FROM curriculum_confidence" in sql:
+            assert parameters.get("load_id") in {"archived", "current", "empty"}
+            observed_loads.append(parameters["load_id"])
+        return catalog_query(sql, parameters)
+
+    before = catalog_state(bounded_query)
+    assert before["confidence_vectors"] == expected
+    assert observed_loads == ["archived", "current", "empty"]
+    catalog_query("UPDATE curriculum_confidence SET instances=ARRAY[8,3] WHERE load_id='archived' AND scope_id='z'", {})
+    with pytest.raises(ValueError, match="Historical confidence_vectors"):
+        verify_preservation(before, catalog_state(bounded_query))
+
+
 def test_release_gate_preserves_archived_packets_even_during_an_explicit_catalog_refresh(
     catalog_database, catalog_query, tmp_path
 ):
@@ -4020,11 +4061,44 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
     assert projected["sample_pin_stale"] is True
 
 
+def test_qc_inventory_keeps_its_selected_load_during_a_refresh(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "inventory-refresh")
+    publish_sample(root, "inventory-refresh")
+    load_catalog(CurationCatalog(root), catalog_query)
+    catalog_query(
+        "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
+        "to_jsonb(s)||jsonb_build_object('id','Marin:unreviewed','assessment_key',NULL))).* "
+        "FROM atlas_sources s WHERE id='Marin:math'",
+        {},
+    )
+    catalog_query(
+        "INSERT INTO atlas_loads SELECT (jsonb_populate_record(NULL::atlas_loads, "
+        "to_jsonb(l)||jsonb_build_object('load_id','next-load','snapshot_id','next'))).* "
+        "FROM atlas_loads l JOIN atlas_current c USING(load_id) WHERE c.name='latest'",
+        {},
+    )
+    switched = False
+
+    def select_new_load(connection, _cursor, statement, _parameters, _context, _many):
+        nonlocal switched
+        if not switched and "atlas_review_current" in statement:
+            switched = True
+            connection.execute(text("UPDATE atlas_current SET load_id='next-load' WHERE name='latest'"))
+
+    event.listen(catalog_database, "before_cursor_execute", select_new_load)
+    try:
+        with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+            inventory = client.get("/qc/inventory").json()
+        assert switched
+        assert {row["source_id"] for row in inventory["panels"]} == {"Marin:math", "Marin:unreviewed"}
+    finally:
+        event.remove(catalog_database, "before_cursor_execute", select_new_load)
+
+
 @pytest.mark.parametrize("shared_batch", [False, True, "chunked"])
 def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
-    catalog_database, catalog_query, tmp_path, shared_batch, monkeypatch
+    catalog_database, catalog_query, tmp_path, shared_batch
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.server.reviews.QC_INVENTORY_BATCH", 1)
     root = str(tmp_path / "sample-browse")
     publish_sample(root, "sample-browse")
     load_catalog(CurationCatalog(root), catalog_query)
@@ -4172,6 +4246,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
             candidate.close()
         detail = client.get("/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]}).json()
         assert detail["raw_review"] == expected_raw[0]["record"]
+        # An archived copy of the same pipeline must not inflate the selected panel.
+        catalog_query(
+            "INSERT INTO atlas_raw_reviews SELECT 'archive-'||load_id,pipeline_key,task_id,record,reviewer "
+            "FROM atlas_raw_reviews WHERE load_id=:load AND pipeline_key=:key",
+            {"load": load_id, "key": key},
+        )
         inventory = client.get("/qc/inventory").json()
         assert (
             len(inventory["panels"])
@@ -4183,6 +4263,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         assert panel["task_count"] == panel["raw_count"] == 3
         assert panel["linked_count"] == (3 if shared_batch else 0)
         assert panel["missing_batches"] == 0
+        unreviewed = next(row for row in inventory["panels"] if row["source_id"] == "Marin:unreviewed")
+        assert unreviewed["pipeline_key"] is None
+        assert {
+            name: unreviewed[name]
+            for name in ("task_count", "raw_count", "linked_count", "missing_batches", "missing_chunks")
+        } == dict.fromkeys(("task_count", "raw_count", "linked_count", "missing_batches", "missing_chunks"), 0)
         legend = client.get("/qc/defects").json()
         ambiguity = next(row for row in legend["defects"] if row["id"] == "ambiguity")
         assert ambiguity["count"] == 1

@@ -9,11 +9,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from marina.client import DEFAULT_MARINA_URL, applet_query
-
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import DifficultyCoverage, campaign_queue
 
 logger = logging.getLogger(__name__)
+
+MARINA_URL = "https://marina.oa.dev"
+"""The CLI's default query target; mirrors ``marina.client.DEFAULT_MARINA_URL`` without
+importing the marina client, which the marin-core test environment does not install."""
 
 
 def published_queue(marina_url: str, applet_id: str) -> dict[str, Any]:
@@ -23,6 +25,10 @@ def published_queue(marina_url: str, applet_id: str) -> dict[str, Any]:
     loaders use, not a bare HTTP request: the caller names the applet whose
     rebuild published the coverage.
     """
+    # marina is not a dependency of the marin-core test environment this module's
+    # tests run under; import it where the query channel is actually used.
+    from marina.client import applet_query  # noqa: PLC0415
+
     query = applet_query(marina_url, applet_id)
     rows = query(
         """
@@ -43,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = queue.add_mutually_exclusive_group(required=True)
     source.add_argument("--applet-id", help="The Atlas applet whose rebuild published the coverage.")
     source.add_argument("--coverage", type=Path, help="A published coverage artifact file.")
-    queue.add_argument("--marina-url", default=DEFAULT_MARINA_URL)
+    queue.add_argument("--marina-url", default=MARINA_URL)
     queue.add_argument("--declarations", type=Path, help="The served catalog's declaration map (file mode).")
     queue.add_argument("--output", type=Path, required=True)
     return parser

@@ -6,6 +6,7 @@
 import json
 import re
 import types
+from dataclasses import replace
 
 import pytest
 import tomlkit
@@ -22,18 +23,24 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     task_toml,
     to_workspace,
 )
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.sources import _declare
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import (
     grader_source,
     solve_sh,
 )
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
+from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
     CHURN_THRESHOLD,
     CHURN_WINDOW,
     TRANSIENT_RETRY_DELAYS_SEC,
     ChurnMonitor,
+    OutcomeLedger,
+    fail_closed_reward,
     transient_daytona_error,
     transient_daytona_text,
+    verifier_timeout_text,
 )
 
 PYTHON_ROW = {
@@ -436,3 +443,94 @@ def test_the_condensed_solve_script_moves_to_the_uniform_workspace():
     assert "/spectree" not in rewritten.replace("/x/spectree", "")
     # the upstream variant's own script is not rewritten
     assert "WORKDIR=/spectree" in solve_sh(row)
+
+
+def test_declared_shape_tag_matches_the_measured_derived_contract():
+    """The source shape must accept the measured contract; the old tag must fail."""
+    source = next(s for s in _declare() if s.info.id == "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119")
+    assert "single-turn" in source.info.tags and "multi-turn" not in source.info.tags
+    receipt = DerivedContractReceipt.model_validate(
+        {
+            "source_id": source.info.id,
+            "input": {
+                "dataset_id": source.dataset.name,
+                "dataset_revision": source.dataset.revision,
+                "converter_version": source.version,
+                "converter_revision": "0" * 40,
+                "measured_tasks": 21272,
+                "task_specs_sha256": "0" * 64,
+                "evidence_url": "s3://proof/derived-contract",
+            },
+            "population_path": "s3://proof/population",
+            "scanned_task_specs_sha256": "0" * 64,
+            "evidence_url": "s3://proof/derived-contract",
+            "summary": {
+                "task_count": 21272,
+                "grader_type_counts": {"none": 21272},
+                "agentic_count": 21272,
+                "single_turn_count": 21272,
+                "reply_only_count": 0,
+                "workspace_graded_count": 0,
+                "judge_rubric_counts": {},
+                "judge_reference_count": 0,
+                "judge_no_reference_count": 0,
+            },
+        }
+    )
+    bound = bind_derived_contract_tags(source, receipt)
+    assert bound.info.derived_contract is not None
+    stale = replace(
+        source,
+        info=replace(
+            source.info,
+            tags=frozenset(
+                {"agentic", "multi-turn", *(t for t in source.info.tags if t not in {"agentic", "single-turn"})}
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="multi-turn"):
+        bind_derived_contract_tags(stale, receipt)
+
+
+def test_outcome_ledger_checkpoint_preserves_cross_pod_history(tmp_path):
+    """The wave ledger's checkpoint must write the MERGED canonical: a fresh pod starts
+    with an empty local sidecar, so checkpointing pod-local content alone erases every
+    prior pod's durable rewards on each preemption (the wave-v11 churn stop lost
+    ~3,700 graded rows this way)."""
+    uri = tmp_path / "wave-outcomes.json"
+    first = OutcomeLedger(str(uri), local_dir=tmp_path / "pod1")
+    first.record(("task-a", "condensed", "nop"), {"rewards": {"reward": 0.0}})
+    first.record(("task-a", "condensed", "oracle"), {"rewards": {"reward": 1.0}})
+    first.close()
+    # the second pod: the fresh local sidecar, the durable rewards replayed from s3
+    second = OutcomeLedger(str(uri), local_dir=tmp_path / "pod2")
+    assert second.completed(("task-a", "condensed", "nop")) and second.completed(("task-a", "condensed", "oracle"))
+    second.record(("task-b", "condensed", "nop"), {"rewards": {"reward": 0.0}})
+    second._checkpoint_locked()
+    # the canonical now carries BOTH pods' rewards; a third pod resumes everything
+    third = OutcomeLedger(str(uri), local_dir=tmp_path / "pod3")
+    assert third.completed(("task-a", "condensed", "nop"))
+    assert third.completed(("task-a", "condensed", "oracle"))
+    assert third.completed(("task-b", "condensed", "nop"))
+    assert third.reward(("task-a", "condensed", "oracle")) == {"reward": 1.0}
+
+
+def test_verifier_timeout_fails_closed_and_never_feeds_the_churn_window():
+    """Ruling 2026-11-20 (the wave-v11 churn refinement): graders fail closed. A verifier
+    timeout is a FAILED grading outcome for that phase - an oracle timeout means the oracle
+    did not pass (the row is not admitted), a NoP timeout counts as NoP not passing - never
+    reward=None, never a pass, and never a churn signal. EnvironmentStartTimeoutError stays
+    in the churn window (that is infra)."""
+    assert verifier_timeout_text("Verifier execution timed out after 2400.0 seconds")
+    assert verifier_timeout_text("harbor.trial.errors.VerifierTimeoutError: deadline")
+    assert not verifier_timeout_text("EnvironmentStartTimeoutError: Public fixture initialization timed out")
+    # fail-closed values: NoP-not-passing records 1.0; oracle-not-passing records 0.0
+    assert fail_closed_reward("nop") == 1.0
+    assert fail_closed_reward("oracle") == 0.0
+    # a verifier timeout is not a transient infra error and is not retried
+    assert not transient_daytona_error(RuntimeError("Verifier execution timed out after 2400.0 seconds"))
+    # the recorded float keeps the timeout out of the churn window
+    monitor = ChurnMonitor()
+    for _ in range(60):
+        monitor.record(False)
+    assert not monitor.tripped()

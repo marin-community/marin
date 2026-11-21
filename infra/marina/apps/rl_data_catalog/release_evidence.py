@@ -168,6 +168,22 @@ def retained_packet_checksums(query: SqlQuery) -> list[dict[str, Any]]:
     return packets
 
 
+def retained_confidence_checksums(query: SqlQuery) -> list[dict[str, Any]]:
+    """Checksum every retained confidence load in its own bounded statement."""
+    checksums = []
+    for row in query("SELECT load_id FROM curriculum_loads ORDER BY load_id", {})["rows"]:
+        checksums.extend(
+            query(
+                "SELECT CAST(:load_id AS TEXT) AS load_id,COUNT(*) AS vectors,"
+                "md5(COALESCE(string_agg(md5(to_jsonb(v)::text),'' ORDER BY v.scope_id,v.metric,"
+                "v.subject_id,v.node_id),'')) AS checksum "
+                "FROM curriculum_confidence v WHERE v.load_id=:load_id",
+                {"load_id": row["load_id"]},
+            )["rows"]
+        )
+    return checksums
+
+
 def catalog_state(query: SqlQuery) -> dict[str, Any]:
     """Snapshot selected pointers and every retained load's assessment/packet contents."""
 
@@ -247,15 +263,7 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
         ),
         {},
     )["rows"]
-    confidence_vectors = read(
-        """SELECT l.load_id,
-        (SELECT COUNT(*) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS vectors,
-        (SELECT md5(COALESCE(string_agg(md5(to_jsonb(v)::text),'' ORDER BY v.scope_id,v.metric,
-            v.subject_id,v.node_id),''))
-         FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS checksum
-        FROM curriculum_loads l ORDER BY l.load_id""",
-        {},
-    )["rows"]
+    confidence_vectors = retained_confidence_checksums(read)
     end = read("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     if end != [{"load_id": current[0]["load_id"]}]:
         raise ValueError("Catalog selection changed while recording the baseline")

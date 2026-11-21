@@ -306,6 +306,7 @@ def test_wrapper_cannot_hide_a_known_parent_ban(pinned_dataset_metadata, monkeyp
     [
         ("selection-manifest.json", "original_selection_plan"),
         ("selection-manifest.json", "prior_dedup_and_lexical_selection"),
+        ("selection-manifest.json", "original_release"),
         ("manifest.json", "source_plan_before_oracle_filter/plan"),
         ("filtered-source.json", "prior_retention_plan"),
     ],
@@ -315,6 +316,8 @@ def test_filtered_wrapper_uses_its_recorded_manifest_source(pinned_dataset_metad
     pin = "e" * 40
     wrapper, parent = "open-athena/filtered-fixture", "fixture/original"
     manifest = {"source_dataset_id": parent, "source_revision": pin}
+    if path == "original_release":
+        manifest = {"repo": parent, "revision": pin, "url": f"https://huggingface.co/datasets/{parent}/tree/{pin}"}
     for key in reversed(path.split("/")):
         manifest = {key: manifest}
     repositories[wrapper, pin] = {
@@ -333,6 +336,58 @@ def test_filtered_wrapper_uses_its_recorded_manifest_source(pinned_dataset_metad
         source["declaration"]["sha256"] == license_check.hashlib.sha256(repositories[wrapper, pin][filename]).hexdigest()
     )
     assert {repository for repository, _, _ in fetched} == {wrapper, parent}
+
+
+def test_repair_lineage_does_not_choose_between_conflicting_original_pins(pinned_dataset_metadata):
+    repositories, _ = pinned_dataset_metadata
+    wrapper, pin = "open-athena/repair-oracle-fixture", "e" * 40
+    manifest = {
+        "original_selection_plan": {"source_dataset_id": "fixture/first", "source_revision": "a" * 40},
+        "original_release": {
+            "repo": "fixture/second",
+            "revision": "b" * 40,
+            "url": "https://huggingface.co/datasets/fixture/second/tree/" + "b" * 40,
+        },
+    }
+    repositories[wrapper, pin] = {
+        "README.md": b"---\npretty_name: Atlas repaired TaskCompendium cohort\n---\n",
+        "selection-manifest.json": json.dumps(manifest).encode(),
+    }
+    row = license_check.check_target(
+        LicenseTarget("fixture", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}"), None
+    )
+    assert (row["verdict"], row["rule_id"]) == ("ESCALATE", "E4")
+    assert row["receipt"] is None
+    assert "exactly one unambiguous source pin" in row["quote"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {},
+        ["fixture/original", "a" * 40],
+        {"repo": "fixture/original", "revision": "a" * 40},
+        {"repo": "fixture/original", "revision": "a" * 40, "url": "https://huggingface.co/datasets/fixture/other"},
+        {"repo": "fixture/original", "revision": "main", "url": "https://huggingface.co/datasets/fixture/original"},
+        {
+            "repo": "fixture/original",
+            "revision": "a" * 40,
+            "url": "https://huggingface.co/datasets/fixture/original/tree/" + "b" * 40,
+        },
+    ],
+)
+def test_repair_lineage_requires_a_complete_matching_immutable_pin(pinned_dataset_metadata, invalid):
+    repositories, _ = pinned_dataset_metadata
+    wrapper, pin = "open-athena/repair-oracle-fixture", "e" * 40
+    repositories[wrapper, pin] = {
+        "README.md": b"---\npretty_name: Atlas repaired TaskCompendium cohort\n---\n",
+        "selection-manifest.json": json.dumps({"original_release": invalid}).encode(),
+    }
+    row = license_check.check_target(
+        LicenseTarget("fixture", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}"), None
+    )
+    assert (row["verdict"], row["rule_id"]) == ("ESCALATE", "E4")
+    assert row["receipt"] is None
 
 
 def test_package_license_is_bound_to_the_exact_wheel_without_downloading_it(monkeypatch):

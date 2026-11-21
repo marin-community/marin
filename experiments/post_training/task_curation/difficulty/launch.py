@@ -12,7 +12,13 @@ DAYTONA_TARGET = "us"
 DATA_ADMISSION_COMMAND = (
     "python",
     "-m",
-    "experiments.post_training.task_curation.difficulty.daytona_admission",
+    "shellbox.backends.daytona.usage_cli",
+    "--api-key-env",
+    "DAYTONA_DATA_API_KEY",
+    "--limits",
+    "data",
+    "--target",
+    DAYTONA_TARGET,
     "--headroom",
     "0.2",
 )

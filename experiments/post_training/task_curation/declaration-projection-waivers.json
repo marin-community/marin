@@ -13,6 +13,7 @@
     "FWeindel:validated-tasks/facet_v2",
     "FWeindel:validated-tasks/facet_v3",
     "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
-    "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified"
+    "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "Marin:forge-main-20261117"
   ]
 }

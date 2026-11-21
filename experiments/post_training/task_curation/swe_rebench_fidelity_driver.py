@@ -340,6 +340,9 @@ class OutcomeLedger:
             if isinstance(reward, float):
                 self._rewards[key] = reward
             if self._handle is None:
+                # The fresh pod's output directory may not exist yet (the earlier wave
+                # instance died exactly here); create it before the first append.
+                self._local_sidecar.parent.mkdir(parents=True, exist_ok=True)
                 self._handle = self._local_sidecar.open("a", encoding="utf-8")
             self._handle.write(json.dumps({"|".join(key): outcome}, separators=(",", ":")) + "\n")
             self._handle.flush()
@@ -350,6 +353,18 @@ class OutcomeLedger:
     def _checkpoint_locked(self) -> None:
         if self._handle is not None:
             self._handle.flush()
+        # The canonical dict file carries the MERGED rewards (every prior pod's durable
+        # verdicts plus this pod's). A fresh pod starts with an empty local sidecar, so
+        # checkpointing the pod-local sidecar alone would erase every prior pod's history
+        # on each preemption (the wave-v11 churn stop lost ~3,700 graded rows this way).
+        StoragePath(self._uri).write_text(
+            json.dumps(
+                {"|".join(key): {"rewards": {"reward": reward}} for key, reward in sorted(self._rewards.items())},
+                indent=1,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         StoragePath(self._sidecar).write_text(self._local_sidecar.read_text())
         self._records_since_checkpoint = 0
 
@@ -393,6 +408,26 @@ class OutcomeLedger:
 # retry is a clean recreate — never a reattach to a reaped or stopped sandbox (idle Daytona
 # sandboxes are purged across orgs; never assume one survives a long preemption).
 TRANSIENT_RETRY_DELAYS_SEC = (60.0, 300.0)
+
+
+def verifier_timeout_text(text: str) -> bool:
+    """A verifier deadline exhaustion: a FAILED grading outcome, not a missing one.
+
+    Graders fail closed (ruling 2026-11-20): an oracle timeout means the oracle did not
+    pass (the row is not admitted); a NoP timeout counts as NoP not passing. The outcome
+    records as a phase fail, never as reward=None, and never as a pass — and because the
+    recorded reward is a real float, the timeout never feeds the churn window.
+    """
+    return "Verifier execution timed out" in text or "VerifierTimeoutError" in text
+
+
+def fail_closed_reward(phase: str) -> float:
+    """The fail-closed reward for a phase whose verifier hit its deadline.
+
+    NoP pass means reward 0.0 (no side effects), so NoP-not-passing records 1.0; oracle
+    pass means reward 1.0, so oracle-not-passing records 0.0.
+    """
+    return 1.0 if phase == "nop" else 0.0
 
 
 def transient_daytona_text(text: str) -> bool:
@@ -446,6 +481,17 @@ def trial(
                 asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
             )
         except Exception as error:
+            if verifier_timeout_text(f"{type(error).__name__}: {error}"):
+                # Graders fail closed: the phase records a FAIL (never reward=None, never a
+                # pass), and the recorded float keeps the timeout out of the churn window.
+                summary = {
+                    "rewards": {"reward": fail_closed_reward(phase)},
+                    "exception": {
+                        "exception_type": type(error).__name__,
+                        "exception_message": str(error)[:400],
+                    },
+                }
+                break
             if not transient_daytona_error(error) or retry_index == len(TRANSIENT_RETRY_DELAYS_SEC):
                 raise
             last_error = error

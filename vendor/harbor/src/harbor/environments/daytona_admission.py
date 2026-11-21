@@ -52,12 +52,9 @@ async def admit_create(
     while True:
         report = await usage_report(command, profile)
         capacity = report["max_concurrency"]
-        region = next(
-            row for row in report["regions"]
-            if row["region_id"] == capacity["region_id"] and row["sandbox_class"] == capacity["sandbox_class"]
-        )
+        maximum = report["org_limits"]["per_sandbox"]
         cpu, memory, disk = (
-            region["max_cpu_per_sandbox"], region["max_memory_gib_per_sandbox"], region["max_disk_gib_per_sandbox"]
+            maximum["cpu"], maximum["memory_gib"], maximum["disk_gib"]
         )
         if cpu is None or memory is None or disk is None:
             raise UnsupportedMachineSpec("Inventory admission requires bounded per-sandbox resource maxima")

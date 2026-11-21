@@ -175,6 +175,7 @@ def test_source_cells_are_names_only_and_overlap_evidence_qualifies_colliding_na
     rows = [row for row in payload["sources"] if row["id"] in {"Marin:clean", "Marin:eval"}]
     for row in rows:
         row.update(display_name="aime24", duplicate_group=None, quality="SAMPLE", result="GOOD", partial_overlaps=[])
+        row["consumer_findings"] = ["provider_schema_mismatch"] if row["id"] == "Marin:clean" else []
         row.update(
             origin="HuggingFaceH4" if row["id"] == "Marin:clean" else "Evalchemy",
             build_path="MarinSkyRL" if row["id"] == "Marin:clean" else "Evalchemy",
@@ -191,6 +192,11 @@ def test_source_cells_are_names_only_and_overlap_evidence_qualifies_colliding_na
     check_view(page, rows)
     expect(page.locator("#rows tr")).to_have_count(2)
     expect(page.locator("#rows .overlap-note")).to_have_count(0)
+    advisory = page.locator('tr[data-source-id="Marin:clean"] .evidence-link:not(.backends-link)')
+    expect(advisory.locator(".consumer-advisory")).to_have_text("⚑")
+    expect(advisory).to_have_attribute("title", "Consumer advisory: provider_schema_mismatch")
+    expect(advisory).to_have_attribute("aria-label", "Evidence: consumer advisory")
+    expect(page.locator('tr[data-source-id="Marin:eval"] .consumer-advisory')).to_have_count(0)
     cell = page.locator('tr[data-source-id="Marin:clean"] td').first
     cell.evaluate("e=>e.append(document.createTextNode('TaskTrove · Task Trove'))")
     with pytest.raises(ValueError):

@@ -25,6 +25,7 @@ from shellbox.image import (
     ImageCache,
     PreparedImage,
     RegistryImage,
+    prepare_image,
     prepared_image_config,
     prepared_image_workdir,
 )
@@ -564,6 +565,66 @@ def test_converted_registry_binding_does_not_bypass_signature_policy(tmp_path, c
     monkeypatch.setattr(subprocess, "run", rejected)
     with pytest.raises(RuntimeError, match="signature verification rejected"):
         ImageCache(cache, policy=policy).prepare(fixture.source)
+
+
+@pytest.mark.parametrize("build_network", [None, "host"])
+def test_built_image_import_uses_the_selected_daemon(tmp_path, monkeypatch, layered_oci_image, build_network):
+    host = f"unix://{tmp_path}/owned-docker.sock"
+    monkeypatch.setenv("DOCKER_HOST", host)
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM scratch\n")
+    images = set()
+
+    def image_tool(args, **_kwargs):
+        if args[:2] == ("docker", "build"):
+            effective_network = args[args.index("--network") + 1] if "--network" in args else "default"
+            if effective_network != (build_network or "default"):
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"build network cannot resolve packages")
+            images.add(args[args.index("-t") + 1])
+        elif args[:3] == ("docker", "image", "rm"):
+            images.remove(args[-1])
+        elif args[0] == "skopeo":
+            endpoint = (
+                args[args.index("--src-daemon-host") + 1]
+                if "--src-daemon-host" in args
+                else "unix:///var/run/docker.sock"
+            )
+            if endpoint != host or args[-2].removeprefix("docker-daemon:") not in images:
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"Cannot connect to Docker daemon")
+            destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
+            shutil.copytree(layered_oci_image.layout, destination)
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", image_tool)
+    image = prepare_image(
+        DockerfileSource(context, context / "Dockerfile"), tmp_path / "cache", build_network=build_network
+    )
+    assert prepared_image_config(image) == prepared_image_config(layered_oci_image)
+    assert image.manifest_digest == layered_oci_image.manifest_digest
+    assert not images
+
+
+def test_failed_build_keeps_the_full_output_before_image_cleanup(tmp_path, monkeypatch):
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM scratch\n")
+    output = b"native setup failed: missing tmux\n" + b"build context\n" * 500
+    removed = []
+
+    def image_tool(args, **_kwargs):
+        if args[:2] == ("docker", "build"):
+            return subprocess.CompletedProcess(args, 1, stdout=output, stderr=b"build failed\n")
+        if args[:3] == ("docker", "image", "rm"):
+            removed.append(args[-1])
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", image_tool)
+    log = tmp_path / "logs" / "build.log"
+    with pytest.raises(RuntimeError, match="build failed"):
+        prepare_image(DockerfileSource(context, context / "Dockerfile"), tmp_path / "cache", build_log=log)
+    assert log.read_bytes() == output + b"build failed\n"
+    assert len(removed) == 1
 
 
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):

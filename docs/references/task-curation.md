@@ -155,6 +155,20 @@ Excluded status. A decision applies only while all of these match. Audit and
 receipt-publication commands never write decisions. A finding without such a
 decision leaves the source's status and filtration counts unchanged.
 
+Ruling 73 (2026-11-20): every consumer-driven Pending or Excluded status needs an
+explicit user decision for that source, recorded in `consumer_decisions.json`. The
+consumer gate itself only records typed findings.
+
+Ruling 74 (2026-11-20): a verifier-deadline finding goes to repair, not to a status
+change. The repaired source uses an effective verifier deadline of
+`max(declared deadline, 1800 s)`, so a repair never shortens a declared deadline.
+
+Ruling 75 (2026-11-20): a missing-tool finding goes to repair. The repair runs the
+tool on the shellbox `LOCAL` backend (bubblewrap on an Iris pod). Such a source can be
+admitted with limited backend support: `LOCAL` supported and Daytona unsupported. If
+the tool cannot run under bubblewrap, the repair hosts it as a service that the
+sandbox reaches through the relay, as OpenResearcher's retrieval index does.
+
 Run `experiments.post_training.task_curation.consumer_audit` in the population's
 storage region. Supply a frozen input inventory, runtime git archive and JSON
 configuration with `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
@@ -192,8 +206,8 @@ uv run python -m experiments.post_training.task_curation.datasets.consumer_recei
 ```
 
 
-Synced to preview revision 31 (2026-11-18). These rules include the admission
-display policy for Atlas preview revision 31. When a later section of this
+Synced to preview revision 36 (2026-11-20). These rules include the admission
+display policy for Atlas preview revision 36. When a later section of this
 reference conflicts with them, this section is current.
 
 **SAMPLE panels across re-pins.** A SAMPLE panel drawn at an earlier pin binds at the
@@ -2716,6 +2730,14 @@ Planning rechecks missing-artifact URIs. Sources whose Python
 `requirements.lock` files have been restored can re-enter measurement.
 
 A local `reconcile` starts one interactive Iris CPU controller in `cw-rno2a`.
+Pass `--secrets-env /path/to/credentials.env` to load the controller credentials
+from an explicit dotenv file. The launcher resolves `GLM_BULK_TOKEN`,
+`TOGETHER_API_KEY`, `HF_TOKEN`, `DAYTONA_DATA_API_KEY`, `CW_KEY_ID` and
+`CW_KEY_SECRET` before submission. File values take precedence over Iris secret
+mounts in `/run/rigging/secrets` and the environment.
+The controller reads population identities first, then fetches unmatched source
+declarations in bounded batches from the same catalog load. A catalog connection failure
+is logged and retried after 60 seconds, before any attempt submission.
 The controller uses `CONTAINER_PROFILE_PRIVILEGED`, matching its attempt and
 repair children. Iris task tokens can delegate this profile only when the
 submitting parent job declares the same profile. A default-profile parent fails
@@ -2758,13 +2780,15 @@ Named snapshot preflight resolves the RL key from Secret Manager and preserves
 existing snapshots within its snapshot limit. See the
 [Daytona credential and account rules](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#credentials-and-account-selection).
 Before each actor or verifier sandbox create, Harbor runs the inventory admission
-command. It sums resources of all started, starting and creating sandboxes across
-all inventory pages, reserves 20% of DATA's total 2,000 vCPU / 4,000 GiB RAM /
-10,000 GiB disk, and waits 30 seconds before rechecking insufficient capacity.
-Requests above 4 vCPU / 8 GiB RAM / 10 GiB disk fail without shrinking the task.
-The organization-usage endpoint is not required. Until the shared Shellbox
-inventory mode lands, the command is the temporary
-`difficulty.daytona_admission` module; Harbor only consumes its usage-report JSON.
+command. The shared `shellbox-daytona-usage` gate counts compute and disk charged
+by every sandbox across all inventory pages. It keeps 20% of DATA's total
+2,000 vCPU / 4,000 GB RAM / 10,000 GB disk unused and converts RAM and disk
+capacity to GiB. It waits 30 seconds before rechecking insufficient capacity.
+Requests exceeding any per-sandbox limit of 4 vCPU, 8 GiB RAM or 10 GiB disk
+fail without shrinking the task.
+The organization-usage endpoint is not required. The command invokes the shared
+Shellbox usage CLI with `--api-key-env DAYTONA_DATA_API_KEY --limits data`;
+Harbor consumes its usage-report JSON.
 New DATA attempts have distinct action identities; existing EVAL receipts remain
 valid, and in-flight children drain before a controller replacement.
 

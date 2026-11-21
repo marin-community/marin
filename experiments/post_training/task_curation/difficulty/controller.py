@@ -8,7 +8,10 @@ import logging
 import os
 import subprocess
 import time
+from pathlib import Path
 
+import requests
+from dotenv import dotenv_values
 from finestore.rl.difficulty import Solver
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
@@ -30,6 +33,14 @@ LOGGER = logging.getLogger(__name__)
 CONTROLLER_INTERVAL = 60
 CONTROLLER_JOB_PREFIX = "atlas-difficulty-reconciler-controller-"
 REFRESH_TOKEN_ENV = "DIFFICULTY_MARINA_REFRESH"
+CONTROLLER_SECRET_NAMES = (
+    "CW_KEY_ID",
+    "CW_KEY_SECRET",
+    "HF_TOKEN",
+    "GLM_BULK_TOKEN",
+    "TOGETHER_API_KEY",
+    "DAYTONA_DATA_API_KEY",
+)
 
 
 def run_controller(
@@ -45,7 +56,12 @@ def run_controller(
         require_secret("MARINA_IAP_REFRESH_TOKEN"),
     )
     while True:
-        catalog = served_catalog(applet_id, token_provider=provider, ledger=ledger)
+        try:
+            catalog = served_catalog(applet_id, token_provider=provider, ledger=ledger)
+        except (requests.ConnectionError, requests.Timeout):
+            LOGGER.exception("DIFFICULTY_CATALOG_UNAVAILABLE; retrying after %d seconds", CONTROLLER_INTERVAL)
+            time.sleep(CONTROLLER_INTERVAL)
+            continue
         rows = read_rows(ledger)
         cells = cells_for_catalog(rows, catalog, policy)
         available = available_artifact_uris(cells)
@@ -61,8 +77,25 @@ def run_controller(
         time.sleep(CONTROLLER_INTERVAL)
 
 
+def controller_environment(secrets_env: Path | None) -> dict[str, str]:
+    """Resolve storage and provider credentials before invoking the Iris submitter."""
+    if secrets_env is not None and not secrets_env.is_file():
+        raise FileNotFoundError(secrets_env)
+    supplied = dotenv_values(secrets_env) if secrets_env is not None else {}
+    environment = dict(os.environ)
+    for name in CONTROLLER_SECRET_NAMES:
+        environment[name] = supplied.get(name) or require_secret(name)
+    return environment
+
+
 def launch_controller(
-    ledger: str, applet_id: str, once: bool, providers: frozenset[Solver], generation: str, budget_gpu_hours: float
+    ledger: str,
+    applet_id: str,
+    once: bool,
+    providers: frozenset[Solver],
+    generation: str,
+    budget_gpu_hours: float,
+    secrets_env: Path | None = None,
 ) -> None:
     """Submit one CPU parent; its inherited client owns every remediation child."""
     for job in list_iris_jobs():
@@ -72,18 +105,17 @@ def launch_controller(
     record = load_credentials("marin")
     if record is None or not record.edge_refresh_token:
         raise ValueError("Controller needs a refreshable Marina login; run iris login")
-    environment = {**os.environ, REFRESH_TOKEN_ENV: record.edge_refresh_token}
+    environment = controller_environment(secrets_env)
+    environment[REFRESH_TOKEN_ENV] = record.edge_refresh_token
     command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
     # Task tokens can delegate an elevated child profile only when the parent holds it.
     command.extend(["--container-profile", job_pb2.ContainerProfile.Name(job_pb2.CONTAINER_PROFILE_PRIVILEGED)])
+    command.extend(["--egress-policy", job_pb2.EgressPolicy.Name(job_pb2.EGRESS_POLICY_CLUSTER)])
     command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:" + REFRESH_TOKEN_ENV])
-    for name in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "GLM_BULK_TOKEN", "TOGETHER_API_KEY"):
+    for name in CONTROLLER_SECRET_NAMES:
         command.extend(["--secret", name, "env:" + name])
     command.extend(
         [
-            "--secret",
-            "DAYTONA_DATA_API_KEY",
-            "env:DAYTONA_DATA_API_KEY",
             "--secret",
             "DAYTONA_RL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_RL_API_KEY/versions/1",

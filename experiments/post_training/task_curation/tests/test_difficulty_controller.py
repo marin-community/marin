@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import google.cloud
 import pytest
+import requests
 from click.testing import CliRunner
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -32,6 +33,13 @@ from rigging.server_auth import VerifiedIdentity, identity_scope
 from experiments.post_training.task_curation.difficulty import controller
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
 from experiments.post_training.task_curation.difficulty.planner import RebuildEnvironmentArtifact
+from experiments.post_training.task_curation.difficulty.state import CatalogSource
+
+
+@pytest.fixture(autouse=True)
+def controller_credentials(monkeypatch):
+    for name in controller.CONTROLLER_SECRET_NAMES:
+        monkeypatch.setenv(name, "fixture-" + name)
 
 
 def test_controller_resolves_versioned_credentials_before_external_submission(tmp_path, monkeypatch):
@@ -148,3 +156,44 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
                 None,
             ).jobs
         assert len(children) == (0 if default_parent else 1)
+
+
+def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_path, monkeypatch):
+    source = CatalogSource("fixture", "revision", (("task", "sha"),), "queue", "digest")
+    catalog_calls, reconciled, sleeps = [], [], []
+
+    def catalog(*args, **kwargs):
+        catalog_calls.append(True)
+        if len(catalog_calls) == 1:
+            raise requests.ConnectionError("[Errno 101] Network is unreachable")
+        return [source]
+
+    monkeypatch.setattr(controller, "iris_ctx", lambda: SimpleNamespace(client=None, job_id="fixture"))
+    monkeypatch.setattr(controller, "IrisBackend", lambda *args: SimpleNamespace(jobs=lambda: []))
+    monkeypatch.setattr(controller, "require_secret", lambda name: "fixture-refresh")
+    monkeypatch.setattr(controller, "served_catalog", catalog)
+    monkeypatch.setattr(controller, "read_rows", lambda ledger: [])
+    monkeypatch.setattr(controller, "available_artifact_uris", lambda cells: frozenset())
+    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    monkeypatch.setattr(controller, "reconcile_once", lambda ledger, sources, *args: reconciled.append(sources) or {})
+    controller.run_controller(str(tmp_path), "fixture", True, frozenset(), 800)
+    assert reconciled == [[source]]
+    assert sleeps == [controller.CONTROLLER_INTERVAL]
+
+
+def test_launcher_loads_provider_credentials_from_explicit_file(tmp_path, monkeypatch):
+    names = ("GLM_BULK_TOKEN", "TOGETHER_API_KEY", "HF_TOKEN", "DAYTONA_DATA_API_KEY")
+    secret_file = tmp_path / "credentials.env"
+    secret_file.write_text("\n".join(f"{name}=file-{name}" for name in names))
+    for name in names:
+        monkeypatch.delenv(name)
+    accepted = []
+    monkeypatch.setattr(controller, "list_iris_jobs", lambda: [])
+    monkeypatch.setattr(controller, "load_credentials", lambda _: SimpleNamespace(edge_refresh_token="fixture"))
+    monkeypatch.setattr(
+        controller.subprocess, "run", lambda command, **kwargs: accepted.append((command, kwargs["env"]))
+    )
+    controller.launch_controller("ledger", "applet", False, frozenset(), "generation", 800, secret_file)
+    ((command, environment),) = accepted
+    assert {name: environment[name] for name in names} == {name: f"file-{name}" for name in names}
+    assert not any("file-" in argument for argument in command)

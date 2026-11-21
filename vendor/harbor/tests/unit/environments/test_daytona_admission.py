@@ -29,12 +29,11 @@ from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 @pytest.mark.parametrize("cpu", [2, 8, None])
 def test_command_rechecks_capacity_and_rejects_an_oversized_machine(tmp_path, cpu):
     report = {
-        "max_concurrency": {"region_id": "us", "sandbox_class": "container", "limit": 0},
-        "regions": [{"region_id": "us", "sandbox_class": "container", "max_cpu_per_sandbox": 4,
-                     "max_memory_gib_per_sandbox": 8, "max_disk_gib_per_sandbox": 10}],
+        "max_concurrency": {"limit": 0},
+        "org_limits": {"per_sandbox": {"cpu": 4, "memory_gib": 8, "disk_gib": 10}},
     }
     if cpu is None:
-        report["regions"][0].update(max_cpu_per_sandbox=6, max_memory_gib_per_sandbox=12, max_disk_gib_per_sandbox=20)
+        report["org_limits"]["per_sandbox"].update(cpu=6, memory_gib=12, disk_gib=20)
     response = tmp_path / "response.json"
     response.write_text(json.dumps(report))
     calls = tmp_path / "calls.json"

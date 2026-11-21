@@ -9,6 +9,7 @@ from dataclasses import replace
 from finestore.rl.curation import ActorCensusInput
 from finestore.rl.difficulty import Solver
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from marina.client import MarinaRequestError
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 
 from experiments.post_training.task_curation.difficulty import catalog
@@ -82,13 +83,10 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
             ),
         }
     )
-    served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
+    served = {"id": declaration.id, "load_id": "frozen-load", "declaration": declaration.model_dump(mode="json")}
 
-    def query(_sql, params):
-        if params:
-            return {"rows": [{"declaration": served["declaration"]}]}
-        minimal = {key: served["declaration"][key] for key in ("current_release", "pipeline", "actor_census_input")}
-        return {"rows": [{"id": served["id"], "declaration": minimal}]}
+    def query(_sql, _params):
+        return {"rows": [served]}
 
     monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)
     ledger = str(tmp_path / "ledger")
@@ -129,3 +127,35 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
     ).model_dump(mode="json")
     (changed,) = catalog.served_catalog("fixture", queues=(), ledger=ledger)
     assert changed.registry_revision != before.registry_revision and not changed.tasks
+
+
+def test_catalog_respects_response_byte_limit_and_original_snapshot(tmp_path, monkeypatch):
+    identities = [
+        {
+            "id": f"fixture:{i}",
+            "load_id": "original",
+            "declaration": {"current_release": None, "pipeline": {}, "actor_census_input": None},
+        }
+        for i in range(9)
+    ]
+    payload = "x" * (1024 * 1024)
+
+    def query(sql, params):
+        if "jsonb_build_object" in sql:
+            return {"rows": identities}
+        assert params["load_id"] == "original"
+        selected = [value for name, value in params.items() if name.startswith("source_")]
+        response = {
+            "rows": [
+                {"id": source_id, "declaration": {**identities[0]["declaration"], "payload": payload}}
+                for source_id in selected
+            ]
+        }
+        if len(json.dumps(response).encode()) > 5 * 1024 * 1024:
+            raise MarinaRequestError(413, "query response exceeds 5242880 bytes")
+        return response
+
+    monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)
+    result = catalog.served_catalog("fixture", queues=(), ledger=str(tmp_path))
+    assert [source.source_id for source in result] == [row["id"] for row in identities]
+    assert all(json.loads(source.declaration_json)["payload"] == payload for source in result)

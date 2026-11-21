@@ -432,9 +432,18 @@ def _archive(source: Path, name: str) -> bytes:
     As ``_copy`` does, a ``source`` that is a symlink contributes what it leads to, and symlinks inside a
     directory stay symlinks.
     """
+    source = source.resolve()
+
+    def metadata(member: tarfile.TarInfo) -> tarfile.TarInfo:
+        path = source / Path(member.name).relative_to(name)
+        seconds, nanos = divmod(path.lstat().st_mtime_ns, 1_000_000_000)
+        member.mtime = seconds
+        member.pax_headers["mtime"] = f"{seconds}.{nanos:09d}"
+        return member
+
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
-        archive.add(os.path.realpath(source), arcname=name)
+        archive.add(source, arcname=name, filter=metadata)
     return stream.getvalue()
 
 

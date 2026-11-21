@@ -66,7 +66,7 @@ NATIVE_SOURCE_PIN = re.compile(r"^Upstream:\s*(\S+) at ([0-9a-f]+)\.\s+(https://
 ARCHIVE_SOURCE_PIN = re.compile(r"archive `([^`]+)`\s*@\s*`([0-9a-f]+)`", re.I)
 REPAIR_SOURCE_PIN = re.compile(r"\bfrom `([^`@]+/[^`@]+)@([0-9a-f]+)`", re.I)
 WRAPPER_MANIFESTS = {
-    "selection-manifest.json": ("original_selection_plan", "prior_dedup_and_lexical_selection"),
+    "selection-manifest.json": ("original_selection_plan", "prior_dedup_and_lexical_selection", "original_release"),
     "manifest.json": ("source_plan_before_oracle_filter/plan",),
     "filtered-source.json": ("prior_retention_plan",),
 }
@@ -342,6 +342,7 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
             )
     declaration_url, declaration_content = url, content
     manifest_path = None
+    manifest_identity_fields = ("source_dataset_id", "source_revision")
     if not declarations:
         filenames = {
             item.rfilename for item in HfApi().dataset_info(target.dataset_id, revision=target.revision).siblings or ()
@@ -358,12 +359,28 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
                     if not isinstance(plan, dict):
                         raise ValueError(f"Wrapper manifest requires an object at {path}")
                     plan = plan.get(key, {})
+                if path == "original_release" and path in document and (not isinstance(plan, dict) or not plan):
+                    raise ValueError("Repair original_release must be a nonempty object")
                 if not isinstance(plan, dict) or not plan:
                     continue
-                dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
+                source_url = None
+                if path == "original_release":
+                    if set(plan) != {"repo", "revision", "url"}:
+                        raise ValueError("Repair original_release must declare repo, revision, and url")
+                    dataset_id, revision, source_url = plan["repo"], plan["revision"], plan["url"]
+                    if not isinstance(source_url, str) or not source_url:
+                        raise ValueError("Repair original_release URL must be a nonempty string")
+                    if not source_url.rstrip("/").endswith(f"/tree/{revision}"):
+                        raise ValueError("Repair original_release URL must name its exact pinned revision")
+                    manifest_identity_fields = ("repo", "revision")
+                else:
+                    dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
+                    manifest_identity_fields = ("source_dataset_id", "source_revision")
                 if not isinstance(dataset_id, str) or not isinstance(revision, str):
                     raise ValueError(f"Wrapper manifest does not declare a source dataset and revision at {path}")
-                declarations.append((dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}"))
+                declarations.append(
+                    (dataset_id, revision, source_url or f"https://huggingface.co/datasets/{dataset_id}")
+                )
                 manifest_path = path
             if declarations:
                 break
@@ -417,8 +434,8 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
     quoted_lines = [f"L{i + 1}: {lines[i]}" for i in sorted(selected)]
     if declaration_url != url:
         quoted_lines = [
-            f"JSON /{manifest_path}/source_dataset_id: {dataset_id}",
-            f"JSON /{manifest_path}/source_revision: {revision}",
+            f"JSON /{manifest_path}/{manifest_identity_fields[0]}: {dataset_id}",
+            f"JSON /{manifest_path}/{manifest_identity_fields[1]}: {revision}",
         ]
     return LicenseSourcePin(
         dataset_id=dataset_id,
