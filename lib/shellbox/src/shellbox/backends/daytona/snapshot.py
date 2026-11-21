@@ -49,6 +49,14 @@ TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
 
 
+class MissingDockerCopySource(UnsupportedMachineSpec):
+    """The original Dockerfile references absent local build inputs."""
+
+    def __init__(self, paths: tuple[Path, ...]) -> None:
+        self.paths = paths
+        super().__init__("Daytona Dockerfile COPY inputs are missing: " + ", ".join(map(str, paths)))
+
+
 @dataclass(frozen=True)
 class SnapshotRequest:
     """The validated source and provider resources that identify one snapshot."""
@@ -173,6 +181,10 @@ def validate_source(
         raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
     if _dockerfile_has_add(source.dockerfile.read_text()):
         raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+    image = Image.from_dockerfile(source.dockerfile)
+    missing = tuple(Path(entry.source_path) for entry in image._context_list if not Path(entry.source_path).exists())
+    if missing:
+        raise MissingDockerCopySource(missing)
     return source
 
 

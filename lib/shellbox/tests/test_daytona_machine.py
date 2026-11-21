@@ -59,6 +59,7 @@ from shellbox.backends.daytona.machine import (
 )
 from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.daytona.snapshot import (
+    MissingDockerCopySource,
     SnapshotRequest,
     ensure_snapshot,
     list_snapshots,
@@ -2125,3 +2126,19 @@ def test_sandbox_deletion_retries_a_gateway_error() -> None:
     asyncio.run(_delete_named_sandbox(client, "fixture"))
 
     assert client.deleted == ["fixture"]
+
+
+@pytest.mark.parametrize("factory_type", [DaytonaMachineFactory, DaytonaDeclarativeMachineFactory])
+def test_missing_native_copy_fails_before_any_create_or_ownership_request(tmp_path, factory_type):
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:22.04\nCOPY ./task_file /app/task_file\n")
+    client = LocalDaytona()
+    factory = factory_type(lambda: client)
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    with process_lifecycle_log(lifecycle), pytest.raises(MissingDockerCopySource) as failure:
+        asyncio.run(factory.create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
+    assert failure.value.paths == (tmp_path / "task_file",)
+    assert client.params is None
+    assert not client.snapshot.snapshots
+    assert lifecycle.read_bytes() == b""
+    assert not (tmp_path / "task_file").exists()
