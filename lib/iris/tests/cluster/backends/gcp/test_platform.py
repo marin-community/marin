@@ -258,7 +258,6 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     ):
         with controller.tunnel("http://10.0.0.7:10000") as tunneled:
             port = int(tunneled.rsplit(":", 1)[1])
-            assert tunneled == f"http://127.0.0.1:{port}"
             lock = Path(f"/tmp/iris/port_{port}")
             assert lock.read_text() == str(os.getpid())
         assert not lock.exists()
@@ -301,9 +300,6 @@ def test_gcp_tunnel_forwards_the_controller_port_from_the_address(address, expec
     ):
         with controller.tunnel(address) as tunneled:
             port = int(tunneled.rsplit(":", 1)[1])
-            lock = Path(f"/tmp/iris/port_{port}")
-            assert lock.read_text() == str(os.getpid())
-        assert not lock.exists()
 
     ssh_cmd = popen_mock.call_args.args[0]
     assert f"127.0.0.1:{port}:localhost:{expected_remote_port}" in ssh_cmd

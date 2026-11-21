@@ -815,8 +815,7 @@ class CloudK8sService:
         """
         port_reservation = reserve_free_port(start=10000) if local_port is None else nullcontext(local_port)
         with port_reservation as local_port:
-            # Mutable ref shared with the watchdog so _stop() always sees the
-            # currently-live process, not the one we started with.
+            # Keep the current process so _stop() can terminate a watchdog restart.
             proc_lock = threading.Lock()
             proc_ref: list[subprocess.Popen | None] = [None]
             shutdown = threading.Event()
