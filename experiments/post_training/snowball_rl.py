@@ -495,7 +495,7 @@ SNOWBALL = ModelPresets(
         for name, commit, revision, count in (
             ("speed-short", "4a4e8f0a81", "2026.11.20.3", 5),
             ("data-short", "4a4e8f0a81", "2026.11.20.3", 4),
-            ("speed-medium", "648b5687f0", "2026.11.06.1", 4),
+            ("speed-medium", "4a4e8f0a81", "2026.11.20.3", 4),
             ("learning-medium", "648b5687f0", "2026.11.06.1", 4),
             ("speed-long", "648b5687f0", "2026.11.06.1", 4),
         )
