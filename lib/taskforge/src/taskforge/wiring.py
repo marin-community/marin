@@ -157,11 +157,8 @@ def install(ctx: Context, resources: Resources) -> None:
         )
     if (decision_model := resources.decision_model) is not None:
         rollouts = replace(rollouts, engine=DecisionModelEngine(rollouts.engine, ctx))
-        grading = replace(
-            grading,
-            engine=DecisionModelEngine(grading.engine, ctx),
-            fresh_engine=DecisionModelEngine(grading.fresh_engine, ctx) if grading.fresh_engine else None,
-        )
+        fresh = DecisionModelEngine(grading.fresh_engine, ctx) if grading.fresh_engine else None
+        grading = replace(grading, engine=DecisionModelEngine(grading.engine, ctx), fresh_engine=fresh)
         ctx.handle(DecisionModelRead, partial(read_level, notify=ctx.notify), decision_model)
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
@@ -236,6 +233,14 @@ def decision_model_policy(policy: Policy) -> DecisionModelPolicy | None:
         # A decision-model grade has the solver turn as its verifier deadline: the typed outage must come first.
         raise ValueError("decision_model.unavailable_wait must end before solver.turn_timeout")
     return settings
+
+
+def clef(policy: Policy, source: EndpointSource, http: httpx.AsyncClient) -> ClefReader:
+    """The library's default decision model: Clef on ``source`` at ``decision_model.route``, for a run and its driver."""
+    route = policy.setting("decision_model.route", str)
+    route_source = replace(source, model=route) if isinstance(source, RelayEndpoint) else source
+    logging.info("MODEL role=decision_model route=%s endpoint=%r", route, route_source)
+    return ClefReader(route_source, http)
 
 
 def build_resources(
@@ -445,9 +450,6 @@ async def runtime(
         )
         web = ParallelWeb(http)
         if decision_model is None and decision_model_policy(policy) is not None:
-            route = policy.setting("decision_model.route", str)
-            route_source = replace(source, model=route) if isinstance(source, RelayEndpoint) else source
-            logging.info("MODEL role=decision_model route=%s endpoint=%r", route, route_source)
-            decision_model = ClefReader(route_source, await owned.enter_async_context(httpx.AsyncClient()))
+            decision_model = clef(policy, source, await owned.enter_async_context(httpx.AsyncClient()))
         resources = build_resources(policy, resolved, factories, web, profiles, decision_model)
         yield build_config(policy, factories, profiles), resources

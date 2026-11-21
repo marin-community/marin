@@ -41,6 +41,7 @@ from taskforge.resources.decision_model import (
     DecisionModelHealth,
     DecisionModelRead,
     DecisionModelReader,
+    read_level,
 )
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
@@ -256,7 +257,7 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
     model = DecisionModel(Gateway(30.0 if down else 60.0, down), replace(policy, unavailable_wait=100.0))
     start = time.clock()
     reads = asyncio.gather(
-        *(model.read(DecisionModelRead(request(str(n))), notify=lambda _: None) for n in range(3)),
+        *(read_level(DecisionModelRead(request(str(n))), model, notify=lambda _: None) for n in range(3)),
         return_exceptions=True,
     )
     while not reads.done() and time.clock() - start < 150.0:  # half a virtual second at a time

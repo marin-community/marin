@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import errno
 import gzip
 import hashlib
@@ -3207,27 +3208,46 @@ async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators
     assert not driver.deferred(held_wp.with_(decisions=(*held_wp.decisions, positional)))
 
 
-@dataclass
-class TickingClock:
-    """Each reading is ``step`` later, so every wait a run computes is already over: no test waits in real time."""
-
-    now: float = 0.0
-    step: float = 0.0
-
-    def __call__(self) -> float:
-        self.now += self.step
-        return self.now
-
-
 def answering(*answers: DecisionModelHealth) -> tuple[list[DecisionModelHealth], Any]:
     """A health read giving ``answers`` in turn and then the last one; the list collects each answer given."""
     given: list[DecisionModelHealth] = []
 
-    async def health() -> DecisionModelHealth:
+    async def health(_policy: Policy) -> DecisionModelHealth:
         given.append(answers[min(len(given), len(answers) - 1)])
         return given[-1]
 
     return given, health
+
+
+def batch(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    codes: Mapping[str, Sequence[int]],
+    concurrency: int = 1,
+) -> list[str]:
+    """A run over one proposal per ``codes`` entry, decision-model ones unless named ``code``, whose children exit with
+    their codes in turn and then 0; the list collects each child launch, which must carry no --resume-held."""
+    decision = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
+    paths = {name: tmp_path / f"{name}.proposal.json" for name in codes}
+    for name, path in paths.items():
+        path.write_bytes(TASK_PROPOSAL.dump_json(proposal if name == "code" else decision))
+    manifest, overlay = tmp_path / "manifest.txt", Path(driver_args.policy)
+    manifest.write_text("\n".join(map(str, paths.values())))
+    overlay.write_text(json.dumps({**json.loads(overlay.read_text()), "decision_model.retry_interval": 0.0}))
+    driver_args.proposals, driver_args.concurrency = str(manifest), concurrency
+    remaining = {str(path): list(codes[name]) for name, path in paths.items()}
+    launches: list[str] = []
+
+    async def child(args: Namespace) -> int:
+        assert not args.resume_held, "only the operator reopens a hold"
+        launches.append(Path(args.proposals).stem.removesuffix(".proposal"))
+        return (remaining[args.proposals] or [0]).pop(0)
+
+    monkeypatch.setattr(driver, "one", child)
+    monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
+    return launches
 
 
 async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_proposals_until_healthy(
@@ -3237,79 +3257,56 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     proposal: TaskProposal,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    decision = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
-    paths = {name: tmp_path / f"{name}.proposal.json" for name in ("first", "second", "code")}
-    for name, path in paths.items():
-        path.write_bytes(TASK_PROPOSAL.dump_json(proposal if name == "code" else decision))
-    manifest = tmp_path / "manifest.txt"
-    manifest.write_text("\n".join(map(str, paths.values())))
-    driver_args.proposals, driver_args.concurrency = str(manifest), 1
-    codes = {str(paths["first"]): [driver.DEFERRED, 0]}
-    launches: list[tuple[str, bool]] = []
-
-    async def child(args: Namespace) -> int:
-        launches.append((Path(args.proposals).stem.removesuffix(".proposal"), args.resume_held))
-        return codes.get(args.proposals, [0]).pop(0)
-
+    codes = {"first": [driver.DEFERRED], "second": [], "code": []}
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
     given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
-    monkeypatch.setattr(driver, "one", child)
-    monkeypatch.setattr(driver, "decision_model_health", lambda _: health)
-    monkeypatch.setattr(driver, "Deferrals", partial(driver.Deferrals, clock=TickingClock(step=1000.0)))
-    monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
+    monkeypatch.setattr(driver, "decision_model_health", health)
     await driver.run(driver_args)
-    # A released proposal runs with the batch's own flags: the child itself enters only an outage-only hold.
-    assert launches == [("first", False), ("code", False), ("first", False), ("second", False)]
-    assert given[:2] == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
+    assert launches == ["first", "code", "first", "second"]
+    assert given == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
     out = capsys.readouterr().out
-    assert f"OUTCOME deferred exit={driver.DEFERRED} proposal={paths['first']}" in out
+    assert f"OUTCOME deferred exit={driver.DEFERRED} proposal={tmp_path / 'first.proposal.json'}" in out
     assert "submitted=4 completed=4 failed=0 skipped=0" in out
 
 
-class VirtualClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
-async def test_without_a_health_route_one_deferred_proposal_probes_and_the_rest_wait_for_it() -> None:
-    clock = VirtualClock()
-    given, health = answering(DecisionModelHealth.UNSUPPORTED)
-    deferrals = driver.Deferrals(health, 300.0, clock)
-    assert deferrals.ended("a", driver.DEFERRED) and deferrals.ended("b", driver.DEFERRED)
-    await deferrals.advance()
-    assert (deferrals.take(), deferrals.wake()) == (None, 300.0)  # the probe starts an interval after the hold
-    clock.now = 300.0
-    await deferrals.advance()
-    assert (deferrals.take(), deferrals.take(), deferrals.wake()) == ("a", None, None)
-    assert deferrals.ended("a", driver.DEFERRED)  # the probe was deferred again: wait a full interval
-    clock.now = 599.0
-    await deferrals.advance()
-    assert deferrals.take() is None
-    clock.now = 600.0
-    await deferrals.advance()
-    assert (deferrals.take(), deferrals.take()) == ("b", None)
-    assert not deferrals.ended("b", 0)  # the probe was answered: everything deferred starts
-    await deferrals.advance()
-    assert (deferrals.take(), deferrals.take(), deferrals.down) == ("a", None, False)
-    assert set(given) == {DecisionModelHealth.UNSUPPORTED}
-
-
-async def test_a_healthy_model_releases_every_deferred_proposal_after_a_random_share_of_the_interval(
-    monkeypatch: pytest.MonkeyPatch,
+# Review 2026-11-21 (n10 finding 5): with one child slot, a code proposal never started while a health read was
+# pending. The run reads health in the background and keeps reaping and launching children while it waits.
+async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
-    clock = VirtualClock()
-    monkeypatch.setattr(driver.random, "uniform", lambda low, high: (low + high) / 2)
-    given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
-    deferrals = driver.Deferrals(health, 300.0, clock)
-    deferrals.ended("a", driver.DEFERRED), deferrals.ended("b", driver.DEFERRED)
-    await deferrals.advance()  # a hold reads health at once: still down
-    assert (deferrals.take(), deferrals.wake()) == (None, 300.0)
-    clock.now = 300.0
-    await deferrals.advance()
-    assert (deferrals.take(), deferrals.wake()) == (None, 150.0)
-    clock.now = 450.0
-    await deferrals.advance()
-    assert [deferrals.take(), deferrals.take(), deferrals.take()] == ["a", "b", None]
-    assert given == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"first": [driver.DEFERRED], "code": []})
+
+    async def health(_policy: Policy) -> DecisionModelHealth:
+        while "code" not in launches:  # answers only once the unrelated proposal has run
+            await asyncio.sleep(0)
+        return DecisionModelHealth.HEALTHY
+
+    monkeypatch.setattr(driver, "decision_model_health", health)
+    async with asyncio.timeout(30.0):  # a health read that blocks dispatch never answers
+        await driver.run(driver_args)
+    assert launches == ["first", "code", "first"]
+
+
+# Review 2026-11-21 (n10 finding 5): without a health route, a probe child that crashed, was superseded, needed a
+# migration or found a corrupt journal reopened the queue. Only a probe that is not deferred again releases the
+# rest; any other exit is reported as usual and another parked proposal probes after the interval.
+@pytest.mark.parametrize("code", [1, driver.SUPERSEDED, driver.NEEDS_MIGRATION, driver.CORRUPT])
+async def test_without_a_health_route_only_an_answered_probe_reopens_decision_model_work(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+    code: int,
+) -> None:
+    codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": []}
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
+    given, health = answering(DecisionModelHealth.UNSUPPORTED)
+    monkeypatch.setattr(driver, "decision_model_health", health)
+    with contextlib.suppress(RuntimeError):  # a failed probe fails the run, once every proposal has run
+        await driver.run(driver_args)
+    # a defers, and b and c wait behind it; a probes and fails, so b probes and defers again, then c probes and is
+    # answered, which releases b. Health is read before each probe: after a's hold, a's failed probe and b's hold.
+    assert (launches, len(given)) == (["a", "a", "b", "c", "b"], 3)
+    label = "failed" if code == 1 else driver.OUTCOMES[code][0]
+    assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out

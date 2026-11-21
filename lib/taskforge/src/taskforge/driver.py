@@ -9,14 +9,11 @@ import hashlib
 import json
 import logging
 import os
-import random
 import subprocess
 import sys
-import time
 import traceback
 from collections import Counter
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -44,15 +41,16 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, Status, fold
+from taskforge.llm.glm_provider import EndpointSource
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.resources.decision_model import ClefReader, DecisionModelHealth
+from taskforge.resources.decision_model import DecisionModelHealth
 from taskforge.stages.classify import replay_rule
-from taskforge.wiring import endpoint_source, install, runtime
+from taskforge.wiring import clef, endpoint_source, install, runtime
 
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
 OUTCOMES = {
@@ -125,6 +123,17 @@ def eligible(proposal: TaskProposal, policy: Policy) -> bool:
     return True
 
 
+def glm_source(policy: Policy) -> EndpointSource:
+    """The GLM gateway this process reaches, from ``GLM_BASE_URL`` or ``GLM_RELAY_JOB``."""
+    return endpoint_source(
+        os.environ.get("GLM_BASE_URL"),
+        os.environ.get("GLM_RELAY_JOB"),
+        require_secret("GLM_API_KEY"),
+        policy.setting("author.model", str),
+        policy.setting("provider.pool", str),
+    )
+
+
 async def one(args: argparse.Namespace) -> int:
     """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, else 0."""
     configure_coreweave_s3()
@@ -151,14 +160,7 @@ async def one(args: argparse.Namespace) -> int:
     wp = [Workpiece(proposal.header.id, proposal)]  # the current workpiece: each stage's start, then the returned one
     try:
         async with checkpoints.running():
-            source = endpoint_source(
-                os.environ.get("GLM_BASE_URL"),
-                os.environ.get("GLM_RELAY_JOB"),
-                require_secret("GLM_API_KEY"),
-                policy.setting("author.model", str),
-                policy.setting("provider.pool", str),
-            )
-            async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+            async with runtime(policy, glm_source(policy), get_secret("PARALLEL_API_KEY") or "") as (config, resources):
                 wp[0] = await run_workpiece(
                     proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
                 )
@@ -190,86 +192,19 @@ async def one(args: argparse.Namespace) -> int:
     return DEFERRED if deferred(wp[0]) else 0
 
 
-@dataclass
-class Deferrals:
-    """Decision-model proposals the run holds back while the decision model is down, and when it starts them.
-
-    A child that exits ``DEFERRED`` marks the model down; new decision-model proposals then wait too. Every
-    ``interval`` the run reads the host's health route, never a read: healthy releases them all after a random share
-    of ``interval``, so drivers one recovery releases do not refill at once. A host without the route releases one
-    deferred proposal as a probe ``interval`` after the latest hold, and the rest once the probe is not deferred.
-    """
-
-    health: Callable[[], Awaitable[DecisionModelHealth]]
-    interval: float
-    clock: Callable[[], float] = time.monotonic
-    paths: list[str] = field(default_factory=list)
-    down: bool = False
-    probe: str | None = None
-    probe_due: bool = False
-    held_at: float = 0.0
-    check_at: float = 0.0
-    release_at: float | None = None
-
-    async def advance(self) -> None:
-        now = self.clock()
-        if not self.down or self.probe is not None or self.probe_due:
-            return
-        if self.release_at is None and now >= self.check_at:
-            self.check_at = now + self.interval
-            match await self.health():
-                case DecisionModelHealth.HEALTHY:
-                    self.release_at = now + random.uniform(0, self.interval)
-                case DecisionModelHealth.UNSUPPORTED if now >= self.held_at + self.interval:
-                    self.probe_due = True
-                case DecisionModelHealth.UNSUPPORTED:
-                    self.check_at = self.held_at + self.interval
-        if self.release_at is not None and now >= self.release_at:
-            self.down, self.release_at = False, None
-
-    def take(self) -> str | None:
-        """A deferred proposal to start now: any once the model is up, else the due probe."""
-        if not self.paths or (self.down and not self.probe_due):
-            return None
-        if self.down:
-            self.probe, self.probe_due = self.paths[0], False
-        return self.paths.pop(0)
-
-    def ended(self, path: str, code: int) -> bool:
-        """Record a child's exit; whether it deferred."""
-        was_probe = path == self.probe
-        if was_probe:
-            self.probe, self.down = None, code == DEFERRED
-        if code != DEFERRED:
-            return False
-        # A hold can come from a wait that began before the model returned: read health at once, unless it probed.
-        now = self.clock()
-        self.down, self.release_at, self.held_at = True, None, now
-        self.check_at = now + self.interval if was_probe else now
-        self.paths.append(path)
-        return True
-
-    def wake(self) -> float | None:
-        if not self.down or self.probe is not None or self.probe_due or not self.paths:
-            return None
-        return max(0.0, (self.release_at if self.release_at is not None else self.check_at) - self.clock())
+async def decision_model_health(policy: Policy) -> DecisionModelHealth:
+    """The default decision model's health on the gateway that ``one`` reads through."""
+    async with httpx.AsyncClient() as http:
+        return await clef(policy, glm_source(policy), http).health()
 
 
-def decision_model_health(policy: Policy) -> Callable[[], Awaitable[DecisionModelHealth]]:
-    """The default reader's health read on ``decision_model.route``, through the same endpoint as ``one``."""
-
-    async def health() -> DecisionModelHealth:
-        route = policy.setting("decision_model.route", str)
-        source = endpoint_source(
-            os.environ.get("GLM_BASE_URL"),
-            os.environ.get("GLM_RELAY_JOB"),
-            require_secret("GLM_API_KEY"),
-            route,
-            policy.setting("provider.pool", str),
-        )
-        async with httpx.AsyncClient() as http:
-            return await ClefReader(source, http).health()
-
+async def recovery(policy: Policy) -> DecisionModelHealth:
+    """HEALTHY once the decision model's host says so; UNSUPPORTED ``decision_model.retry_interval`` after a host
+    without the health route says so, when one deferred proposal probes it."""
+    while (health := await decision_model_health(policy)) is not DecisionModelHealth.HEALTHY:
+        await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
+        if health is DecisionModelHealth.UNSUPPORTED:
+            break
     return health
 
 
@@ -285,24 +220,29 @@ async def run(args: argparse.Namespace) -> None:
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     labels, failed = Counter[str](), list[str]()
     policy = run_policy(args.policy)
-    deferrals = Deferrals(decision_model_health(policy), policy.setting("decision_model.retry_interval", float))
+    # Decision-model proposals wait in ``parked`` while one background ``waiting`` health read runs, or while the one
+    # ``probe`` of a host without the route runs; ``ready`` is what a recovery released, launched first.
+    parked, ready = list[str](), list[str]()
+    waiting: asyncio.Task[DecisionModelHealth] | None = None
+    probe: str | None = None
     skipped = completed = submitted = 0
     try:
         exhausted = False
-        while active or not exhausted or deferrals.paths:
-            await deferrals.advance()
+        while active or not exhausted or parked or ready:
             while len(active) < args.concurrency:
-                if (path := deferrals.take()) is None:
-                    if exhausted or (path := next(proposals, None)) is None:
-                        exhausted = True
-                        break
+                if ready:
+                    path = ready.pop(0)
+                elif exhausted or (path := next(proposals, None)) is None:
+                    exhausted = True
+                    break
+                else:
                     with open_url(path, "rt") as source:
                         proposal = TASK_PROPOSAL.validate_json(source.read())
                     if not eligible(proposal, policy):
                         skipped += 1
                         continue
-                    if deferrals.down and proposal.header.verification is Verification.DECISION_MODEL:
-                        deferrals.paths.append(path)
+                    if (waiting or probe) and proposal.header.verification is Verification.DECISION_MODEL:
+                        parked.append(path)
                         continue
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
                 command += [
@@ -310,34 +250,46 @@ async def run(args: argparse.Namespace) -> None:
                     for name in ("output", "policy", "work_dir")
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
-                if args.resume_held:  # never added for a deferred path: only the operator reopens a human hold
+                if args.resume_held:  # the operator's flag alone: a child enters an outage-only hold by itself
                     command.append("--resume-held")
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
-            wake = deferrals.wake()
-            if active:
-                done, _ = await asyncio.wait(active, timeout=wake, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    path, _ = active.pop(task)
-                    completed += 1
-                    if deferrals.ended(path, code := task.result()):
-                        print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
-                        continue
+            if not active and waiting is None:
+                break  # the manifest ran out during admission, with nothing parked
+            done, _ = await asyncio.wait([*active, *([waiting] if waiting else [])], return_when=asyncio.FIRST_COMPLETED)
+            if waiting is not None and waiting in done:
+                if waiting.result() is DecisionModelHealth.HEALTHY:
+                    ready, parked = ready + parked, []
+                else:
+                    ready.append(probe := parked.pop(0))
+                waiting = None
+            for task in [task for task in active if task in done]:
+                path, _ = active.pop(task)
+                completed += 1
+                code = task.result()
+                if path == probe:  # only a probe that is not deferred again shows the decision model reads
+                    probe = None
                     if code == 0:
-                        continue
+                        ready, parked = ready + parked, []
+                if code == DEFERRED:
+                    print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
+                    parked.append(path)
+                elif code != 0:
                     label, action = OUTCOMES.get(code, ("failed", "see its log"))
                     labels[label] += 1
                     print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
                     if code != SUPERSEDED:
                         failed.append(path)
-            elif wake is not None:
-                await asyncio.sleep(wake)
+            if parked and waiting is None and probe is None:
+                waiting = asyncio.create_task(recovery(policy))
     finally:
+        if waiting is not None:
+            waiting.cancel()
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
-        await asyncio.gather(*active, return_exceptions=True)
+        await asyncio.gather(*active, *([waiting] if waiting else []), return_exceptions=True)
     outcomes = " ".join(f"{label}={labels[label]}" for label, _ in OUTCOMES.values())
     print(
         f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} {outcomes}",

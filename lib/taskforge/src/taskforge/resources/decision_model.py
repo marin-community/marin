@@ -22,7 +22,7 @@ from taskcompendium.decision_model import DecisionModelRequest
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
-from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, GlmEndpoint
+from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, GlmEndpoint, retry_after
 from taskforge.resources.execution import Notify
 from taskforge.resources.rollouts import Engine
 
@@ -91,9 +91,7 @@ class ClefReader(DecisionModelReader):
         except httpx.TransportError as error:
             raise DecisionModelDown(f"unreachable: {type(error).__name__}") from error
         if (status := response.status_code) in DOWN_STATUSES or status >= 500:
-            seconds = response.headers.get("retry-after", "")  # an HTTP-date form is ignored
-            asked = float(seconds) if seconds.replace(".", "", 1).isdigit() else 0.0
-            raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", asked)
+            raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", retry_after(response))
         if status != 200:
             raise RuntimeError(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")
         probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
@@ -105,8 +103,8 @@ class ClefReader(DecisionModelReader):
     @override
     async def health(self) -> DecisionModelHealth:
         try:
-            endpoint = await self._endpoint()
-            async with asyncio.timeout(HEALTH_TIMEOUT):
+            async with asyncio.timeout(HEALTH_TIMEOUT):  # relay resolution included
+                endpoint = await self._endpoint()
                 response = await self.http.get(
                     f"{endpoint.base_url}/systemone/health", headers={"Authorization": f"Bearer {endpoint.token}"}
                 )
@@ -160,12 +158,6 @@ class DecisionModel:
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("decision_model", digest(self.policy.model), ReplayPolicy.CACHE)
 
-    async def read(self, event: DecisionModelRead, *, notify: Notify) -> float:
-        if (shared := self.reading.get(key := event_digest(event))) is None:
-            shared = self.reading[key] = asyncio.ensure_future(self.level(event, notify))
-            shared.add_done_callback(lambda _: self.reading.pop(key))
-        return await asyncio.shield(shared)
-
     async def level(self, event: DecisionModelRead, notify: Notify) -> float:
         policy = self.policy
         delay, attempt, why = policy.backoff_initial, 1, f"none of its {policy.concurrency} read slots came free"
@@ -197,7 +189,10 @@ class DecisionModel:
 
 
 async def read_level(event: DecisionModelRead, model: DecisionModel, *, notify: Notify) -> float:
-    return await model.read(event, notify=notify)
+    if (shared := model.reading.get(key := event_digest(event))) is None:
+        shared = model.reading[key] = asyncio.ensure_future(model.level(event, notify))
+        shared.add_done_callback(lambda _: model.reading.pop(key))
+    return await asyncio.shield(shared)
 
 
 @dataclass(frozen=True, slots=True)

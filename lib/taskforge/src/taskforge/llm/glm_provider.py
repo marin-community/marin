@@ -114,7 +114,7 @@ def _usage(usage: CompletionUsage) -> Usage:
     )
 
 
-def _retry_after(response: httpx.Response) -> float:
+def retry_after(response: httpx.Response) -> float:
     value = response.headers.get("retry-after", "")
     return float(value) if value.replace(".", "", 1).isdigit() else 0.0
 
@@ -137,7 +137,7 @@ def _status_failure(response: httpx.Response) -> AttemptFailed:
     if overflowed(status, body):
         return AttemptFailed(AttemptOutcome.CONTEXT_OVERFLOW, body, status)
     if status in RETRYABLE_STATUSES or status >= 500:
-        return AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(response))
+        return AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, retry_after(response))
     return AttemptFailed(AttemptOutcome.REJECTED, body, status)
 
 
