@@ -355,16 +355,20 @@ def golden_control(record: Mapping) -> Mapping:
     return controls[0]
 
 
-def _heredoc_write(path: str, content: str) -> str:
-    """A POSIX shell command writing ``content`` to ``path`` through a keyed heredoc."""
+def _script_write(path: str, content: bytes) -> str:
+    """A POSIX shell command writing ``content`` to ``path`` byte-exactly.
+
+    Decodable text uses a keyed heredoc; anything else round-trips through
+    ``base64``, which the Linux image provides.
+    """
     try:
-        content.encode()
-    except UnicodeEncodeError as error:
-        raise ValueError(f"golden content is not text: {path}") from error
-    delimiter = f"FORGE_GOLDEN_{hashlib.sha256(content.encode()).hexdigest()[:12]}"
-    if any(line.strip() == delimiter for line in content.splitlines()):
-        raise ValueError(f"golden content carries its own heredoc delimiter: {path}")
-    return f"cat > '{path}' <<'{delimiter}'\n{content}\n{delimiter}\n"
+        text = content.decode()
+    except UnicodeDecodeError:
+        return f"printf '%s' '{base64.b64encode(content).decode()}' | base64 -d > '{path}'\n"
+    delimiter = f"FORGE_GOLDEN_{hashlib.sha256(content).hexdigest()[:12]}"
+    if any(line.strip() == delimiter for line in text.splitlines()):
+        return f"printf '%s' '{base64.b64encode(content).decode()}' | base64 -d > '{path}'\n"
+    return f"cat > '{path}' <<'{delimiter}'\n{text}\n{delimiter}\n"
 
 
 def golden_oracle_resources(record: Mapping) -> tuple[list[dict], int]:
@@ -401,11 +405,8 @@ def golden_oracle_resources(record: Mapping) -> tuple[list[dict], int]:
             )
         script = "#!/bin/sh\n# The authored golden control: rewrite its workspace files.\n"
         for file in candidate.get("files") or []:
-            try:
-                content = base64.b64decode(file["source"]["content_base64"]).decode()
-            except UnicodeDecodeError as error:
-                raise ValueError(f"{record['id']}: golden file {file['path']} is not text") from error
-            script += _heredoc_write(posixpath.join(workdir, file["path"]), content)
+            content = base64.b64decode(file["source"]["content_base64"])
+            script += _script_write(posixpath.join(workdir, file["path"]), content)
         resources.append(
             {
                 "path": SOLUTION_SCRIPT_PATH,

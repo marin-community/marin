@@ -314,3 +314,29 @@ def test_the_release_manifest_counts_the_golden_solution(tmp_path):
     manifest = forge_release.write_release(records, 2, tmp_path, "memory://records")
     # Both fixture tasks run on a machine with a text answer: solve script plus reply.
     assert manifest["golden_solution"] == {"tasks": 2, "files": 4}
+
+
+def test_a_non_utf8_golden_file_round_trips_through_base64():
+    record = _record("d01.a/01", 4)
+    payload = b"caf\xe9 menu \x99 byte-preserving"
+    control = {
+        "kind": "positive",
+        "candidate": {
+            "reply": "done",
+            "files": [
+                {
+                    "path": "menu.txt",
+                    "source": {"kind": "inline_file", "content_base64": base64.b64encode(payload).decode()},
+                }
+            ],
+        },
+        "expected": {"status": "graded", "reward_min": 1.0, "reward_max": 1.0},
+    }
+    _with_control(record, control)
+    task = forge_release.lowered_spec(record).task
+    (script_resource,) = (r for r in task.resources.oracle if r.path == "solution/solve.sh")
+    script = base64.b64decode(script_resource.source.content_base64).decode()
+    line = next(line for line in script.splitlines() if "menu.txt" in line)
+    assert "base64 -d > '/app/menu.txt'" in line
+    embedded = line.split("printf '%s' '")[1].split("'")[0]
+    assert base64.b64decode(embedded) == payload
