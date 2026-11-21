@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -13,9 +14,10 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import micro210_step, run_micro210
+from experiments.evaluation.micro210 import PREPARED_INPUTS, PREPARED_INPUTS_VERSION, micro210_step, run_micro210
 from experiments.evaluation.micro210_policy import (
-    POLICY_VERSION,
+    LEGACY_POLICY_REFERENCE,
+    POLICY_REFERENCE,
     Micro210Model,
     micro210_evaluation,
     read_micro210_policy,
@@ -48,6 +50,11 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
 def test_micro210_model_rejects_mutable_references(identity, revision):
     with pytest.raises(ValueError, match=r"identity|tokenizer_revision"):
         Micro210Model("s3://test/latest", identity, "test/tokenizer", revision)
+
+
+def test_default_policy_references_pin_immutable_hugging_face_revisions():
+    for reference in (LEGACY_POLICY_REFERENCE, POLICY_REFERENCE):
+        assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
 
 
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
@@ -158,7 +165,12 @@ def test_policy_reference_verifies_hash_and_size(policy_reference, change):
     assert read_micro210_policy(policy_reference)["evaluation"]["judge"]["model"] == MICRO210_JUDGE.model
 
 
-def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "previous_version,previous_digest", [("2026.11.18", "old-task-digest"), ("2026.11.20", "fixture-tasks")]
+)
+def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
+    tmp_path, monkeypatch, previous_version, previous_digest
+):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     old_inputs = tmp_path / "old-inputs"
     new_inputs = tmp_path / "new-inputs"
@@ -166,7 +178,7 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkey
     new_inputs.mkdir()
     run(
         ArtifactStep.adopt(
-            "evaluation/micro210/prepared", "2026.11.18", str(old_inputs), config={"sha256": "old-task-digest"}
+            "evaluation/micro210/prepared", previous_version, str(old_inputs), config={"sha256": previous_digest}
         )
     )
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(new_inputs))
@@ -177,9 +189,20 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkey
     )
     prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
     run(prepared)
-    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared/2026.11.18"))
-    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / POLICY_VERSION))
+    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / previous_version))
+    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
     assert old_record.source == str(old_inputs)
-    assert old_record.config == {"sha256": "old-task-digest"}
+    assert old_record.config == {"sha256": previous_digest}
     assert new_record.source == str(new_inputs)
     assert new_record.config == {"sha256": "fixture-tasks"}
+
+
+def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/prepared-source",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    assert prepared.adopt_source == PREPARED_INPUTS
+    assert re.fullmatch(r"hf://datasets/open-athena/micro210-prepared-tasks@[0-9a-f]{40}", PREPARED_INPUTS)
