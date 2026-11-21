@@ -192,7 +192,7 @@ async def test_an_outer_result_replays_only_under_the_judge_profile_that_shaped_
     assert (reward, (solver_calls, judge_calls)) == (clean, calls)
 
 
-# Review 2026-11-21, follow-up 2: a judge provider reporting another model, under the same policy and profile,
+# Review 2026-11-21: a judge provider reporting another model, under the same policy and profile,
 # replayed a grade and a rollout of 1.0 with zero calls where a clean run scored 0.0.
 @pytest.mark.parametrize("role", ["author", "solver", "adversary", "judge"])
 def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role: str) -> None:

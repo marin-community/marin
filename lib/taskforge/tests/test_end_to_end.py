@@ -986,7 +986,7 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
     ]
 
 
-# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. Follow-up 1 added
+# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. The faults also include
 # empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
@@ -1004,7 +1004,7 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
     assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
 
 
-# Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged (a known limit of the
+# Review 2026-11-21: a confirmed tail from an exited worker is still charged (a known limit of the
 # client-side bound, which consults no pool state).
 @pytest.mark.parametrize("tail", [False, True], ids=["live", "exited-worker-tail"])
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
@@ -1023,7 +1023,7 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
-# Review 2026-11-21, follow-up 2: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
+# Review 2026-11-21: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
 # (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
 async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
