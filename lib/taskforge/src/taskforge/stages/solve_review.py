@@ -236,7 +236,7 @@ async def solve_review(
     async with sitting(
         ctx,
         role,
-        Visit(prompts, prompts, None, bills, tools=evidence_tools(index, report)),
+        Visit(prompts, prompts, None, tools=evidence_tools(index, report), bills=bills),
         resources,
     ) as session:
         outcome = await session(opening)

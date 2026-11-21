@@ -65,7 +65,7 @@ from taskforge.checkpoint import HEAD, HEAD_JSON, JOURNAL_FORMAT, CheckpointSink
 from taskforge.effects.context import Context
 from taskforge.effects.events import Invalidated, Resolved, ScopeEntered, ScopeExited, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
-from taskforge.effects.log import EventLog, JsonlSink, Record, Status
+from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status
 from taskforge.llm.client import AttemptOutcome, ModelRequestRejected, Segment
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import FinishReason, ToolCall
@@ -124,7 +124,8 @@ async def slot(
         install(ctx, replace(built, rollouts=replace(built.rollouts, engine=engine)))  # the later handlers answer
     outcome: GradedRollout | DecisionModelUnavailable
     try:
-        outcome = await ctx.emit(SolverRollout(native_spec(policy) if native else decision_spec(policy), 0, 0))
+        async with ctx.scope("validate", bills=Billing.SOLVER):  # as the validation stage runs its slots
+            outcome = await ctx.emit(SolverRollout(native_spec(policy) if native else decision_spec(policy), 0, 0))
     except DecisionModelUnavailable as error:
         outcome = error
     await ctx.drain()
@@ -264,20 +265,22 @@ async def test_a_checkpointed_generation_is_charged_once_in_validation_and_confi
     def result(trial: int, attempt: int) -> Resolved[GradedRollout]:
         return Resolved(SolverRollout(spec, trial, attempt), fp, GradedRollout(rollout, graded))
 
+    solver, confirmation = Billing.SOLVER, Billing.CONFIRMATION  # every slot row names its payer, graded ones too
     events = (
-        ScopeEntered("workpiece"),
-        ScopeEntered("validate"),
-        generation(0, 0),
-        result(0, 0),
-        result(1, 0),
-        ScopeExited("validate", False),
-        ScopeEntered("confirm"),
-        generation(2, 1),
-        result(2, 1),
-        generation(3, 1),
-        ScopeExited("confirm", True),
+        (ScopeEntered("workpiece"), None),
+        (ScopeEntered("validate"), None),
+        (generation(0, 0), solver),
+        (result(0, 0), solver),
+        (result(1, 0), solver),
+        (ScopeExited("validate", False), None),
+        (ScopeEntered("confirm"), None),
+        (generation(2, 1), confirmation),
+        (result(2, 1), confirmation),
+        (generation(3, 1), confirmation),
+        (ScopeExited("confirm", True), None),
     )
-    lines = await reported(tmp_path, proposal, [Record(i, time.time(), e) for i, e in enumerate(events, 1)])
+    records = [Record(i, time.time(), e, billed=payer) for i, (e, payer) in enumerate(events, 1)]
+    lines = await reported(tmp_path, proposal, records)
     assert "tokens role=solver prompt=80 cached=0 completion=14" in lines
     assert "tokens role=confirmation prompt=80 cached=0 completion=14" in lines
 
@@ -319,7 +322,8 @@ async def test_a_paid_refusal_before_its_replacements_checkpoint_keeps_its_charg
 
 
 # Review 2026-11-21: a format-8 root's off-scale slot result predates any checkpoint, yet the replacement's checkpoint
-# suppressed it; and a window opening between a checkpoint and its regrade must not charge the regrade.
+# suppressed it; and a window opening between a checkpoint and its regrade must not charge the regrade. The rows
+# before format 10 name no payer and charge as unattributed; the regrade names one and is still not charged.
 @pytest.mark.parametrize("since_hours, charged", [(None, (20, 10)), (1.0, (0, 0))], ids=["all time", "after the gen"])
 async def test_a_slot_result_is_charged_unless_it_follows_its_checkpoint(
     tmp_path: Path, proposal: TaskProposal, since_hours: float | None, charged: tuple[int, int]
@@ -333,11 +337,15 @@ async def test_a_slot_result_is_charged_unless_it_follows_its_checkpoint(
         (old, Resolved(SolverRollout(spec, 0, 0), (), GradedRollout(rollout, off))),
         (now, Resolved(SolverRollout(spec, 0, 0), (), GradedRollout(rollout, graded))),  # graded from the checkpoint
     ]
-    records = [Record(i, stamp, event) for i, (stamp, event) in enumerate(events, 1)]
+    records = [
+        Record(i, stamp, event, billed=Billing.SOLVER if stamp == now else None)
+        for i, (stamp, event) in enumerate(events, 1)
+    ]
     prompt, completion = charged
-    assert f"tokens role=solver prompt={prompt} cached=0 completion={completion}" in await reported(
-        tmp_path, proposal, records, since_hours
-    )
+    lines = await reported(tmp_path, proposal, records, since_hours)
+    assert "tokens role=solver prompt=0 cached=0 completion=0" in lines
+    unattributed = f"tokens role=unattributed prompt={prompt} cached=0 completion={completion}"
+    assert unattributed in lines if charged != (0, 0) else not any("role=unattributed" in line for line in lines)
 
 
 PROBE = [sys.executable, "-m", "lib.taskforge.tests.generation_replay_probe"]
@@ -363,6 +371,7 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
     second = probed("resume", tmp_path)
     assert second["exit"] == 0 and second["terminal"] == "accepted" and second["awaits"] is None
     assert (second["solves"], second["reads"], second["generations"]) == (5, ["thirteen", "twelve"], 2)
+    assert second["graded"] == ["solver", "solver"]  # a payer on the grade, yet the generations are not charged again
     assert second["solver"] == "tokens role=solver prompt=20 cached=0 completion=10"
     assert second["confirmation"] == "tokens role=confirmation prompt=50 cached=0 completion=25"
 
