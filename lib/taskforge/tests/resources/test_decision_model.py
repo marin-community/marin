@@ -711,7 +711,8 @@ async def length_stopped(
 
 # Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded, and an off-scale level is a
 # grader infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made
-# no solver call and no read and republished the hold.
+# no solver call and no read and republished the hold. Since n14 the explicit resume reads its checkpointed generation
+# again and generates nothing.
 async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_the_model_recovers(
     tmp_path: Path,
 ) -> None:
@@ -722,7 +723,7 @@ async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_
     healthy = FakeReader()
     graded, solved = await length_stopped(healthy, sink, local_records(sink), resume=True)
     assert isinstance(graded, GradedRollout) and graded.grade.reward == 1.0 and grade_cause(graded.grade) is None
-    assert healthy.reads == [request("12")] and solved == 1
+    assert healthy.reads == [request("12")] and solved == 0
 
 
 async def test_a_503_on_a_length_stopped_answer_leaves_no_slot_and_an_unflagged_launch_reads_it(

@@ -1,0 +1,334 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""A solver generation whose decision-model grade an outage or an off-scale level ended is journalled before the slot
+holds, so that resuming the slot grades it again without generating it (n12 review finding 8 and follow-up 1)."""
+
+import asyncio
+import json
+import subprocess
+import sys
+import time
+from argparse import Namespace
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+from lib.taskforge.tests.effect_fakes import local_records
+from lib.taskforge.tests.resource_doubles import FakeInference
+from lib.taskforge.tests.resources.inference_fakes import HANG, Act, Fails, ScriptedProvider, segment
+from lib.taskforge.tests.resources.test_decision_model import (
+    GRADER,
+    FakeReader,
+    VirtualTime,
+    decision_spec,
+    installed,
+    overlaid,
+    request,
+)
+from lib.taskforge.tests.stage_fakes import SolverEngine
+from lib.taskforge.tests.test_end_to_end import (
+    ConfirmationOutage,
+    Envs,
+    ServedOnce,
+    confirming,
+    driver_args,  # noqa: F401 (a fixture)
+    history,
+    published,
+    published_workpiece,
+    resources,
+    script,
+    serve,
+)
+from rolloutengine.models import (
+    LENGTH_STOP_REASON,
+    ConversationRecord,
+    GradedRollout,
+    ModelTurn,
+    Rollout,
+    RolloutStep,
+    TaskRolloutSpec,
+    TraceMode,
+    Transition,
+)
+from rolloutengine.test_support import arithmetic_task
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import AnswerType, FinalAction, FunctionDefinition
+
+from taskforge import driver
+from taskforge.checkpoint import HEAD, HEAD_JSON, JOURNAL_FORMAT, CheckpointSink
+from taskforge.effects.context import Context
+from taskforge.effects.events import Invalidated, Resolved, ScopeEntered, ScopeExited, event_digest
+from taskforge.effects.issues import DecisionModelUnavailable
+from taskforge.effects.log import EventLog, JsonlSink, Record, Status
+from taskforge.llm.client import AttemptOutcome, Segment
+from taskforge.lowering import lower_with_settings, lowering_settings
+from taskforge.model.llm import FinishReason, ToolCall
+from taskforge.model.proposal import TaskProposal
+from taskforge.model.review import Cause
+from taskforge.model.workpiece import Terminal, Workpiece
+from taskforge.policy import Policy
+from taskforge.report import report
+from taskforge.resources.rollouts import SolverGeneration, SolverRollout, refused
+from taskforge.stages.classify import replaced_refusals, replayable_grade, trial_cause
+
+WAIT: Mapping[str, object] = {"decision_model.unavailable_wait": 10.0}
+NATIVE = '{"arguments":{"value":12},"name":"answer","type":"function_call"}'
+"""TaskCompendium's candidate text for the native action ``answer({"value": 12})``."""
+LEVELS = {"12": 4.0, NATIVE: 4.0}
+
+
+def native_spec(policy: Policy) -> TaskRolloutSpec:
+    answer = FunctionDefinition(
+        name="answer", parameters={"type": "object", "properties": {"value": {"type": "integer"}}}
+    )
+    task = arithmetic_task(
+        grader=GRADER, answer_type=AnswerType.NATIVE_ACTION, answer_format=FinalAction(), final_tools=(answer,)
+    )
+    return lower_with_settings(task, lowering_settings(policy), {}).model_copy(update={"trace": TraceMode.MESSAGES})
+
+
+def native_answer() -> Segment:
+    return segment(tool_calls=(ToolCall("call-1", "answer", json.dumps({"value": 12})),), finish=FinishReason.TOOL_CALLS)
+
+
+type Script = Sequence[Segment | Fails | str | Act]
+
+
+async def slot(
+    reader: FakeReader,
+    sink: JsonlSink,
+    script: Script = (segment("12"),),
+    *,
+    resume: bool = False,
+    native: bool = False,
+    overlay: Mapping[str, object] = WAIT,
+) -> tuple[GradedRollout | DecisionModelUnavailable, int, Sequence[Record]]:
+    """Slot 0 of a decision-model task, one launch replaying ``sink`` as the driver builds its log (``resume`` is
+    ``--resume-held``): what the slot came to, the solver requests it dispatched, and the launch's records."""
+    history = local_records(sink) if Path(sink.path).exists() else ()
+    policy = overlaid().overlaid(overlay)
+    solver, replaces = ScriptedProvider(script), replaced_refusals(history, resume)
+    log = EventLog(sink=sink, replay_from=history, replayable=replayable_grade, replaces=replaces)
+    ctx = Context(log=log)
+    installed(policy, reader, solver, ctx, VirtualTime())
+    outcome: GradedRollout | DecisionModelUnavailable
+    try:
+        outcome = await ctx.emit(SolverRollout(native_spec(policy) if native else decision_spec(policy), 0, 0))
+    except DecisionModelUnavailable as error:
+        outcome = error
+    await ctx.drain()
+    return outcome, len(solver.bodies), log.records[len(history) :]
+
+
+def generations(records: Sequence[Record]) -> list[Rollout]:
+    return [
+        r.event.value for r in records if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverGeneration)
+    ]
+
+
+def slot_results(records: Sequence[Record]) -> list[GradedRollout]:
+    return [
+        r.event.value for r in records if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)
+    ]
+
+
+@pytest.mark.parametrize("native", [False, True], ids=["text answer", "native action"])
+async def test_an_outage_after_a_finished_generation_is_graded_on_resume_without_generating_again(
+    tmp_path: Path, native: bool
+) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    answer, candidate = (native_answer(), NATIVE) if native else (segment("12"), "12")
+    deferred, solved, first = await slot(FakeReader(LEVELS, down={candidate}), sink, (answer,), native=native)
+    assert isinstance(deferred, DecisionModelUnavailable) and solved == 1
+    [generated] = generations(first)
+    assert (
+        not slot_results(first)
+        and generated.failure is None
+        and generated.stop_reason == ("tool_calls" if native else "stop")
+    )
+    healthy = FakeReader(LEVELS)
+    graded, solved, resumed = await slot(healthy, sink, (), native=native)  # an unflagged launch: any call would fail
+    assert isinstance(graded, GradedRollout) and (graded.grade.reward, solved) == (1.0, 0)
+    assert healthy.reads == [request(candidate)] and graded.rollout == generated and not generations(resumed)
+    again = FakeReader(LEVELS)
+    replayed, solved, _ = await slot(again, sink, (), native=native)
+    assert (replayed, solved, again.reads) == (graded, 0, [])
+
+
+async def test_a_cutoff_before_any_answer_stays_a_completed_loss_without_a_checkpoint(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    reader = FakeReader(LEVELS, down={"", "12"})
+    cut, solved, first = await slot(reader, sink, (segment("", finish=FinishReason.LENGTH),))
+    assert isinstance(cut, GradedRollout) and cut.rollout.stop_reason == LENGTH_STOP_REASON and solved == 1
+    assert trial_cause(cut, arithmetic_task(grader=GRADER)) is Cause.GENERATION_LIMIT and not reader.reads
+    assert not generations(first) and slot_results(first) == [cut]
+    replayed, solved, _ = await slot(FakeReader(LEVELS), sink, (), resume=True)
+    assert (replayed, solved) == (cut, 0)
+
+
+async def test_a_refused_slot_stays_held_until_replaced_and_its_replacements_outage_is_checkpointed(
+    tmp_path: Path,
+) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    rejected = Fails(AttemptOutcome.REJECTED, status=400)
+    held, solved, first = await slot(FakeReader(LEVELS), sink, (rejected,))
+    assert isinstance(held, GradedRollout) and refused(held) and solved == 1 and not generations(first)
+    kept, solved, _ = await slot(FakeReader(LEVELS), sink, ())
+    assert (kept, solved) == (held, 0)
+    replacing = FakeReader(LEVELS, down={"12"})
+    deferred, solved, second = await slot(replacing, sink, (segment("12"),), resume=True)
+    assert isinstance(deferred, DecisionModelUnavailable) and solved == 1 and len(generations(second)) == 1
+    assert [r for r in second if isinstance(r.event, Invalidated)]
+    healthy = FakeReader(LEVELS)
+    graded, solved, _ = await slot(healthy, sink, ())
+    assert isinstance(graded, GradedRollout) and (graded.grade.reward, solved, healthy.reads) == (
+        1.0,
+        0,
+        [request("12")],
+    )
+
+
+async def test_an_off_scale_level_is_read_again_on_an_explicit_resume_from_its_checkpoint(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    off, solved, first = await slot(FakeReader({"12": 7}), sink)
+    assert isinstance(off, GradedRollout) and off.grade.status is Outcome.INFRA_ERROR and solved == 1
+    assert generations(first) == [off.rollout] and slot_results(first) == [off]
+    healthy = FakeReader(LEVELS)
+    graded, solved, _ = await slot(healthy, sink, (), resume=True)
+    assert isinstance(graded, GradedRollout) and (graded.grade.reward, solved, healthy.reads) == (
+        1.0,
+        0,
+        [request("12")],
+    )
+    assert graded.rollout == off.rollout
+
+
+async def test_a_changed_generation_fingerprint_generates_again(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    deferred, _, first = await slot(FakeReader(LEVELS, down={"12"}), sink)
+    assert isinstance(deferred, DecisionModelUnavailable) and generations(first)
+    changed = {**WAIT, "solver.tool_timeout": 121.0}
+    graded, solved, resumed = await slot(FakeReader(LEVELS), sink, (segment("12"),), overlay=changed)
+    assert isinstance(graded, GradedRollout) and (graded.grade.reward, solved) == (1.0, 1)
+    [before] = [
+        r.event for r in first if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverGeneration)
+    ]
+    [after] = [r.event for r in resumed if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)]
+    assert before.fingerprints != after.fingerprints  # the rollouts fingerprint is the generation's
+
+
+async def test_a_generation_interrupted_before_it_finished_is_generated_again(tmp_path: Path) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    policy = overlaid().overlaid(WAIT)
+    solver, ctx = ScriptedProvider((HANG,)), Context(log=EventLog(sink=sink))
+    installed(policy, FakeReader(LEVELS), solver, ctx, VirtualTime())
+    running = asyncio.create_task(ctx.emit(SolverRollout(decision_spec(policy), 0, 0)))
+    await solver.streaming.wait()
+    running.cancel()  # the process stops mid-generation
+    await asyncio.gather(running, return_exceptions=True)
+    await ctx.drain()
+    assert not generations(local_records(sink))
+    graded, solved, _ = await slot(FakeReader(LEVELS), sink, (segment("12"),))
+    assert isinstance(graded, GradedRollout) and (graded.grade.reward, solved) == (1.0, 1)
+
+
+def metered(prompt: int, completion: int) -> Rollout:
+    usage = {"prompt_tokens": prompt, "completion_tokens": completion}
+    turn = ModelTurn({}, (), (), None, "stop", metadata={"usage": usage})
+    return Rollout(
+        "r", (ConversationRecord((), (), (), (), None, (RolloutStep(turn, Transition(True), 0, ()),)),), "stop"
+    )
+
+
+async def test_a_checkpointed_generation_is_charged_once_in_validation_and_confirmation(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    """Slot 0 and slot 2 were graded from their checkpoints; slot 3 still awaits its grade; slot 1 never needed one."""
+    spec, rollout, graded = decision_spec(overlaid()), metered(40, 7), GradeResult(Outcome.GRADED, 1.0)
+    fp = ()
+
+    def generation(trial: int, attempt: int) -> Resolved[Rollout]:
+        return Resolved(SolverGeneration(spec, trial, attempt, rollout), fp, rollout)
+
+    def result(trial: int, attempt: int) -> Resolved[GradedRollout]:
+        return Resolved(SolverRollout(spec, trial, attempt), fp, GradedRollout(rollout, graded))
+
+    events = (
+        ScopeEntered("workpiece"),
+        ScopeEntered("validate"),
+        generation(0, 0),
+        result(0, 0),
+        result(1, 0),
+        ScopeExited("validate", False),
+        ScopeEntered("confirm"),
+        generation(2, 1),
+        result(2, 1),
+        generation(3, 1),
+        ScopeExited("confirm", True),
+    )
+    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
+    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink.claim(None)
+    await sink.local.write(records)
+    await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
+    lines = await report(str(tmp_path / "root"))
+    assert "tokens role=solver prompt=80 cached=0 completion=14" in lines
+    assert "tokens role=confirmation prompt=80 cached=0 completion=14" in lines
+
+
+PROBE = [sys.executable, "-m", "lib.taskforge.tests.generation_replay_probe"]
+
+
+def probed(mode: str, directory: Path) -> Mapping[str, object]:
+    done = subprocess.run(
+        [*PROBE, mode, str(directory)], cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=300
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_without_buying_them_again(
+    tmp_path: Path,
+) -> None:
+    """Through the public driver: the two validation answers are generated, and their grade meets a decision-model
+    outage: exit 75. A second process, with the model back and no flag, generates neither again, reads each answer
+    once, buys the five confirmation trials (whose equal answers replay those reads) and accepts; every generation is
+    charged once."""
+    first = probed("record", tmp_path)
+    assert first == {"exit": 75, "solves": 2, "reads": ["12", "9"], "terminal": "held", "awaits": "decision_model"}
+    second = probed("resume", tmp_path)
+    assert second["exit"] == 0 and second["terminal"] == "accepted" and second["awaits"] is None
+    assert (second["solves"], second["reads"], second["generations"]) == (5, ["thirteen", "twelve"], 2)
+    assert second["solver"] == "tokens role=solver prompt=20 cached=0 completion=10"
+    assert second["confirmation"] == "tokens role=confirmation prompt=50 cached=0 completion=25"
+
+
+# The checkpoint row is new at format 9, and every format-8 row means the same at 9: a format-8 root, written before
+# this change, resumes with its completed slots and author calls replayed, and its claim fences it from format-8 readers.
+async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_format_9(
+    driver_args: Namespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    confirming(driver_args)
+    first = replace(
+        resources(Envs(), script()), rollouts=replace(resources(Envs(), ()).rollouts, engine=ConfirmationOutage(2))
+    )
+    resumed = replace(resources(Envs(), ()), inference=ServedOnce((), ()))
+    resumed = replace(resumed, rollouts=replace(resumed.rollouts, engine=SolverEngine(1)))
+    serve(monkeypatch, first, resumed)
+    assert await driver.one(driver_args) == driver.DEFERRED
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert not generations(history(destination))  # nothing a format-8 writer could not have written
+    (destination / HEAD).write_bytes(HEAD_JSON.dump_json(replace(published(destination).head, format=8)))
+    assert isinstance(first.inference, FakeInference) and isinstance(resumed.inference, ServedOnce)
+    resumed.inference.served = {event_digest(request) for request in first.inference.requests}
+    assert await driver.one(driver_args) == 0
+    before, engine = first.rollouts.engine, resumed.rollouts.engine
+    assert isinstance(before, SolverEngine) and isinstance(engine, SolverEngine)
+    assert engine.started[0] == "arithmetic:4:1" and not {r for r in before.started if r != "arithmetic:4:1"} & set(
+        engine.started
+    )
+    assert published(destination).head.format == JOURNAL_FORMAT == 9
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED

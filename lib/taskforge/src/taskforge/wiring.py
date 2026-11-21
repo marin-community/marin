@@ -71,6 +71,7 @@ from taskforge.resources.decision_model import (
     DecisionModelPolicy,
     DecisionModelRead,
     DecisionModelReader,
+    decided_rollout,
     read_level,
 )
 from taskforge.resources.env import Env, EnvFactory, ShellboxEnvFactory
@@ -78,7 +79,7 @@ from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.ids import Ids, NewId, new_id
 from taskforge.resources.inference import CompletionBackend, GlmInference, InferenceRequest, complete
 from taskforge.resources.judge import JudgeEngine
-from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
+from taskforge.resources.rollouts import RolloutResource, SolverGeneration, SolverRollout, checkpoint, run_rollout
 from taskforge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
     shellsim_factory,
@@ -149,6 +150,7 @@ def install(ctx: Context, resources: Resources) -> None:
             ctx.notify(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
 
     rollouts, grading = resources.rollouts, resources.grading
+    solve = partial(run_rollout, notify=ctx.notify)
     if (judge := resources.role_inference.get("judge")) is not None:
         rollouts = replace(rollouts, engine=JudgeEngine(rollouts.engine, ctx, judge))
         grading = replace(
@@ -161,12 +163,14 @@ def install(ctx: Context, resources: Resources) -> None:
         fresh = DecisionModelEngine(grading.fresh_engine, ctx) if grading.fresh_engine else None
         grading = replace(grading, engine=DecisionModelEngine(grading.engine, ctx), fresh_engine=fresh)
         ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), decision_model)
+        solve = partial(decided_rollout, ctx=ctx)
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.notify
     for event, execute, resource in (
         (InferenceRequest, partial(complete, notify=ctx.notify), resources.inference_for("author")),
-        (SolverRollout, partial(run_rollout, notify=ctx.notify), rollouts),
+        (SolverRollout, solve, rollouts),
+        (SolverGeneration, checkpoint, rollouts),
         (GradeCandidate, partial(grade, notify=ctx.notify), grading),
         (NewId, new_id, resources.ids),
         (WebSearch, partial(search, notify=ctx.notify), resources.web),

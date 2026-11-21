@@ -3,12 +3,13 @@
 
 """Solver attempts through RolloutEngine, with explicit restart decisions."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rolloutengine.models import (
     GradedRollout,
     Model,
+    Rollout,
     RolloutFailure,
     RolloutInterrupted,
     RolloutOperation,
@@ -42,6 +43,23 @@ class SolverRollout(Event[GradedRollout]):
     spec: TaskRolloutSpec
     trial: int
     attempt: int
+
+
+@dataclass(frozen=True, slots=True)
+class SolverGeneration(Event[Rollout]):
+    """A slot's finished generation that its decision model has not yet scored: an outage or an off-scale level ended
+    its grade. Keyed by the slot's ``SolverRollout`` fields under the same fingerprint; ``generated``, outside the
+    identity, is the rollout it records, so that a later execution of the slot grades it without generating again."""
+
+    kind = "rollouts.solver_generation"
+    spec: TaskRolloutSpec
+    trial: int
+    attempt: int
+    generated: Rollout | None = field(default=None, compare=False, repr=False, metadata={"serialize": False})
+
+    @property
+    def slot(self) -> SolverRollout:
+        return SolverRollout(self.spec, self.trial, self.attempt)
 
 
 class RequestRejected(Hold):
@@ -114,3 +132,9 @@ class RolloutResource:
 
 async def run_rollout(event: SolverRollout, resource: RolloutResource, *, notify: Notify) -> GradedRollout:
     return await retry_effect(event, lambda: resource.run(event), notify)
+
+
+async def checkpoint(event: SolverGeneration, _resource: RolloutResource) -> Rollout:
+    """Record the generation the event carries; nothing is generated here."""
+    assert event.generated is not None, "a generation is checkpointed only once generated"
+    return event.generated

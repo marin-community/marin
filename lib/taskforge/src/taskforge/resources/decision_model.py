@@ -16,15 +16,25 @@ from enum import StrEnum
 from typing import Protocol, cast, override
 
 import httpx
-from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
-from taskcompendium.decision_model import DecisionModelRequest
+from rolloutengine.models import (
+    GradedRollout,
+    Model,
+    Rollout,
+    RolloutInterrupted,
+    RolloutOperation,
+    TaskRolloutSpec,
+)
+from taskcompendium.chat import chat_conversation
+from taskcompendium.decision_model import DecisionModelConnection, DecisionModelRequest, grade_decision_model_answer
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import GradingAttempt
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
-from taskforge.resources.rollouts import Engine
+from taskforge.resources.rollouts import Engine, RolloutResource, SolverGeneration, SolverRollout, run_rollout
 
 CLEF_MODEL, CLEF_QUESTION = "clef", "whole"
 DOWN_STATUSES = frozenset({404, 408, 429})
@@ -222,6 +232,18 @@ async def read_level(event: DecisionModelRead, model: DecisionModel, *, ctx: Con
             await asyncio.gather(flight.task, return_exceptions=True)
 
 
+def recorded_reads(connection: DecisionModelConnection, ctx: Context) -> DecisionModelConnection:
+    """``connection`` reading through recorded ``DecisionModelRead`` effects."""
+
+    async def read(request: DecisionModelRequest) -> float:
+        try:
+            return await ctx.emit(DecisionModelRead(request))
+        except OffScale as error:
+            return cast(float, error.args[0])  # graded INFRA_ERROR; the level was never recorded
+
+    return replace(connection, read=read)
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionModelEngine:
     """Bind each decision-model spec's read, at grade setup, to recorded ``DecisionModelRead`` effects."""
@@ -231,12 +253,34 @@ class DecisionModelEngine:
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
         if (connection := spec.decision_model) is not None:
-
-            async def read(request: DecisionModelRequest) -> float:
-                try:
-                    return await self.ctx.emit(DecisionModelRead(request))
-                except OffScale as error:
-                    return cast(float, error.args[0])  # graded INFRA_ERROR; the level was never recorded
-
-            spec = spec.model_copy(update={"decision_model": replace(connection, read=read)})
+            spec = spec.model_copy(update={"decision_model": recorded_reads(connection, self.ctx)})
         return await self.engine.run_task(spec, model, run_id=run_id)
+
+
+async def regraded(spec: TaskRolloutSpec, rollout: Rollout, ctx: Context) -> GradeResult:
+    """Grade a checkpointed generation as RolloutEngine grades a finished one: TaskCompendium's decision-model grade of
+    the chat of its last conversation with a model turn, its captured outputs and its stop reason."""
+    assert spec.decision_model is not None
+    chat = [record.messages for record in rollout.conversations if record.steps][-1]
+    attempt = GradingAttempt(chat_conversation(list(chat)), rollout.outputs, stop_reason=rollout.stop_reason)
+    return await grade_decision_model_answer(spec.task, attempt, recorded_reads(spec.decision_model, ctx))
+
+
+async def decided_rollout(event: SolverRollout, resource: RolloutResource, *, ctx: Context) -> GradedRollout:
+    """``run_rollout``, except that a finished generation its decision model did not score (an outage, or an
+    off-scale level) is journalled as a ``SolverGeneration`` before the slot holds, and a later execution of the slot
+    grades that generation again instead of generating it. Every other outcome is ``run_rollout``'s."""
+    spec, trial, attempt = event.spec, event.trial, event.attempt
+    if spec.decision_model is None:
+        return await run_rollout(event, resource, notify=ctx.notify)
+    if (generated := ctx.recorded(SolverGeneration(spec, trial, attempt))) is not None:
+        return GradedRollout(generated, await regraded(spec, generated, ctx))
+    try:
+        result = await run_rollout(event, resource, notify=ctx.notify)
+    except DecisionModelUnavailable as outage:
+        if isinstance(cause := outage.__cause__, RolloutInterrupted) and cause.operation is RolloutOperation.GRADE:
+            await ctx.emit(SolverGeneration(spec, trial, attempt, replace(cause.rollout, failure=None)))
+        raise
+    if result.grade.status is Outcome.INFRA_ERROR:  # TaskCompendium's grade of an off-scale level, never recorded
+        await ctx.emit(SolverGeneration(spec, trial, attempt, result.rollout))
+    return result

@@ -12,14 +12,14 @@ from pathlib import PurePosixPath
 from rigging.filesystem.factory import url_to_fs
 
 from taskforge.checkpoint import FORMAT_1, HEAD, read_journal
-from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
+from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted, event_digest
 from taskforge.effects.issues import UnsupportedFormat
 from taskforge.effects.log import decode
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 from taskforge.resources.env import RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
-from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.rollouts import SolverGeneration, SolverRollout
 from taskforge.stages.solve_review import reviewing
 
 EVENT_GAPS = {RunCommand.kind: "RunCommand", WriteFile.kind: "WriteFile", InferenceRequest.kind: "InferenceRequest"}
@@ -83,6 +83,12 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 last = workpiece.decisions[-1] if workpiece is not None and workpiece.decisions else None
                 for reason in {reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}:
                     reasons[terminal, reason] += 1
+            # A checkpointed generation is charged by its own row; a slot graded from it adds no second charge.
+            generated = {
+                (event_digest(event.request.slot), event.fingerprints)
+                for event in (record.event for record in records)
+                if isinstance(event, Resolved) and isinstance(event.request, SolverGeneration)
+            }
             decision_time = None
             scopes: dict[str, list[float]] = defaultdict(list)
             previous = records[0].wall_time if records else 0.0
@@ -109,8 +115,12 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                         # The confirmation step's reviewer is its final review; its judge calls stay the judge's.
                         role = "final_review" if role == "solve_review" and scopes["confirm"] else role
                         tokens[role].update(asdict(event.value.usage))
-                    elif isinstance(event.request, SolverRollout):
-                        for conversation in event.value.rollout.conversations:
+                    elif isinstance(event.request, SolverGeneration) or (
+                        isinstance(event.request, SolverRollout)
+                        and (event_digest(event.request), event.fingerprints) not in generated
+                    ):
+                        rollout = event.value if isinstance(event.request, SolverGeneration) else event.value.rollout
+                        for conversation in rollout.conversations:
                             for step in conversation.steps:
                                 tokens["confirmation" if scopes["confirm"] else "solver"].update(
                                     step.turn.metadata.get("usage", asdict(step.turn.usage) if step.turn.usage else {})

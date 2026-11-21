@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 8; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 9; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -32,8 +32,12 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 8
-"""Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
+JOURNAL_FORMAT = 9
+"""Format 9 records a ``rollouts.solver_generation`` row: a slot's finished generation that its decision model did not
+score, which a resumed slot grades without generating again. Format-8 readers cannot decode that row, and would report
+the root corrupt; at 9 they refuse it as another format, untouched. Every format-8 row means the same at 9, so this
+reader also resumes a format-8 root (``READABLE``), and its claim writes 9.
+Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
 terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
 round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
 finding (``responses``, each marked ``discarded`` once a restore drops the revision it answered), a final
@@ -51,6 +55,8 @@ submission named by digest; format 4 hydrated each trial without a detail and re
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
 expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
 owners; format 2 replayed them by content, without owners."""
+READABLE = frozenset({8, JOURNAL_FORMAT})
+"""The head formats this reader resumes: its own, and format 8, whose rows it reads unchanged."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""
 HEAD = "journal.json"
@@ -201,7 +207,7 @@ def read_journal(destination: str) -> Journal | None:
         found = json.loads(current.data).get("format")
         if type(found) is not int:
             raise ValueError(f"format {found!r} is no integer")
-        if found != JOURNAL_FORMAT:
+        if found not in READABLE:
             raise UnsupportedFormat(f"{destination}/{HEAD} has journal format {found}, not {JOURNAL_FORMAT}")
         head = HEAD_JSON.validate_json(current.data)
         if head.status.terminal is not None and head.workpiece is None:
