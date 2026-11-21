@@ -534,11 +534,11 @@ group. It submits four
 single-choice requests with distinct seeds under the same prompt ID.
 Use the existing RLOO-N calculation and Levanter `PolicyLearner` through
 `PolicyBatch`. Assemble a batch whose route tensors can be sliced and sharded
-with its tokens. The quick-loop bridge rejects `routed_experts` today, and
-the Snowball snapshot requires default contiguous positions at its public
-replay boundary. Use the qualified layout for the first gate. Then verify
-explicit positions, left-padded prompts and right-padded responses before
-connecting the inventory batch builder.
+with its tokens. The SkyRL bridge at `b8aa9e2af1` rejects
+`routed_experts`. The Snowball replay API at `fcc3167fef` requires default
+contiguous positions. Use the qualified layout for the first gate. Then
+verify explicit positions, left-padded prompts and right-padded responses
+at inventory shapes before connecting the inventory batch builder.
 
 Check matching routes and raw logprobs before the first update under identical
 weights. Check finite loss and changed parameters. Publish the update, reset
