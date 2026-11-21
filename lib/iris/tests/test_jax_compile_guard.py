@@ -1,12 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Condition
 
 import pytest
-from iris.jax.compile_guard import check_distributed_compile_fingerprint
+from iris.jax.compile_guard import (
+    _autotune_cache_metadata,
+    _optimized_hlo_text,
+    check_distributed_compile_fingerprint,
+    check_distributed_executable_text,
+)
 
 
 @dataclass
@@ -83,3 +91,120 @@ def test_distributed_compile_missing_peer_reports_observed_fingerprints() -> Non
 
     with pytest.raises(RuntimeError, match="expected processes \\(0, 1\\); observed \\{0: 'module-0'\\}"):
         check_distributed_compile_fingerprint(service.client(0), (0, 1), 0, 0, "module-0", timeout_ms=10)
+
+
+def test_distributed_executable_identical_text_continues_and_releases_keys() -> None:
+    service = _FakeCoordinationService()
+
+    def check(process_id: int) -> None:
+        check_distributed_executable_text(
+            service.client(process_id), (0, 1), process_id, 0, "same-cache-key", "same optimized HLO", "", 0
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(check, (0, 1)))
+
+    assert service.values == {}
+
+
+def test_distributed_executable_divergent_text_reports_ranks_and_autotune_inputs() -> None:
+    service = _FakeCoordinationService()
+    hashes = [hashlib.sha256(f"HLO {process_id}".encode()).hexdigest() for process_id in (0, 1)]
+
+    def check(process_id: int) -> str:
+        with pytest.raises(RuntimeError) as error:
+            check_distributed_executable_text(
+                service.client(process_id),
+                (0, 1),
+                process_id,
+                0,
+                "same-cache-key",
+                f"HLO {process_id}",
+                f"/cache/process-{process_id}",
+                process_id + 1,
+            )
+        return str(error.value)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        errors = list(executor.map(check, (0, 1)))
+
+    for error in errors:
+        assert "same-cache-key" in error
+        assert "2 distinct" in error
+        assert all(f"{digest}: [{rank}]" in error for rank, digest in enumerate(hashes))
+        assert "/cache/process-0" in error and "file_count=1" in error
+        assert "/cache/process-1" in error and "file_count=2" in error
+
+
+def test_distributed_executable_unsupported_text_continues_on_all_ranks(caplog: pytest.LogCaptureFixture) -> None:
+    service = _FakeCoordinationService()
+
+    def check(process_id: int) -> None:
+        check_distributed_executable_text(
+            service.client(process_id),
+            (0, 1),
+            process_id,
+            0,
+            "same-cache-key",
+            None if process_id == 0 else "HLO",
+            "",
+            0,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(check, (0, 1)))
+
+    assert service.values == {}
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "iris.jax.compile_guard" and record.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1
+
+
+def test_optimized_hlo_text_falls_back_to_modules() -> None:
+    class Loaded:
+        def hlo_modules(self) -> list["Module"]:
+            return [Module("first"), Module("second")]
+
+    @dataclass
+    class Module:
+        text: str
+
+        def to_string(self) -> str:
+            return self.text
+
+    assert _optimized_hlo_text(Loaded(), RuntimeError) == "first\n\nsecond"
+
+
+def test_optimized_hlo_text_unsupported_backend_returns_none() -> None:
+    class Loaded:
+        def get_hlo_text(self) -> str:
+            raise RuntimeError("UNIMPLEMENTED: optimized HLO is unavailable")
+
+        def hlo_modules(self) -> list[object]:
+            raise NotImplementedError
+
+    assert _optimized_hlo_text(Loaded(), RuntimeError) is None
+
+
+def test_autotune_cache_metadata_counts_files_in_active_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "first.textproto").write_text("first")
+    (tmp_path / "second.textproto").write_text("second")
+    (tmp_path / "nested").mkdir()
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_gpu_autotune_level=0 --xla_gpu_per_fusion_autotune_cache_dir={tmp_path}")
+
+    assert _autotune_cache_metadata() == (str(tmp_path), 2)
+
+
+def test_autotune_cache_metadata_non_directory_path_has_unknown_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    not_a_directory = tmp_path / "file.textproto"
+    not_a_directory.write_text("file")
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_gpu_per_fusion_autotune_cache_dir={not_a_directory}")
+
+    assert _autotune_cache_metadata() == (str(not_a_directory), None)
