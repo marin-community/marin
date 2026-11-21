@@ -209,6 +209,7 @@ lanes:
   - ml-guard-after-error
   - ml-naive-path-join
   - ml-raw-fsspec-io
+  - ml-raw-path-training-data
 - name: cruft
   prompt: |-
     # Marin lint rules — Cruft lane
