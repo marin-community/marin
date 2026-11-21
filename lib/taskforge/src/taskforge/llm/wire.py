@@ -29,19 +29,6 @@ def wire_message(content: str, reasoning: str, tool_calls: Sequence[ToolCall]) -
     return message
 
 
-def assistant_wire_message(completion: Completion) -> dict[str, Any]:
-    """The assistant turn of ``completion`` as it is replayed (``wire_message``).
-
-    Tool-call arguments stay exactly as served, even when malformed, so a rollout replays what the
-    model sampled. RolloutEngine ends the rollout on arguments that are not valid JSON. When the
-    arguments parse to a value other than an object, it returns an error observation and asks for
-    another turn, and vLLM answers the replay of this message with a 400 from GLM's chat template.
-    GLM's calls carry object arguments, because vLLM's GLM tool parser builds them from the call's
-    ``<arg_key>`` pairs.
-    """
-    return wire_message(completion.content, completion.reasoning, completion.tool_calls)
-
-
 def attempts_metadata(attempts: Sequence[Attempt]) -> list[dict[str, Any]]:
     return [
         {
@@ -56,8 +43,9 @@ def attempts_metadata(attempts: Sequence[Attempt]) -> list[dict[str, Any]]:
 
 
 def model_turn(completion: Completion) -> ModelTurn:
+    # Tool-call arguments stay exactly as served, even when malformed, so a rollout replays what the model sampled.
     return ModelTurn(
-        message=assistant_wire_message(completion),
+        message=wire_message(completion.content, completion.reasoning, completion.tool_calls),
         prompt_token_ids=(),
         response_token_ids=(),
         logprobs=None,

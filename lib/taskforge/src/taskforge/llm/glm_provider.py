@@ -4,12 +4,15 @@
 """The library's default ``Provider``: the GLM router's chat completions through the ``openai`` SDK.
 
 Each ``stream`` call is one streamed request with the SDK's retries off; ``ModelClient`` owns every retry. A stream
-is abandoned after ``stall_timeout`` seconds without a token, never on wall-clock time. A 400 naming the context
-window (vLLM's and sglang's wordings, or the code ``context_length_exceeded``) is a context overflow; a 404 naming
-the route is a missing route.
+is abandoned after ``stall_timeout`` seconds without a token, never on wall-clock time, and a request that finds no
+free pooled connection within ``POOL_TIMEOUT`` is a transport failure. A 400 naming the context window (vLLM's and
+sglang's wordings, or the code ``context_length_exceeded``) is a context overflow; a 404 naming the route is a missing
+route; every 5xx is an outage.
 
 The endpoint resolves at the first request, and again after a refused connection or a missing route (a moved
-relay), so an unregistered relay is unavailability the client waits out. An httpx pool works only in the event loop
+relay), so an unregistered relay is unavailability the client waits out. The lookup runs in a thread, because an
+Iris registry lookup blocks and retries for up to 30 minutes; one runs at a time, and each request waits for it at
+most ``RESOLVE_TIMEOUT`` seconds. An httpx pool works only in the event loop
 that opened it, so each loop gets its own pool and SDK client, and a pickled provider carries only its settings. A
 stalled read replaces the loop's pool, at most once per ``POOL_RESET_INTERVAL``; requests still streaming on the
 old pool keep it until they end.
@@ -33,7 +36,7 @@ from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
 
-from taskforge.llm.client import RETRYABLE_STATUSES, AttemptFailed, AttemptOutcome, Provider, Segment
+from taskforge.llm.client import RETRYABLE_STATUSES, AttemptFailed, AttemptOutcome, Progress, Provider, Segment
 from taskforge.model.llm import FinishReason, ToolCall, Usage
 
 logger = logging.getLogger(__name__)
@@ -42,23 +45,13 @@ API_ROOT = "/v1"
 """The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
 CONTEXT_OVERFLOW = re.compile(r"context length|maximum model length", re.IGNORECASE)
 CONTEXT_OVERFLOW_CODE = "context_length_exceeded"
-SDK_REQUEST_FIELDS = frozenset(
-    {
-        "model",
-        "messages",
-        "max_tokens",
-        "temperature",
-        "top_p",
-        "tools",
-        "tool_choice",
-        "response_format",
-        "parallel_tool_calls",
-    }
-)
-"""Fields the provider passes to ``chat.completions.create`` as keyword arguments, putting the rest in ``extra_body``."""
 ERROR_BODY_LIMIT = 2000
 CONNECT_TIMEOUT = 10.0
 WRITE_TIMEOUT = 30.0
+POOL_TIMEOUT = 30.0
+"""Seconds a request waits for a free connection in the local pool; longer is local admission, not the model."""
+RESOLVE_TIMEOUT = 30.0
+"""Seconds a request waits for the endpoint lookup in flight before failing as unavailable; the lookup keeps running."""
 KEEPALIVE_EXPIRY = 30.0
 """Seconds an idle pooled connection may be reused, so a connection idle through a long author turn is not
 reused blindly; a stalled read also replaces the whole pool (``_reset_pool``)."""
@@ -150,32 +143,18 @@ def _status_failure(response: httpx.Response) -> AttemptFailed:
         return AttemptFailed(AttemptOutcome.ROUTE_MISSING, body, status)
     if overflowed(status, body):
         return AttemptFailed(AttemptOutcome.CONTEXT_OVERFLOW, body, status)
-    if status in RETRYABLE_STATUSES:
+    if status in RETRYABLE_STATUSES or status >= 500:
         return AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(response))
     return AttemptFailed(AttemptOutcome.REJECTED, body, status)
 
 
-def sdk_kwargs(body: Mapping[str, Any]) -> dict[str, Any]:
-    """The exact ``chat.completions.create`` arguments for ``body``, streamed with usage.
-
-    Fields in ``SDK_REQUEST_FIELDS`` go in as keyword arguments; the rest, such as ``chat_template_kwargs`` and
-    ``continue_final_message``, go in ``extra_body`` for the SDK to merge into the request.
-    """
-    return {
-        **{key: value for key, value in body.items() if key in SDK_REQUEST_FIELDS},
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "extra_body": {key: value for key, value in body.items() if key not in SDK_REQUEST_FIELDS},
-    }
-
-
 @dataclass(eq=False)
 class _LoopPool:
-    """The connection pool of one event loop, the SDK client on it for one endpoint, and its requests in flight."""
+    """The connection pool of one event loop, the SDK client on it for the latest endpoint, and requests in flight."""
 
     http: httpx.AsyncClient
-    sdk: openai.AsyncOpenAI
-    endpoint: GlmEndpoint
+    sdk: openai.AsyncOpenAI | None = None
+    endpoint: GlmEndpoint | None = None
     in_flight: int = 0
 
 
@@ -194,6 +173,7 @@ class GlmProvider(Provider):
         self.stall_timeout, self.max_connections = stall_timeout, max_connections
         self._endpoint: GlmEndpoint | None = None
         self._stale = True
+        self._lookup: asyncio.Future[GlmEndpoint] | None = None
         self._pools: dict[asyncio.AbstractEventLoop, _LoopPool] = {}
         self._retired: dict[asyncio.AbstractEventLoop, list[_LoopPool]] = {}
         self._pool_reset_at = -POOL_RESET_INTERVAL
@@ -225,43 +205,42 @@ class GlmProvider(Provider):
         for pool in pools:
             await pool.http.aclose()
 
-    def _current(self) -> GlmEndpoint:
+    async def _current(self) -> GlmEndpoint:
         """The endpoint, resolved at first use and again after a failure that a moved relay causes."""
-        if self._stale or self._endpoint is None:
-            try:
-                endpoint = self._source.current()
-            except EndpointUnavailable as error:
-                raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"no endpoint: {error}") from error
-            if self._endpoint is not None and endpoint != self._endpoint:
-                logger.warning("GLM endpoint moved from %s to %s", self._endpoint.base_url, endpoint.base_url)
-            self._endpoint, self._stale = endpoint, False
-        return self._endpoint
+        if not self._stale and self._endpoint is not None:
+            return self._endpoint
+        loop = asyncio.get_running_loop()
+        if self._lookup is None or self._lookup.get_loop() is not loop:
+            self._lookup = loop.run_in_executor(None, self._source.current)
+        lookup = self._lookup
+        try:
+            endpoint = await asyncio.wait_for(asyncio.shield(lookup), RESOLVE_TIMEOUT)
+        except TimeoutError as error:
+            raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"no endpoint within {RESOLVE_TIMEOUT}s") from error
+        except EndpointUnavailable as error:
+            raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"no endpoint: {error}") from error
+        finally:
+            if lookup.done() and self._lookup is lookup:
+                self._lookup = None
+        if self._endpoint is not None and endpoint != self._endpoint:
+            logger.warning("GLM endpoint moved from %s to %s", self._endpoint.base_url, endpoint.base_url)
+        self._endpoint, self._stale = endpoint, False
+        return endpoint
 
-    def _open_pool(self, endpoint: GlmEndpoint) -> _LoopPool:
-        """A fresh connection pool for the running event loop, with an SDK client on it for ``endpoint``."""
+    def _open_pool(self) -> _LoopPool:
         limit = self.max_connections
-        http = httpx.AsyncClient(
-            limits=httpx.Limits(
-                max_connections=limit, max_keepalive_connections=limit, keepalive_expiry=KEEPALIVE_EXPIRY
-            )
-        )
-        return _LoopPool(http, self._sdk_client(endpoint, http), endpoint)
+        limits = httpx.Limits(max_connections=limit, max_keepalive_connections=limit, keepalive_expiry=KEEPALIVE_EXPIRY)
+        return _LoopPool(httpx.AsyncClient(limits=limits))
 
     def _pool(self) -> _LoopPool:
-        """The running event loop's pool and SDK client, opened on first use; closed loops' pools are dropped."""
+        """The running event loop's pool, opened on first use; closed loops' pools are dropped."""
         for closed in [loop for loop in self._pools.keys() | self._retired.keys() if loop.is_closed()]:
             self._pools.pop(closed, None)
             self._retired.pop(closed, None)
-        endpoint = self._current()
         loop = asyncio.get_running_loop()
-        pool = self._pools.get(loop)
-        if pool is None:
-            pool = self._open_pool(endpoint)
-            self._pools[loop] = pool
-        elif pool.endpoint != endpoint:
-            pool.sdk = self._sdk_client(endpoint, pool.http)
-            pool.endpoint = endpoint
-        return pool
+        if loop not in self._pools:
+            self._pools[loop] = self._open_pool()
+        return self._pools[loop]
 
     async def _reset_pool(self) -> None:
         """Open a fresh pool after a stalled read, so the retry cannot reuse a dead connection.
@@ -277,7 +256,7 @@ class GlmProvider(Provider):
         logger.warning(
             "GLM read stalled; replacing the connection pool (%d requests still on the old one)", old.in_flight
         )
-        self._pools[loop] = self._open_pool(old.endpoint)
+        self._pools[loop] = self._open_pool()
         if old.in_flight:
             self._retired.setdefault(loop, []).append(old)
         else:
@@ -286,10 +265,13 @@ class GlmProvider(Provider):
     @asynccontextmanager
     async def _leased(self) -> AsyncIterator[tuple[openai.AsyncOpenAI, httpx.AsyncClient, GlmEndpoint]]:
         """The running event loop's SDK client and its pool, which stays open until the request using them ends."""
+        endpoint = await self._current()
         pool = self._pool()
+        sdk = pool.sdk if pool.sdk is not None and pool.endpoint == endpoint else self._sdk_client(endpoint, pool.http)
+        pool.sdk, pool.endpoint = sdk, endpoint
         pool.in_flight += 1
         try:
-            yield pool.sdk, pool.http, pool.endpoint
+            yield sdk, pool.http, endpoint
         finally:
             pool.in_flight -= 1
             retired = self._retired.get(asyncio.get_running_loop(), [])
@@ -298,23 +280,23 @@ class GlmProvider(Provider):
                 await pool.http.aclose()
 
     def _sdk_client(self, endpoint: GlmEndpoint, http: httpx.AsyncClient) -> openai.AsyncOpenAI:
-        timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=self.stall_timeout, write=WRITE_TIMEOUT, pool=None)
+        timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=self.stall_timeout, write=WRITE_TIMEOUT, pool=POOL_TIMEOUT)
         return openai.AsyncOpenAI(
             base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=http
         )
 
     @override
-    async def stream(self, body: Mapping[str, Any], events: list[str]) -> Segment:
+    async def stream(self, body: Mapping[str, Any], progress: Progress) -> Segment:
         try:
-            return await self._stream(body, events)
+            return await self._stream(body, progress)
         except AttemptFailed as failure:
             self._stale = self._stale or failure.outcome in RERESOLVE
             if failure.outcome is AttemptOutcome.STALLED:
                 await self._reset_pool()
             raise
 
-    async def _stream(self, body: Mapping[str, Any], events: list[str]) -> Segment:
-        """Stream a request into a segment, appending each chunk's JSON to ``events``."""
+    async def _stream(self, body: Mapping[str, Any], progress: Progress) -> Segment:
+        """Stream a request into a segment, reporting each chunk's JSON to ``progress``."""
         stall_timeout = self.stall_timeout
         # ``get_final_completion`` raises on a ``length`` finish, as does ``handle_chunk`` once the state holds
         # strict tools, so the provider builds the state without tools or a response format and reads its snapshot.
@@ -323,8 +305,13 @@ class GlmProvider(Provider):
         ttft: float | None = None
         try:
             async with self._leased() as (sdk, _, _):
-                chunks = await sdk.chat.completions.create(**sdk_kwargs(body))
+                model, messages = body["model"], body["messages"]
+                extra = {key: value for key, value in body.items() if key not in ("model", "messages")}
+                chunks = await sdk.chat.completions.create(
+                    model=model, messages=messages, stream=True, stream_options={"include_usage": True}, extra_body=extra
+                )
                 assert isinstance(chunks, openai.AsyncStream)
+                progress.admit()
                 async with chunks:
                     last_token = time.monotonic()
                     while True:
@@ -333,7 +320,7 @@ class GlmProvider(Provider):
                             chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
                         except StopAsyncIteration:
                             break
-                        events.append(chunk.model_dump_json())
+                        progress.event(chunk.model_dump_json(), _carries_token(chunk))
                         try:
                             state.handle_chunk(chunk)
                         except IndexError as error:
@@ -353,6 +340,8 @@ class GlmProvider(Provider):
         except openai.APIStatusError as error:
             raise _status_failure(error.response) from error
         except openai.APITimeoutError as error:
+            if isinstance(error.__cause__, httpx.PoolTimeout):
+                raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"no free connection in {POOL_TIMEOUT}s") from error
             raise AttemptFailed(AttemptOutcome.STALLED, f"no response within the timeout: {error}") from error
         except openai.APIConnectionError as error:
             raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{error}: {error.__cause__!r}") from error
@@ -366,7 +355,7 @@ class GlmProvider(Provider):
             raise AttemptFailed(AttemptOutcome.STALLED, f"no bytes for {stall_timeout}s") from error
         except httpx.TransportError as error:
             raise AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{type(error).__name__}: {error}") from error
-        if not events:
+        if not progress.events:
             raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream ended before its first chunk")
         snapshot = state.current_completion_snapshot
         if not snapshot.choices or snapshot.choices[0].finish_reason is None or snapshot.usage is None:
@@ -391,7 +380,8 @@ class GlmProvider(Provider):
     async def no_workers(self) -> bool:
         """Whether ``/health`` answers 200 with zero workers in this endpoint's pool.
 
-        False for an unresolvable endpoint, an unreachable ``/health``, a non-200 answer or a report without the pool.
+        False, unknown, for an unresolvable endpoint, an unreachable ``/health``, a non-200 answer or a report that is
+        not JSON or lacks the pool.
         """
         try:
             async with self._leased() as (_, http, endpoint):
@@ -404,5 +394,7 @@ class GlmProvider(Provider):
             return False
         if response.status_code != 200:
             return False
-        workers = response.json().get("workers", {})
-        return workers.get(str(endpoint.pool)) == 0
+        try:
+            return response.json()["workers"][str(endpoint.pool)] == 0
+        except (ValueError, KeyError, TypeError):
+            return False

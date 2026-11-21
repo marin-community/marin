@@ -3,7 +3,7 @@
 
 """Recorded inference requests and their executor in front of the model client."""
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, override
 
@@ -66,7 +66,8 @@ class CompletionBackend(Protocol):
     ) -> ProviderCompletion: ...
 
 
-def _message(message: Message, replay_arguments: Callable[[str], str]) -> dict[str, object]:
+def _message(message: Message) -> dict[str, object]:
+    """``message`` on the wire; the harness already shaped its tool-call arguments with the profile's formatter."""
     wire: dict[str, object] = {"role": message.role, "content": message.content}
     if message.reasoning:
         wire["reasoning_content"] = message.reasoning
@@ -77,7 +78,7 @@ def _message(message: Message, replay_arguments: Callable[[str], str]) -> dict[s
             {
                 "id": call.id,
                 "type": "function",
-                "function": {"name": call.name, "arguments": replay_arguments(call.arguments)},
+                "function": {"name": call.name, "arguments": call.arguments},
             }
             for call in message.tool_calls
         ]
@@ -93,7 +94,9 @@ class GlmInference(InferenceClient):
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("inference", digest((self.client.model, self.role)), ReplayPolicy.CACHE)
+        profile = self.client.profile.replay_identity()
+        identity = (self.client.model, self.role) + (() if profile is None else (profile,))
+        return Fingerprint("inference", digest(identity), ReplayPolicy.CACHE)
 
     @override
     async def complete(self, request: InferenceRequest) -> Completion:
@@ -103,11 +106,8 @@ class GlmInference(InferenceClient):
                 {"type": "function", "function": TOOL_SCHEMA.dump_python(tool, mode="json")} for tool in request.tools
             ]
         }
-        repair = self.client.profile.replay_arguments
         try:
-            result = await self.client.complete(
-                tuple(_message(message, repair) for message in request.conversation), policy, fields
-            )
+            result = await self.client.complete(tuple(map(_message, request.conversation)), policy, fields)
         except ModelUnavailable as error:
             raise Restart(str(error), retries=_retries(error.attempts)) from error
         except ContextExhausted as error:

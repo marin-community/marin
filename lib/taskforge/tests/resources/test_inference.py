@@ -49,7 +49,7 @@ async def test_retry_telemetry_preserves_wire_and_completion_values() -> None:
     messages, policy, fields = backend.calls[-1]
     assert messages[0]["reasoning_content"] == "thought" and messages[1]["tool_call_id"] == "previous"
     wire = json.loads(json.dumps(messages[0]))
-    assert broken in json.loads(wire["tool_calls"][0]["function"]["arguments"]).values()
+    assert wire["tool_calls"][0]["function"]["arguments"] == broken  # the harness shapes arguments when it records
     assert event.messages[0].tool_calls[0].arguments == broken
     assert policy.max_tokens == 100
     assert fields == {

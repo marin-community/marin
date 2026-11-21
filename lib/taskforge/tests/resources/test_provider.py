@@ -3,25 +3,43 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from lib.taskforge.tests.resources.inference_fakes import HANG, Fails, ScriptedProvider, chunk, request, segment
+from lib.taskforge.tests.resources.inference_fakes import (
+    HANG,
+    Act,
+    Fails,
+    LoopTime,
+    ScriptedProvider,
+    chunk,
+    report,
+    request,
+    segment,
+)
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.models import GradedRollout, TaskRolloutSpec, TraceMode
+from rolloutengine.models import GradedRollout, ModelRequest, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 
 from taskforge import wiring
-from taskforge.effects.issues import Restart
+from taskforge.effects.issues import Hold, Restart
 from taskforge.llm import glm_provider
-from taskforge.llm.client import AttemptOutcome, ContextExhausted, ModelClient, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import (
+    AttemptOutcome,
+    ContextExhausted,
+    ModelClient,
+    ModelRequestRejected,
+    ModelUnavailable,
+    Progress,
+    Segment,
+)
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, RetryPolicy
-from taskforge.model.llm import FinishReason
 from taskforge.model.review import Cause
 from taskforge.policy import load_policy
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
@@ -123,11 +141,31 @@ async def test_an_empty_pool_is_polled_instead_of_sent_to(pool_returns: bool) ->
     assert len(provider.bodies) == (2 if pool_returns else 1)
 
 
-async def test_consecutive_stalls_inside_a_tool_call_return_degenerate_output() -> None:
-    provider = ScriptedProvider((TOOL_STALL, unavailable(AttemptOutcome.STALLED), TOOL_STALL, TOOL_STALL))
+# Review 2026-11-21: a second silent stall inside a tool call became an empty `length` completion, a failed trial.
+async def test_stalls_inside_a_tool_call_are_waited_out_as_an_outage() -> None:
+    """Silence cannot tell a model buffering degenerate arguments from a fleet that went away, so it is never a trial."""
+    provider = ScriptedProvider((TOOL_STALL, TOOL_STALL, TOOL_STALL, segment("answer")))
     result = await client(provider, Time()).complete((), LLMPolicy())
-    assert (result.content, result.tool_calls, result.finish_reason) == ("", (), FinishReason.LENGTH)
-    assert len(result.attempts) == len(provider.bodies) == 4  # a stall in no tool call resets the count
+    assert (result.content, len(provider.bodies)) == ("answer", 4)
+
+
+# Review 2026-11-21: a role header and a close, eight times, kept a call alive past a 3 s availability window.
+async def test_a_stream_cut_before_generating_does_not_renew_the_availability_window() -> None:
+    header = unavailable(AttemptOutcome.INCOMPLETE_STREAM, chunk(role="assistant"))
+    provider = ScriptedProvider((header,) * 8 + (segment("answer"),))
+    time = Time()
+    with pytest.raises(ModelUnavailable):
+        await client(provider, time, wait=3, backoff=(1, 1, 1)).complete((), LLMPolicy())
+    assert (time.now, len(provider.bodies)) == (3, 3)
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+async def test_the_profile_output_limit_caps_a_token_limit_the_request_sets(field: str) -> None:
+    provider = ScriptedProvider((segment("12"),))
+    capped = replace(GLM_5_3, name="glm-5.3/output-4", max_output_tokens=4)
+    model = ModelClient(provider, capped, RetryPolicy(60, 1, 1, 1), role="solver")
+    await solver_turn(model, LLMPolicy(), ModelRequest(({"role": "user", "content": "6+6"},), {field: 64}))
+    assert provider.bodies[0][field] == 4
 
 
 @pytest.mark.parametrize(
@@ -158,24 +196,52 @@ async def rollout(model: ModelClient, spec: TaskRolloutSpec = SPEC) -> GradedRol
     return await run_rollout(SolverRollout(spec, 0, 0), solver(model), notify=lambda _: None)
 
 
-@pytest.mark.parametrize(
-    ("script", "generation_timeout"),
-    [
-        ((Fails(AttemptOutcome.CONTEXT_OVERFLOW, status=400),), None),
-        ((HANG,), 0.05),
-        ((TOOL_STALL, TOOL_STALL), None),
-    ],
-    ids=["context-overflow", "turn-deadline", "degenerate-tool-call"],
-)
-async def test_a_solver_turn_that_cannot_finish_is_an_unsolved_trial_and_is_not_retried(
-    script: tuple[Fails | str, ...], generation_timeout: float | None
-) -> None:
+async def test_a_solver_context_overflow_is_an_unsolved_trial_and_is_not_retried() -> None:
     """The trial ends at the generation limit with no transcript: counted in the band, never solved or retried."""
-    provider = ScriptedProvider(script)
-    result = await rollout(client(provider, generation_timeout=generation_timeout))
+    provider = ScriptedProvider((Fails(AttemptOutcome.CONTEXT_OVERFLOW, status=400),))
+    result = await rollout(client(provider))
     assert result.rollout.stop_reason == "length"
     assert trial_cause(result, SPEC.task) is Cause.GENERATION_LIMIT
-    assert len(provider.bodies) == len(script)
+    assert len(provider.bodies) == 1
+
+
+GENERATION_BOUND = 100.0
+TURN = SPEC.model_copy(update={"limits": SPEC.limits.model_copy(update={"model_turn_timeout": GENERATION_BOUND + 60})})
+
+
+def generates(time: LoopTime, seconds: float) -> Act:
+    """A stream that generates a token every second for ``seconds``, then finishes."""
+
+    async def act(progress: Progress) -> Segment:
+        for _ in range(int(seconds)):
+            await time.sleep(1)
+            report(progress, chunk(content="x"))
+        return segment("12")
+
+    return act
+
+
+def bounded(provider: ScriptedProvider, time: LoopTime, wait: float = 3600) -> ModelClient:
+    retry = RetryPolicy(wait, 1, 1, 1, generation_timeout=GENERATION_BOUND)
+    return ModelClient(provider, GLM_5_3, retry, role="solver", clock=time.clock, sleep=time.sleep)
+
+
+# Review 2026-11-21: after any earlier fault the bound was off, so a long healthy generation ate stage retries.
+@pytest.mark.parametrize("before", [(), (unavailable(AttemptOutcome.RETRYABLE_STATUS),)], ids=["first", "after-a-fault"])
+async def test_a_generation_sustained_past_its_bound_is_an_unsolved_trial(before: tuple[Fails, ...]) -> None:
+    time = LoopTime()
+    provider = ScriptedProvider((*before, generates(time, 10 * GENERATION_BOUND)))
+    result = await rollout(bounded(provider, time), TURN)
+    assert trial_cause(result, SPEC.task) is Cause.GENERATION_LIMIT
+    assert len(provider.bodies) == len(before) + 1
+
+
+async def test_a_generation_at_its_bound_on_an_empty_pool_is_an_outage() -> None:
+    time = LoopTime()
+    provider = ScriptedProvider((generates(time, 10 * GENERATION_BOUND),), empty_pool=[True] * 100)
+    with pytest.raises(Restart, match="interrupted during model"):
+        await rollout(bounded(provider, time, wait=30), TURN)
+    assert provider.polls > 0
 
 
 async def test_a_solver_transport_stall_is_retried_by_the_model_client() -> None:
@@ -215,6 +281,15 @@ async def test_an_outage_that_outlasts_the_turn_deadline_restarts_never_a_trial(
             model, SPEC.model_copy(update={"limits": SPEC.limits.model_copy(update={"model_turn_timeout": 0.3})})
         )
     assert len(provider.bodies) == 2
+
+
+# Review 2026-11-21: an unknown 400 wording was restarted twice by the rollout wrapper and the coordinator.
+async def test_a_solver_request_the_server_rejects_holds_at_once_with_its_status_and_reason() -> None:
+    reason = "the prompt exceeds the input token budget"
+    provider = ScriptedProvider((Fails(AttemptOutcome.REJECTED, status=400, detail=reason), segment("12")))
+    with pytest.raises(Hold, match=f"HTTP 400: {reason}"):
+        await rollout(client(provider, Time()))
+    assert len(provider.bodies) == 1
 
 
 async def test_cancelling_a_solver_rollout_propagates() -> None:

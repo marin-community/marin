@@ -238,15 +238,19 @@ payloads (they are in the workdir).
 ## Models and providers
 
 Every model call goes through one `ModelClient` (`llm/client.py`), the only place that retries.
-It sends each attempt through a `Provider` and decides from the attempt's outcome:
+It sends each attempt through a `Provider` and decides from the attempt's outcome. A solver trial is
+charged as failed only on positive evidence that the model itself ran out; anything the fleet, the
+relay, the transport or local admission may have caused is an outage, and no failed trial is recorded.
 
-| Failure | What happens |
-|---|---|
-| 400 context overflow | `ContextExhausted`: a solver trial ends at the generation limit (counted, never solved); the author and adversary get `ContextExceeded` as before |
-| other rejection (401, 400, ...) | `ModelRequestRejected`, a typed bug; never retried |
-| 408/429/5xx, 404 `no route`, no endpoint, refused connection, stall, cut or aborted stream | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
-| two stalls in a row inside an open tool call | an empty `finish_reason=length` completion (degenerate output) |
-| a solver generation still healthy at the turn deadline less 60 s | the trial ends at the generation limit |
+| Failure | Evidence checked | What happens |
+|---|---|---|
+| 400 context overflow (recognised wording or `context_length_exceeded`) | the rejection itself | `ContextExhausted`: a solver trial ends at the generation limit (counted, never solved); the author and adversary get `ContextExceeded` |
+| solver generation past `solver.turn_timeout` less 60 s | tokens still arriving at the bound, counted from each attempt's first token, and `/health` not reporting the pool empty then | the trial ends at the generation limit |
+| other rejection (401, unknown 400 wording, ...) | the status | `ModelRequestRejected`, never retried; a solver rollout holds at once with the status and reason |
+| 408, 429, any 5xx, 404 `no route`, no endpoint, registry lookup failure, refused connection, full local pool, stall (also inside a tool call), cut or aborted stream | `/health` while waiting | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
+
+Only an attempt that generated text before a non-stall failure restarts the availability window. An
+undecodable `/health` reply counts as unknown availability.
 
 The defaults are `GlmProvider` (the GLM router, `llm/glm_provider.py`) for every role and the
 `GLM_5_3` profile (`llm/policy.py`: sampling defaults, context window, no output limit, tool-call
@@ -257,15 +261,19 @@ from dataclasses import replace
 from taskforge.llm.policy import GLM_5_3
 from taskforge.wiring import runtime
 
-profiles = {"author": replace(GLM_5_3, max_output_tokens=32_768)}
-providers = {"adversary": MyProvider()}  # any object with `model`, `stream(body, events)` and `no_workers()`
+profiles = {"author": replace(GLM_5_3, name="glm-5.3/output-32k", max_output_tokens=32_768)}
+providers = {"adversary": MyProvider()}  # a `Provider` subclass: `model` and `stream(body, progress)`
 async with runtime(policy, source, parallel_api_key, providers=providers, profiles=profiles) as (config, resources):
     ...
 ```
 
 `build_config(policy, factories, profiles)` and `build_resources(policy, providers, factories, web, profiles)` take the
 same mappings when the caller builds the bindings itself. The policy's `<role>.model` and `sampling.*` keys still apply
-on top of the profile. Replay keys carry only the model, the role and the request, so neither choice moves a recorded journal.
+on top of the profile. A provider reports admission and every payload to `progress` and inherits a `no_workers()` that
+knows of no outage. The profile's output limit is a ceiling on any token-limit field a request sets. Replay keys carry
+the model, the role, the request, and for any profile but `GLM_5_3` its `name` and output limit, so a changed profile
+never replays a result it did not shape. A callable has no stable hash: a profile with its own `replay_arguments` needs
+its own name, and a new one when the formatter changes.
 
 ## Environments
 

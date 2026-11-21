@@ -14,10 +14,11 @@ from types import MappingProxyType
 from typing import override
 
 import httpx
+from connectrpc.errors import ConnectError
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import JobName
-from iris.rpc.errors import DEFAULT_RETRY_MAX_ELAPSED
+from iris.rpc.errors import DEFAULT_RETRY_MAX_ELAPSED, is_retryable_error
 from rolloutengine.models import GenerationLimitReached, GradedRollout, ModelRequest, ModelTurn
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
@@ -84,8 +85,8 @@ NO_PROVIDERS: Mapping[str, Provider] = MappingProxyType({})
 class RelayEndpoint(EndpointSource):
     """The endpoint that the Iris relay job ``job`` registers for ``model``, resolved on every call.
 
-    A relay with no endpoint, as while a fresh Iris controller waits for relays to re-register, is
-    ``EndpointUnavailable``: the model client waits it out like any other outage.
+    A relay with no endpoint, as while a fresh Iris controller waits for relays to re-register, or a controller that
+    stays unavailable through the lookup's retries is ``EndpointUnavailable``: the model client waits it out.
     """
 
     job: str
@@ -98,7 +99,12 @@ class RelayEndpoint(EndpointSource):
         client = iris_ctx().client
         if client is None:
             raise EndpointUnavailable("Iris client is unavailable inside the task")
-        endpoints = client.resolver_for_job(JobName.from_string(self.job)).resolve(self.model).endpoints
+        try:
+            endpoints = client.resolver_for_job(JobName.from_string(self.job)).resolve(self.model).endpoints
+        except ConnectError as error:
+            if not is_retryable_error(error):
+                raise
+            raise EndpointUnavailable(f"Iris endpoint lookup failed: {error}") from error
         if not endpoints:
             raise EndpointUnavailable(f"GLM relay {self.job} has no registered endpoint for {self.model}")
         url = endpoints[0].url.rstrip("/")
@@ -171,8 +177,9 @@ class Environments(EnvFactory):
 
 
 async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:
-    """One solver turn. A conversation that outgrew the model window, or one healthy generation that outlasted the
-    turn deadline less its margin, ends the rollout at the generation limit: a failed trial, graded and counted."""
+    """One solver turn. Only positive evidence that the model ran out ends the rollout at the generation limit, a
+    failed trial that is graded and counted: a recognised context overflow, or generation sustained past the turn
+    deadline less its margin (``taskforge.llm.client``). Every outage propagates, so no trial is recorded."""
     if request.continuation is not None or request.prompt_token_ids is not None:
         raise ValueError("GLM solver requires messages trace")
     try:
@@ -217,16 +224,17 @@ def build_resources(
     execution = digest((settings, command_timeout, policy.setting("sandbox.output_budget_mb", int)))
     solver = clients["solver"]
     sampling = policy_sampling(policy, solver.profile.sampling)
-    # Provider settings (provider.*, pools, the profile's limits) shape how a request is served, not what it
-    # returns, so replay keys carry only the model, the role and what the request itself records.
+    # Provider settings (provider.*, pools) shape how a request is served, not what it returns, so replay keys carry
+    # the model, the role, what the request itself records and a non-default profile's identity.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
+    profile = solver.profile.replay_identity()
     return Resources(
         Environments(factories, settings),
         inference["author"],
         RolloutResource(
             verifiers.rollouts,
             partial(solver_turn, solver, sampling),
-            digest((solver.model, sampling, execution)),
+            digest((solver.model, sampling, execution) + (() if profile is None else (profile,))),
         ),
         GradingResource(verifiers.grades, execution, base_engine),
         Ids(),

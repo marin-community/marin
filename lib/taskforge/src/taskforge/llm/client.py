@@ -3,18 +3,26 @@
 
 """The model client: the one owner of retries, holds and backoff, in front of any ``Provider``.
 
-A ``Provider`` streams one request and reports how it failed (``AttemptFailed``). ``ModelClient`` raises
-``ContextExhausted`` for a context overflow and ``ModelRequestRejected`` for another rejection a retry cannot fix.
-Every other failure (408, 429, 5xx, a 404 ``no route for model``, no endpoint or a refused connection, a stall, a cut,
-malformed or aborted stream) is waited out with backoff, polling while the provider reports no workers, for
-``unavailable_wait``; then ``ModelUnavailable``. A failure after the provider streamed, other than a stall, restarts
-that window. ``max_stalls`` consecutive stalls inside an open tool call (the server buffering degenerate arguments)
-return an empty ``finish_reason=length`` completion. ``generation_timeout`` bounds a call until its first failure, so
-its expiry (``GenerationTimedOut``) is a long healthy generation, never an outage.
+A solver trial is charged as failed only on positive evidence that the model itself ran out: generation sustained up to
+the bound, or a recognised context-limit rejection. Anything the fleet, the relay, the transport or local admission may
+have caused is unavailable evidence: no failed trial is recorded, and the stage waits, restarts or holds as for an
+outage. When in doubt it is not the model's fault, because a fleet fault scored against the model corrupts solve rates
+and can accept a task at the wrong band.
+
+A ``Provider`` streams one request, reporting admission and each payload to the attempt's ``Progress``, and raises
+``AttemptFailed`` saying how it failed. ``ModelClient`` raises ``ContextExhausted`` for a context overflow and
+``ModelRequestRejected`` for another rejection a retry cannot fix. Every other failure (408, 429, any 5xx, a 404 ``no
+route for model``, no endpoint, a refused connection or a full local pool, a stall, a cut, malformed or aborted
+stream) is waited out with backoff, polling while the provider reports no workers, for ``unavailable_wait``; then
+``ModelUnavailable``. A failure after the attempt generated text, other than a stall, restarts that window. Silence,
+including a stall inside an open tool call, is never evidence about the model.
+
+``generation_timeout`` bounds the seconds a call spends generating: from the first generated token of each attempt,
+adding the call's completed segments, so neither admission nor an earlier fault counts. A token past the bound ends the
+call as ``GenerationTimedOut`` unless the provider reports its pool empty at that moment.
 """
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -37,8 +45,9 @@ from taskforge.model.llm import FinishReason, ToolCall, Usage
 
 logger = logging.getLogger(__name__)
 
-RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
-"""HTTP statuses a retry can cure: a timeout, rate limiting or a server-side failure."""
+RETRYABLE_STATUSES = frozenset({408, 429})
+"""HTTP statuses below 500 that a retry can cure: a timeout or rate limiting. Every 5xx is an outage too."""
+TOKEN_LIMIT_FIELDS = ("max_tokens", "max_completion_tokens")
 REASON_LIMIT = 300
 
 
@@ -145,50 +154,74 @@ class ModelUnavailable(Exception):
 
 
 class GenerationTimedOut(Exception):
-    """A call generated for ``RetryPolicy.generation_timeout`` seconds without failing or finishing.
+    """A call generated for ``RetryPolicy.generation_timeout`` seconds without finishing.
 
     Evidence about the request, not the provider (production 2026-11-19: three solver turns of 70 minutes each).
     """
 
 
-class Provider(Protocol):
-    """Where and how a model is reached; ``GlmProvider`` is the library default.
+class _BoundReached(Exception):
+    pass
 
-    ``stream`` sends one chat-completions ``body`` (every field but the streaming options), appends each raw ``data:``
-    payload to ``events`` and raises ``AttemptFailed`` on failure. ``no_workers`` is True only on positive evidence that
-    the service has no workers for ``model``.
+
+class Progress:
+    """One attempt as its provider reports it: ``admit`` when the server answers, ``event`` for each ``data:`` payload.
+
+    ``event`` raises past the call's generation bound; a provider lets that propagate and abandons the stream.
+    """
+
+    def __init__(self, clock: Callable[[], float], remaining: float | None) -> None:
+        self.clock, self.remaining = clock, remaining
+        self.events: list[str] = []
+        self.admitted: float | None = None
+        self.first_token: float | None = None
+        self.last_token: float | None = None
+
+    def admit(self) -> None:
+        if self.admitted is None:
+            self.admitted = self.clock()
+
+    def event(self, payload: str, generated: bool) -> None:
+        """Record ``payload``; ``generated`` says it carries generated text, which is the only evidence of progress."""
+        self.admit()
+        self.events.append(payload)
+        if not generated:
+            return
+        self.last_token = now = self.clock()
+        if self.first_token is None:
+            self.first_token = now
+        if self.remaining is not None and now - self.first_token >= self.remaining:
+            raise _BoundReached
+
+    def generated(self) -> float:
+        """Seconds from the attempt's first generated token to its last."""
+        if self.first_token is None or self.last_token is None:
+            return 0.0
+        return self.last_token - self.first_token
+
+
+class Provider(Protocol):
+    """Where and how a model is reached; ``GlmProvider`` is the library default. Subclass it.
+
+    ``stream`` sends one chat-completions ``body`` (every field but the streaming options), reports to ``progress`` and
+    raises ``AttemptFailed`` on failure. ``no_workers`` is True only on positive evidence that the service has no
+    workers for ``model``; the default has none.
     """
 
     @property
     def model(self) -> str: ...
-    async def stream(self, body: Mapping[str, Any], events: list[str]) -> Segment: ...
-    async def no_workers(self) -> bool: ...
+    async def stream(self, body: Mapping[str, Any], progress: Progress) -> Segment: ...
 
-
-class _Degenerate(Exception):
-    pass
-
-
-def degenerate_stall(failure: AttemptFailed, events: Sequence[str]) -> bool:
-    """Whether a stall came inside an open tool call: the last chunk carrying generated text is a tool-call delta."""
-    if failure.outcome is not AttemptOutcome.STALLED:
+    async def no_workers(self) -> bool:
         return False
-    for event in reversed(events):
-        deltas = [choice.get("delta") or {} for choice in json.loads(event).get("choices") or ()]
-        if any(delta.get("tool_calls") for delta in deltas):
-            return True
-        if any(delta.get("content") or delta.get("reasoning") for delta in deltas):
-            return False
-    return False
 
 
 class _Call:
-    """A logical call's attempts, availability window, consecutive degenerate stalls and generation bound."""
+    """A logical call's attempts, availability window and seconds generated by its completed segments."""
 
     def __init__(self, retry: RetryPolicy, clock: Callable[[], float]) -> None:
-        self.retry, self.clock, self.stalls, self.started = retry, clock, 0, clock()
+        self.retry, self.clock, self.started, self.generated = retry, clock, clock(), 0.0
         self.attempts: list[Attempt] = []
-        self.bound = asyncio.timeout(retry.generation_timeout)
         self.restart()
 
     def restart(self) -> None:
@@ -234,20 +267,7 @@ class ModelClient:
         ``request_fields`` adds body fields such as ``tools``. When a continuation overflows the context window, the
         call ends with the segments gathered so far and ``finish_reason == "length"``.
         """
-        call = _Call(self.retry, self.clock)
-        try:
-            async with call.bound:
-                return await self._complete(messages, policy, request_fields or {}, call)
-        except _Degenerate:
-            logger.warning("%s: %d stalls inside a tool call; degenerate output", self._name(), call.stalls)
-            wall_time = self.clock() - call.started
-            return Completion("", "", (), FinishReason.LENGTH, Usage(), wall_time, 0.0, 0.0, 0, tuple(call.attempts))
-        except TimeoutError as error:
-            if not call.bound.expired():
-                raise
-            raise GenerationTimedOut(
-                f"{self._name()} generated for {self.retry.generation_timeout}s without finishing"
-            ) from error
+        return await self._complete(messages, policy, request_fields or {}, _Call(self.retry, self.clock))
 
     async def _complete(
         self,
@@ -256,6 +276,8 @@ class ModelClient:
         request_fields: Mapping[str, object],
         call: _Call,
     ) -> Completion:
+        # A cut segment resends only itself, continuing from the segments already complete; n4 restarted the call.
+        # With a deterministic prefix both record the same answer, while a resampled prefix now keeps the first one.
         segments: list[Segment] = []
         conversation, fields = list(messages), request_fields
         while True:
@@ -301,57 +323,51 @@ class ModelClient:
         call: _Call,
     ) -> Segment:
         """Send one segment's request until an attempt succeeds, recording every attempt in ``call``."""
-        output = self.profile.max_output_tokens
-        limit = None if output is None else min(policy.max_tokens, output)
-        body = request_body(self.model, messages, limit, policy, request_fields)
+        body = request_body(self.model, messages, policy, request_fields, self.profile.max_output_tokens)
+        limit = min((body[key] for key in TOKEN_LIMIT_FIELDS if key in body), default=None)
+        bound = self.retry.generation_timeout
         while True:
-            events: list[str] = []
+            progress = Progress(self.clock, None if bound is None else bound - call.generated)
             started_wall, started = time.time(), time.monotonic()
+            result, failure = None, None
             try:
-                result = await self.provider.stream(body, events)
-            except AttemptFailed as failure:
-                status, detail = failure.http_status, failure.detail
-                duration = time.monotonic() - started
-                call.attempts.append(
-                    Attempt(segment, failure.outcome, limit or 0, started_wall, duration, status, detail, tuple(events))
-                )
-                call.bound.reschedule(None)  # only a call that has not failed is a generation
-                if failure.outcome is AttemptOutcome.CONTEXT_OVERFLOW:
-                    raise ContextExhausted(detail, call.attempts) from failure
-                if failure.outcome is AttemptOutcome.REJECTED:
-                    assert status is not None
-                    raise ModelRequestRejected(status, detail, call.attempts) from failure
-                await self._wait(failure, events, call)
-                continue
-            duration = time.monotonic() - started
-            call.attempts.append(
-                Attempt(segment, AttemptOutcome.COMPLETED, limit or 0, started_wall, duration, 200, "", tuple(events))
+                result = await self.provider.stream(body, progress)
+            except _BoundReached as reached:
+                if not await self.provider.no_workers():
+                    raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
+                failure = AttemptFailed(AttemptOutcome.ABORTED, "generation bound reached on a pool with no workers")
+            except AttemptFailed as error:
+                failure = error
+            outcome, status, detail = (
+                (failure.outcome, failure.http_status, failure.detail)
+                if failure
+                else (AttemptOutcome.COMPLETED, 200, "")
             )
-            call.stalls = 0
-            # vLLM's GLM tool parser reports a reply cut off inside a tool call as ``tool_calls`` (measured live).
-            if (
-                limit is not None
-                and result.finish_reason is FinishReason.TOOL_CALLS
-                and result.usage.completion_tokens >= limit
-            ):
-                return replace(result, finish_reason=FinishReason.LENGTH)
-            return result
+            duration, events = time.monotonic() - started, tuple(progress.events)
+            call.attempts.append(Attempt(segment, outcome, limit or 0, started_wall, duration, status, detail, events))
+            if result is not None:
+                call.generated += progress.generated()
+                # vLLM's GLM tool parser reports a reply cut off inside a tool call as ``tool_calls`` (measured live).
+                if limit is not None and result.finish_reason is FinishReason.TOOL_CALLS:
+                    if result.usage.completion_tokens >= limit:
+                        return replace(result, finish_reason=FinishReason.LENGTH)
+                return result
+            assert failure is not None
+            if failure.outcome is AttemptOutcome.CONTEXT_OVERFLOW:
+                raise ContextExhausted(detail, call.attempts) from failure
+            if failure.outcome is AttemptOutcome.REJECTED:
+                assert status is not None
+                raise ModelRequestRejected(status, detail, call.attempts) from failure
+            await self._wait(failure, progress, call)
 
-    async def _wait(self, failure: AttemptFailed, events: Sequence[str], call: _Call) -> None:
+    async def _wait(self, failure: AttemptFailed, progress: Progress, call: _Call) -> None:
         """Back off after an unavailable attempt, then poll while the provider reports no workers.
 
         Raises:
             ModelUnavailable: The window closed first.
-            _Degenerate: The call stalled inside a tool call ``max_stalls`` times in a row.
         """
-        if degenerate_stall(failure, events):
-            call.stalls += 1
-            if call.stalls >= self.retry.max_stalls:
-                raise _Degenerate
-        else:
-            call.stalls = 0
-            if events and failure.outcome is not AttemptOutcome.STALLED:
-                call.restart()  # the provider streamed before the stream was cut, so it was available
+        if progress.first_token is not None and failure.outcome is not AttemptOutcome.STALLED:
+            call.restart()  # the attempt generated text before it was cut, so the provider was serving
         backoff = call.backoff
         delay = max(backoff.next_interval(), failure.retry_after)
         waited = False
@@ -362,8 +378,9 @@ class ModelClient:
                 delay = backoff.next_interval()
             wait = min(delay, remaining)
             logger.warning(
-                "%s unavailable; %.1fs left in availability window, retrying in %.1fs: %s",
+                "%s unavailable (admitted=%s); %.1fs left in availability window, retrying in %.1fs: %s",
                 self._name(),
+                progress.admitted is not None,
                 remaining,
                 wait,
                 str(failure)[:REASON_LIMIT],
@@ -376,20 +393,25 @@ class ModelClient:
 def request_body(
     model: str,
     messages: Sequence[Message],
-    max_tokens: int | None,
     policy: LLMPolicy,
     request_fields: Mapping[str, object],
+    max_output_tokens: int | None,
 ) -> dict[str, Any]:
-    """The chat-completions fields of one request, apart from streaming; ``max_tokens`` None sends no limit."""
-    if max_tokens is None:
-        request_fields = {
-            key: value for key, value in request_fields.items() if key not in ("max_tokens", "max_completion_tokens")
-        }
-    return {
+    """The chat-completions fields of one request, apart from streaming.
+
+    ``max_output_tokens`` caps every token-limit field, whether ``policy`` or ``request_fields`` set it; None sends none.
+    """
+    body: dict[str, Any] = {
         "model": model,
         "messages": list(messages),
-        **({"max_tokens": max_tokens} if max_tokens is not None else {}),
+        "max_tokens": policy.max_tokens,
         **policy.sampling_params(),
         "chat_template_kwargs": policy.template_kwargs(),
         **request_fields,
     }
+    for key in (key for key in TOKEN_LIMIT_FIELDS if key in body):
+        if max_output_tokens is None:
+            del body[key]
+        else:
+            body[key] = min(body[key], max_output_tokens)
+    return body

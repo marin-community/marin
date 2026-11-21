@@ -9,10 +9,17 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from lib.taskforge.tests.llm.fake_glm import GLM_MODEL, FakeGlm
+from lib.taskforge.tests.resources.inference_fakes import request
 
+from taskforge import wiring
+from taskforge.effects.issues import Restart
+from taskforge.llm import glm_provider
 from taskforge.llm.client import (
     AttemptOutcome,
     Completion,
@@ -38,6 +45,7 @@ from taskforge.llm.policy import (
     RetryPolicy,
 )
 from taskforge.model.llm import FinishReason
+from taskforge.resources.inference import GlmInference
 
 MESSAGES: list[Message] = [{"role": "user", "content": "hi"}]
 LIMITED = replace(GLM_5_3, max_output_tokens=GLM_MAX_OUTPUT_TOKENS)
@@ -492,3 +500,121 @@ def test_endpoint_output_limit_survives_pickling_and_preserves_tool_calls(
     assert len(fake_glm.requests) == 1
     assert "max_tokens" not in fake_glm.requests[0] and "max_completion_tokens" not in fake_glm.requests[0]
     assert result.attempts[0].max_tokens == 0
+
+
+# Review 2026-11-21: with the only pooled connection leased, a solver call made no request and ended at `length`.
+def test_a_call_waiting_for_a_local_connection_is_unavailable_not_a_generation(
+    fake_glm: FakeGlm, fast_retry: RetryPolicy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(glm_provider, "POOL_TIMEOUT", 0.05, raising=False)
+    fake_glm.stream(content="holds the only connection", stall_after_first=True)
+    bounded = RetryPolicy(0.3, 0.01, 0.01, 1.0, generation_timeout=0.2)
+
+    async def call() -> ModelUnavailable:
+        async with GlmProvider(FixedEndpoint(endpoint(fake_glm.base_url)), GLM_MODEL, 600.0, 1) as glm:
+            holder = asyncio.create_task(
+                ModelClient(glm, LIMITED, fast_retry, role="author").complete(MESSAGES, LLMPolicy())
+            )
+            while not fake_glm.requests:
+                await asyncio.sleep(0.01)
+            with pytest.raises(ModelUnavailable) as raised:
+                await ModelClient(glm, LIMITED, bounded, role="solver").complete(MESSAGES, LLMPolicy())
+            holder.cancel()
+            return raised.value
+
+    error = asyncio.run(call())
+    assert len(fake_glm.requests) == 1
+    assert set(outcomes(error)) == {AttemptOutcome.TRANSPORT_ERROR}
+
+
+# Review 2026-11-21: a 529 was a rejection; a 503 then an HTML /health reply escaped as JSONDecodeError.
+@pytest.mark.parametrize(("status", "health"), [(529, None), (503, "<html>gateway</html>")], ids=["529", "html-health"])
+def test_every_5xx_is_an_outage_and_an_undecodable_health_reply_is_unknown(
+    fake_glm: FakeGlm, run: Run, status: int, health: str | None
+) -> None:
+    fake_glm.health_text = health
+    fake_glm.status(status, "overloaded")
+    fake_glm.stream(content="served")
+    completion = run()
+    assert completion.content == "served"
+    assert outcomes(completion) == [AttemptOutcome.RETRYABLE_STATUS, AttemptOutcome.COMPLETED]
+
+
+def test_a_cut_in_a_continuation_resends_only_that_segment(fake_glm: FakeGlm, run: Run) -> None:
+    fake_glm.stream(content="A", finish="length", completion_tokens=1)
+    fake_glm.stream(content="cut", finish=None, send_done=False)
+    fake_glm.stream(content="Z", completion_tokens=1)
+    completion = run()
+    assert (completion.content, completion.continuations, completion.usage.completion_tokens) == ("AZ", 1, 2)
+    assert [(a.segment, a.outcome) for a in completion.attempts] == [
+        (0, AttemptOutcome.COMPLETED),
+        (1, AttemptOutcome.INCOMPLETE_STREAM),
+        (1, AttemptOutcome.COMPLETED),
+    ]
+    assert fake_glm.requests[1]["messages"] == fake_glm.requests[2]["messages"]
+
+
+@dataclass
+class BlockingEndpoint:
+    """A registry lookup that blocks its thread until ``released``, as an Iris lookup retrying a dead controller does."""
+
+    released: threading.Event
+    calls: int = 0
+
+    def current(self) -> GlmEndpoint:
+        self.calls += 1
+        self.released.wait()
+        raise EndpointUnavailable("released")
+
+
+# Review 2026-11-21: the synchronous registry lookup, with its 1,800 s retry budget, ran on the event loop.
+def test_a_blocked_registry_lookup_is_bounded_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(glm_provider, "RESOLVE_TIMEOUT", 0.05, raising=False)
+    source = BlockingEndpoint(threading.Event())
+    retry = RetryPolicy(0.3, 0.01, 0.01, 1.0)
+
+    async def call() -> int:
+        ticks = 0
+
+        async def tick() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        ticker = asyncio.create_task(tick())
+        try:
+            async with provider(source) as glm:
+                with pytest.raises(ModelUnavailable):
+                    await ModelClient(glm, LIMITED, retry, role="author").complete(MESSAGES, LLMPolicy())
+        finally:
+            ticker.cancel()
+            source.released.set()
+        return ticks
+
+    assert asyncio.run(call()) >= 10
+    assert source.calls == 1
+
+
+class FailingRegistry:
+    """An Iris client whose controller answers every endpoint lookup with 503."""
+
+    def resolver_for_job(self, job: object) -> "FailingRegistry":
+        return self
+
+    def resolve(self, name: str) -> object:
+        raise ConnectError(Code.UNAVAILABLE, "controller returned 503")
+
+
+# Review 2026-11-21: a controller 503 during the lazy relay lookup escaped author inference as a raw ConnectError.
+def test_a_registry_outage_during_relay_lookup_is_an_unavailable_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wiring, "iris_ctx", lambda: SimpleNamespace(client=FailingRegistry()))
+    source = wiring.RelayEndpoint("/me/glm53-relay", "token", Pool.HIGH, GLM_MODEL)
+    retry = RetryPolicy(0.05, 0.01, 0.01, 1.0)
+
+    async def call() -> None:
+        async with provider(source) as glm:
+            await GlmInference(ModelClient(glm, LIMITED, retry, role="author"), "author").complete(request())
+
+    with pytest.raises(Restart, match="unavailable"):
+        asyncio.run(call())

@@ -39,6 +39,8 @@ class FakeGlm:
     health_workers: deque = field(default_factory=lambda: deque([{"high": 1, "bulk": 1}]))
     health_polls: int = 0
     health_status: int = 200
+    health_text: str | None = None
+    """A raw ``/health`` body in place of the JSON worker report."""
     released: threading.Event = field(default_factory=threading.Event)
 
     def stream(
@@ -115,7 +117,8 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             assert self.path == "/health"
-            self._send(fake.health_status, json.dumps({"status": "ok", "workers": fake.next_health()}), {})
+            report = json.dumps({"status": "ok", "workers": fake.next_health()})
+            self._send(fake.health_status, report if fake.health_text is None else fake.health_text, {})
 
         def do_POST(self) -> None:
             assert self.path == "/v1/chat/completions", self.path

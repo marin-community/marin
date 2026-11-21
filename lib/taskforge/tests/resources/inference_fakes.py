@@ -5,7 +5,7 @@
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -15,6 +15,7 @@ from taskforge.llm.client import (
     AttemptOutcome,
     ModelRequestRejected,
     ModelUnavailable,
+    Progress,
     Provider,
     Segment,
 )
@@ -97,11 +98,45 @@ HANG = "hang"
 """A healthy stream that never finishes."""
 
 
+class LoopTime:
+    """A fake clock that is also the running event loop's: ``sleep`` jumps both forward.
+
+    Loop deadlines, such as RolloutEngine's model-turn timeout, then expire at their virtual time while the test runs in
+    milliseconds. Construct it inside the test's event loop.
+    """
+
+    def __init__(self) -> None:
+        loop = asyncio.get_running_loop()
+        self.real, self.offset = loop.time, 0.0
+        loop.time = self.clock  # type: ignore[method-assign]
+
+    def clock(self) -> float:
+        return self.real() + self.offset
+
+    async def sleep(self, delay: float) -> None:
+        self.offset += delay
+        await asyncio.sleep(0)
+
+
+def generated(payload: str) -> bool:
+    """Whether a payload carries generated text, as ``GlmProvider`` decides it."""
+    deltas = [choice.get("delta") or {} for choice in json.loads(payload).get("choices") or ()]
+    return any(delta.get("content") or delta.get("reasoning") or delta.get("tool_calls") for delta in deltas)
+
+
+def report(progress: Progress, payload: str) -> None:
+    progress.event(payload, generated(payload))
+
+
+Act = Callable[[Progress], Awaitable[Segment]]
+"""A scripted attempt that drives its own events and time."""
+
+
 class ScriptedProvider(Provider):
     """Answers each attempt with the next script item; ``empty_pool`` answers each availability poll in turn."""
 
     def __init__(
-        self, script: Sequence[Segment | Fails | str], model: str = "test-model", empty_pool: Sequence[bool] = ()
+        self, script: Sequence[Segment | Fails | str | Act], model: str = "test-model", empty_pool: Sequence[bool] = ()
     ) -> None:
         self.script, self.name, self.empty_pool = tuple(script), model, list(empty_pool)
         self.bodies: list[Mapping[str, Any]] = []
@@ -114,15 +149,18 @@ class ScriptedProvider(Provider):
         return self.name
 
     @override
-    async def stream(self, body: Mapping[str, Any], events: list[str]) -> Segment:
+    async def stream(self, body: Mapping[str, Any], progress: Progress) -> Segment:
         item = self.script[len(self.bodies)]
         self.bodies.append(body)
         self.streaming.set()
         if item == HANG:
             await asyncio.Event().wait()
         if isinstance(item, Fails):
-            events.extend(item.events)
+            for payload in item.events:
+                report(progress, payload)
             raise AttemptFailed(item.outcome, item.detail, item.status)
+        if callable(item):
+            return await item(progress)
         assert isinstance(item, Segment)
         return item
 
