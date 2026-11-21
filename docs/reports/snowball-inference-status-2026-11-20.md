@@ -15,6 +15,79 @@ and recorded results. It contains 42 inference commits after the shared ancestor
 ancestor. This branch has not been rebased onto or qualified against that newer
 `main`.
 
+## AgentX on v5p-8, 2026-11-21
+
+Native Levanter served the BF16 Snowball 67B-A2B v0.1 checkpoint and completed
+the 64K AgentX diagnostic on one v5p-8. The comparison used four chips in
+`us-central1`, concurrency 1, a 180-second sending window, and a one-hour Iris
+job cap. Both runs used checkpoint and tokenizer revision
+`adc0078a19a4383bc998fcdb43867b3360baf5f3`, AgentX 1.0.12, and the same eight
+eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
+`16b554c33632fe702852ccc2d4382f34733fad3fae394179b3e0932eec0b13f2`.
+
+| Run | Completed requests | Output tokens | AgentX output tok/s | Active decode tok/s/user |
+| --- | ---: | ---: | ---: | ---: |
+| [Native, bounded attention tiles](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v5) | 2 | 1,008 | 4.80 | 9.17 |
+| [Native, vectorized prefill and clean shutdown](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v6) | 3 | 1,602 | 7.75 | 9.11 |
+| [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
+
+Reported throughput includes drain time. The second native run completed one
+request during drain and exited successfully. The first exported its metrics
+before an active batch triggered a libtpu shutdown abort. The
+`--unsafe-override` setting makes these diagnostics ineligible for leaderboard
+submission. Each run recorded two warmup errors and zero profiling errors.
+
+The native rerun's three completed turns appear in the vLLM export with the same
+output token counts. The longest had 45,502 input tokens on native and 45,500 on
+vLLM. It took 88.16 seconds end to end on native and 6.29 seconds on vLLM. Native
+used expert parallelism across four chips. vLLM used tensor parallelism across
+four chips and reported an 88.8% prefix-cache token hit rate. The latency
+percentiles summarize different numbers of completed requests.
+
+The initial 64K compile exhausted HBM in attention. The tiled FP32 attention
+path fit after bounding query and KV tile sizes. The original larger tiles also
+compiled with `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=60000`, and
+took 1.04 seconds on the synthetic long prefill. The bounded tiles took about
+0.82 seconds at 50,000 KiB. The native runs in the table use bounded tiles at
+50,000 KiB. [VMEM comparison](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v5p-vmem-20261121-v1)
+
+The serving fixes cover tiled attention, streamed usage, graceful shutdown,
+vectorized KV writes, and projection of sampled rows. [`2dd5eafffc`](https://github.com/marin-community/marin/commit/2dd5eafffc)
+
+Full-model learner replay parity remains open. Native active decode and
+reusable prefix cache support remain the main gaps exposed by the comparison.
+
+The short-window kernel now discards fully masked tiles while preserving the
+softmax tile boundaries. It matched the untrimmed kernel bit for bit in the
+packed-window test on v5p. With one decode query after a 51,870-token prefix,
+the compact 2,048-token window took 0.38 ms and full-context attention took
+1.35 ms on the same synthetic shape. [v5p kernel test](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v5p-window-20261121-v3)
+
+### Reproduce the native diagnostic
+
+Run from the inference branch and point `iris_client` and `iris_config` to
+the current Marin Iris client and its cluster config. Set `weights` to the
+regional checkpoint mirror and `workload` to the frozen workload receipt.
+Keep the weights and TPU worker in the same GCS region.
+
+```bash
+workload=gs://marin-us-central1/tmp/ttl=30d/agentx-workload/95f345f596f40f84b64cf57ad70cf53ea6493004a5ac71d6c24448da770b9fe2/workload.json
+"$iris_client" --config "$iris_config" job run --no-wait \
+  --job-name snowball-agentx-native-v5p8-64k-c1 \
+  --priority batch --region us-central1 --tpu v5p-8 --enable-extra-resources \
+  --cpu 32 --memory 340g --disk 80g --timeout 3600 --sync-package marin-core --extra tpu \
+  -e JAX_PLATFORMS tpu -e LIBTPU_INIT_ARGS '--xla_tpu_scoped_vmem_limit_kib=50000' \
+  -- uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
+  --weights "$weights" --workload "$workload"
+```
+
+Use `--profile-decode` to capture short and long warmed decode after the
+measurement. To rebuild an expired workload receipt on a CPU worker, run
+`python -m experiments.evaluation.knotmeter.workload` with the
+`experiments/evaluation/knotmeter/snowball-v01-tpu-64k.yaml` series, a fresh
+local output directory, and a region-local `--cache-root`. It writes the
+receipt to `workload.json` in that directory.
+
 ## What works
 
 - **Paged generation.** The real `InferenceEngine` handles heterogeneous causal
