@@ -35,10 +35,7 @@ from experiments.post_training.task_curation.datasets.bfcl_structure_closure.inp
 )
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.prefixes import near_boundary_case
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tasks import case_task
-from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tool_serialization import (
-    RESULT_TOOL,
-    native_tool_case,
-)
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tool_serialization import result_tool
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -53,7 +50,7 @@ def _load_tokenizer(root: StoragePath) -> PreTrainedTokenizerFast:
 
 @dataclass(frozen=True)
 class CaseReader:
-    """Expand the staged manifests and oracles into one case per source row."""
+    """Expand each selected oracle into structural completion rows."""
 
     split: Split
 
@@ -62,15 +59,13 @@ class CaseReader:
         tokenizer = _load_tokenizer(context.inputs["tokenizer"])
         for parent in parents:
             oracle = parent.verify(parent.staged_path(inventory_file).read_bytes())
-            for case in oracle_cases(parent.task, oracle, self.split):
-                if closure_format(case.family) == ClosureFormat.TOOL:
-                    case = native_tool_case(case, tokenizer)
+            for case in oracle_cases(parent.task, oracle, self.split, tokenizer):
                 yield asdict(near_boundary_case(case))
 
 
 def _convert_case(row: RawRow, _context: ConversionContext) -> TaskSpec:
     case = parse_case(row.data)
-    tools = (RESULT_TOOL,) if closure_format(case.family) == ClosureFormat.TOOL else ()
+    tools = (result_tool(),) if closure_format(case.family) == ClosureFormat.TOOL else ()
     return case_task(case, row.source, row.id, tools=tools)
 
 

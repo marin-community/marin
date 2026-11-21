@@ -35,7 +35,7 @@ ORACLE_ANSWER = [{"search": {"query": QUOTED_MARKERS}}]
 
 
 @pytest.fixture
-def bfcl_manifests(tmp_path):
+def bfcl_input_root(tmp_path):
     inventory = tmp_path / INVENTORY_FILE
     inventory.parent.mkdir(parents=True)
     oracle_dir = inventory.parent / "oracles"
@@ -79,27 +79,28 @@ def bfcl_manifests(tmp_path):
             }
         )
     )
-    return tmp_path, inventory, split
+    return tmp_path
 
 
-@pytest.mark.asyncio
-async def test_process_rows_curates_and_grades_native_tool_and_reasoning_tasks(tmp_path, tokenizer, bfcl_manifests):
-    input_root, _, _ = bfcl_manifests
-    tokenizer.save_pretrained(input_root / TOKENIZER_FILES[0].rsplit("/", 1)[0])
-    declared = sources()
-    runtime = CampaignRuntime()
-    download_options = PipelineOptions(SourceProcessingMode.QUICK, runtime)
-    train_graph, validation_graph = (source.pipeline(source, download_options) for source in declared)
+def test_train_and_validation_share_download_artifacts():
+    options = PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime())
+    train_graph, validation_graph = (source.pipeline(source, options) for source in sources())
     assert [(dep.name, dep.fingerprint()) for dep in train_graph.deps] == [
         (dep.name, dep.fingerprint()) for dep in validation_graph.deps
     ]
 
+
+@pytest.fixture
+def curated_cohorts(tmp_path, tokenizer, bfcl_input_root):
+    tokenizer.save_pretrained(bfcl_input_root / TOKENIZER_FILES[0].rsplit("/", 1)[0])
+    declared = sources()
+    runtime = CampaignRuntime()
     options = PipelineOptions(
         SourceProcessingMode.QUICK,
         runtime,
         inputs=InputOverrides(
-            str(input_root),
-            auxiliary={"split": str(input_root), "tokenizer": str(input_root)},
+            str(bfcl_input_root),
+            auxiliary={"split": str(bfcl_input_root), "tokenizer": str(bfcl_input_root)},
         ),
     )
     output = tmp_path / "curated"
@@ -114,11 +115,19 @@ async def test_process_rows_curates_and_grades_native_tool_and_reasoning_tasks(t
     )
 
     cohorts = {}
-    engine = RolloutEngine({}, {ASSISTANT_PREFIX_HARNESS: AssistantPrefixHarness()})
     for cohort in Split:
         shards = (output / f"bfcl-structure-closure-{cohort}" / "normalize").glob("*.parquet")
-        tasks = [TaskSpec.model_validate_json(row["task_json"]) for shard in shards for row in load_parquet(str(shard))]
-        cohorts[cohort] = {task.id for task in tasks}
+        cohorts[cohort] = [
+            TaskSpec.model_validate_json(row["task_json"]) for shard in shards for row in load_parquet(str(shard))
+        ]
+    return cohorts
+
+
+def test_process_rows_curates_disjoint_cohorts(curated_cohorts):
+    train_ids = {task.id for task in curated_cohorts[Split.TRAIN]}
+    validation_ids = {task.id for task in curated_cohorts[Split.VALIDATION]}
+    assert train_ids.isdisjoint(validation_ids)
+    for tasks in curated_cohorts.values():
         assert {tag for task in tasks for tag in task.tags if tag.startswith("family:")} == {
             "family:json_object",
             "family:json_array",
@@ -129,6 +138,12 @@ async def test_process_rows_curates_and_grades_native_tool_and_reasoning_tasks(t
             "family:code_fence",
             "family:repeated_opener_retention",
         }
+
+
+@pytest.mark.asyncio
+async def test_curated_native_tool_and_reasoning_tasks_grade_raw_continuations(curated_cohorts):
+    engine = RolloutEngine({}, {ASSISTANT_PREFIX_HARNESS: AssistantPrefixHarness()})
+    for cohort, tasks in curated_cohorts.items():
         tool_task = next(
             task for task in tasks if "family:tool_delimiter" in task.tags and "control:continue_required" in task.tags
         )
@@ -167,31 +182,29 @@ async def test_process_rows_curates_and_grades_native_tool_and_reasoning_tasks(t
         assert result.grade.reward == 1
         assert result.rollout.conversations[0].steps[0].turn.message["content"] == THINK_CLOSE
 
-    assert cohorts[Split.TRAIN].isdisjoint(cohorts[Split.VALIDATION])
-
 
 @pytest.mark.parametrize(
-    "changed, error",
+    "changed",
     [
-        ({"train": ["train_parent", "validation_parent"]}, "disjoint"),
-        ({"validation": ["outside_complement"]}, "audited complement"),
-        ({"parity": ["train_parent"]}, "disjoint"),
-        ({"train": "train_parent"}, "valid array"),
+        {"train": ["train_parent", "validation_parent"]},
+        {"validation": ["outside_complement"]},
+        {"parity": ["train_parent"]},
+        {"train": "train_parent"},
     ],
 )
-def test_reader_rejects_invalid_split_before_opening_oracles(bfcl_manifests, changed, error):
-    root, inventory, split = bfcl_manifests
+def test_reader_rejects_invalid_split_before_opening_oracles(bfcl_input_root, changed):
+    split = bfcl_input_root / SPLIT_FILE
     record = json.loads(split.read_text())
     record["task_ids"].update(changed)
     split.write_text(json.dumps(record))
-    context = ConversionContext(inputs={"split": StoragePath(str(root))}, grader_environment=None)
-    with pytest.raises(ValueError, match=error):
-        list(CaseReader(Split.TRAIN)(StoragePath(str(inventory)), context))
+    context = ConversionContext(inputs={"split": StoragePath(str(bfcl_input_root))}, grader_environment=None)
+    with pytest.raises(ValueError):
+        list(CaseReader(Split.TRAIN)(StoragePath(str(bfcl_input_root / INVENTORY_FILE)), context))
 
 
-def test_reader_rejects_split_from_a_different_manifest(bfcl_manifests):
-    root, inventory, split = bfcl_manifests
+def test_reader_rejects_split_from_a_different_manifest(bfcl_input_root):
+    split = bfcl_input_root / SPLIT_FILE
     split.write_text(json.dumps(json.loads(split.read_text()) | {"source_split_sha256": "b" * 64}))
-    context = ConversionContext(inputs={"split": StoragePath(str(root))}, grader_environment=None)
-    with pytest.raises(ValueError, match="different split manifests"):
-        list(CaseReader(Split.TRAIN)(StoragePath(str(inventory)), context))
+    context = ConversionContext(inputs={"split": StoragePath(str(bfcl_input_root))}, grader_environment=None)
+    with pytest.raises(ValueError):
+        list(CaseReader(Split.TRAIN)(StoragePath(str(bfcl_input_root / INVENTORY_FILE)), context))

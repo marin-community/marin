@@ -7,17 +7,14 @@ import pytest
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import Split, task_cases
-
 
 @pytest.fixture
 def tokenizer():
-    cases = task_cases("sample_task", [{"search": {"query": 'quote=" slash=\\'}}], Split.TRAIN, "source")
     backend = Tokenizer(models.BPE())
     backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     backend.decoder = decoders.ByteLevel()
     backend.train_from_iterator(
-        [case.expected for case in cases],
+        ['<tool_call>{"name": "write_result"}</tool_call>'],
         trainers.BpeTrainer(vocab_size=400, initial_alphabet=pre_tokenizers.ByteLevel.alphabet()),
     )
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend)
