@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Run status last checked November 20, 2026 at 8:23 p.m. PST.
+Draft for review. H100 task admission last checked November 20, 2026 at 8:32 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,14 +16,16 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | --- | --- | --- |
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. The live child ends in `afd506ffbac0`. All five tasks are scheduling-gated. At 8:10 p.m., Kueue reported a shortfall of 22 GPUs and 22 InfiniBand allocations. The tasks were still gated at 8:23 p.m. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| Learner on current `main` | Local ports cover the SPMD policy core, Snowball precision and rotary positions, and the JAX worker with one- and two-process checkpoint coverage. | Complete the SkyRL host adapter and a synchronous BATCH preset. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. The live child ends in `afd506ffbac0`. All five tasks are scheduling-gated. At 8:32 p.m., Kueue reported a shortfall of 17 GPUs and 17 InfiniBand allocations. There are no GPU execution receipts for this child. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native paged decode on current `main` | The local port matches greedy sequences from teacher forcing on heterogeneous prompts and matches mixed local/global paged logits within the existing tolerance. The focused suite passed on one and four CPU devices. | Port capture and replay, then repeat the bounded accelerator gate. |
+| Native online loop on current `main` | The local prototype completed both updates on one and four CPU devices. Each run consumed eight binary frames and sampled 128 tokens. The second rollout used the exact first published weight fingerprint. The maximum sampled-to-learner logprob difference was `4.06e-6`. | Run the four-TPUv4 gate and compare the current scorer to the prior bitwise fixture. |
 | Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
-| Typed binary protocol | The existing learner pipe uses binary pickle, expert-block publication uses binary NCCL and the replay prototype uses JSON metadata plus safetensors. | Implement the first typed binary transport for native rollout evidence. Migrate the learner pipe after learner acceptance. |
+| Typed binary protocol | The local native loop uses protobuf metadata and binary tensor buffers end to end between generation and learner batching. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Qualify cross-process native transport with bounded flow control, then migrate the learner pipe after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
-[Snowball qualification report][snowball-status] · [Historical quick-loop timing][timing]
+[Native TPUv4 fixture][iris-native] · [Snowball qualification report][snowball-status] ·
+[Historical quick-loop timing][timing]
 
 ## Desired system
 
@@ -196,6 +198,22 @@ policy configuration. The original preflight verified the input artifact.
 A fresh preflight from the current shell reached the selection metadata check
 and requires the regional object-store credentials.
 
+Current `main` uses the `experiments.post_training.rl` runner and named
+Snowball presets. Add a dedicated synchronous BATCH preset for the native
+learner with native checkpoint output. The existing `learning-medium`
+preset uses asynchronous rollouts, truncated importance sampling and HF
+export. Those features each need explicit learner support before carrying
+the new strategy into that preset. [Preset migration][preset-migration]
+
+A local two-process CPU run exposed a native Gloo write to stdout before
+the worker's protocol reply. Python's stdout redirection leaves native
+file descriptor writes on the frame stream. The current-main worker port
+separates those descriptors and passes the same checkpoint test. The frozen
+H100 source still has the original pipe setup. If startup reports a frame
+read error before initialization, inspect the first worker exception
+before attributing later rendezvous failures. GPU execution has yet to
+exercise this path.
+
 [Exact smoke and comparison recipes][learner-status] ·
 [Frozen checkpoint validation code][frozen-worker]
 
@@ -206,6 +224,10 @@ fixture arithmetic in reviewable slices onto current `main`. Reconcile
 Snowball attention, model and loss changes with the learner branch. The
 snapshot is 766 commits behind the `main` used for this design, and includes
 unrelated Hero and Iris changes. [Source comparison][snowball-compare]
+
+The bounded native job was submitted on source `158bd86404` as one BATCH
+`v4-8` slice with four TPUv4 chips. The job archives its binary trajectory
+frames and update receipts in the Iris task output. [Native TPUv4 fixture][iris-native]
 
 Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
 and a deterministic grader with mixed rewards within a group. Submit four
@@ -278,3 +300,5 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 [batch-bridge]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/vendor/skyrl/skyrl-train/skyrl_train/workers/levanter_batch.py#L46-L74
 [engine-replay]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/inference/snowball_engine_replay.py#L32-L42
 [rloo]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/utils/advantage_estimators.py#L176-L289
+[preset-migration]: https://github.com/marin-community/marin/pull/10740
+[iris-native]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-binary-proof-20261120-01
