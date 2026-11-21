@@ -161,11 +161,6 @@ function sourceRow(row, others, canonical) {
     const name = node('td'), open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open);
-    if (row.consumer_findings?.length) {
-      const flag = node('span', 'Consumer advisory', 'chip');
-      flag.title = row.consumer_findings.join(', ');
-      name.append(flag);
-    }
     if (others.length) {
       const groupId = row.duplicate_group.group_id, expanded = expandedGroups.has(groupId);
       const toggle = node('button', expanded ? '▾' : '▸', 'text-button duplicate-toggle');
@@ -205,6 +200,12 @@ function sourceRow(row, others, canonical) {
     const updated = node('td', day(row.updated_at), 'date-cell');
     updated.title = row.updated_at ? 'Load time of the selected catalog snapshot (UTC)' : 'Catalog load time unavailable';
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
+    if (row.consumer_findings?.length) {
+      const flag = node('span', ' ⚑', 'consumer-advisory');
+      flag.setAttribute('aria-hidden', 'true'); link.append(flag);
+      link.title = `Consumer advisory: ${row.consumer_findings.join(', ')}`;
+      link.setAttribute('aria-label', 'Evidence: consumer advisory');
+    }
     const contamination = contaminationCell(row);
     const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty, row.id));
     const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row, state.daytonaLimit));
