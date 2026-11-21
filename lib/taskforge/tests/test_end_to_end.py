@@ -566,26 +566,29 @@ async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
 
 
 @pytest.mark.parametrize(
-    "artefact, found",
+    "artefact, written, found",
     [
-        ("events.jsonl", "format 1"),
-        ("events.jsonl.parts/000000000001.jsonl", "format 1"),
-        ("status.json", "format 1"),
-        ("workpiece.json", "format 1"),
-        (HEAD, "format 3"),
+        ("events.jsonl", 1, "format 1"),
+        ("events.jsonl.parts/000000000001.jsonl", 1, "format 1"),
+        ("status.json", 1, "format 1"),
+        ("workpiece.json", 1, "format 1"),
+        # The version gate refuses every format but its own: the n3 reader, at format 2, refuses this one's heads.
+        (HEAD, checkpoint.JOURNAL_FORMAT - 1, f"format {checkpoint.JOURNAL_FORMAT - 1}"),
+        (HEAD, checkpoint.JOURNAL_FORMAT + 1, f"format {checkpoint.JOURNAL_FORMAT + 1}"),
     ],
 )
 async def test_driver_fails_closed_on_another_journal_format_without_touching_it(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, artefact: str, found: str
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, artefact: str, written: int, found: str
 ) -> None:
     """Format 1 wrote parts and sidecars before its consolidated stream; any one of them marks the root."""
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     (destination / artefact).parent.mkdir(parents=True)
-    (destination / artefact).write_text(json.dumps({"format": 3, "sequence": 1}) + "\n")
+    (destination / artefact).write_text(json.dumps({"format": written, "sequence": 1}) + "\n")
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(LogFailure, match=f"journal {found}"):
+    with pytest.raises(LogFailure, match=f"journal {found}") as raised:
         await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert tree(destination) == before
 
 
@@ -678,11 +681,11 @@ FINISHED = {"stage": "review", "round": 1, "terminal": "accepted"}
         ({"format": 3.0}, None, driver.CORRUPT),
         ({"format": 2.0}, None, driver.CORRUPT),
         ({"format": True}, None, driver.CORRUPT),
-        ({"format": 3}, None, driver.NEEDS_MIGRATION),
+        ({"format": 4}, None, driver.NEEDS_MIGRATION),
         ({"status": FINISHED, "workpiece": None}, None, driver.CORRUPT),
         ({}, MALFORMED_REQUEST, driver.CORRUPT),
     ],
-    ids=["string", "float", "float 2", "bool", "format 3", "finished without workpiece", "resolved without request"],
+    ids=["string", "float", "float 2", "bool", "format 4", "finished without workpiece", "resolved without request"],
 )
 async def test_driver_refuses_a_damaged_head_or_history_before_skipping_or_claiming(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: dict[str, object], event: object, code: int
@@ -693,7 +696,7 @@ async def test_driver_refuses_a_damaged_head_or_history_before_skipping_or_claim
     chunks = (hashlib.sha256(events).hexdigest() + ".jsonl",) if events else ()
     for name in chunks:
         (destination / "chunks" / name).write_bytes(events)
-    head = HEAD_JSON.dump_python(Head(2, "earlier", chunks, len(events), Status(), None, 0.0), mode="json")
+    head = HEAD_JSON.dump_python(Head(checkpoint.JOURNAL_FORMAT, "earlier", chunks, len(events), Status(), None, 0.0), mode="json")
     (destination / HEAD).write_text(json.dumps({**head, **change}))
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
@@ -1205,7 +1208,7 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     name = hashlib.sha256(torn).hexdigest() + ".jsonl"
     (roots["corrupt"] / "chunks").mkdir(parents=True)
     (roots["corrupt"] / "chunks" / name).write_bytes(torn)
-    head = Head(2, "earlier", (name,), len(torn), Status(), None, 0.0)
+    head = Head(checkpoint.JOURNAL_FORMAT, "earlier", (name,), len(torn), Status(), None, 0.0)
     (roots["corrupt"] / HEAD).write_bytes(HEAD_JSON.dump_json(head))
     corrupt = tree(roots["corrupt"])
     workdir = Path(driver_args.work_dir) / driver.proposal_key(str(paths["superseded"]))
@@ -1542,25 +1545,48 @@ async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated
 N3_JOURNAL = Path(__file__).parent / "fixtures" / "n3-held-drift.jsonl.gz"
 
 
-async def test_a_journal_whose_sandbox_rows_name_no_owner_needs_migration_and_stays_untouched(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The fixture is the journal the n3 dispatch (e5ec5eba21) published for the held first launch of
-    ``held_after_stamp``: its sandbox rows carry no owner references, so which machine owned each result is lost."""
-    events = gzip.decompress(N3_JOURNAL.read_bytes())
+def plant(driver_args: Namespace, events: bytes, journal_format: int) -> Path:
+    """Publish ``events`` as a held root under a head of ``journal_format``, as another writer would."""
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     (destination / "chunks").mkdir(parents=True)
     chunk = hashlib.sha256(events).hexdigest() + ".jsonl"
     (destination / "chunks" / chunk).write_bytes(events)
     workpiece = hashlib.sha256(b"{}").hexdigest() + ".json"
-    head = Head(2, "n3", (chunk,), len(events), Status(terminal=Terminal.HELD), workpiece, 0.0)
+    head = Head(journal_format, "other", (chunk,), len(events), Status(terminal=Terminal.HELD), workpiece, 0.0)
     (destination / HEAD).write_bytes(HEAD_JSON.dump_json(head))
+    return destination
+
+
+def before_first_environment_outcome(events: bytes) -> bytes:
+    lines = events.splitlines(keepends=True)
+    records = decode(events)
+    cut = next(n for n, r in enumerate(records) if isinstance(r.event, Resolved) and r.event.request.kind.startswith("env."))
+    return b"".join(lines[:cut])
+
+
+# Review 2026-11-20: the n3 reader claimed a positional journal under the same format number, ignoring its owners.
+@pytest.mark.parametrize(
+    "events",
+    [
+        gzip.decompress(N3_JOURNAL.read_bytes()),
+        gzip.decompress(N4_JOURNAL.read_bytes()),
+        before_first_environment_outcome(gzip.decompress(N4_JOURNAL.read_bytes())),
+    ],
+    ids=["n3 dispatch", "positional rows", "interrupted before its first environment outcome"],
+)
+async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
+) -> None:
+    """The n3 fixture is the journal the n3 dispatch (e5ec5eba21) published for the held first launch of
+    ``held_after_stamp``; the positional one is ``N4_JOURNAL``, which an earlier revision published as format 2."""
+    destination = plant(driver_args, events, 2)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
-    with pytest.raises(LogFailure, match="without an owner") as raised:
+    with pytest.raises(LogFailure, match=f"has journal format 2; this reader reads {checkpoint.JOURNAL_FORMAT}") as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
+    assert f"journal format {checkpoint.JOURNAL_FORMAT}" in driver.OUTCOMES[driver.NEEDS_MIGRATION][1]
     assert tree(destination) == before
 
 
