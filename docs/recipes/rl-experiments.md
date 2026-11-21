@@ -273,7 +273,9 @@ The gate writes `gate_report.json` and `gate_report.md`. Status prints verdict, 
 path, followed by the Markdown tables of objectives, guards, invariants and reported statistics.
 JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `slice` roles.
 `run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
-explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
+explicit settings and derived differences. The gate estimates GPU-hours from the configured GPU count and the
+time from the first recorded workload start to native job completion. The window includes restarts within the
+same attempt and excludes queue time before the first workload start.
 
 Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, revision and
 replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
