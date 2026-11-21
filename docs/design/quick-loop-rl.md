@@ -19,9 +19,9 @@ results. Use a typed binary protocol for internal rollout and learner traffic.
 | Learner on current `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a1029950e470`. All five tasks were still scheduling-gated at 9:31 p.m. The last detailed diagnostic showed a shortfall of one GPU and one InfiniBand allocation. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. Serving used paged inference and the fixture used an unfused loss. | Port the required code to current `main`, keep that numerical gate reproducible, then run two closed RL updates. |
-| Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. Eight binary frames covered 128 tokens, and the second rollout used the exact first published weight fingerprint. | Connect the native backend to the rollout service and prove the binary process boundary. |
-| Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. | Verify multi-rank weight installation, real tool turns, full checkpoint and production context, then run the matched serving comparison. |
-| Typed binary protocol | The local native loop uses protobuf metadata and binary tensor buffers end to end between generation and learner batching. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Qualify cross-process native transport with bounded flow control, then migrate the learner pipe after learner acceptance. |
+| Native online loop on current `main` | Two updates passed on four TPUv4 chips with queued generation and local cache installation. Eight binary frames covered 128 tokens, and the second rollout used the exact first published weight fingerprint. | Connect the native backend to the rollout service and exercise publication across process boundaries. |
+| Native inventory backend | The branch contains a portable route payload and paged decode. Against one-token decode chunks, 32-token chunks cut finite-batch latency by 3.54× on the long fixture and 1.79× on the mixed fixture. A bounded CPU model/tool/model probe now passes. | Validate tool turns through the deployed adapter, multi-rank weight installation, full checkpoint and production context, then run the matched serving comparison. |
+| Typed binary protocol | Separate Snowball serving and learner processes exchanged four protobuf and binary tensor frames and replayed all 64 sampled targets on the CPU fixture. The existing learner pipe uses binary pickle, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the native service boundary. Migrate the learner pipe after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
 [First TPUv4 attempt][iris-native] · [TPUv4 queue and cache proof][iris-native-install] ·
@@ -161,6 +161,14 @@ environments, exact token and tensor bytes, invalid lengths and versions,
 stale policy identities, truncated frames and restart after publication.
 [Current learner pipe][worker-pipe] · [Current replay encoding][replay]
 
+A local process-boundary proof at `9fc0fd8afd` sent four generated frames
+through a Unix socket with one unacknowledged frame at a time. A separate
+learner validated frame integrity and policy identity, rebuilt the graded
+batch, and reproduced its scores on a second pass. The 64 sampled raw
+rollout scores agreed with the learner to `4.29e-6` on four CPU devices.
+The fixture uses one policy version. Cross-process installation and service
+integration remain open.
+
 ## Implementation and acceptance
 
 ### 1. Qualify the Levanter learner on H100
@@ -193,11 +201,11 @@ it is queued and follow the coordinator if Iris retries the child.
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
 
-Both 25-update recipes render with publication verification. Their only
-rendered differences are the learner strategy, batch builder and Levanter
-policy configuration. The original preflight verified the input artifact.
-A fresh preflight from the current shell reached the selection metadata check
-and requires the regional object-store credentials.
+Both 25-update recipes passed read-only preflight on the frozen source
+against the regional task selection. Megatron uses version `2026.11.20.6`
+and Levanter uses `2026.11.20.7`. Both enable publication verification.
+The trainer differences are the learner strategy, batch builder and
+Levanter policy configuration. Submission follows smoke acceptance.
 
 Current `main` uses the `experiments.post_training.rl` runner and named
 Snowball presets. The local port adds `levanter-smoke`, `learner-control`
@@ -274,8 +282,9 @@ scoring modes. Each run decoded eight binary frames and verified the
 full-vocabulary profile and fused forward diagnostic on four TPUv4 chips.
 The three installed weight digests were distinct, the second group
 used step 1, and the 128 sampled scores matched within `4.29e-6`. This
-qualifies fresh local KV state across updates. Multi-rank publication and an
-external serving process remain open. [TPUv4 queue and cache proof][iris-native-install]
+qualifies fresh local KV state across updates. Multi-rank publication and
+serving installation across process boundaries remain open.
+[TPUv4 queue and cache proof][iris-native-install]
 
 The integrated proof archive is
 `gs://marin-us-central2/users/dlwh/quick-loop-rl/native-proof/2026.11.20.03/outputs.tar.zst`.
@@ -283,9 +292,11 @@ Its SHA-256 is `dfe5aadfd44f1d3c3111474cb5a8a528d0b55078df9b166b30dd8727c8e5d1c1
 [Integrated proof archive in Filer][native-install-archive]
 
 The maintained learner and native ports share the SPMD policy scorer and
-learner commit `d52fd47db5`. Reconcile the overlapping Snowball model and
-attention changes from that base. Preserve the learner's explicit positions
-and attention precision and the inference port's paged and replay paths.
+learner commit `d52fd47db5`. A local merge at `fe0bb85486` preserves the
+learner's explicit positions and attention precision alongside the native
+paged and replay paths. On four CPU devices its two scoring profiles
+produced the same tokens, scores and installed weight digests as the native
+parent. The capture format still requires contiguous valid request positions.
 
 Start with the supported four-row, 256-token TPUv4 layout, a single-turn task
 and a deterministic grader with mixed rewards within a group. Submit four
@@ -311,12 +322,20 @@ without reconstructing sampled text. [Batch bridge][batch-bridge] ·
 - Connect the native backend to the RolloutEngine operations used by the
   recipe. Use SkyRL's exact-token chat continuation helper to retain the
   first assistant turn's served tokens and append only the rendered boundary
-  and tool suffix. Prove one actual model/tool/model rollout end to end.
-  Retain both turns' sampled IDs and raw scores, cover the full causal prefix
-  with routes indexed by predictor position, and put zero objective weight
-  on tool observations. Reject a continuation when its served prefix or
-  policy identity disagrees. Then exercise tool and infrastructure failure
-  masks and a restart at the publication boundary. [Exact chat continuation][chat-continuation]
+  and tool suffix. A local probe at `1c34b22a42` sampled an arithmetic tool
+  call from a tiny Snowball model, dispatched the real tool through
+  RolloutEngine and fed its observation into a second model turn. On one
+  and four CPU devices, learner replay matched both turns' raw scores and
+  gave every added tool or boundary token zero objective gradient. Both
+  frames used the same acknowledged installed policy.
+- Use the exact prompt IDs from SkyRL's chat model client as native
+  `Request.prompt_tokens`. Pass a binary replay frame or reference through
+  the model client and turn record to learner batch assembly. Retain both
+  turns' sampled IDs and raw scores and cover the full causal prefix with
+  routes indexed by predictor position. Reject a continuation when its
+  served prefix or policy identity disagrees. Qualify this through the
+  deployed adapter, then exercise tool and infrastructure failure masks
+  and a restart at the publication boundary. [Exact chat continuation][chat-continuation]
 - Load the pinned 67B checkpoint on the intended serving hardware. Qualify
   real context and batch sizes, expert sharding, precision, peak memory,
   compile time and sustained serving. Measure serve/score drift under the
