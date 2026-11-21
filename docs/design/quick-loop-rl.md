@@ -691,8 +691,10 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   installed v0 through v2, rejected stale requests after both updates and
   generated and evaluated under v2. The two-host TPUv4 replay reached the
   learner host, then timed out scheduling the serving host before the
-  cross-host proof began. Production-context memory remains to be qualified.
-  [TPUv4 tool-turn restart run][iris-native-tool-restart-tpu]
+  cross-host proof began. A retry with the same source requests both hosts
+  together in one zone. Production-context memory remains to be qualified.
+  [TPUv4 tool-turn restart run][iris-native-tool-restart-tpu] ·
+  [TPUv4 gang retry][iris-native-tool-gang-tpu]
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
   prompt IDs from SkyRL's chat client and binds the returned binary frame to
   the controller's expected policy identity. The turn records carry those
@@ -852,6 +854,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-cross-host]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-12
 [iris-native-tool-turn-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-turn-tpu-20261121-26
 [iris-native-tool-restart-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-restart-tpu-20261121-27
+[iris-native-tool-gang-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-gang-tpu-20261121-28
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
