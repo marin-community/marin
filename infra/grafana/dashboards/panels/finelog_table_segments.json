@@ -1,0 +1,69 @@
+{
+  "type": "table",
+  "title": "Finelog hub table segments",
+  "description": "Each hub table's segment, row and byte counts from ListNamespaces. A count that keeps growing means compaction is behind flushes; FinelogSegmentBacklog fires at the threshold in src/segment_backlog.py.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "byte_size"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "bytes"
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "sortBy": [
+      {
+        "displayName": "segment_count",
+        "desc": true
+      }
+    ]
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/table_segments",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "namespace",
+          "text": "namespace",
+          "type": "string"
+        },
+        {
+          "selector": "segment_count",
+          "text": "segment_count",
+          "type": "number"
+        },
+        {
+          "selector": "row_count",
+          "text": "row_count",
+          "type": "number"
+        },
+        {
+          "selector": "byte_size",
+          "text": "byte_size",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

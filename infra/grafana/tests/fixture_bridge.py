@@ -300,6 +300,16 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         ]
     if path == "/iris/marin/jobs":
         return [{"job": job} for job in ("/alice/llama", "/bob/eval", "/carol/embed", "/ops/loader", "/dave/train")]
+    if path == "/finelog/marin/table_segments":
+        return [
+            {
+                "namespace": namespace,
+                "segment_count": segments,
+                "row_count": segments * 40_000,
+                "byte_size": segments << 22,
+            }
+            for namespace, segments in (("log", 2_780), ("levanter.metrics", 2_132), ("iris.task", 328))
+        ]
     if path == "/finelog/marin/fleet_health":
         return [
             {

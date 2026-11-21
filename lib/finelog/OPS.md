@@ -739,7 +739,9 @@ and `index_artifacts`. While compaction still has runs left, the cycle skips the
 A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
 waited for a slot` reporting waits of many minutes, means compaction is falling
 behind flushes. Reads then open every L0 because an L0
-spans the whole key range.
+spans the whole key range. On the marin hub the Grafana rule `FinelogSegmentBacklog` fires
+on this count, and the Clusters dashboard lists it per table; see
+[`infra/grafana/README.md`](../../infra/grafana/README.md#alerting).
 
 `slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
 for one turn, with its source cursor range, row count, chunk count, and encoded
