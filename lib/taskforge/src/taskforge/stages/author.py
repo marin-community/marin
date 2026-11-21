@@ -7,19 +7,20 @@ import json
 from functools import partial
 from pathlib import PurePosixPath
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.lowering import host_requirements, lowering_settings, requirements
-from taskforge.model.controls import CONTROL, CONTROLS
+from taskforge.model.controls import CONTROLS
 from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
+from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import (
     Env,
@@ -35,14 +36,18 @@ from taskforge.resources.env import (
 from taskforge.resources.execution import close_resource
 from taskforge.stages.summary import validation_path
 
+# The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
+# wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
+AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v1.json"
+
+
+def author_reference() -> str:
+    """The pinned reference in the compact form the system prompt embeds."""
+    return json.dumps(json.loads(AUTHOR_REFERENCE.read_text()), sort_keys=True, separators=(",", ":"))
+
 
 def system_prompt(policy: Policy) -> str:
-    """Render the author reference from the current task and control schemas."""
-    reference = json.dumps(
-        {"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    """Render the author's system prompt around the pinned task and control reference."""
     environments = tuple(
         environment.model_dump(mode="json", include={"docker_image", "command_semantics"})
         for environment in (
@@ -55,7 +60,7 @@ def system_prompt(policy: Policy) -> str:
         "Python 3.12 Debian container" if image == GRADER_BASE_IMAGE else ("container" if image else "ShellSim")
     )
     return policy.prompt("author.system").render(
-        reference=reference,
+        reference=author_reference(),
         environment=environment,
         author_image=image or "none (ShellSim)",
         workdir=policy.setting("author.workdir", str),
