@@ -48,7 +48,7 @@ from taskforge.effects.issues import ContextExceeded, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
-from taskforge.harness.tools.evidence import Evidence, ReadTool, SearchTool, Source
+from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ListTool, ReadTool, SearchTool, Source
 from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
@@ -752,3 +752,35 @@ def test_a_file_s_mode_and_build_inputs_are_evidence() -> None:
     assert len({plain.version, executable.version, rebased.version}) == 3
     assert '"mode": "0755"' in executable.sources["resource/verifier/check.sh"].summary
     assert rebased.sources["resource/actor_build/Dockerfile"].parts == ("FROM b:1",)
+
+
+async def listing(index: Evidence) -> list[str]:
+    """Every listing page from the first, following each continuation; each page must advance and fit a reply."""
+    tool, out, start, offset = ListTool(index), [], 0, 0
+    while True:
+        out.append(page := text(await tool(Context(log=EventLog()), {"start": start, "offset": offset})))
+        assert len(page) <= index.output_chars
+        if (more := re.search(r"list_evidence start=(\d+)(?: offset=(\d+))?\]$", page)) is None:
+            return out
+        assert (int(more.group(1)), int(more.group(2) or 0)) > (start, offset)
+        start, offset = int(more.group(1)), int(more.group(2) or 0)
+
+
+async def test_every_listed_address_is_recoverable_at_the_smallest_cap() -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P2): at cap 240 a 187-character resource address was cut to 119 characters
+    and the listing's continuation reported zero sources left. A summary longer than a page continues within itself."""
+    path = "/".join(["deeply-nested-directory"] * 7) + "/check.sh"
+    index = evidence(with_resources(verifier=((path, b"exit 0\n"),)), TRIALS, 2 * PAGE_ROOM)
+    joined = "".join(re.sub(r"\n?\[(\d+ more sources|source \d+ continues).*$", "", p) for p in await listing(index))
+    for source in index.sources.values():
+        assert source.summary in joined
+    assert f"resource/verifier/{path}" in joined
+
+
+def test_a_cap_too_small_for_an_evidence_page_is_refused_when_wired() -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P2): caps under 240 failed only after paid work, even when no trial left
+    any evidence. The configuration is refused before a run starts, naming the key; zero trials still skip."""
+    with pytest.raises(ValueError, match=r"tools\.output_chars 239 .* at least 240"):
+        build_config(load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": 239}), {})
+    build_config(load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": 240}), {})
+    assert evidence(SUBMISSION, (), 1).sources

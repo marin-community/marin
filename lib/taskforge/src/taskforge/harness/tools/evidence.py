@@ -23,6 +23,8 @@ from taskforge.model.review import Attribution, Citation, ReviewEnd, ReviewFindi
 
 PAGE_ROOM = 120
 """Characters each reply keeps free for its continuation line; headers are counted against the page itself."""
+MIN_OUTPUT_CHARS = 2 * PAGE_ROOM
+"""The smallest tool-output cap that leaves a page of evidence beside its continuation line."""
 SEARCH_CONTEXT = 120
 TRIAL, TASK, RESOURCE = "trial/", "task/", "resource/"
 """Address namespaces: solver trials, the task's own documents, and resources by group."""
@@ -44,10 +46,6 @@ class Evidence:
     sources: Mapping[str, Source]
     unpassed: frozenset[int]
     output_chars: int
-
-    def __post_init__(self) -> None:
-        if self.output_chars < 2 * PAGE_ROOM:
-            raise ValueError(f"tools.output_chars {self.output_chars} leaves no room for a page of evidence")
 
     @property
     def version(self) -> str:
@@ -73,16 +71,28 @@ def bounded(lines: Iterable[str], chars: int, more: Callable[[int, int], str]) -
     return "\n".join(out)
 
 
-def source_listing(evidence: Evidence, start: int = 0) -> str:
-    """The source summaries from number ``start`` that fit in a reply, naming where a longer listing continues."""
-    summaries = [source.summary for source in evidence.sources.values()][start:]
-    more = lambda after, left: f"[{left} more sources: list_evidence start={start + after}]"  # noqa: E731
-    return bounded(summaries, evidence.output_chars, more) or "No more sources"
+def source_listing(evidence: Evidence, start: int = 0, offset: int = 0) -> str:
+    """The source summaries from number ``start``, ``offset`` characters into it, that fit in a reply, naming where a
+    longer listing continues; a summary longer than a page continues within itself, so no address is ever lost."""
+    summaries = [source.summary for source in evidence.sources.values()]
+    out, room = [], evidence.output_chars - PAGE_ROOM
+    for index in range(start, len(summaries)):
+        skip = offset if index == start else 0
+        text = summaries[index][skip:]
+        if len(text) + 1 <= room:
+            out.append(text)
+            room -= len(text) + 1
+        elif out:
+            return "\n".join((*out, f"[{len(summaries) - index} more sources: list_evidence start={index}]"))
+        else:
+            return f"{text[:room]}\n[source {index} continues: list_evidence start={index} offset={skip + room}]"
+    return "\n".join(out) or "No more sources"
 
 
 @dataclass(frozen=True, slots=True)
 class ListArgs:
     start: int = 0
+    offset: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,13 +101,13 @@ class ListTool(ValidatedTool[ListArgs]):
     name = "list_evidence"
     description = (
         "List the evidence sources (each solver trial, then each task file) with their sizes and summaries, from "
-        "source number `start`; a long listing names where it continues."
+        "source number `start`, `offset` characters into its summary; a long listing names where it continues."
     )
     args_type = ListArgs
 
     @override
     async def run(self, ctx: Context, args: ListArgs) -> ToolResult:
-        return ToolResult(source_listing(self.evidence, max(args.start, 0)))
+        return ToolResult(source_listing(self.evidence, max(args.start, 0), max(args.offset, 0)))
 
 
 @dataclass(frozen=True, slots=True)

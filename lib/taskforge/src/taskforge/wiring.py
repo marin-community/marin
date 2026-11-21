@@ -34,6 +34,7 @@ from taskforge.effects.issues import Hold
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.role import Role
 from taskforge.harness.tools import adversary_tools, standard_tools
+from taskforge.harness.tools.evidence import MIN_OUTPUT_CHARS
 from taskforge.llm.client import ContextExhausted, GenerationTimedOut, ModelClient, Provider
 from taskforge.llm.glm_provider import (
     CONNECT_TIMEOUT,
@@ -345,6 +346,10 @@ def build_config(
         )
     if (revisions := policy.setting("adversary.max_revisions", int)) < 0:
         raise ValueError(f"adversary.max_revisions must be at least 0, not {revisions}")
+    if (chars := policy.setting("tools.output_chars", int)) < MIN_OUTPUT_CHARS:
+        raise ValueError(
+            f"tools.output_chars {chars} leaves no page of evidence for solve_review: at least {MIN_OUTPUT_CHARS}"
+        )
     settings = lowering_settings(policy)
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
