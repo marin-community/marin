@@ -8,7 +8,8 @@ import pytest
 from taskcompendium.models import TaskSpec
 
 from taskforge.model.controls import CONTROL
-from taskforge.policy.defaults import DEFAULT_POLICY
+from taskforge.policy import load_policy
+from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.stages.author import AUTHOR_REFERENCE, author_reference, system_prompt
 
 # sha256 of the reference d8c26e50ba rendered live from TaskSpec and CONTROL: what recorded author requests embed.
@@ -41,15 +42,15 @@ def differences(pinned: object, installed: object, path: str = "$") -> list[str]
 def test_author_is_shown_the_v1_reference_bytes() -> None:
     reference = author_reference()
     assert hashlib.sha256(reference.encode()).hexdigest() == V1_DIGEST
-    assert reference in system_prompt(DEFAULT_POLICY)
+    assert reference in system_prompt(load_policy(DEFAULTS_DIR))
 
 
 def test_a_reworded_field_description_leaves_the_author_prompt_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    before = system_prompt(DEFAULT_POLICY)
+    before = system_prompt(load_policy(DEFAULTS_DIR))
     reworded = TaskSpec.model_json_schema()
     reworded["$defs"]["JsonAnswer"]["description"] = "The answer field, reworded."
     monkeypatch.setattr(TaskSpec, "model_json_schema", lambda *_args, **_kwargs: reworded)
-    assert system_prompt(DEFAULT_POLICY) == before
+    assert system_prompt(load_policy(DEFAULTS_DIR)) == before
 
 
 def test_pinned_reference_has_the_installed_schema_shapes() -> None:
