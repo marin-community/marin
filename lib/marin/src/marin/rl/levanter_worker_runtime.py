@@ -3,6 +3,7 @@
 
 """Native Snowball policy learner, isolated from the SkyRL Torch runtime."""
 
+import argparse
 import asyncio
 import contextlib
 import ctypes
@@ -478,18 +479,22 @@ class NativePolicyRuntime:
 
 
 def main() -> None:
-    # Preserve a binary protocol stream while third-party logging/prints go to
-    # the host worker's stderr. A failed operation terminates this learner.
-    if sys.platform == "linux":
-        parent = os.getppid()
-        # Ray kills failed actors without running their cleanup hooks. Kernel
-        # delivery prevents the learner from retaining GPUs after its owner dies.
-        if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM) != 0:
-            raise OSError(ctypes.get_errno(), "Could not bind learner lifetime to its Ray worker")
-        if os.getppid() != parent:
-            return
-    incoming, outgoing = sys.stdin.buffer, sys.stdout.buffer
-    with contextlib.redirect_stdout(sys.stderr):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--response-fd", type=int, required=True)
+    args = parser.parse_args()
+    incoming = sys.stdin.buffer
+    # stdout is logging from process start, including native/import-time writes.
+    # Only framed responses use the explicitly inherited, separate descriptor.
+    with os.fdopen(args.response_fd, "wb") as outgoing, contextlib.redirect_stdout(sys.stderr):
+        os.set_inheritable(outgoing.fileno(), False)
+        if sys.platform == "linux":
+            parent = os.getppid()
+            # Ray kills failed actors without running their cleanup hooks. Kernel
+            # delivery prevents the learner from retaining GPUs after its owner dies.
+            if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM) != 0:
+                raise OSError(ctypes.get_errno(), "Could not bind learner lifetime to its Ray worker")
+            if os.getppid() != parent:
+                return
         runtime = NativePolicyRuntime()
         while True:
             try:

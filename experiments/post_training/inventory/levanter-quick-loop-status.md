@@ -8,9 +8,12 @@ blocked. The latest 40-H100 smoke, version `2026.11.20.5` from
 setup before model loading or updates. Its configured DCN (inter-host) axis
 product was one, while mesh validation required four slices. A source repair
 keeps GPU hosts in one global mesh and preserves TPU slice meshes; local
-topology regressions pass. Fresh smoke `2026.11.21.1` is submitted at BATCH
-priority from `1b6f4a9ca28bb3ee4faf46f7e3e98ba24462f6d8`. GPU startup and
-acceptance remain pending; the matched comparison is gated on smoke acceptance.
+topology regressions pass. Fresh smoke `2026.11.21.1`, from
+`1b6f4a9ca28bb3ee4faf46f7e3e98ba24462f6d8`, also failed during initialization:
+the host worker raised `MemoryError` while reading a learner IPC response frame.
+GPU or host memory exhaustion has not been established. The stdout/protocol
+boundary is under repair. Accelerator acceptance and the matched comparison
+remain pending.
 
 ## Scope and fixed recipe
 
@@ -64,7 +67,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `.1` failed the device-count guard. Smoke `.5` ran all five GPU tasks for about 6m50s, then failed native trainer mesh validation. Both failed before model loading. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
+| Actual H100 | Smoke `2026.11.20.1` failed the device-count guard; `2026.11.20.5` failed mesh validation. Smoke `2026.11.21.1` ran all five GPU tasks for about seven minutes, then failed while reading an initialization response frame. No model initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
 | Publication and resume | CPU Gloo replay and fresh-process native checkpoint transactions passed, including exact model, Adam, RNG, step, and model-averaging fingerprints. Four native child/host restart cases passed. | H100 NCCL/vLLM receiver replay with zero byte mismatches, subsequent nonempty generation stamped with the updated policy, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
@@ -97,7 +100,7 @@ independent source review passed for these fixes. The earlier broad suite had
 17 failures: six sandbox and ten router failures reproduced on clean main;
 one nested-launcher setup failure remained unclassified.
 
-## Latest failure, current submission, and reproduction
+## Failed smokes and planned reproduction
 
 Smoke `2026.11.20.5` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2`,
@@ -120,17 +123,34 @@ exact batch and expert shard ownership for GPU descriptors, and checks that
 TPU expert groups stay within each slice. These are local topology checks;
 the repaired source still requires accelerator acceptance.
 
-Run from the repository with the required storage, evaluation, and judge
-credentials loaded. Smoke `2026.11.21.1` was submitted through coordinator
+Smoke `2026.11.21.1` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.1-coordinator-e6c36b61`.
-At 11:48 PST it was running with actual BATCH priority; no GPU child had yet
-been discovered. Its accepted source bundle matches all 4,582 entries of the
-frozen `1b6f4a9ca2` archive, including 41 required runtime files.
+Its child suffix was `users-dlwh-checkpoints-snowball-inventory-2026.11.21.1-a38272c61e63`.
+Both jobs had actual BATCH priority; their accepted bundles matched all 4,582
+entries of the frozen `1b6f4a9ca2` archive, including 41 required runtime files.
+It failed at `2026-11-21T20:06:58.770Z` during initialization, with `MemoryError`
+in the parent process's `stream.read(size)` for a binary response frame.
+[W&B run](https://wandb.ai/marin-community/marin-snowball-curriculum/runs/o9tedbzi).
+The other JAX processes subsequently aborted during an initialization broadcast.
+No GPU or host out-of-memory verdict was recorded. The five GPU pods are gone;
+the coordinator pod remains in `Failed` state. Task output archives were empty
+or unavailable; the original exception and actual resolved config were collected.
+
+The existing transport puts binary responses on stdout and redirects Python
+prints to stderr. Native writes to file descriptor 1 can still corrupt a frame,
+including during imports. That vulnerability is reproducible locally; the
+failed run's original frame-header bytes were not captured, so the exact cause
+of its `MemoryError` remains an inference. The repair gives responses a dedicated
+pipe and leaves stdout available for logs.
+
+Run from the repository with the required storage, evaluation, and judge
+credentials loaded. The next smoke version `2026.11.21.4` is not submitted.
 Comparison versions `2026.11.21.2` and `2026.11.21.3` remain unsubmitted.
-Local topology checks, four real CPU update/checkpoint/restart cases, lint,
-types, strict docs, and independent mesh review pass. No successful accelerator
-rerun is established by this record. The smoke command below records that
-submission; use a fresh unused version for another attempt.
+The transport repair passes five pinned JAX/JAXLIB `0.11.0` cases: native
+import-time stdout isolation and four real CPU update/checkpoint/restart cases.
+Required lint/type checks, strict docs, and independent transport review pass.
+A fresh source freeze is still required before submission. No successful
+accelerator rerun is established by this record.
 Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
@@ -139,7 +159,7 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.1 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.4 \
   --learner levanter --steps 2 --verify-publication \
   --validate-native-checkpoint --coordinator-route regional --run
 ```

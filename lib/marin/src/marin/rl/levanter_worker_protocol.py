@@ -9,6 +9,7 @@ Torch and JAX environments without importing each other's framework.
 """
 
 import concurrent.futures
+import os
 import pickle
 import struct
 import subprocess
@@ -46,22 +47,43 @@ class LearnerProcess:
 
     def __init__(self, python_executable: str, *, environment: Mapping[str, str], timeout_seconds: float):
         self.timeout_seconds = timeout_seconds
-        self.process = subprocess.Popen(
-            [python_executable, "-u", "-m", "marin.rl.levanter_worker_runtime"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=None,
-            env=dict(environment),
-        )
+        response_read, response_write = os.pipe()
+        try:
+            self._responses = os.fdopen(response_read, "rb")
+        except BaseException:
+            os.close(response_read)
+            os.close(response_write)
+            raise
+        try:
+            self.process = subprocess.Popen(
+                [
+                    python_executable,
+                    "-u",
+                    "-m",
+                    "marin.rl.levanter_worker_runtime",
+                    "--response-fd",
+                    str(response_write),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=None,
+                stderr=None,
+                pass_fds=(response_write,),
+                env=dict(environment),
+            )
+        except BaseException:
+            self._responses.close()
+            raise
+        finally:
+            os.close(response_write)
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="levanter-child")
 
     def request(self, method: str, payload: dict, *, timeout_seconds: float | None = None):
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
 
         def exchange():
-            assert self.process.stdin is not None and self.process.stdout is not None
+            assert self.process.stdin is not None
             write_frame(self.process.stdin, {"method": method, "payload": payload})
-            return read_frame(self.process.stdout)
+            return read_frame(self._responses)
 
         future = self._executor.submit(exchange)
         try:
@@ -96,6 +118,5 @@ class LearnerProcess:
         self.process.wait()
         if self.process.stdin is not None:
             self.process.stdin.close()
-        if self.process.stdout is not None:
-            self.process.stdout.close()
+        self._responses.close()
         self._executor.shutdown(wait=False, cancel_futures=True)

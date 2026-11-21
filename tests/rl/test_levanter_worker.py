@@ -24,6 +24,20 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 
+def test_native_child_import_time_stdout_does_not_corrupt_response(tmp_path, capfd):
+    # sitecustomize runs before the runtime's imports or Python stdout redirect.
+    (tmp_path / "sitecustomize.py").write_text("import os\nos.write(1, b'native startup stdout\\n')\n")
+    environment = {**os.environ, "JAX_PLATFORMS": "cpu", "PYTHONPATH": str(tmp_path)}
+    child = LearnerProcess(sys.executable, environment=environment, timeout_seconds=30)
+    try:
+        assert child.request("shutdown", {}) is None
+        assert child.process.returncode == 0
+    finally:
+        child.close()
+        child.close()
+    assert "native startup stdout" in capfd.readouterr().out
+
+
 @pytest.mark.parametrize("require_accelerator", [True, False])
 def test_native_child_backend_intent_overrides_inherited_coordinator_platform(require_accelerator, monkeypatch):
     host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
