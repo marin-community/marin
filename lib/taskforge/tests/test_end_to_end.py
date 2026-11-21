@@ -235,6 +235,36 @@ def needs_revision(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     return Modify((f"Revise {result.task_digest} for band {band.low}-{band.high}",))
 
 
+class FirstRoundSolves(Engine):
+    """Every trial of the first validation solves (too easy); every later one grades the task invalid (a fault)."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        assert run_id is not None
+        first = run_id.endswith(":0")
+        grade = GradeResult(Outcome.GRADED, 1.0) if first else GradeResult(Outcome.INVALID_TASK, None, "bad task")
+        return GradedRollout(Rollout(run_id, (), "stop"), grade)
+
+
+# Review 2026-11-21 (follow-up 1): a faulted revision resubmitted the same task and controls with new notes; review
+# chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
+# the faulted round's notes shipped as a clean acceptance.
+async def test_a_faulted_resubmission_with_the_same_digest_restores_the_stored_submission(
+    proposal: TaskProposal,
+) -> None:
+    resubmit = (*script()[:3], call("submit", {"notes": "revised notes"}, "submit"))
+    bundle = resources(Envs(), (*script(), *resubmit))
+    bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=FirstRoundSolves()))
+    wp = await run_workpiece(proposal, config(), bundle, EventLog(), install=install)
+    first, final = wp.decisions
+    assert isinstance(first, Modify) and first.placement is BandOutcome.TOO_EASY
+    assert isinstance(final, Accept) and wp.terminal is Terminal.ACCEPTED and wp.round == 1
+    assert wp.evidence[0].task_digest == wp.evidence[1].task_digest  # the digest cannot tell the rounds apart
+    assert wp.submission is not None and wp.submission.notes == "done" and final.restore == wp.submission.digest
+    assert any(reason.startswith("The revision has a fault; restored submission") for reason in final.reasons)
+    assert wp.accepted_with is BandOutcome.TOO_EASY
+
+
 async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
     class RoundPool(RoundVerifier):
         def __init__(self) -> None:
