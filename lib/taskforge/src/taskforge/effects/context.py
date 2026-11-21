@@ -8,8 +8,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited
-from taskforge.effects.log import EventLog, Missing
+from taskforge.effects.events import Event, Fingerprint, Resolved, ScopeEntered, ScopeExited
+from taskforge.effects.log import EventLog, Missing, cached
 
 type Executor = Callable[..., Awaitable[object]]
 type Observer[E: Event[object]] = Callable[[E], Awaitable[None]]
@@ -30,25 +30,20 @@ class _Scope:
     def __init__(self) -> None:
         self.handlers: tuple[_Handler, ...] = ()
         self.observers: tuple[tuple[type[Event[object]], Observer[Event[object]]], ...] = ()
-        self.observed: tuple[asyncio.Future[None], ...] = ()
+        self.observed: list[asyncio.Future[None]] = []
         """Observer runs this scope's events started; their failures are the scope's issues."""
 
-    def take(self) -> tuple[asyncio.Future[None], ...]:
-        runs, self.observed = self.observed, ()
+    def take(self) -> list[asyncio.Future[None]]:
+        runs, self.observed = self.observed, []
         return runs
 
 
-async def _failures(take: Callable[[], tuple[asyncio.Future[None], ...]]) -> tuple[BaseException, ...]:
-    """Join the runs ``take`` hands over, including runs they start, and return their failures."""
-    errors: tuple[BaseException, ...] = ()
+async def _join(take: Callable[[], list[asyncio.Future[None]]], *, propagate: bool = True) -> None:
+    """Join the runs ``take`` hands over until it hands over none, including runs they start; raise their failures."""
+    errors = []
     while runs := take():
-        results = await asyncio.gather(*runs, return_exceptions=True)
-        errors += tuple(result for result in results if isinstance(result, BaseException))
-    return errors
-
-
-def _raise(errors: tuple[BaseException, ...]) -> None:
-    if errors:
+        errors += [result for result in await asyncio.gather(*runs, return_exceptions=True) if result is not None]
+    if errors and propagate:
         raise BaseExceptionGroup("Effect observer issues", errors)
 
 
@@ -62,7 +57,7 @@ class Context:
     def __init__(self, *, log: EventLog) -> None:
         self._log = log
         self._root = _Scope()
-        self._recording: tuple[asyncio.Future[None], ...] = ()
+        self._recording: list[asyncio.Future[None]] = []
         self._chain: ContextVar[tuple[_Scope, ...]] = ContextVar("forge_scopes", default=(self._root,))
 
     def handle(self, etype: type[Event[object]], fn: Executor, resource: Resource | None = None) -> None:
@@ -81,12 +76,15 @@ class Context:
         self._publish(event, self._chain.get())
 
     def _publish(self, event: Event[object], chain: tuple[_Scope, ...]) -> None:
-        # Starting eagerly numbers and indexes the record now, so the next emission already replays it.
-        self._recording += (asyncio.Task(self._log.record(event), loop=asyncio.get_running_loop(), eager_start=True),)
+        # Starting eagerly numbers and indexes the record now, so the next emission already replays it. A task that
+        # publishes as it starts appends its own run first, so each run is appended to the live list once it exists.
+        recording = asyncio.Task(self._log.record(event), loop=asyncio.get_running_loop(), eager_start=True)
+        self._recording.append(recording)
         for scope in chain:
             for etype, observer in scope.observers:
                 if isinstance(event, etype):
-                    chain[-1].observed += (asyncio.ensure_future(observer(event)),)
+                    run = asyncio.ensure_future(observer(event))
+                    chain[-1].observed.append(run)
 
     async def emit[T](self, event: Event[T]) -> T:
         chain = self._chain.get()
@@ -99,9 +97,8 @@ class Context:
                 raise RuntimeError(f"No executor for {type(event).__qualname__}")
             return cast(T, None)
         value = self._log.lookup(event, fingerprints)
-        cached = all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
-        replayed = cached and not isinstance(value, Missing)
-        if not cached:
+        replayed = cached(fingerprints) and not isinstance(value, Missing)
+        if not cached(fingerprints):
             value = await handler.fn(event, *uses, recorded=value)
         elif not replayed:
             value = await handler.fn(event, *uses)
@@ -111,7 +108,7 @@ class Context:
 
     async def check(self) -> None:
         """Raise the failures of the observers this scope's events have started."""
-        _raise(await _failures(self._chain.get()[-1].take))
+        await _join(self._chain.get()[-1].take)
 
     @asynccontextmanager
     async def scope(self, name: str) -> AsyncIterator[None]:
@@ -122,7 +119,7 @@ class Context:
         failed = True
         try:
             yield
-            _raise(await _failures(owner.take))
+            await _join(owner.take)
             failed = False
         finally:
             try:
@@ -131,9 +128,7 @@ class Context:
                     for run in owner.observed:
                         run.cancel()
                 self._publish(ScopeExited(name, failed), chain)
-                failures = await _failures(owner.take)
-                if not failed:
-                    _raise(failures)
+                await _join(owner.take, propagate=not failed)
             finally:
                 self._chain.reset(token)
 
@@ -142,8 +137,8 @@ class Context:
         if self._chain.get() != (self._root,):
             raise RuntimeError("Drain is only valid outside active scopes")
 
-        def take() -> tuple[asyncio.Future[None], ...]:
-            runs, self._recording = (*self._root.take(), *self._recording), ()
+        def take() -> list[asyncio.Future[None]]:
+            runs, self._recording = [*self._root.take(), *self._recording], []
             return runs
 
-        _raise(await _failures(take))
+        await _join(take)

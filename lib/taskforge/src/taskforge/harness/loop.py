@@ -104,7 +104,7 @@ class AgenticHarness(Harness):
                 if empty_completions == MAX_EMPTY_COMPLETIONS:
                     raise Hold(f"provider returned {MAX_EMPTY_COMPLETIONS} empty completions")
                 for call in result.tool_calls:
-                    await ctx.emit(ToolInvoked(call.id, call.name, call.arguments))
+                    ctx.notify(ToolInvoked(call.id, call.name, call.arguments))
                     try:
                         args = json.loads(call.arguments)
                         if not isinstance(args, dict):
@@ -136,7 +136,7 @@ class AgenticHarness(Harness):
                         content = content[: self.output_chars] + marker
                     # Estimate only appended text; the provider counted the prior prompt and reply.
                     prompt_tokens += (len(content) + 3) // 4
-                    await ctx.emit(ToolReturned(call.id, call.name, content))
+                    ctx.notify(ToolReturned(call.id, call.name, content))
                     session = replace(
                         session, messages=(*session.messages, Message(Role.TOOL, content, tool_call_id=call.id))
                     )

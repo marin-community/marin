@@ -61,7 +61,7 @@ async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
         except* OutputBudgetExhausted:
-            await ctx.emit(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
+            ctx.notify(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
         if result is not None:
             return TrialResult(trial, result.grade, trial_cause(result, spec.task))
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
@@ -78,7 +78,7 @@ async def adversary_result(
             result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
         if result is not None:
             return result
-        await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
+        ctx.notify(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
     return exhausted(name, SearchLimit.OUTPUT_BUDGET)
 
 

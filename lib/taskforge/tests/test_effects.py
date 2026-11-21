@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import override
 
 import pytest
 from lib.taskforge.tests.effect_fakes import FlakySink, Number
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, ScopeEntered, ScopeExited
-from taskforge.effects.issues import Hold, LogFailure, Restart
-from taskforge.effects.log import EventLog, Missing
+from taskforge.effects.issues import Hold, LogFailure, PublicationFailed, Restart
+from taskforge.effects.log import EventLog, Missing, Record, Sink
 
 pytestmark = pytest.mark.asyncio
 
@@ -248,3 +250,56 @@ async def test_failed_scope_exit_reaches_observers_without_masking_original_fail
     await ctx.drain()
     assert seen == [ScopeExited("failed", True)]
     assert any(record.event == seen[0] for record in log.records)
+
+
+class ReentrantSink(Sink):
+    """Notes a diagnostic while it writes ``outer``, and refuses to write that diagnostic."""
+
+    def __init__(self) -> None:
+        self.ctx: Context | None = None
+
+    @override
+    async def write(self, records: Sequence[Record]) -> None:
+        events = [record.event for record in records]
+        if Note("diagnostic") in events:
+            raise PublicationFailed("diagnostic refused")
+        if Note("outer") in events and self.ctx is not None:
+            self.ctx.notify(Note("diagnostic"))
+
+
+# Review 2026-11-20: a recording or observer run started while another was starting replaced the collection the outer
+# one was appended to, so its failure was lost and drain returned with a row pending.
+async def test_a_recording_started_while_another_is_written_surfaces_its_failure_at_drain() -> None:
+    sink = ReentrantSink()
+    ctx = Context(log=(log := EventLog(sink=sink)))
+    sink.ctx = ctx
+    ctx.notify(Note("outer"))
+    with pytest.raises(ExceptionGroup) as caught:
+        await ctx.drain()
+    assert [type(error) for error in caught.value.exceptions] == [PublicationFailed]
+    assert [record.event for record in log.records] == [Note("outer"), Note("diagnostic")]
+
+
+async def test_an_observer_run_started_while_another_starts_reports_its_hold() -> None:
+    loop = asyncio.get_running_loop()
+    loop.set_task_factory(asyncio.eager_task_factory)
+    try:
+        ctx = Context(log=EventLog())
+
+        async def relay(event: Note) -> None:
+            if event.msg == "outer":
+                ctx.notify(Note("nested"))
+
+        async def refuse(event: Note) -> None:
+            if event.msg == "nested":
+                raise Hold("nested observer")
+
+        with pytest.raises(ExceptionGroup) as caught:
+            async with ctx.scope("work"):
+                ctx.observe(Note, relay)
+                ctx.observe(Note, refuse)
+                ctx.notify(Note("outer"))
+        assert [str(error) for error in caught.value.exceptions] == ["nested observer"]
+        await ctx.drain()
+    finally:
+        loop.set_task_factory(None)

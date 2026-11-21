@@ -110,7 +110,7 @@ def install(ctx: Context, resources: Resources) -> None:
     async def cleanup_notes(event: Resolved[object]) -> None:
         value = event.value.grade if isinstance(event.value, GradedRollout) else event.value
         if isinstance(value, GradeResult) and value.diagnostics.get("cleanup_errors"):
-            await ctx.emit(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
+            ctx.notify(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
 
     rollouts, grading = resources.rollouts, resources.grading
     if (judge := resources.role_inference.get("judge")) is not None:
