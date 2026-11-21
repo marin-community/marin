@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 2:06 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 2:25 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ protocol for internal rollout and learner traffic.
 | H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue is waiting for GPU and InfiniBand quota to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Two CPU hosts also passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
-| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact verification of the installed compute weights. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
+| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Native serving commands and reply metadata use protobuf. Generation replies carry bounded, detached binary replay frames. The protocol passed two optimizer updates on one TPUv4 host. The learner command pipe uses pickle, and expert-block publication uses NCCL. | Verify native serving across accelerator hosts. Migrate the learner envelope after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -628,13 +628,25 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   root let a fresh learner restore the exact state and prompt cursor.
   [Callback recovery reproduction][native-callback-recovery-source]
 
-  The restart qualification needs a step-1 trainer checkpoint, an
-  interrupted step-2 save, and fresh learner and serving processes.
-  Resume the exact committed path and cursor, verify the restored policy
-  on serving, and require one further optimizer update. Give each save a
-  unique path. Once all components finish, advance the commit pointer
-  only if it still names the checkpoint this attempt restored or last
-  committed.
+  The maintained Levanter runtime at `c016fc3ae5` writes each save to a
+  unique generation. It conditionally advances the index after all learner
+  ranks agree on the path and version and the trainer and rollout files
+  are durable.
+  Resume and artifact lookup use the indexed path. Retention updates the
+  index before deleting removed generations and checks the attempt owner
+  before terminal cleanup.
+
+  A four-device CPU test failed the step-2 rollout-state write after
+  committing step 1. Fresh learner and serving processes restored the
+  saved prompt cursor and installed policy 1. The four live replay frames
+  matched the uninterrupted run after normalizing request IDs. Scores,
+  optimizer, PRNG, model state and policy 2 also matched. The recovered
+  trainer committed step 2 to a new generation and left the abandoned
+  generation intact. The test used
+  local TensorStore with in-process actor dispatch. Separate metadata
+  probes passed stale-writer rejection and exact retry acknowledgement
+  on CoreWeave S3 and GCS. The accelerator restart remains a deployment
+  gate. [Durable recovery source and tests][native-durable-recovery-source]
 - During native training, fixed-panel evaluation uses a separate binary
   sampling call bound to the installed weight digest. A local isolated
   CPU test matched an independently configured local sampler's token IDs and
@@ -718,6 +730,7 @@ arms. [Prior timing comparison][timing]
 [native-cross-host-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Fsource-inputs.tar.zst
 [native-install-retry-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.14%2Finstall-retry-source-and-tests.tar.zst
 [native-callback-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.15%2Fcallback-recovery-reproduction.tar.zst
+[native-durable-recovery-source]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.16%2Fdurable-checkpoint-recovery.tar.zst
 [native-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.02%2Foutputs.tar.zst
 [native-install-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.03%2Foutputs.tar.zst
 [native-fused-archive]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.20.05%2Foutputs.tar.zst
