@@ -140,6 +140,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--port-file", type=Path, required=True)
     parser.add_argument("--concurrency", type=int, required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -148,6 +149,9 @@ def main() -> None:
         index = OpenResearcherIndex(args.root, state["top_k"], state["snippet_max_tokens"], args.concurrency)
     logger.info("Binding retrieval HTTP server on port %d", args.port)
     with RetrievalServer(("0.0.0.0", args.port), retrieval_handler(index, state), args.concurrency) as server:
+        temporary_port_file = args.port_file.with_suffix(".tmp")
+        temporary_port_file.write_text(str(server.server_port))
+        temporary_port_file.replace(args.port_file)
         logger.info("Retrieval HTTP server bound at %s; serving requests", server.server_address)
         server.serve_forever()
 
