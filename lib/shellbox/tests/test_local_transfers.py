@@ -50,3 +50,14 @@ def test_archive_round_trip_preserves_directory_contents(tmp_path: Path):
     assert restored.read_text() == "criteria\n"
     assert stat.S_IMODE(restored.stat().st_mode) == 0o600
     assert abs(restored.stat().st_mtime - MTIME) < 1e-3
+
+
+def test_archive_round_trip_preserves_nanosecond_mtime(tmp_path: Path):
+    source = tmp_path / "marker"
+    source.write_bytes(b"mimo-local-native-qualification\n")
+    source.chmod(0o640)
+    mtime_ns = 1700000000123456789
+    os.utime(source, ns=(mtime_ns, mtime_ns))
+    restored = _round_trip(tmp_path, source, "marker")
+    assert stat.S_IMODE(restored.stat().st_mode) == 0o640
+    assert restored.stat().st_mtime_ns == mtime_ns

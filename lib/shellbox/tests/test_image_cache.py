@@ -567,7 +567,8 @@ def test_converted_registry_binding_does_not_bypass_signature_policy(tmp_path, c
         ImageCache(cache, policy=policy).prepare(fixture.source)
 
 
-def test_built_image_import_uses_the_selected_daemon(tmp_path, monkeypatch, layered_oci_image):
+@pytest.mark.parametrize("build_network", [None, "host"])
+def test_built_image_import_uses_the_selected_daemon(tmp_path, monkeypatch, layered_oci_image, build_network):
     host = f"unix://{tmp_path}/owned-docker.sock"
     monkeypatch.setenv("DOCKER_HOST", host)
     context = tmp_path / "context"
@@ -577,6 +578,9 @@ def test_built_image_import_uses_the_selected_daemon(tmp_path, monkeypatch, laye
 
     def image_tool(args, **_kwargs):
         if args[:2] == ("docker", "build"):
+            effective_network = args[args.index("--network") + 1] if "--network" in args else "default"
+            if effective_network != (build_network or "default"):
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"build network cannot resolve packages")
             images.add(args[args.index("-t") + 1])
         elif args[:3] == ("docker", "image", "rm"):
             images.remove(args[-1])
@@ -593,7 +597,9 @@ def test_built_image_import_uses_the_selected_daemon(tmp_path, monkeypatch, laye
         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(subprocess, "run", image_tool)
-    image = prepare_image(DockerfileSource(context, context / "Dockerfile"), tmp_path / "cache")
+    image = prepare_image(
+        DockerfileSource(context, context / "Dockerfile"), tmp_path / "cache", build_network=build_network
+    )
     assert prepared_image_config(image) == prepared_image_config(layered_oci_image)
     assert image.manifest_digest == layered_oci_image.manifest_digest
     assert not images

@@ -311,6 +311,7 @@ def prepare_image(
     authfile: Path | None = None,
     policy: Path | None = None,
     build_log: Path | None = None,
+    build_network: str | None = None,
 ) -> PreparedImage:
     """Copy or build an image and retain its selected platform by manifest digest.
 
@@ -321,6 +322,7 @@ def prepare_image(
     requires a fresh verified copy instead.
 
     ``build_log`` preserves complete Docker build output, including failed builds.
+    ``build_network`` selects Docker RUN networking without changing the build context.
     """
     cache.mkdir(parents=True, exist_ok=True)
     if isinstance(source, RegistryImage) and ("://" in source.reference or not source.reference.strip()):
@@ -361,6 +363,7 @@ def prepare_image(
                 _run(
                     "docker",
                     "build",
+                    *(("--network", build_network) if build_network is not None else ()),
                     "--platform",
                     "linux/amd64",
                     "-f",
