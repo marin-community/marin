@@ -19,11 +19,37 @@ from daytona_api_client_async import SandboxDesiredState, SandboxState
 from shellbox.backends.daytona import usage_cli
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
+    INVENTORY_READ_ATTEMPTS,
     OrganizationLimits,
     SandboxProfile,
     account_usage_from_client,
     usage_report,
 )
+
+
+class FlakyInventoryClient:
+    """Yield one pre-set row sequence per whole-inventory read."""
+
+    def __init__(self, passes):
+        self.passes = passes
+        self.reads = 0
+
+    def list(self, **_kwargs):
+        self.reads += 1
+        rows = self.passes[min(self.reads, len(self.passes)) - 1]
+
+        async def iterate():
+            for row in rows:
+                yield row
+
+        return iterate()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
 
 LIMITS = OrganizationLimits(100, 100, 100, SandboxProfile(4, 8, 10))
 
@@ -263,3 +289,30 @@ def test_usage_cli_missing_keys_are_explicit_in_all_account_report(monkeypatch, 
         "rl": {"skipped": "missing DAYTONA_RL_API_KEY"},
         "data": {"skipped": "missing DAYTONA_DATA_API_KEY"},
     }
+
+
+def test_inventory_rereads_after_a_repeated_id_and_reports_once():
+    """A duplicated ID on one pagination pass is retried whole-inventory, not failed."""
+    duplicate_pass = [sandbox("s-1"), sandbox("s-2"), sandbox("s-1")]
+    clean_pass = [sandbox("s-1"), sandbox("s-2"), sandbox("s-3")]
+    client = FlakyInventoryClient([duplicate_pass, clean_pass])
+
+    async def scenario():
+        return await account_usage_from_client(client, LIMITS)
+
+    report = asyncio.run(scenario())
+    assert client.reads == 2
+    assert report.compute_sandboxes == 3
+
+
+def test_inventory_fails_closed_after_the_bounded_retries():
+    """Every pass repeating an ID still fails closed after INVENTORY_READ_ATTEMPTS reads."""
+    duplicate_pass = [sandbox("s-1"), sandbox("s-1")]
+    client = FlakyInventoryClient([duplicate_pass])
+
+    async def scenario():
+        return await account_usage_from_client(client, LIMITS)
+
+    with pytest.raises(ValueError, match="Repeated sandbox ID in paginated inventory; retry the reading"):
+        asyncio.run(scenario())
+    assert client.reads == INVENTORY_READ_ATTEMPTS

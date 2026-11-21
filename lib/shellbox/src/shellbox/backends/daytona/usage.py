@@ -3,6 +3,8 @@
 
 """Estimate organization headroom from sandbox inventory and supplied quotas."""
 
+import asyncio
+import logging
 import math
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -14,7 +16,13 @@ from daytona_api_client_async import SandboxDesiredState, SandboxState
 
 from shellbox.backends.daytona.connection import DaytonaConnection
 
+logger = logging.getLogger(__name__)
+
 REQUEST_TIMEOUT_SECONDS = 30.0
+# The provider occasionally repeats an ID across pagination boundaries; re-read the
+# whole inventory a bounded number of times with a short backoff before failing closed.
+INVENTORY_READ_ATTEMPTS = 3
+INVENTORY_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 DEFAULT_HEADROOM = 0.2
 GB_TO_GIB = 10**9 / 2**30
 # Provider quota rules: daytonaio/daytona@b5a5d9e, apps/api/src/organization/constants/.
@@ -148,16 +156,42 @@ class AccountUsage:
     observed_at: str
 
 
-async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
-    """Read every sandbox across all SDK result pages and account regions."""
+class RepeatedSandboxIdError(ValueError):
+    """One whole-inventory pagination pass yielded a sandbox ID twice."""
+
+
+async def _read_inventory_once(client: AsyncDaytona) -> list[AsyncSandbox]:
     sandboxes = []
     seen = set()
     async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT_SECONDS):
         if sandbox.id in seen:
-            raise ValueError("Repeated sandbox ID in paginated inventory; retry the reading")
+            raise RepeatedSandboxIdError(f"Repeated sandbox ID {sandbox.id} in paginated inventory")
         seen.add(sandbox.id)
         sandboxes.append(sandbox)
     return sandboxes
+
+
+async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
+    """Read every sandbox across all SDK result pages and account regions.
+
+    Re-reads the whole inventory up to ``INVENTORY_READ_ATTEMPTS`` times with a short
+    backoff when one pass repeats a sandbox ID, and fails closed with the original
+    error if every pass does.
+    """
+    failure: RepeatedSandboxIdError | None = None
+    for attempt, backoff in enumerate((0.0, *INVENTORY_RETRY_BACKOFF_SECONDS), start=1):
+        if backoff:
+            await asyncio.sleep(backoff)
+        try:
+            return await _read_inventory_once(client)
+        except RepeatedSandboxIdError as error:
+            failure = error
+            logger.warning(
+                "Daytona sandbox inventory read %d/%d repeated a sandbox ID; re-reading",
+                attempt,
+                INVENTORY_READ_ATTEMPTS,
+            )
+    raise ValueError("Repeated sandbox ID in paginated inventory; retry the reading") from failure
 
 
 async def account_usage_from_client(client: AsyncDaytona, limits: OrganizationLimits) -> AccountUsage:
