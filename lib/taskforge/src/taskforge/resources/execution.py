@@ -30,17 +30,6 @@ async def retry_effect[T](event: Event[T], operation: Callable[[], Awaitable[T]]
             attempt += 1
 
 
-def has_cause(error: BaseException, kind: type[BaseException]) -> bool:
-    seen: set[int] = set()
-    cause: BaseException | None = error
-    while cause is not None and id(cause) not in seen:
-        seen.add(id(cause))
-        if isinstance(cause, kind):
-            return True
-        cause = cause.__cause__
-    return False
-
-
 async def close_resource(action: Callable[[], Awaitable[None]], notify: Notify, *, timeout: float | None = None) -> None:
     """Warn about failed cleanup without replacing the result or the primary failure."""
     try:

@@ -206,20 +206,10 @@ class JsonlSink(Sink):
             raise LogFailure("Cannot encode the event stream") from error
 
     def _line(self, record: Record) -> bytes:
-        return (
-            json.dumps(
-                {
-                    "sequence": record.sequence,
-                    "wall_time": record.wall_time,
-                    "event": _encode(record.event, record.sequence, self._known),
-                    **{name: value for name in ENVELOPE if (value := getattr(record, name)) is not None},
-                },
-                sort_keys=True,
-                allow_nan=True,
-                default=asdict,
-            )
-            + "\n"
-        ).encode()
+        row = {name: value for name in ENVELOPE if (value := getattr(record, name)) is not None}
+        row.update(sequence=record.sequence, wall_time=record.wall_time)
+        row["event"] = _encode(record.event, record.sequence, self._known)
+        return (json.dumps(row, sort_keys=True, allow_nan=True, default=asdict) + "\n").encode()
 
     def _write(self, records: Sequence[Record]) -> None:
         path = Path(self.path)
