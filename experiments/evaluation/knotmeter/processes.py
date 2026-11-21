@@ -28,7 +28,7 @@ def sample_client(process: subprocess.Popen, output: Path, stopped: threading.Ev
                         usage = child.cpu_times()
                         cpu += usage.user + usage.system
                         rss += child.memory_info().rss
-            record = {
+            record: dict[str, float | int | str] = {
                 "unix": time.time(),
                 "cpu_seconds": cpu,
                 "rss_bytes": rss,
