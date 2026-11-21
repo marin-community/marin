@@ -13,6 +13,7 @@ from multiprocessing.context import ForkServerContext
 from finestore.rl.run_records import read_attempts, read_evaluations
 from marinskyrl.environment_contract import RUN_MODEL_ENV
 import fsspec
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import rolloutengine
@@ -25,7 +26,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
-from skyrl_train.dataset.tasks import source_row_task, write_tasks
+from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
@@ -110,6 +111,7 @@ def train(
     eval_interval: int | None = None,
     seed: int = 0,
     callbacks: list[dict] | None = None,
+    groups_per_family: dict[str, int] | None = None,
 ):
     cfg = cat_count_config(
         root, model, steps=steps, staleness=staleness, resume=resume, eval_interval=eval_interval, seed=seed
@@ -118,6 +120,20 @@ def train(
         OmegaConf.update(cfg, "trainer.callbacks", callbacks, force_add=True)
     if flipped:
         cfg.trainer.algorithm.advantage_estimator = "cat_count_flipped_grpo"
+    if groups_per_family:
+        source = Path(cfg.data.train_data[0])
+        configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
+        rows = []
+        for index, line in enumerate(source.read_text().splitlines()):
+            row = json.loads(line)
+            task = source_row_task(row, index, source_name="train", environment_configs=configs).task
+            family = "odd" if row["extra_info"]["n"] % 2 else "even"
+            rows.append({TASK_SPEC_COLUMN: task.model_dump_json(), "family": family})
+        parquet = source.with_suffix(".parquet")
+        pq.write_table(pa.Table.from_pylist(rows), parquet)
+        cfg.data.train_data = [str(parquet)]
+        cfg.environment.task_sessions.task_spec.harness_by_dataset = {"train": "cat_count"}
+        OmegaConf.update(cfg, "trainer.rollout_buffer.groups_per_family", groups_per_family, force_add=True)
     return run_process(forkserver_context, root, cfg)
 
 
@@ -728,9 +744,19 @@ def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count
 @pytest.mark.nightly
 def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "async"
-    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1)
+    groups_per_family = {"odd": 4, "even": 4}
+    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1, groups_per_family=groups_per_family)
     before_resume = len(cat_count_session)
-    resumed = train(forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2)
+    resumed = train(
+        forkserver_context,
+        root,
+        cat_count_policy,
+        steps=100,
+        staleness=1,
+        resume=True,
+        eval_interval=2,
+        groups_per_family=groups_per_family,
+    )
     resumed_steps = {
         int(row["attributes"]["step"])
         for row in cat_count_session[before_resume:]

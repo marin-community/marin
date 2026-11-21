@@ -291,20 +291,6 @@ def load_parquet_db(parquet_dir: Path | str, local_cache: Path | None = None) ->
     return conn
 
 
-def load_parquet_db_from_paths(paths: list[str], summary_cache: Path | None = None) -> duckdb.DuckDBPyConnection:
-    """Build an in-memory DuckDB from explicit parquet paths (local or GCS)."""
-    conn = duckdb.connect(":memory:")
-    if summary_cache is None:
-        h = hashlib.sha1()
-        for p in sorted(paths):
-            h.update(p.encode() + b"\0")
-        summary_cache = Path("/tmp/storage-scan-cache/_from_paths_summaries") / h.hexdigest()[:16]
-    _tune_duckdb(conn, summary_cache)
-    _build_summaries(conn, list(paths), summary_cache)
-    _init_storage_classes(conn)
-    return conn
-
-
 # ---------------------------------------------------------------------------
 # Cost SQL fragment (reused across queries)
 # ---------------------------------------------------------------------------

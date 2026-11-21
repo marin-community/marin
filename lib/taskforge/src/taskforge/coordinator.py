@@ -35,7 +35,7 @@ def reasons(error: BaseException) -> tuple[str, ...]:
 
 
 STAGE_REPLAY_ATTEMPTS = 3
-"""Bound interrupted-stage reconstruction; effect executors alone own retries."""
+"""Bound consecutive interrupted reconstructions of one stage visit; effect executors alone own retries."""
 
 
 async def run_workpiece(
@@ -79,6 +79,8 @@ async def run_workpiece(
                 if replay:
                     continue
                 assert result is not None
+                # A completed visit resets the budget, so a same-round re-entry starts with a full one.
+                stage_attempts.pop(key, None)
                 edge = config.transitions.get((stage, type(result)))
                 if edge is None:
                     raise ValueError(f"No transition for {stage}/{type(result).__name__}")

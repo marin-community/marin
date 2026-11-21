@@ -22,6 +22,7 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
+from iris.testing import observability_rows_check
 from iris.testing.journeys.backend import (
     BackendEvent,
     ScriptedObservation,
@@ -131,6 +132,8 @@ class JourneyWorld:
             federation_peers=self._federation_peers,
         )
         controller.register_backend(backend)
+        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
+        observability_rows_check.install(db)
         return controller, backend
 
     def close(self) -> None:

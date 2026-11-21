@@ -250,6 +250,37 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
 
 
+# Review 2026-11-20: a reported claim whose reproduction hit the output limit became an exhausted search, and
+# review accepted. One of several parallel reproductions failing must not drop the others.
+@pytest.mark.parametrize("replies", [("13",), ("13", "9")])
+async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept(
+    workpiece: Workpiece, replies: tuple[str, ...]
+) -> None:
+    claims = tuple(
+        AdversaryClaim(f"{reply} earns credit", Candidate(reply), RewardBand(Outcome.GRADED, 1)) for reply in replies
+    )
+    setup = adversary_config(RecordingHarness(Returned("report", AdversaryReport(claims), Conversation((), ()))))
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+
+    async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
+        if event.candidate.reply == "13":
+            raise OutputBudgetExhausted("output budget exhausted")
+        return await grade(event, grading, notify=ctx.emit)
+
+    ctx.handle(GradeCandidate, output_limited, uses=(bundle.grading,))
+    evidence = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    (adversary,) = evidence.adversary
+    assert adversary.status is AdversaryStatus.FAILED
+    assert tuple(finding.candidate.reply for finding in adversary.findings) == replies
+    inconclusive = adversary.findings[0]
+    assert inconclusive.claim == "13 earns credit" and inconclusive.grade is None and not inconclusive.met
+    assert all(finding.grade is not None for finding in adversary.findings[1:])
+    restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
+    assert isinstance(default_review(restored, setup.band, setup.budget), Incomplete)
+
+
 # "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
 
 

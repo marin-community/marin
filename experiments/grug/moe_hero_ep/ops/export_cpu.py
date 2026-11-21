@@ -3,6 +3,7 @@
 
 """Export native Hero weights on one CPU host using chunk-aligned TensorStore reads."""
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from experiments.grug.moe_hero_ep.model import (
 )
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
     EXPORT_VERSION,
+    MANIFEST_FILENAME,
     artifact_config,
     bf16_hf_config,
     execution_config,
@@ -38,6 +40,7 @@ from experiments.grug.moe_hero_ep.ops.export_metadata import (
     split_expert_names,
     write_export_metadata,
 )
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.weights import (
     PENDING_QB_BETAS_KEY,
     checkpoint_weight_path,
@@ -47,6 +50,8 @@ from experiments.grug.moe_hero_ep.weights import (
 logger = logging.getLogger(__name__)
 BF16_BYTES = 2
 EXPERT_PATH = "/expert_mlp/"
+DEFAULT_READ_HOST_BUDGET_BYTES = 96 * 1024**3
+DEFAULT_EXPORT_HOST_BUDGET_BYTES = 32 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -56,8 +61,8 @@ class CpuExportConfig:
     model: GrugModelConfig
     destination: str
     source_revision: str
-    read_host_budget_bytes: int = 96 * 1024**3
-    export_host_budget_bytes: int = 32 * 1024**3
+    read_host_budget_bytes: int = DEFAULT_READ_HOST_BUDGET_BYTES
+    export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
     max_concurrent_shards: int = 2
     request_concurrency: int = 16
 
@@ -73,6 +78,25 @@ def _native_shapes(config: GrugModelConfig) -> dict[str, tuple[int, ...]]:
         template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
     paths = jax.tree.leaves(leaf_key_paths(template))
     return {path.replace(".", "/"): value.shape for path, value in zip(paths, jax.tree.leaves(template), strict=True)}
+
+
+def _source_cache_bytes(shapes: dict[str, tuple[int, ...]]) -> tuple[int, int]:
+    ordinary_bytes = 0
+    largest_block = 0
+    for path, shape in shapes.items():
+        size = math.prod(shape) * BF16_BYTES
+        if EXPERT_PATH in path:
+            largest_block = max(largest_block, size)
+        else:
+            ordinary_bytes += size
+    return ordinary_bytes, largest_block
+
+
+def full_expert_bank_read_bytes(model: GrugModelConfig) -> int:
+    """BF16 cache size for ordinary weights and a whole native expert bank."""
+    shapes = _native_shapes(model)
+    paths = {spec.path for spec in grugmoe_inference_weight_specs(model)}
+    return sum(_source_cache_bytes({path: shapes[path] for path in paths}))
 
 
 class CpuCheckpointWeights:
@@ -116,16 +140,15 @@ class CpuCheckpointWeights:
         self.pending = self._open(pending_path)
         if tuple(self.pending.shape) != (config.model.num_layers, config.model.num_experts):
             raise ValueError("Pending router-bias shape differs from model config")
-        self.ordinary_bytes = sum(
-            math.prod(store.shape) * BF16_BYTES for path, store in self.stores.items() if EXPERT_PATH not in path
-        )
-        largest_block = max(
-            (
-                min(self.layer_chunk(path), store.shape[0]) * math.prod(store.shape[1:]) * BF16_BYTES
+        self.ordinary_bytes, largest_block = _source_cache_bytes(
+            {
+                path: (
+                    (min(self.layer_chunk(path), store.shape[0]), *store.shape[1:])
+                    if EXPERT_PATH in path
+                    else store.shape
+                )
                 for path, store in self.stores.items()
-                if EXPERT_PATH in path
-            ),
-            default=0,
+            }
         )
         if self.ordinary_bytes + largest_block > config.read_host_budget_bytes:
             raise ValueError(
@@ -223,7 +246,8 @@ class CpuCheckpointWeights:
         return min((spec.path, int(spec.layer_index)) for spec in experts)
 
 
-def export(config: CpuExportConfig) -> None:
+def export(config: CpuExportConfig, *, accept_completed: bool = False) -> None:
+    """Export the checkpoint or accept a matching committed manifest on retry."""
     hf_config = bf16_hf_config(config.model)
     encoded = draccus.encode(config)
     request = {
@@ -232,7 +256,15 @@ def export(config: CpuExportConfig) -> None:
         "config": artifact_config(encoded),
         "hf_config": hf_config,
     }
-    resume = prepare_export(config.destination, request)
+    try:
+        resume = prepare_export(config.destination, request)
+    except FileExistsError:
+        manifest = StoragePath(config.destination) / MANIFEST_FILENAME
+        if not accept_completed or not manifest.exists():
+            raise
+        if json.loads(manifest.read_text()).get("export_id") != digest(request):
+            raise FileExistsError(f"Completed export differs from the selected checkpoint: {manifest}") from None
+        return
     reader = CpuCheckpointWeights(config)
     shapes = reader.shapes()
     shards, _ = _shard_hf_checkpoint(shapes, max_shard_size=DEFAULT_MAX_SHARD_SIZE)

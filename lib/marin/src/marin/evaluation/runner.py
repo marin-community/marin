@@ -28,6 +28,7 @@ from evalrecords.records import (
     ModelConfigRef,
     ModelRef,
     Provenance,
+    RLAttemptRef,
     RunStatus,
     ServingParams,
     TaskCoverage,
@@ -263,6 +264,7 @@ class EvaluationBatch:
     egress_allow: tuple[str, ...] = ()
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
+    rl_attempt: RLAttemptRef | None = None
 
 
 @dataclass(frozen=True)
@@ -322,6 +324,7 @@ def _record(
         user=batch.user,
         version=batch.version,
         description=batch.description,
+        rl_attempt=batch.rl_attempt,
         model=ModelRef(
             name=batch.model.name,
             location=batch.model.location,
