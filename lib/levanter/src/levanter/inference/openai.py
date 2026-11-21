@@ -200,11 +200,11 @@ class InferenceContext:
         self.batch_thread.start()
 
     def shutdown(self):
-        """Signal shutdown and wait for threads to finish"""
+        """Stop accepting batches and wait for active device work to drain."""
         logger.info("Shutting down inference context.")
         self.shutdown_event.set()
-        self.inference_thread.join(timeout=1)
-        self.batch_thread.join(timeout=1)
+        self.inference_thread.join()
+        self.batch_thread.join()
 
     def unload(self):
         """Unload the inference model to free up resources."""
@@ -456,7 +456,7 @@ class InferenceContext:
         start_time = time.time()
         result = self.engine.generate(
             service_requests,
-            should_abort=self.pause_event.is_set,
+            should_abort=lambda: self.shutdown_event.is_set() or self.pause_event.is_set(),
             on_tokens=on_tokens if any(request.on_tokens is not None for request in requests) else None,
         )
         duration = time.time() - start_time

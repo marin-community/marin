@@ -907,6 +907,38 @@ class _BlockingTokenModel(_TokenSensitiveCompletionModel):
         return super().decode(input_ids, cache, batch_info, pos_ids)
 
 
+def test_server_shutdown_aborts_inflight_generation():
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _BlockingTokenModel(entered, release), _AliasingChatTokenizer())
+    request = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 3,
+        "temperature": 0,
+        "return_token_ids": True,
+    }
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+            pending = pool.submit(client.post, "/v1/chat/completions", json=request)
+            try:
+                assert entered.wait(30)
+                shutdown = pool.submit(server.shutdown)
+                assert server.inference_context.shutdown_event.wait(5)
+            finally:
+                release.set()
+            shutdown.result(timeout=20)
+            response = pending.result(timeout=20)
+        assert response.status_code == 200, response.text
+        choice = response.json()["choices"][0]
+        assert choice["finish_reason"] == "abort"
+        assert choice["token_ids"] == [3]
+    finally:
+        release.set()
+        server.shutdown()
+
+
 @pytest.mark.asyncio
 async def test_chat_stream_delivers_content_before_decode_completes():
     entered, release = threading.Event(), threading.Event()
