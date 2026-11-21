@@ -160,11 +160,11 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
 
 def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_path, monkeypatch):
     source = CatalogSource("fixture", "revision", (("task", "sha"),), "queue", "digest")
-    snapshots, reconciled, sleeps = [], [], []
+    catalog_calls, reconciled, sleeps = [], [], []
 
     def catalog(*args, **kwargs):
-        snapshots.append(True)
-        if len(snapshots) == 1:
+        catalog_calls.append(True)
+        if len(catalog_calls) == 1:
             raise requests.ConnectionError("[Errno 101] Network is unreachable")
         return [source]
 

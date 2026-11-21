@@ -84,7 +84,7 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
     )
     served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
 
-    def query(_sql, params):
+    def query(_sql, _params):
         return {"rows": [served]}
 
     monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)

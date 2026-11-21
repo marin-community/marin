@@ -78,7 +78,7 @@ def run_controller(
 
 
 def controller_environment(secrets_env: Path | None) -> dict[str, str]:
-    """Resolve every controller credential before invoking the Iris submitter."""
+    """Resolve storage and provider credentials before invoking the Iris submitter."""
     if secrets_env is not None and not secrets_env.is_file():
         raise FileNotFoundError(secrets_env)
     supplied = dotenv_values(secrets_env) if secrets_env is not None else {}
@@ -112,13 +112,10 @@ def launch_controller(
     command.extend(["--container-profile", job_pb2.ContainerProfile.Name(job_pb2.CONTAINER_PROFILE_PRIVILEGED)])
     command.extend(["--egress-policy", job_pb2.EgressPolicy.Name(job_pb2.EGRESS_POLICY_CLUSTER)])
     command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:" + REFRESH_TOKEN_ENV])
-    for name in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "GLM_BULK_TOKEN", "TOGETHER_API_KEY"):
+    for name in CONTROLLER_SECRET_NAMES:
         command.extend(["--secret", name, "env:" + name])
     command.extend(
         [
-            "--secret",
-            "DAYTONA_DATA_API_KEY",
-            "env:DAYTONA_DATA_API_KEY",
             "--secret",
             "DAYTONA_RL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_RL_API_KEY/versions/1",
