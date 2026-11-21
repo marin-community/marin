@@ -84,7 +84,9 @@ async def qualify(rows: list[PythonQualificationInput]) -> tuple[PythonProbe, ..
         lowered = rollout_spec(task, session, task_machine=runtime)
         validate_spec(lowered, {Backend.LOCAL: factory})
         assert lowered.task_machine is not None
-        async with task_machine(task, factory, lowered.task_machine, cleanup_timeout=60) as machine:
+        async with task_machine(
+            task, factory, lowered.task_machine, cleanup_timeout=lowered.limits.cleanup_timeout
+        ) as machine:
             (requirement,) = task.environment_requirements.tool_providers.values()
             provider = TOOL_PROVIDERS[requirement.action_interface]
             (tool,) = provider.tools(requirement)
