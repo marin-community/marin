@@ -1013,8 +1013,9 @@ def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: 
         )
         revision = replace(SUBMISSION, notes="revised")
         decision, _ = decided(wp.with_(submission=revision, evidence=(*wp.evidence, faulted)), setup)
-        assert "Revision fault: Control 0 violates its expected reward" in decision.reasons
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and decision.notes == (FOUND,)
+    if ending == "same-digest fault":
+        assert "Revision fault: Control 0 violates its expected reward" in decision.reasons
     assert (
         f"false_accept: {SPENT}" in decision.reasons
         and "1 of 3 solver trials have no score; placed over 2" in decision.reasons
