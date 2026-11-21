@@ -92,8 +92,9 @@ class PublicationFailed(LogFailure):
 class ContextExceeded(Exception):
     """The provider rejected the conversation because its context window is full.
 
-    Not an effect decision: retrying or replacing the machine cannot shrink the conversation, so the
-    agent loop that owns it catches this and ends the session with a context-limit stop.
+    Not an effect decision: retrying or replacing the machine cannot shrink the conversation. The inference resource
+    records the provider's refusal as a ``FinishReason.CONTEXT_EXCEEDED`` completion, so a resumed request replays it;
+    the agent loop ends its session with a context-limit stop, and a caller without one raises this.
     """
 
 

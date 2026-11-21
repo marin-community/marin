@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import threading
@@ -3703,3 +3704,14 @@ async def test_a_probe_child_reports_its_readers_last_physical_outcome(
     held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
     assert held.terminal is Terminal.HELD and driver.deferred(held) is (code == driver.DEFERRED)
     assert "queued" not in reads
+
+
+def test_a_second_process_replays_a_provider_context_refusal_without_asking_again(tmp_path: Path) -> None:
+    """The provider refused the author's request for a full context window and the author stopped; a cold resume in
+    another process, whose provider would now answer, replays that stop from the journal and makes no provider call."""
+    probe, root = [sys.executable, "-m", "lib.taskforge.tests.context_replay_probe"], Path(__file__).parents[3]
+    stop = "('author stopped: context_limit after 1 turns: maximum context length exceeded',)"
+    for mode, calls in (("record", 1), ("replay", 0)):
+        done = subprocess.run([*probe, mode, str(tmp_path)], cwd=root, capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr[-3000:]
+        assert done.stdout.strip() == f"{mode}: abandoned, {stop}, {calls} provider call(s)"

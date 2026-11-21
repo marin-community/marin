@@ -56,7 +56,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
-from taskforge.effects.issues import ContextExceeded, Hold, LogFailure
+from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
@@ -272,7 +272,7 @@ async def test_a_trial_without_a_transcript_is_a_named_stub_and_none_at_all_skip
 
 
 async def test_a_review_without_a_report_is_named_missing_evidence() -> None:
-    review = await reviewed(FakeInference((ContextExceeded("window full"),)))
+    review = await reviewed(FakeInference((Completion("window full", finish_reason=FinishReason.CONTEXT_EXCEEDED),)))
     assert review.end is ReviewEnd.NO_REPORT and review.missing[0].kind is EvidenceKind.SOLVE_REVIEW
 
 
