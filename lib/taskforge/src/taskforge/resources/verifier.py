@@ -31,8 +31,8 @@ class RoundVerifier:
         self.lock = asyncio.Lock()
         self.index = 0
         self.notify: Notify = logging.warning
-        self.rollouts = LeaseAtGrade(self)
-        self.grades = LeaseFirst(self)
+        self.rollouts = Lease(self, before_attempt=False)
+        self.grades = Lease(self, before_attempt=True)
 
     async def close(self) -> None:
         machine, self.machine, self.key = self.machine, None, None
@@ -85,23 +85,14 @@ class RoundVerifier:
 
 
 @dataclass(frozen=True, slots=True)
-class LeaseAtGrade:
-    """Solver rollouts: lease when grading starts, so the rollout phase does not hold the verifier."""
+class Lease:
+    """One of the two engines ``RoundVerifier`` describes: ``before_attempt`` for ``grades``, otherwise ``rollouts``."""
 
     verifier: RoundVerifier
+    before_attempt: bool
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        return await self.verifier.leased(spec, model, run_id, locked=False)
-
-
-@dataclass(frozen=True, slots=True)
-class LeaseFirst:
-    """Grade-only attempts (controls, adversary claims): lease before the engine starts its deadlines."""
-
-    verifier: RoundVerifier
-
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        if spec.verifier_machine is None:
-            return await self.verifier.engine.run_task(spec, model, run_id=run_id)
+        if not self.before_attempt or spec.verifier_machine is None:
+            return await self.verifier.leased(spec, model, run_id, locked=False)
         async with self.verifier.lock:
             return await self.verifier.leased(spec, model, run_id, locked=True)
