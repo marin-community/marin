@@ -269,7 +269,7 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.21.1",
+    revision="2026.11.21.2",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
@@ -278,7 +278,24 @@ _TRAIN_LONG = _snowball(
     recipe=replace(
         _ASYNC_P40,
         layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
-        config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(use_sample_packing=True))),
+        config=_ASYNC_P40.config.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    use_sample_packing=True,
+                    # KV all-gather supports sliding windows with Grug's five KV heads.
+                    policy=sections.Policy(
+                        megatron_config=sections.PolicyMegatronConfig(
+                            transformer_config_kwargs={"cp_comm_type": "all_gather"},
+                        ),
+                    ),
+                    ref=sections.Ref(
+                        megatron_config=sections.RefMegatronConfig(
+                            transformer_config_kwargs={"cp_comm_type": "all_gather"},
+                        ),
+                    ),
+                ),
+            ),
+        ),
     ),
     owned_keys=_OWNED_KEYS,
     updates=100,

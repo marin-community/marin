@@ -595,6 +595,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
             "2026.11.21.1": "90e2499b",
+            "2026.11.21.2": "e6ac6d88",
         },
         "train-long-harbor": {
             "2026.11.20.5": "e1f1635a",
