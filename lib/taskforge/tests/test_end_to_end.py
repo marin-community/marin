@@ -1366,7 +1366,7 @@ def drifting_script() -> tuple[Completion, ...]:
 class ServedOnce(FakeInference):
     """Fails any request an earlier launch already served: a replay that misses its recording pays twice."""
 
-    def __init__(self, completions: Sequence[Completion], served: Sequence[InferenceRequest]) -> None:
+    def __init__(self, completions: Sequence[Completion | Hold], served: Sequence[InferenceRequest]) -> None:
         super().__init__(completions)
         self.served = {event_digest(request) for request in served}
         self.repeated: list[InferenceRequest] = []
@@ -1379,10 +1379,12 @@ class ServedOnce(FakeInference):
         return await super().complete(request)
 
 
-async def held_after_stamp(monkeypatch: pytest.MonkeyPatch, driver_args: Namespace) -> list[InferenceRequest]:
+async def held_after_stamp(
+    monkeypatch: pytest.MonkeyPatch, driver_args: Namespace, stamp: FakeCommand | None = None
+) -> list[InferenceRequest]:
     """Hold the drifting author on its fourth model call and return the requests it was served."""
     held = FakeInference((*drifting_script()[:3], Hold("relay unavailable")))
-    first = replace(resources(DriftingEnvs(1), ()), inference=held)
+    first = replace(resources(DriftingEnvs(1, stamp), ()), inference=held)
     serve(monkeypatch, first)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
@@ -1399,12 +1401,17 @@ def tool_output(workpiece: Workpiece, call_id: str) -> str:
 
 
 # Review 2026-11-20: a re-executed command's fresh stdout reached the model, so every later request missed its
-# recording and the resume paid for the model calls again.
+# recording and the resume paid for the model calls again. A flipped truncation flag alone produced no note.
+@pytest.mark.parametrize(
+    "stamp",
+    [None, FakeCommand(CommandResult(0, "pid 11\n", "", 0, True), {STAMP: b"ok"})],
+    ids=["stdout drifts", "truncation only"],
+)
 async def test_resume_serves_recorded_command_output_and_notes_the_divergence(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, stamp: FakeCommand | None
 ) -> None:
     served = await held_after_stamp(monkeypatch, driver_args)
-    resumed = replace(resources(DriftingEnvs(2), ()), inference=ServedOnce(drifting_script()[3:], served))
+    resumed = replace(resources(DriftingEnvs(2, stamp), ()), inference=ServedOnce(drifting_script()[3:], served))
     serve(monkeypatch, resumed)
     with caplog.at_level(logging.INFO):
         await driver.one(driver_args)
@@ -1414,6 +1421,7 @@ async def test_resume_serves_recorded_command_output_and_notes_the_divergence(
     assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
     assert len(resumed.inference.requests) == len(drifting_script()) - 3
     assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
+    assert json.loads(tool_output(workpiece, "stamp"))["truncated"] is False
     assert tool_output(workpiece, "read") == "ok"
     assert isinstance(resumed.envs, Envs)
     fresh = resumed.envs.created[0]
@@ -1424,18 +1432,26 @@ async def test_resume_serves_recorded_command_output_and_notes_the_divergence(
     assert any(record.levelno == logging.INFO and record.getMessage() == notes[0] for record in caplog.records)
 
 
+def stamped(code: int, stamp: bytes = b"ok") -> FakeCommand:
+    return FakeCommand(CommandResult(code, "", f"exit {code}\n", 0, False), {STAMP: stamp})
+
+
+# Review 2026-11-20: 2 -> 3 and 2 -> 0 kept serving exit 2, and a read of other binary bytes kept serving the old ones.
 @pytest.mark.parametrize(
-    "stamp",
+    ("recorded", "stamp"),
     [
-        FakeCommand(CommandResult(1, "", "disk full\n", 0, False), {}),
-        FakeCommand(CommandResult(0, "pid 21\n", "", 0, False), {}),
+        (None, FakeCommand(CommandResult(1, "", "disk full\n", 0, False), {})),
+        (None, FakeCommand(CommandResult(0, "pid 21\n", "", 0, False), {})),
+        (stamped(2), stamped(3)),
+        (stamped(2), stamped(0)),
+        (stamped(0, b"\x00\xff"), stamped(0, b"\x00\xfe")),
     ],
-    ids=["command fails", "file missing"],
+    ids=["0 to 1", "file missing", "2 to 3", "2 to 0", "binary read"],
 )
 async def test_resume_holds_when_the_fresh_machine_cannot_rebuild_the_recorded_state(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, stamp: FakeCommand
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, recorded: FakeCommand | None, stamp: FakeCommand
 ) -> None:
-    served = await held_after_stamp(monkeypatch, driver_args)
+    served = await held_after_stamp(monkeypatch, driver_args, recorded)
     resumed = replace(resources(DriftingEnvs(2, stamp), ()), inference=ServedOnce(drifting_script()[3:], served))
     serve(monkeypatch, resumed)
     await driver.one(driver_args)
@@ -1446,6 +1462,9 @@ async def test_resume_holds_when_the_fresh_machine_cannot_rebuild_the_recorded_s
     assert isinstance(resumed.inference, ServedOnce)
     assert not resumed.inference.repeated and not resumed.inference.requests
     assert isinstance(resumed.envs, Envs) and resumed.envs.created[0].executed == ["stamp"]
+    # Same exit status: the command matched and the read of the file it wrote is what failed to rebuild.
+    same_status = stamp.result.exit_code == (recorded.result.exit_code if recorded else 0)
+    assert ("env.read_file" in str(workpiece.decisions[-1])) == same_status
 
 
 # Review 2026-11-20: resuming a partly validated workpiece must keep its finished solver trials.
@@ -1501,3 +1520,139 @@ async def test_a_journal_written_by_the_n3_dispatch_resumes_without_repeated_mod
     assert isinstance(resumed.inference, ServedOnce) and len(served) == 3 and not resumed.inference.repeated
     assert len(resumed.inference.requests) == len(drifting_script()) - 3
     assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
+
+
+STATUS = PurePosixPath("/workspace/status.txt")
+TASK = PurePosixPath("/workspace/task.json")
+
+
+class ProducerEnv(RecordingEnv):
+    """A guest process rewrites ``path`` before each read of it: read ``n`` finds ``contents[n]`` there, and the last
+    content stays. ``physical`` holds the bytes each read of ``path`` returned from the machine."""
+
+    def __init__(self, commands: Mapping[str, FakeCommand], path: PurePosixPath, contents: Sequence[bytes]) -> None:
+        super().__init__(commands, fail=False)
+        self.path, self.contents = path, contents
+        self.physical: list[bytes] = []
+
+    @override
+    async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes:
+        if path == self.path and len(self.physical) < len(self.contents):
+            self.files[path] = self.contents[len(self.physical)]
+        data = await super().read(path, offset=offset, limit=limit)
+        if path == self.path:
+            self.physical.append(data)
+        return data
+
+
+class ProducerEnvs(Envs):
+    def __init__(self, path: PurePosixPath, contents: Sequence[bytes], draft: bytes | None = None) -> None:
+        super().__init__()
+        self.path, self.contents = path, contents
+        self.producers: list[ProducerEnv] = []
+        if draft is not None:  # this machine's draft command writes other task bytes
+            writes = {**self.commands["write-draft"].writes, TASK: draft}
+            self.commands = {**self.commands, "write-draft": replace(self.commands["write-draft"], writes=writes)}
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> ProducerEnv:
+        env = ProducerEnv(self.commands, self.path, self.contents)
+        self.created.append(env)
+        self.producers.append(env)
+        return env
+
+
+def polling_script() -> tuple[Completion, ...]:
+    """Read a status file twice, then continue the ordinary script."""
+    poll = {"path": str(STATUS)}
+    return (call("read_file", poll, "poll-1"), call("read_file", poll, "poll-2"), *script()[1:])
+
+
+def last_message(request: InferenceRequest) -> str:
+    return request.messages[-1].content
+
+
+# Review 2026-11-20: on an empty journal the second of two identical reads was served the first read's bytes.
+async def test_a_first_launch_returns_each_physical_read_of_a_file_that_changes(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envs = ProducerEnvs(STATUS, (b"pending", b"done"))
+    first = resources(envs, polling_script())
+    serve(monkeypatch, first)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert envs.producers[0].physical == [b"pending", b"done"]
+    assert [tool_output(workpiece, poll) for poll in ("poll-1", "poll-2")] == ["pending", "done"]
+    assert isinstance(first.inference, FakeInference)
+    assert [last_message(request) for request in first.inference.requests[1:3]] == ["pending", "done"]
+    assert not [r for r in history(destination) if isinstance(r.event, Note)]
+    assert workpiece.terminal is Terminal.ACCEPTED and workpiece.submission is not None
+    assert executions(first) == (len(polling_script()), 2)
+
+
+N3_POLLS = Path(__file__).parent / "fixtures" / "n3-held-polls.jsonl.gz"
+
+
+# Review 2026-11-20: a journal recording pending then done served done to both polls and paid for two turns again.
+async def test_a_journal_from_n3_with_two_polls_serves_each_poll_its_own_recording(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fixture is the journal the n3 dispatch (6675b2b38b) published for this test's held first launch: two
+    identical reads of a file a guest process changed, then a hold on the third model call. Delete it, rather than
+    regenerate it, when a deliberate change to the author prompts, tool schemas or event identities invalidates it."""
+    held = FakeInference((*polling_script()[:2], Hold("relay unavailable")))
+    serve(monkeypatch, replace(resources(ProducerEnvs(STATUS, (b"pending", b"done")), ()), inference=held))
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    recorded = decode(gzip.decompress(N3_POLLS.read_bytes()))
+    assert [record.event for record in history(destination)] == [record.event for record in recorded]
+    envs = ProducerEnvs(STATUS, (b"pending", b"done"))
+    resumed = replace(resources(envs, ()), inference=ServedOnce(polling_script()[2:], held.requests[:-1]))
+    serve(monkeypatch, resumed)
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    await driver.one(driver_args)
+    workpiece = published_workpiece(destination)
+    assert envs.producers[0].physical == [b"pending", b"done"]
+    assert [tool_output(workpiece, poll) for poll in ("poll-1", "poll-2")] == ["pending", "done"]
+    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
+    assert len(resumed.inference.requests) == len(polling_script()) - 2
+    assert last_message(resumed.inference.requests[0]) == "done"  # the first new turn read the second poll
+    assert workpiece.terminal is Terminal.ACCEPTED and workpiece.submission is not None
+    assert not [r for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
+
+
+MALFORMED = b'{"malformed"'
+
+
+# Review 2026-11-20: the first submit after a resume was served the bytes an earlier grade had read, and accepted.
+@pytest.mark.parametrize("rebuilt", ["replaced after the grade", "malformed when rebuilt"])
+async def test_a_resumed_submit_never_accepts_bytes_the_sandbox_does_not_hold(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, rebuilt: str
+) -> None:
+    held = FakeInference((*script()[:3], Hold("relay unavailable")))
+    serve(monkeypatch, replace(resources(Envs(), ()), inference=held))
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    valid = arithmetic_task().model_dump_json().encode()
+    if rebuilt == "replaced after the grade":  # a guest process rewrites the draft between grade and submit
+        envs = ProducerEnvs(TASK, (valid, MALFORMED))
+    else:  # the fresh machine's draft command produced other bytes
+        envs = ProducerEnvs(TASK, (), draft=MALFORMED)
+    resumed = replace(resources(envs, ()), inference=ServedOnce((script()[3], Hold("stop")), held.requests[:-1]))
+    serve(monkeypatch, resumed)
+    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    await driver.one(driver_args)
+    workpiece = published_workpiece(destination)
+    assert workpiece.terminal is Terminal.HELD and workpiece.submission is None
+    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
+    assert executions(resumed)[1] == 0
+    if rebuilt == "replaced after the grade":
+        # The grade's read matched its recording; submit, beyond the recording, read the machine.
+        assert envs.producers[0].physical == [valid, MALFORMED]
+        assert len(resumed.inference.requests) == 2
+        assert last_message(resumed.inference.requests[1]).startswith("Invalid draft")
+    else:
+        assert envs.producers[0].physical == [MALFORMED]
+        assert not resumed.inference.requests
+        assert "Unreproducible" in str(workpiece.decisions[-1]) and "env.read_file" in str(workpiece.decisions[-1])

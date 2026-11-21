@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from functools import partial
 from pathlib import Path, PurePosixPath
+from typing import override
 
 import pytest
 from lib.taskforge.tests.effect_fakes import local_records
@@ -13,17 +15,27 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Event, Note, Resolved
+from taskforge.effects.events import LAUNCH_SCOPE, Event, Note, Resolved, event_digest
 from taskforge.effects.issues import Unreproducible
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion, Message, Role, ToolSchema
-from taskforge.resources.env import CommandResult, Env, ReadFile, RunCommand, WriteFile, run_command, write_file
+from taskforge.resources.env import (
+    CommandResult,
+    Env,
+    ReadFile,
+    RunCommand,
+    WriteFile,
+    read_file,
+    run_command,
+    write_file,
+)
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import Ids, NewId, new_id
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 from taskforge.resources.rollouts import SolverRollout
+from taskforge.stages.author import install_env
 
 
 def configure(ctx: Context, env: Env, client: InferenceClient, ids: Ids) -> None:
@@ -122,3 +134,81 @@ async def test_a_reexecuted_command_serves_its_recording_and_chains_it(
     await replay.drain()
     notes = [record.event.msg for record in replayed.records if isinstance(record.event, Note)]
     assert len(notes) == diverged
+
+
+class Gated(FakeEnv):
+    """Holds each command until its sibling has issued one too, so the two requests are in flight at once."""
+
+    def __init__(self, barrier: asyncio.Barrier, stdout: str) -> None:
+        super().__init__("image", {"ps": FakeCommand(CommandResult(0, stdout, "", 0, False), {})})
+        self.barrier = barrier
+        self.executed: list[str] = []
+
+    @override
+    async def run(self, cmd: str, *, timeout: float) -> CommandResult:
+        self.executed.append(cmd)
+        await self.barrier.wait()
+        return await super().run(cmd, timeout=timeout)
+
+
+async def adversaries(
+    log: EventLog, outputs: tuple[str, str]
+) -> tuple[list[CommandResult | BaseException], list[Gated]]:
+    """One launch in which two adversaries on identical machines run the same command at once."""
+    ctx = Context(log=log)
+    barrier = asyncio.Barrier(2)
+    envs = [Gated(barrier, stdout) for stdout in outputs]
+
+    async def adversary(name: str, env: Gated) -> CommandResult:
+        async with ctx.scope(f"adversary:{name}"):
+            install_env(ctx, env)
+            return await ctx.emit(RunCommand("ps", 5))
+
+    async with ctx.scope(LAUNCH_SCOPE):
+        results = await asyncio.gather(*map(adversary, "ab", envs), return_exceptions=True)
+    await ctx.drain()
+    return results, envs
+
+
+@pytest.mark.parametrize(
+    ("outputs", "held"), [(("1\n", "1\n"), False), (("1\n", "2\n"), True)], ids=["same", "different"]
+)
+async def test_sibling_machines_with_one_history_never_take_each_others_results(
+    outputs: tuple[str, str], held: bool
+) -> None:
+    """Sibling machines with one history share a replay key, and the record does not say whose result is whose. Equal
+    results are served; different ones hold before either is used."""
+    first = EventLog()
+    recorded, _ = await adversaries(first, outputs)
+    assert [result.stdout for result in recorded if isinstance(result, CommandResult)] == list(outputs)
+    resolved = [r.event for r in first.records if isinstance(r.event, Resolved)]
+    assert len({(event_digest(event.request), event.fingerprints) for event in resolved}) == 1
+    resumed, envs = await adversaries(EventLog(replay_from=first.records), (outputs[1], outputs[0]))
+    if held:
+        assert all(isinstance(result, Unreproducible) for result in resumed)
+        assert not any(env.executed for env in envs)
+    else:
+        assert [result.stdout for result in resumed if isinstance(result, CommandResult)] == list(outputs)
+        assert all(env.executed == ["ps"] for env in envs)
+
+
+async def test_each_launch_matches_the_occurrences_of_the_launches_before_it_in_order() -> None:
+    """A guest process changes a file between identical reads. Each resumed launch re-dispatches the reads recorded
+    before it, gets them in order, and reads the machine once beyond them."""
+    path = PurePosixPath("/workspace/status")
+    contents = (b"pending", b"done", b"failed")
+    records: tuple[Record, ...] = ()
+    reads = []
+    for launch in range(len(contents)):
+        ctx = Context(log=(log := EventLog(replay_from=records)))
+        env = FakeEnv("image", {})
+        ctx.handle(ReadFile, partial(read_file, notify=ctx.notify), env)
+        async with ctx.scope(LAUNCH_SCOPE):
+            served = []
+            for content in contents[: launch + 1]:
+                env.files[path] = content
+                served.append(await ctx.emit(ReadFile(path)))
+        await ctx.drain()
+        reads.append(served)
+        records = log.records
+    assert reads == [list(contents[: launch + 1]) for launch in range(len(contents))]

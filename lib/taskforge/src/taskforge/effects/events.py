@@ -116,6 +116,10 @@ class Retrying(Event[None]):
     cause: str
 
 
+LAUNCH_SCOPE = "workpiece"
+"""The root scope a launch enters first; its entry is where each launch begins in a recorded stream."""
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeEntered(Event[None]):
     kind = "scope.entered"

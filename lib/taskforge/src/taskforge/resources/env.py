@@ -307,9 +307,10 @@ async def reexecuted[T](
 ) -> T:
     """Apply ``event`` to this machine and return its recorded result when it has one.
 
-    A resumed stage rebuilds its machine by re-executing the recorded history. Serving the recorded result keeps the
-    model's view, and every later request, equal to the recording even when output drifts (a PID, a timestamp). A
-    drift is noted at INFO by digest; a failure where the recording succeeded cannot rebuild that history and holds.
+    A resumed stage rebuilds its machine by re-executing the recorded history. Serving a command's recorded output
+    keeps the model's view, and every later request, equal to the recording when only its text drifts (a PID, a
+    timestamp); that drift, the truncation flag included, is noted at INFO by digest. A failure where the recording
+    succeeded, a changed exit status, and a read of other bytes cannot rebuild that history and hold.
     """
     try:
         fresh = await retry_effect(event, operation, notify)
@@ -322,15 +323,16 @@ async def reexecuted[T](
     if isinstance(recorded, Missing):
         return fresh
     if isinstance(fresh, CommandResult) and isinstance(recorded, CommandResult):
-        if recorded.exit_code == 0 != fresh.exit_code:
-            raise Unreproducible(f"{event.kind} exited 0 when recorded but {fresh.exit_code} here")
-        observed = _stable(recorded), _stable(fresh)
-    else:
-        observed = recorded, fresh
-    if (before := digest(observed[0])) != (after := digest(observed[1])):
-        message = f"Replay of {event.kind} diverged: recorded {before[:12]}, re-executed {after[:12]}"
-        logging.info(message)
-        notify(Note(message))
+        if recorded.exit_code != fresh.exit_code:
+            raise Unreproducible(f"{event.kind} exited {recorded.exit_code} when recorded but {fresh.exit_code} here")
+        before, after = digest((_stable(recorded), recorded.truncated)), digest((_stable(fresh), fresh.truncated))
+        if before != after:
+            message = f"Replay of {event.kind} diverged: recorded {before[:12]}, re-executed {after[:12]}"
+            logging.info(message)
+            notify(Note(message))
+    elif fresh != recorded:
+        # File content is the machine's state; a read of the same range that differs means the history did not rebuild.
+        raise Unreproducible(f"{event.kind} read other bytes than were recorded ({digest(fresh)[:12]})")
     return recorded
 
 

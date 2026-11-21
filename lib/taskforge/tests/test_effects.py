@@ -136,10 +136,11 @@ class Shifting:
 
 @pytest.mark.parametrize("policy", [ReplayPolicy.CACHE, ReplayPolicy.REEXECUTE])
 async def test_replay_keys_on_the_event_and_the_resource_fingerprint_at_emission(policy: ReplayPolicy) -> None:
-    log = EventLog()
     fingerprint = Fingerprint("fake", "before", policy)
-    await log.record(Resolved(Number(1), (fingerprint,), 10))
-    await log.record(Resolved(Number(2), (fingerprint,), 20))
+    previous = EventLog()
+    await previous.record(Resolved(Number(1), (fingerprint,), 10))
+    await previous.record(Resolved(Number(2), (fingerprint,), 20))
+    log = EventLog(replay_from=previous.records)
     ctx = Context(log=log)
     resource = Shifting(fingerprint)
     executed: list[tuple[int, int | Missing]] = []

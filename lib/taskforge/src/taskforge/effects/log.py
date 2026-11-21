@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from itertools import islice
@@ -17,16 +18,20 @@ from pydantic import TypeAdapter
 from taskforge.effects.events import (
     BYTES_TAG,
     EVENT_TYPES,
+    LAUNCH_SCOPE,
     MAPPING_TAG,
     Event,
     Fingerprint,
+    ReplayPolicy,
     Resolved,
     Retrying,
+    ScopeEntered,
     StageCompleted,
+    digest,
     event_digest,
     json_value,
 )
-from taskforge.effects.issues import LogFailure
+from taskforge.effects.issues import LogFailure, Unreproducible
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
@@ -192,8 +197,52 @@ class JsonlSink(Sink):
         return records
 
 
+type Key = tuple[str, tuple[Fingerprint, ...]]
+
+
+def cached(fingerprints: tuple[Fingerprint, ...]) -> bool:
+    return all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
+
+
+def occurrences(records: Sequence[Record]) -> tuple[dict[Key, list[object]], frozenset[Key]]:
+    """Each re-executed key's results in dispatch order, and the keys whose results cannot be told apart.
+
+    A launch re-dispatches the occurrences recorded before it, so its n-th result for a key replaces the n-th one.
+    Sibling machines with one history share keys. When two requests with one digest were in flight at once in a
+    launch and a key's results there differ, the record does not say whose result is whose: the key is ambiguous.
+    """
+    history: dict[Key, list[object]] = {}
+    ambiguous: set[Key] = set()
+    launches: list[list[Event[object]]] = [[]]
+    for record in records:
+        if isinstance(record.event, ScopeEntered) and record.event.name == LAUNCH_SCOPE:
+            launches.append([])
+        launches[-1].append(record.event)
+    for launch in launches:
+        position, inflight, overlapped, results = Counter[Key](), Counter[str](), set[str](), dict[Key, set[str]]()
+        for event in launch:
+            if not isinstance(event, Resolved):
+                inflight[request := event_digest(event)] += 1
+                if inflight[request] > 1:
+                    overlapped.add(request)
+                continue
+            inflight[request := event_digest(event.request)] -= 1
+            if not cached(event.fingerprints):
+                key = request, event.fingerprints
+                history.setdefault(key, [])[position[key] : position[key] + 1] = [event.value]  # replace or append
+                position[key] += 1
+                results.setdefault(key, set()).add(digest(event.value))
+        ambiguous.update(key for key, seen in results.items() if key[0] in overlapped and len(seen) > 1)
+    return history, frozenset(ambiguous)
+
+
 class EventLog:
-    """Replay source and ordered stream; retain records even when persistence fails."""
+    """Replay source and ordered stream; retain records even when persistence fails.
+
+    A cached effect replays the last result recorded for its key, in any launch. A re-executed effect is matched to
+    the next unconsumed occurrence of its key in the launches before this one; this launch's own results only advance
+    that position, so an effect beyond the recorded history gets its fresh result.
+    """
 
     def __init__(
         self,
@@ -209,11 +258,13 @@ class EventLog:
         self._replayable = replayable
         self._records = list(replay_from)
         self._pending: list[Record] = []
-        self._index: dict[tuple[str, tuple[Fingerprint, ...]], object] = {
+        self._index: dict[Key, object] = {
             (event_digest(record.event.request), record.event.fingerprints): record.event.value
             for record in replay_from
-            if isinstance(record.event, Resolved) and replayable(record.event)
+            if isinstance(record.event, Resolved) and cached(record.event.fingerprints) and replayable(record.event)
         }
+        self._history, self._ambiguous = occurrences(replay_from)
+        self._consumed: Counter[Key] = Counter()
         self._attempts = attempts
         self._lock = asyncio.Lock()
 
@@ -228,8 +279,12 @@ class EventLog:
             raise LogFailure("Cannot encode the event") from error
         record = Record(len(self._records) + 1, time.time(), event)
         self._records.append(record)
-        if isinstance(event, Resolved) and self._replayable(event):
-            self._index[event_digest(event.request), event.fingerprints] = event.value
+        if isinstance(event, Resolved):
+            key = event_digest(event.request), event.fingerprints
+            if not cached(event.fingerprints):
+                self._consumed[key] += 1
+            elif self._replayable(event):
+                self._index[key] = event.value
         if self._sink is None:
             return
         self._pending.append(record)
@@ -249,7 +304,18 @@ class EventLog:
             raise LogFailure("Persistence requires at least one attempt")
 
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
-        return cast(T | Missing, self._index.get((event_digest(event), fingerprints), Missing()))
+        """The result to replay for ``event``; for a re-executed effect, its next historical occurrence.
+
+        Raises:
+            Unreproducible: sibling machines recorded different results for this re-executed key at once.
+        """
+        key = event_digest(event), fingerprints
+        if cached(fingerprints):
+            return cast(T | Missing, self._index.get(key, Missing()))
+        if key in self._ambiguous:
+            raise Unreproducible(f"{event.kind} was recorded with different results on sibling machines at once")
+        recorded = self._history.get(key, [])
+        return cast(T, recorded[self._consumed[key]]) if self._consumed[key] < len(recorded) else Missing()
 
 
 @dataclass(frozen=True, slots=True)
