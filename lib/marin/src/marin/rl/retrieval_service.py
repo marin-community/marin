@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -30,6 +31,8 @@ from taskcompendium.openresearcher import OpenResearcherState
 from marin.inference.iris import _terminate_job, _wait_for_endpoint
 from marin.rl.retrieval_backend import BM25_RELATIVE_PATH, HEALTH_PATH
 
+logger = logging.getLogger(__name__)
+
 RETRIEVAL_PORT_NAME = "retrieval"
 
 
@@ -54,7 +57,9 @@ def stage_index(config: RetrievalServiceConfig) -> None:
         raise ValueError("Index manifest differs from frozen retrieval state")
     root = Path(config.root) / BM25_RELATIVE_PATH
     root.mkdir(parents=True, exist_ok=True)
-    for entry in json.loads(manifest):
+    entries = json.loads(manifest)
+    logger.info("Staging %d retrieval index files from %s", len(entries), config.index_uri)
+    for number, entry in enumerate(entries, start=1):
         relative = Path(entry["path"])
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError("Index manifest contains an unsafe path")
@@ -66,6 +71,7 @@ def stage_index(config: RetrievalServiceConfig) -> None:
         actual = file_sha256(StoragePath(str(target)))
         if target.stat().st_size != entry["bytes"] or actual != entry["sha256"]:
             raise ValueError(f"Index file differs from frozen manifest: {relative}")
+        logger.info("Verified retrieval index file %d/%d: %s", number, len(entries), relative)
 
 
 def run_retrieval_service(config: RetrievalServiceConfig) -> None:
@@ -79,6 +85,7 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
     require_regional_coreweave_bucket(config.index_uri, config.region)
     configure_coreweave_s3()
     stage_index(config)
+    logger.info("Retrieval index verified; starting pinned backend")
     port = context.get_port(RETRIEVAL_PORT_NAME)
     address = f"http://{info.advertise_host}:{port}"
     state_path = Path(config.root) / "service-state.json"
@@ -111,6 +118,7 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
                     if response.json()["state"] != config.state.model_dump(mode="json"):
                         raise ValueError("Pinned retrieval backend health differs")
                     break
+            logger.info("Retrieval backend healthy; registering %s", config.endpoint_name)
             with context.registry.registered(config.endpoint_name, address):
                 if process.wait() != 0:
                     raise RuntimeError("Pinned retrieval backend failed")
@@ -166,7 +174,8 @@ def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
         adopt_existing=False,
     )
     try:
-        address, _ = _wait_for_endpoint(job, launch.config.endpoint_name, launch.startup_timeout)
+        endpoint_name = f"{iris_ctx().namespace}/{launch.config.endpoint_name}"
+        address, _ = _wait_for_endpoint(job, endpoint_name, launch.startup_timeout)
         response = httpx.get(address + HEALTH_PATH, timeout=launch.startup_timeout, trust_env=False)
         response.raise_for_status()
         if response.json()["state"] != launch.config.state.model_dump(mode="json"):

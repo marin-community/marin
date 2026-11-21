@@ -45,7 +45,7 @@ class PythonProbe(BaseModel):
     backend: str
     image: str
     namespace_isolated: bool
-    network_routes_absent: bool
+    ipv4_routes_absent: bool
     state_persisted: bool
 
 
@@ -121,7 +121,7 @@ async def qualify(rows: list[PythonQualificationInput]) -> tuple[PythonProbe, ..
                         backend=Backend.LOCAL.value,
                         image=image,
                         namespace_isolated=True,
-                        network_routes_absent=True,
+                        ipv4_routes_absent=True,
                         state_persisted=True,
                     )
                 )

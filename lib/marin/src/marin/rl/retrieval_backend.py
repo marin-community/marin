@@ -98,8 +98,8 @@ def retrieval_handler(index: OpenResearcherIndex, state: dict) -> type[BaseHTTPR
             chunk = content[offset : offset + CHUNK_BYTES]
             self.respond({"data": base64.b64encode(chunk).decode(), "done": offset + len(chunk) == len(content)})
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            pass
+        def log_message(self, format: str, *_args: object) -> None:  # noqa: A002
+            """Suppress HTTP request logs while retaining the inherited callback signature."""
 
     return Handler
 
