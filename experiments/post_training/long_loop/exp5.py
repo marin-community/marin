@@ -18,6 +18,7 @@ from pathlib import Path
 
 import click
 import draccus
+from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
 from marin.rl.curriculum import RlCurriculum
@@ -150,7 +151,8 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
     if context.params["default_version"] != spec.version:
         raise click.UsageError("--version must equal the round's immutable version")
     workspace = Path(__file__).resolve().parents[3]
-    require_clean_revision(workspace, source_revision)
+    if get_job_info() is None:
+        require_clean_revision(workspace, source_revision)
     require_permanent_round_storage(spec)
     for pin in INITIAL_EVAL_FILES:
         pin.read()
