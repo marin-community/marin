@@ -49,6 +49,7 @@ prints the same list.
 The driver job fails when any child exits with a code other than 0, 3 or 75, apart from the probe's 10; a 10 from
 any other child is a failure.
 
-Journal roots are format-fenced: a root written in any other journal format exits 4 with the root untouched,
-before anything is claimed, whether it is running, held or finished. No migration for Taskforge journals ships in
-this repository, so rebuild such proposals by launching with a fresh `--output` prefix.
+Output roots follow the format fence and the rollout rule in the
+[Taskforge README's Outputs section](../../../lib/taskforge/README.md#outputs): a root in another journal format
+exits 4 untouched, and a root written by this driver is never launched by an earlier one. No migration for Taskforge
+journals ships in this repository, so an exit-4 root, like a rollback of the driver, takes a fresh `--output` prefix.
