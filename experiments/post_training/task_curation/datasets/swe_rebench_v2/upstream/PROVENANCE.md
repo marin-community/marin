@@ -9,7 +9,7 @@ Vendored from upstream:
 - `log_parsers.py` ← `lib/harbor_tasks/log_parsers.py` (adds type aliases for
   upstream annotations that otherwise reference undefined names)
 - `task_files.py` ← `lib/harbor_tasks/task_files.py` (adapted: `HERE` points at this directory so the
-  vendored templates and parsers load; module docstring describes the grader change)
+  vendored templates and parsers load)
 - `templates/{test.sh, solve.sh, apply_patch.sh}` ← `lib/harbor_tasks/templates/`
 - `templates/grade.py.tmpl` ← `lib/harbor_tasks/templates/grade.py` (renamed and changed as described below)
 - `LICENSE` ← the repository MIT license
@@ -18,7 +18,7 @@ The dataset rows come from `ibragim-bad/SWE-rebench-V2.1` (CC BY 4.0), pinned at
 `26c0145ded93168b0d5d095420155901ad2d5a2f` — the same author's re-verified release these templates render.
 The renderer keeps the upstream task format and tests, subject to the grader change below.
 
-The vendored `grade.py.tmpl` marks an empty parsed log with no expected test IDs as
-`UNSCORABLE`, leaves `resolved` false, and exits nonzero, so `test.sh` leaves its
-initialized reward at zero. The source template lacks this explicit verdict. Its
-parser already requires a nonempty expected set before resolving a task.
+The vendored `grade.py.tmpl` adds `unscorable: true` and an `UNSCORABLE` log line
+when no test IDs are expected and the parsed log is empty. Upstream's
+`normalized_passed_subset` already requires a nonempty expected set, so the
+grader exits nonzero and `test.sh` leaves reward at zero in both versions.

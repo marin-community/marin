@@ -40,7 +40,6 @@ def grade(config, test_log):
     pass_to_pass = config["PASS_TO_PASS"]
     results = parse_test_log(test_log)
     expected = {"PASSED": set(fail_to_pass) | set(pass_to_pass)}
-    # An empty expected set and empty parse must not resolve by a vacuous subset check.
     unscorable = not fail_to_pass and not pass_to_pass and not any(results.values())
     actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
 
@@ -56,7 +55,7 @@ def grade(config, test_log):
     return {
         "log_parser": LOG_PARSER,
         "unscorable": unscorable,
-        "resolved": normalized_passed_subset(results, expected) and not unscorable,
+        "resolved": normalized_passed_subset(results, expected),
         "parsed_counts": {key: len(value) for key, value in results.items()},
         "fail_to_pass": status(fail_to_pass),
         "pass_to_pass": status(pass_to_pass),
