@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Prepare regional OCI mirrors without changing a task's registry image identity."""
 
 from pathlib import Path
@@ -9,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
+
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import ImageCache, PreparedImage, RegistryImage, image_cache_path
 

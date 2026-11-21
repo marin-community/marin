@@ -18,6 +18,7 @@ from uuid import uuid4
 import cloudpickle
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
+from pydantic import BaseModel, ConfigDict, Field
 
 from shellbox.backends.local.transfers import _guest_member, unpack_local_archive
 from shellbox.image import RegistryImage
@@ -29,6 +30,7 @@ from shellbox.machine import (
     Machine,
     MachineFactory,
     MachineSpec,
+    MachineTerminated,
     ProcessMachine,
     ProcessScope,
     ProcessScopeMachine,
@@ -55,6 +57,19 @@ class MachineServiceContract:
     memory_mb: int
     region: str
     architecture: str
+    host_network_namespace: str | None = None
+
+
+class MachineServiceBinding(BaseModel):
+    """A private endpoint and the identities its advertised contract must match."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    address: str
+    actor_name: str
+    region: str
+    images: tuple[str, ...]
+    rpc_timeout: float = Field(gt=0)
 
 
 def check_service_spec(contract: MachineServiceContract, spec: MachineSpec) -> RegistryImage:
@@ -113,6 +128,7 @@ class ProcessExit:
 @dataclass
 class MachineOwner:
     machines: dict[str, Machine] = field(default_factory=dict)
+    closing: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     processes: dict[str, tuple[str, ProcessSession]] = field(default_factory=dict)
     scopes: dict[str, tuple[str, ProcessScope]] = field(default_factory=dict)
 
@@ -265,6 +281,7 @@ class MachineService:
         self._blobs[owner, identifier + "-result"] = output
 
     def ready(self, owner: str, identifier: str) -> bool:
+        """Return whether an outcome is available, including failure or cancellation."""
         return self._on_loop(self._ready(owner, identifier))
 
     async def _ready(self, owner: str, identifier: str) -> bool:
@@ -301,12 +318,22 @@ class MachineService:
         self._owners[owner].machines[identifier] = machine
 
     async def _run(self, owner: str, machine: str, command: Command) -> Result:
-        return await self._owners[owner].machines[machine].run(command)
+        return await self._machine(owner, machine).run(command)
+
+    def _machine(self, owner: str, identifier: str) -> Machine:
+        state = self._owners[owner]
+        if identifier in state.closing:
+            raise MachineTerminated("Machine service is closing this machine")
+        return state.machines[identifier]
 
     async def _close_machine(self, owner: str, identifier: str) -> None:
         state = self._owners[owner]
-        machine = state.machines.pop(identifier, None)
+        machine = state.machines.get(identifier)
         if machine is None:
+            return
+        closing = state.closing.get(identifier)
+        if closing is not None and not closing.done():
+            await await_cleanup(closing)
             return
         operations: list[Awaitable[object]] = []
         for key, (machine_id, process) in tuple(state.processes.items()):
@@ -323,21 +350,23 @@ class MachineService:
                 await _complete_all(operations)
             finally:
                 await machine.close()
-
-        try:
-            await await_cleanup(own_cleanup(destroy()))
-        finally:
+            del state.machines[identifier]
+            del state.closing[identifier]
             self._slots.release()
+
+        closing = own_cleanup(destroy())
+        state.closing[identifier] = closing
+        await await_cleanup(closing)
 
     async def _upload(self, owner: str, machine: str, blob: str, target: str) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = _unpack(self._blobs[owner, blob].stream, Path(temporary))
-            await await_cleanup(own_cleanup(self._owners[owner].machines[machine].upload(source, target)))
+            await await_cleanup(own_cleanup(self._machine(owner, machine).upload(source, target)))
 
     async def _download(self, owner: str, machine: str, source: str, blob: str) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "payload"
-            await await_cleanup(own_cleanup(self._owners[owner].machines[machine].download(source, target)))
+            await await_cleanup(own_cleanup(self._machine(owner, machine).download(source, target)))
             output = TransferBlob()
             try:
                 _pack(target, output.stream)
@@ -347,7 +376,7 @@ class MachineService:
             self._blobs[owner, blob] = output
 
     async def _open_process(self, owner: str, machine: str, identifier: str, command: Command) -> None:
-        selected = self._owners[owner].machines[machine]
+        selected = self._machine(owner, machine)
         if not isinstance(selected, ProcessMachine):
             raise UnsupportedMachineSpec("Machine service factory does not support persistent process pipes")
         process = await acquire_owned(asyncio.create_task(selected.open_process(command)))
@@ -373,7 +402,7 @@ class MachineService:
             await entry[1].close()
 
     async def _open_scope(self, owner: str, machine: str, identifier: str) -> None:
-        selected = cast(ProcessScopeMachine, self._owners[owner].machines[machine])
+        selected = cast(ProcessScopeMachine, self._machine(owner, machine))
         scope = await selected.open_process_scope()
         self._owners[owner].scopes[identifier] = machine, scope
 

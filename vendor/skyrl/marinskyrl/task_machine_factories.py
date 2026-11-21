@@ -12,7 +12,8 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
 
 from shellbox.backends.iris.local_images import LocalMachineSettings, local_machine_factory
-from marinskyrl.local_service import LocalServiceSettings, local_service_factory
+from shellbox.backends.iris.machine_service import MachineServiceBinding
+from marinskyrl.local_service import local_service_factory
 
 
 def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactory]:
@@ -22,7 +23,7 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
         raise ValueError("Configure exactly one LOCAL factory: local or local_service")
     service = task_sessions.get("local_service")
     if service is not None:
-        settings = LocalServiceSettings.model_validate(OmegaConf.to_container(service, resolve=True))
+        settings = MachineServiceBinding.model_validate(OmegaConf.to_container(service, resolve=True))
         factories[Backend.LOCAL] = local_service_factory(settings)
     if task_sessions.get("local") is not None:
         local_settings = LocalMachineSettings.model_validate(OmegaConf.to_container(task_sessions.local, resolve=True))

@@ -284,3 +284,21 @@ async def test_lost_start_response_does_not_replay_a_command(service, monkeypatc
     result = await machine.run(Command((sys.executable, "-c", "print('recovered')")))
     assert result.stdout == b"recovered\n"
     await factory.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_teardown_remains_owned_for_explicit_cleanup(service, monkeypatch):
+    factory, native, _ = service
+    machine = await factory.create(SPEC)
+    selected = native.machines[0]
+
+    async def failed_close():
+        raise RuntimeError("teardown failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(selected, "close", failed_close)
+        with pytest.raises(RuntimeError, match="teardown failed"):
+            await machine.close()
+    await machine.close()
+    assert selected.closed.is_set()
+    await factory.close()

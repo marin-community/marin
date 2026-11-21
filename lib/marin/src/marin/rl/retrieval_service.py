@@ -12,25 +12,23 @@ import subprocess
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
-from fray.current_client import current_client
-from fray.types import ANY_REGION, Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
+from fray.types import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, require_secret
 from rigging.timing import Duration
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.openresearcher import OpenResearcherState
 
-from marin.inference.iris import _terminate_job, _wait_for_endpoint
 from marin.rl.retrieval_backend import BM25_RELATIVE_PATH, HEALTH_PATH
+from marin.rl.services import cpu_service
 
 logger = logging.getLogger(__name__)
 
@@ -154,42 +152,19 @@ class RetrievalServiceLaunch:
 @contextmanager
 def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
     """Yield the ready private HTTP endpoint of a service owned by the current RL run."""
-    if launch.resources.target_cluster is not None:
-        raise ValueError("Retrieval service must inherit the RL run cluster")
-    if launch.resources.regions is not None and tuple(launch.resources.regions) != (launch.config.region,):
-        raise ValueError("Retrieval service placement must match its run region")
-    # CoreWeave CPU nodes lack region labels. The child inherits its single-region
-    # run cluster; ANY clears a GPU parent's region selector without routing elsewhere.
-    resources = replace(launch.resources, regions=(ANY_REGION,))
-    storage = {
-        name: launch.environment.secrets[name] if name in launch.environment.secrets else require_secret(name)
-        for name in COREWEAVE_SECRET_NAMES
-    }
-    environment = replace(
-        launch.environment,
-        secrets={**launch.environment.secrets, **storage},
-        secret_behavior=SecretBehavior.ISOLATE,
+    request = JobRequest(
+        name=launch.config.endpoint_name,
+        entrypoint=Entrypoint.from_callable(run_retrieval_service, args=(launch.config,)),
+        resources=launch.resources,
+        environment=launch.environment,
+        timeout=launch.lifetime,
+        max_retries_failure=0,
+        max_retries_preemption=0,
+        ports=(RETRIEVAL_PORT_NAME,),
     )
-    job = current_client().submit(
-        JobRequest(
-            name=launch.config.endpoint_name,
-            entrypoint=Entrypoint.from_callable(run_retrieval_service, args=(launch.config,)),
-            resources=resources,
-            environment=environment,
-            timeout=launch.lifetime,
-            max_retries_failure=0,
-            max_retries_preemption=0,
-            ports=(RETRIEVAL_PORT_NAME,),
-        ),
-        adopt_existing=False,
-    )
-    try:
-        endpoint_name = f"{iris_ctx().namespace}/{launch.config.endpoint_name}"
-        address, _ = _wait_for_endpoint(job, endpoint_name, launch.startup_timeout)
-        response = httpx.get(address + HEALTH_PATH, timeout=launch.startup_timeout, trust_env=False)
+    with cpu_service(request, region=launch.config.region, startup_timeout=launch.startup_timeout) as endpoint:
+        response = httpx.get(endpoint.address + HEALTH_PATH, timeout=launch.startup_timeout, trust_env=False)
         response.raise_for_status()
         if response.json()["state"] != launch.config.state.model_dump(mode="json"):
             raise ValueError("Retrieval service health differs from the run pinned state")
-        yield address
-    finally:
-        _terminate_job(job)
+        yield endpoint.address

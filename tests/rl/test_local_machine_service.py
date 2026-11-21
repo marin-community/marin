@@ -5,6 +5,8 @@
 
 from dataclasses import replace
 
+import marin.rl.local_machine_service as service
+import marin.rl.services as service_launch
 import pytest
 from fray.current_client import set_current_client
 from fray.types import ResourceConfig, create_environment
@@ -16,8 +18,6 @@ from rigging.timing import Duration
 from shellbox.backends.iris.local_images import LocalImageMirror, LocalMachineSettings
 from shellbox.backends.iris.machine_service import MachineServiceContract
 from shellbox.machine import LINUX_PROCESS_CAPABILITIES, Backend, CommandSemantics
-
-import marin.rl.local_machine_service as service
 
 IMAGE = "fixture@sha256:" + "a" * 64
 
@@ -78,7 +78,7 @@ def test_parent_terminates_the_verified_service_after_success_or_failure(monkeyp
         "US-EAST-08A",
         "x86_64",
     )
-    monkeypatch.setattr(service, "require_secret", lambda name: "fixture")
+    monkeypatch.setattr(service_launch, "require_secret", lambda name: "fixture")
     info = JobInfo(task_id=JobName.from_wire("/fixture/run/0"))
     parent = ServiceClient()
     with IrisClient.in_cluster("http://controller.fixture", workspace=tmp_path) as client:
@@ -88,12 +88,12 @@ def test_parent_terminates_the_verified_service_after_success_or_failure(monkeyp
         actor = DescriptorActor(contract)
         server.register(actor_name, actor)
         port = server.serve_background()
-        monkeypatch.setattr(service, "_wait_for_endpoint", lambda *args: (f"http://127.0.0.1:{port}", {}))
+        monkeypatch.setattr(service_launch, "_wait_for_endpoint", lambda *args: (f"http://127.0.0.1:{port}", {}))
         try:
             with iris_ctx_scope(context), set_current_client(parent):
                 if body_error is None:
                     with service.local_machine_service(launch) as endpoint:
-                        assert endpoint.task_session_config()["images"] == [IMAGE]
+                        assert endpoint.images == (IMAGE,)
                 else:
                     with pytest.raises(RuntimeError, match="training failed"):
                         with service.local_machine_service(launch):

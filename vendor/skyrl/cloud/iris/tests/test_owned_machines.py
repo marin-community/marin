@@ -63,7 +63,7 @@ async def test_rollout_owned_factory_keeps_private_http_relay_process_support():
     factory = OwnedMachineFactory(PipeFactory(native), "local")
     machine = await factory.create(MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64)))
 
-    async def handler(request):
+    async def handler(_request):
         return HttpResponse(status=200, body=b"owned relay")
 
     with socket.socket() as reserved:

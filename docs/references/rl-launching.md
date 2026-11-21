@@ -523,7 +523,7 @@ with local_machine_service(launch) as endpoint:
     document = yaml.safe_load(config.launch_config_yaml)
     sessions = document["skyrl"]["environment"]["task_sessions"]
     sessions["local"] = None
-    sessions["local_service"] = endpoint.task_session_config()
+    sessions["local_service"] = endpoint.model_dump(mode="json")
     bound = replace(config, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
     result = run_skyrl(bound)
 ```
