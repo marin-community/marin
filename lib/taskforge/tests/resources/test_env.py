@@ -4,6 +4,7 @@
 import asyncio
 import errno
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -56,9 +57,11 @@ from taskforge.resources.env import (
     ShellboxEnv,
     ShellboxEnvFactory,
     WriteFile,
+    WriteFiles,
     read_file,
     run_command,
     write_file,
+    write_files,
 )
 from taskforge.resources.sandbox.factories import shellsim_factory
 
@@ -508,6 +511,92 @@ async def test_no_failure_after_dispatch_reruns_the_command_or_escapes(
     assert controller.sent("command") == 1 + retried
     assert _appends(tmp_path) == (0 if site == "command" and not ran and not retried else 1)
     assert sum(isinstance(event, Retrying) for event in events) == (retried and fault is Fault.CONNECT_REFUSED)
+
+
+LATE = Fault.SETUP_FAILED_LATE
+FILES = tuple((PurePosixPath(f"dir/f{index}.txt"), f"payload {index}\n".encode()) for index in range(4))
+
+
+def _sandbox(root: Path, faults: Sequence[Injection] = ()) -> tuple[ShellboxEnv, LocalController]:
+    root.mkdir()
+    controller = LocalController(faults)
+    return ShellboxEnv(local_iris_machine(root, controller), "image", Notes(), AsyncExitStack(), str(root)), controller
+
+
+async def _write(env: Env, count: int, notify: Callable[[Event[None]], object]) -> None:
+    """Write the first ``count`` files as the write tool (one file) or stage hydration (several) does."""
+    if count == 1:
+        await write_file(WriteFile(*FILES[0]), env, notify=notify)
+    else:
+        await write_files(WriteFiles(FILES[:count]), env, notify=notify)
+
+
+# Review 2026-11-21 (follow-up 4): a lost upgrade reply for the first upload chunk retried the write in the same
+# sandbox, and the original append landed after the retry truncated the file: `File written` with 14 bytes on disk
+# for a 7-byte write. Two-file hydration corrupted its first file the same way.
+@pytest.mark.parametrize("count", [1, 2], ids=["write", "hydrate-2"])
+async def test_lost_upload_reply_restarts_on_a_fresh_sandbox_with_exact_bytes(tmp_path: Path, count: int) -> None:
+    first, controller = _sandbox(tmp_path / "sandbox-0", [("append", LATE, True)])
+    events: list[Event[None]] = []
+    with pytest.raises(Restart, match="write outcome unknown"):
+        await _write(first, count, events.append)
+    assert controller.sent("truncate") == 1 and not events, "the write must not be resent to this sandbox"
+    fresh, _ = _sandbox(tmp_path / "sandbox-1")
+    await _write(fresh, count, events.append)
+    for path, data in FILES[:count]:
+        assert await read_file(ReadFile(path), fresh, notify=events.append) == data
+
+
+# Every guest mutation Taskforge drives through ShellboxEnv, with one helper's upgrade reply lost while that helper is
+# still running. Only a resend to a fresh guest name, the archive of four-file hydration, is safe on the same sandbox;
+# a read-only helper keeps its in-place retry, and so does a write that was positively never sent.
+@pytest.mark.parametrize(
+    "operation,fault,resent",
+    [
+        ("write", "truncate:setup-failed-late:ran", False),
+        ("write", "append:setup-failed-late:ran", False),
+        ("hydrate-2", "append:setup-failed-late:ran", False),
+        ("hydrate-4", "append:setup-failed-late:ran", True),
+        ("hydrate-4", "command:setup-failed-late:ran", False),
+        ("run", "command:setup-failed-late:ran", False),
+        ("read", "read-chunk:setup-failed-late:ran", True),
+        ("write", "append:connect-refused:unsent", True),
+        ("write", "append:admission-refused:unsent", True),
+    ],
+)
+async def test_lost_helper_reply_resends_only_a_read_or_a_fresh_name_in_place(
+    tmp_path: Path, fast_refusal_backoff: None, operation: str, fault: str, resent: bool
+) -> None:
+    ((site, kind, _),) = injection = _injected([fault])
+    env, controller = _sandbox(tmp_path / "sandbox", injection)
+    events: list[Event[None]] = []
+    count = int(operation.removeprefix("hydrate-")) if operation.startswith("hydrate") else 1
+    if operation == "run":
+        action = run_command(
+            RunCommand("mkdir -p dir && printf 'payload 0\\n' > dir/f0.txt", 5), env, notify=events.append
+        )
+    elif operation == "read":
+        (tmp_path / "sandbox" / "dir").mkdir()
+        (tmp_path / "sandbox" / FILES[0][0]).write_bytes(FILES[0][1])
+        action = read_file(ReadFile(FILES[0][0]), env, notify=events.append)
+    else:
+        action = _write(env, count, events.append)
+    try:
+        if not resent:
+            with pytest.raises(Restart):
+                await action
+        else:
+            assert await action in (None, FILES[0][1])
+            assert [(tmp_path / "sandbox" / path).read_bytes() for path, _ in FILES[:count]] == [
+                data for _, data in FILES[:count]
+            ]
+        assert controller.sent(site) == 1 + resent
+        # The exec pool's admission refusal is retried inside the machine's own send.
+        assert sum(isinstance(event, Retrying) for event in events) == (resent and kind is not Fault.ADMISSION_REFUSED)
+    finally:
+        for script in controller.scripts:
+            for archive in re.findall(r"/tmp/forge-hydration-\w+\.tar", script):
+                Path(archive).unlink(missing_ok=True)
 
 
 async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.MonkeyPatch) -> None:
