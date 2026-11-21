@@ -597,9 +597,13 @@ CUDA and the TPU path also falls back for BF16. Benchmark that path at the
 current context and compare with a qualified faster kernel before
 concluding that native serving improves time per rollout group.
 
-The local qualification command at `f9685c68dd` uses the regional 67B
+The local qualification command at `4fbb38e286` uses the regional 67B
 export, its completion manifest, the pinned tokenizer revision and the
-maintained inventory precision settings. Its inventory case uses four
+maintained inventory precision settings. This revision connects the
+per-turn replay binder to the probe and places logical `data=4` across
+the typed learner's four CUDA hosts while keeping `expert=8` host-local.
+Thirty mesh, typed worker and checkpoint regressions passed on JAX `0.11.1`.
+Its inventory case uses four
 independently seeded samples with a 16,384-token prompt and an 8,192-token
 response each. The engine keeps the inventory's 24,576-token prefill
 capacity. The long-prompt case uses 24,544 prompt tokens and 32 generated
@@ -647,7 +651,8 @@ On the eight-H100 regional worker, run the probe with the GPU extras
 for `marin-core` and `marin-levanter`.
 
 ```bash
-JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball_native_qualification \
+JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
+  uv run --no-sync python -m experiments.post_training.snowball_native_qualification \
   --case inventory "$IRIS_OUTPUT_DIR/snowball-native-full-context.json"
 ```
 
@@ -784,7 +789,8 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
 - Run a matched Levanter/vLLM versus Levanter/native comparison. Hold learner,
   task mix, sampling and fixed evaluation panel constant. Record hardware
   and cost, time per admitted group and optimizer update, and fixed-panel
-  reward. For the maintained two-update pair, the primary fixed panel is
+  reward. Both two-update plans at `4fbb38e286` resolved their regional
+  inputs for artifact version `2026.11.21.2`. The primary fixed panel is
   `eval-lite@2026.11.17.1`. The published 100-task Parquet has SHA-256
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
   Require all four attempt-scoped panels at steps 0 and 2, with each task
