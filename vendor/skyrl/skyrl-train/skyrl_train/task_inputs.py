@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from finestore.rl.strata import TaskEvaluationIdentity
+
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.harness.shell import task_prompt
 from rolloutengine.models import TaskRolloutSpec
@@ -23,6 +25,7 @@ class TrajectoryMetadata:
     metric_tags: tuple[str, ...] = ()
     task_id: str | None = None
     subset_id: str | None = None
+    evaluation_identity: TaskEvaluationIdentity | None = None
 
 
 @dataclass(frozen=True)

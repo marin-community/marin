@@ -98,7 +98,7 @@ async function load() {
     return;
   }
   const link = document.getElementById('run-details');
-  link.href = './#run=' + encodeURIComponent(JSON.stringify([run, attempt]));
+  link.href = './#' + new URLSearchParams({ run, attempt });
   link.hidden = false;
   try {
     const query = new URLSearchParams({ run_id: run, attempt_id: attempt });
@@ -111,9 +111,12 @@ async function load() {
       return;
     }
     status.textContent = 'Success rate uses verified responses. Latency covers attempts that entered grading.';
-    for (const [step, rows] of Object.entries(report.evaluation ?? {})) {
-      const title = step === '0' ? 'Baseline evaluation' : `Evaluation · step ${step}`;
-      results.append(section(title, rows, report.evaluation_tasks?.[step]));
+    for (const [key, rows] of Object.entries(report.evaluation ?? {})) {
+      const separator = key.lastIndexOf('/');
+      const evaluation = separator < 0 ? 'Evaluation' : key.slice(0, separator);
+      const step = key.slice(separator + 1);
+      const title = step === 'eval_only' ? evaluation : `${evaluation} · step ${step}`;
+      results.append(section(title, rows, report.evaluation_tasks?.[key]));
     }
     for (const [execution, rows] of Object.entries(report.training ?? {})) {
       results.append(section(`Training · ${execution}`, rows, report.training_tasks?.[execution]));

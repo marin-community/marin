@@ -1,9 +1,6 @@
 const $ = (id) => document.getElementById(id);
-const ns = 'http://www.w3.org/2000/svg';
-const colors = ['#286451', '#526bb2', '#a06534', '#9a5079', '#16768c'];
 let runs = [];
-let controlRewards = [];
-let hardwareColors = new Map();
+const selectedAttempts = new Map();
 
 function element(tag, text, attrs = {}) {
   const node = document.createElement(tag);
@@ -11,230 +8,126 @@ function element(tag, text, attrs = {}) {
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
   return node;
 }
-function svg(tag, attrs = {}, text) {
-  const node = document.createElementNS(ns, tag);
-  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
-  if (text != null) node.textContent = text;
-  return node;
+const series = (run) => run.series ?? run.label;
+const grafanaLink = (run) => run.grafana_url && /^https:\/\/grafana\.oa\.dev\//.test(run.grafana_url) ? element('a', 'Grafana ↗', { href: run.grafana_url, target: '_blank', rel: 'noopener noreferrer' }) : null;
+const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
+const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
+const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
+const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
+const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
+const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
+function groupedRuns(records = runs) {
+  const groups = new Map();
+  for (const run of records) {
+    if (!groups.has(run.run_id)) groups.set(run.run_id, []);
+    groups.get(run.run_id).push(run);
+  }
+  for (const attempts of groups.values()) attempts.sort((a, b) => attemptTime(b) - attemptTime(a) || b.attempt_id.localeCompare(a.attempt_id));
+  return groups;
 }
-const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
-const fixed = (run) => run.run_id.includes('snowball-inventory-batch-fixed');
-const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
-const hardwareLabel = (run) => run.hardware ? `${run.hardware.count} × ${run.hardware.gpu}` : 'Not recorded';
-const color = (run) => hardwareColors.get(hardwareLabel(run)) ?? '#6d6a60';
-const formatNumber = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
-const hours = (run) => run.elapsed_seconds / 3600;
-const timingLabel = (scope) => ({
-  trainer_elapsed_excluding_eval: 'Trainer setup to shutdown, excluding evaluation',
-  coordinator_wall_minus_validation: 'Coordinator wall time minus validation',
-  coordinator_submission_to_terminal: 'Coordinator submission to completion',
-  checkpoint_lineage_native_jobs: 'Native job time across checkpoint lineage',
-  loop_launcher_to_terminal: 'Loop launch to completion',
-})[scope] ?? scope;
-const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
-function runsInPreset() {
-  return runs.filter((run) => run.preset === $('preset').value);
+function visibleRuns(groups) {
+  return [...groups.values()].map((attempts) => attempts.find((run) => run.attempt_id === selectedAttempts.get(run.run_id)) ?? attempts[0]);
 }
-const presetLabel = (preset) => ({ 'quick-rl': 'Quick RL', unspecified: 'Unspecified preset' })[preset] ?? preset;
-
-function fillHardware() {
-  const select = $('hardware');
-  const current = select.value;
-  const labels = [...new Set(runsInPreset().map(hardwareLabel))].sort();
-  select.replaceChildren(new Option('All hardware', ''), ...labels.map((label) => new Option(label, label)));
-  select.value = labels.includes(current) ? current : '';
-  select.disabled = labels.length === 0;
-  hardwareColors = new Map(labels.filter((label) => label !== 'Not recorded').map((label, index) => [label, colors[index % colors.length]]));
-}
-function fillPresets(catalog, defaultPreset) {
-  const select = $('preset');
-  const current = select.value;
-  const counts = new Map();
-  for (const run of runs) counts.set(run.preset, (counts.get(run.preset) ?? 0) + 1);
-  const presets = [...new Set([...catalog, ...counts.keys()])];
-  select.replaceChildren(...presets.map((preset) => new Option(`${presetLabel(preset)} · ${counts.get(preset) ?? 0}`, preset)));
-  select.value = presets.includes(current) ? current : defaultPreset;
-  fillHardware();
-}
-function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
-function graderPage(run) {
-  return './graders.html?' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id });
-}
+function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id }); }
 function selectedFromHash() {
-  if (!location.hash.startsWith('#run=')) return null;
-  return runs.find((run) => route(run) === location.hash) ?? null;
-}
-
-function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, labelDots = false, baseline = false } = {}) {
-  const host = $(id); host.replaceChildren();
-  const points = rows.flatMap((run) => {
-    const entries = [{ run, x: xValue(run), y: yValue(run), phase: 'final' }];
-    if (baseline && run.baseline) entries.unshift({ run, x: xValue(run), y: run.baseline.reward, phase: 'baseline' });
-    return entries.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-  });
-  if (!points.length) { host.append(element('p', 'No complete measurements for this view.', { class: 'note' })); return; }
-  const width = Math.max(330, host.clientWidth || 700), height = id === 'pareto' ? 350 : 285;
-  const margin = { left: 55, right: 30, top: 30, bottom: 55 };
-  let xMin = Math.min(...points.map((p) => p.x)), xMax = Math.max(...points.map((p) => p.x));
-  const xPadding = (xMax - xMin || (dateAxis ? 86400000 : Math.max(xMax, 1))) * 0.12;
-  xMin -= xPadding; xMax += xPadding;
-  const yMin = Math.min(0, ...points.map((p) => p.y));
-  const yMax = Math.max(...points.map((p) => p.y), 0.01) * 1.14;
-  const px = (x) => margin.left + (x - xMin) / (xMax - xMin) * (width - margin.left - margin.right);
-  const py = (y) => height - margin.bottom - (y - yMin) / (yMax - yMin) * (height - margin.top - margin.bottom);
-  const root = svg('svg', { viewBox: `0 0 ${width} ${height}`, role: 'group', 'aria-label': `${yLabel} versus ${xLabel}. Each point links to grader stats for its run.` });
-  for (let i = 0; i <= 4; i++) {
-    const value = yMin + (yMax - yMin) * i / 4, y = py(value);
-    root.append(svg('line', { x1: margin.left, x2: width - margin.right, y1: y, y2: y, class: 'axis' }));
-    root.append(svg('text', { x: margin.left - 9, y: y + 4, 'text-anchor': 'end', class: 'tick' }, formatNumber(value, yLabel.includes('Reward') ? 3 : 2)));
-  }
-  for (let i = 0; i <= 3; i++) {
-    const value = xMin + (xMax - xMin) * i / 3;
-    root.append(svg('text', { x: px(value), y: height - margin.bottom + 23, 'text-anchor': 'middle', class: 'tick' }, dateAxis ? day(value).slice(5) : formatNumber(value, 2)));
-  }
-  root.append(svg('text', { x: margin.left, y: 15, class: 'axis-label' }, yLabel));
-  root.append(svg('text', { x: width / 2, y: height - 8, 'text-anchor': 'middle', class: 'axis-label' }, xLabel));
-  const eligible = rows.filter((run) => run.pareto_eligible);
-  const frontier = new Set(eligible.filter((a) => !eligible.some((b) => a.comparison_key === b.comparison_key && hours(b) <= hours(a) && b.final.reward >= a.final.reward && (hours(b) < hours(a) || b.final.reward > a.final.reward))).map(identity));
-  for (const point of points) {
-    const { run, phase } = point;
-    const link = svg('a', { href: graderPage(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}, hardware ${hardwareLabel(run)}, ${yLabel.toLowerCase()} ${formatNumber(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${formatNumber(hours(run), 2)} elapsed hours` });
-    link.append(svg('title', {}, `${run.label}\nHardware: ${hardwareLabel(run)}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${formatNumber(point.y)}\n${timingLabel(run.timing_scope)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for this run’s grader stats`));
-    const cx = px(point.x), cy = py(point.y);
-    if (id === 'pareto' && frontier.has(identity(run))) {
-      link.append(svg('circle', { cx, cy, r: 10, fill: 'var(--panel)', stroke: color(run), class: 'frontier-ring' }));
-    }
-    link.append(svg('circle', { cx, cy, r: 5, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
-    root.append(link);
-    if (labelDots && phase === 'final') root.append(svg('text', { x: cx + 13, y: cy - 10, class: 'dot-label' }, arm(run)));
-  }
-  host.append(root);
+  const params = new URLSearchParams(location.hash.slice(1));
+  const attempts = groupedRuns().get(params.get('run')) ?? [];
+  return params.has('attempt') ? attempts.find((run) => run.attempt_id === params.get('attempt')) ?? null : attempts[0] ?? null;
 }
 
 function addField(list, title, value) {
   list.append(element('dt', title), element('dd', value ?? 'Not recorded'));
 }
-
-function renderControlRewards(hardware) {
-  const host = $('control-rewards');
-  host.replaceChildren();
-  const groups = controlRewards.filter((group) => (
-    group.preset === $('preset').value && (!hardware || hardwareLabel(group) === hardware)
-  ));
-  if (!groups.length) {
-    host.append(element('p', 'No comparable control runs recorded for this view.', { class: 'note' }));
-    return;
-  }
-
-  const width = Math.max(240, host.clientWidth);
-  const inset = 26;
-  const axis = 59;
-  const tickCount = width < 420 ? 3 : 5;
-  for (const group of groups) {
-    const { points, mean, sample_sd: sd } = group;
-    const summary = sd === null
-      ? '1 control run · sample SD needs at least 2 comparable runs'
-      : `${points.length} control runs · mean ${formatNumber(mean)} · sample SD ${formatNumber(sd)}`;
-    const configuration = group.hardware ? hardwareLabel(group) : 'Hardware not recorded';
-    host.append(element('p', `${group.eval_set} · ${configuration}`, { class: 'note' }));
-    host.append(element('p', summary, { class: 'control-summary' }));
-    const low = Math.min(mean - (sd ?? 0), ...points.map((point) => point.reward));
-    const high = Math.max(mean + (sd ?? 0), ...points.map((point) => point.reward));
-    const padding = (high - low || 0.01) * 0.14;
-    const min = low - padding;
-    const max = high + padding;
-    const x = (reward) => inset + (reward - min) / (max - min) * (width - 2 * inset);
-    const plot = svg('svg', {
-      viewBox: `0 0 ${width} 104`, class: 'control-plot', role: 'group',
-      'aria-label': `Final control rewards. ${summary}.`,
-    });
-    if (sd !== null) {
-      plot.append(svg('rect', { x: x(mean - sd), y: 10, width: x(mean + sd) - x(mean - sd), height: axis - 10, class: 'control-band' }));
-      plot.append(svg('line', { x1: x(mean), x2: x(mean), y1: 10, y2: axis, class: 'control-mean' }));
-    }
-    plot.append(svg('line', { x1: inset, x2: width - inset, y1: axis, y2: axis, class: 'axis' }));
-    for (let index = 0; index < tickCount; index++) {
-      const value = min + (max - min) * index / (tickCount - 1);
-      plot.append(svg('text', { x: x(value), y: axis + 17, 'text-anchor': 'middle', class: 'tick' }, formatNumber(value, 3)));
-    }
-    plot.append(svg('text', { x: width / 2, y: 98, 'text-anchor': 'middle', class: 'axis-label' }, 'Final reward'));
-    for (const [index, point] of points.entries()) {
-      const replicate = point.run_id.match(/-r(\d+)-/)?.[1];
-      const label = `${replicate === undefined ? point.label : `Control r${replicate}`} · ${formatNumber(point.reward)}`;
-      const link = svg('a', { href: graderPage(point), class: 'dot', 'aria-label': label });
-      link.append(svg('title', {}, label), svg('circle', { cx: x(point.reward), cy: 26 + 12 * (index % 3), r: 5, class: 'control-point' }));
-      plot.append(link);
-    }
-    host.append(plot);
-    if (sd !== null) host.append(element('p', 'Shading shows ±1 sample SD. Dots show individual control runs.', { class: 'note' }));
-  }
-}
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
-  const warning = run.partial_coverage ? 'Incomplete evaluation: this attempt is excluded from comparison. Training completion and evaluation validity are separate.' : run.provisional ? 'Descriptive result. Runtime evaluation protocol is unknown, so this run is unranked.' : 'Complete comparison metadata.';
-  body.append(element('p', warning, { class: run.partial_coverage ? 'warning' : 'note' }));
+  body.append(element('p', run.status === 'failed' ? 'The native attempt or a recorded invariant failed. See the named facts.' : 'Recorded native attempt.', { class: 'note' }));
   const links = element('div', null, { class: 'links' });
-  const explicitWandb = run.wandb_url ?? run.links?.wandb;
+  const explicitWandb = run.wandb_url;
   if (explicitWandb && /^https:\/\/wandb\.ai\//.test(explicitWandb)) links.append(element('a', 'W&B run ↗', { href: explicitWandb, target: '_blank', rel: 'noopener noreferrer' }));
-  else if (fixed(run)) {
-    links.append(element('a', 'W&B project ↗', { href: 'https://wandb.ai/marin-community/marin-snowball-curriculum', target: '_blank', rel: 'noopener noreferrer' }));
-    links.append(element('span', 'Exact W&B run URL was not recorded.', { class: 'note' }));
+  const grafana = grafanaLink(run);
+  if (grafana) links.append(grafana);
+  if (typeof run.issue === 'number') links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
+  for (const id of run.evaldash_run_ids ?? []) {
+    links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
   }
-  links.append(element('a', 'Grader stats', { href: graderPage(run) }), element('a', 'Link to this run', { href: route(run) }));
+  if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
+  links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Preset', presetLabel(run.preset)], ['Base model', run.model_label], ['Eval set', run.eval_set_label], ['Hardware', hardwareLabel(run)],
-    ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
-    ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
-    ['Reward', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`],
-    ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
-    ['Elapsed', `${formatNumber(hours(run), 2)} hours (${formatNumber(run.elapsed_seconds, 1)} seconds)`],
-    ['Timing scope', timingLabel(run.timing_scope)], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
+    ['Model', run.model], ['Issue', run.issue],
+    ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
+    ['Verdict', run.gate_result?.verdict], ['Effect', run.gate_result?.effect], ['Gate', run.gate], ['Failed invariants', (run.failed_facts ?? []).join(', ') || null],
+    ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
+    ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
+    ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
+    ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
-    ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
-    ['Evaluation protocol', run.evaluation.protocol_sha256 ?? 'Unknown · unranked'], ['Artifact location', run.artifact_uri],
+    ['Artifact location', run.artifact_uri],
+    ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];
   for (const [title, value] of facts) addField(fields, title, value);
-  body.append(fields, element('h3', 'Evidence and caveats'));
+  body.append(fields);
+  if (run.gate_result) {
+    body.append(element('h3', `Gate report · ${run.gate_result.replicates} replicate(s)`));
+    for (const row of run.gate_result.comparisons) body.append(element('p', comparison(row)));
+    for (const row of run.gate_result.invariants) body.append(element('p', invariant(row), { class: row.holds ? 'note' : 'warning' }));
+    if (run.gate_result.reason) body.append(element('p', run.gate_result.reason));
+  }
+  if (run.evaluations?.length) {
+    body.append(element('h3', 'Evaluations'));
+    for (const row of run.evaluations) body.append(element('p', `${row.metric}: ${number(row.run)}${row.tasks == null ? '' : ` · ${row.tasks} tasks`}`));
+  }
+  body.append(element('h3', 'Evidence and caveats'));
   const evidence = element('ul', null, { class: 'evidence' });
-  for (const text of run.evidence ?? []) evidence.append(element('li', typeof text === 'string' ? text : JSON.stringify(text)));
+  for (const text of run.evidence ?? []) evidence.append(element('li', text));
   body.append(evidence);
   if (!$('run-detail').open) $('run-detail').showModal();
 }
 function followHash() {
   const run = selectedFromHash();
+  if (run) selectedAttempts.set(run.run_id, run.attempt_id);
+  render();
   if (run) showDetails(run);
   else if ($('run-detail').open) $('run-detail').close();
 }
 
 function render() {
-  const hardware = $('hardware').value;
-  const selected = runsInPreset().filter((run) => !hardware || hardwareLabel(run) === hardware);
-  $('no-runs').hidden = selected.length > 0;
-  $('preset-runs').hidden = selected.length === 0;
-  if (!selected.length) {
-    $('count').textContent = '';
-    $('attempts').replaceChildren();
-    return;
-  }
-  $('count').textContent = `${selected.length} attempts · ${selected.filter((run) => run.pareto_eligible).length} eligible for frontier ranking`;
-  renderControlRewards(hardware);
-  chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
-  chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
-  chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
-  chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.gain_per_hour, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
-  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each matching evaluation protocol, timing definition, and hardware configuration.' : 'These points are descriptive. A verified evaluation protocol and timing definition are required for frontier ranking.';
-  const hardwareRuns = new Map(selected.map((run) => [hardwareLabel(run), run]));
-  $('legend').replaceChildren(...[...hardwareRuns.values()].map((run) => {
-    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${color(run)}` }), document.createTextNode(hardwareLabel(run))); return item;
-  }));
-  $('attempts').replaceChildren(...[...selected].sort((a, b) => Date.parse(b.run_date) - Date.parse(a.run_date)).map((run) => {
+  const model = $('model-filter').value;
+  const matching = model ? runs.filter((run) => run.model === model) : runs;
+  const groups = groupedRuns(matching), selected = visibleRuns(groups);
+  $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
+  $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
-    const name = element('td');
-    name.append(element('a', run.label, { href: graderPage(run) }));
-    tr.append(name, element('td', run.model_label), element('td', run.eval_set_label), element('td', hardwareLabel(run)), element('td', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`), element('td', `${formatNumber(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
+    const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); }; name.append(button);
+    const attempts = element('select', null, { 'aria-label': `Attempt for ${run.label}` });
+    for (const attempt of groups.get(run.run_id)) {
+      const option = element('option', `${attempt.started_at ?? attempt.run_date ?? attempt.completed_at ?? 'Time unavailable'} · ${attempt.attempt_id} · ${attempt.status}`, { value: attempt.attempt_id });
+      option.selected = attempt.attempt_id === run.attempt_id;
+      attempts.append(option);
+    }
+    attempts.onchange = () => { location.hash = route(groups.get(run.run_id).find((attempt) => attempt.attempt_id === attempts.value)); };
+    name.append(attempts, element('span', run.status, { class: run.status === 'failed' ? 'warning' : 'note' }));
+    const grafana = grafanaLink(run);
+    if (grafana) name.append(grafana);
+    const report = run.gate_result;
+    const objectives = element('td'), constraints = element('td'), verdict = element('td');
+    if (report) {
+      for (const row of report.comparisons) {
+        const cell = row.role === 'objective' ? objectives : constraints;
+        cell.append(element('p', comparison(row), { class: row.passes === false ? 'warning' : '' }));
+      }
+      for (const row of report.invariants) constraints.append(element('p', invariant(row), { class: row.holds ? 'note' : 'warning' }));
+      objectives.append(element('span', `Report across ${report.replicates} replicate(s)`, { class: 'note' }));
+      verdict.append(element('strong', `${report.verdict}${report.effect ? ` · ${report.effect}` : ''}`));
+      if (report.reason) verdict.append(element('p', report.reason));
+    } else {
+      objectives.textContent = 'Report details unavailable';
+      constraints.textContent = '—';
+      verdict.textContent = '—';
+    }
+    tr.append(name, element('td', run.model ?? 'Not recorded'), objectives, constraints, verdict);
     return tr;
   }));
 }
@@ -243,26 +136,30 @@ async function refresh() {
   try {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
-    const data = await response.json(); runs = data.runs; controlRewards = data.control_rewards;
-    fillPresets(data.presets, data.default_preset);
-    render(); followHash();
+    const data = await response.json(); runs = data.runs;
+    const filter = $('model-filter'), previous = filter.value;
+    const models = [...new Set(runs.map((run) => run.model).filter(Boolean))].sort();
+    filter.replaceChildren(element('option', 'All models', { value: '' }), ...models.map((model) => element('option', model, { value: model })));
+    if (models.includes(previous)) filter.value = previous;
+    $('warnings').hidden = !(data.skipped_records?.length);
+    $('warnings').textContent = (data.skipped_records ?? []).map((record) => `Skipped malformed record ${record.run_id}/${record.attempt_id}: ${record.error}`).join('\n');
+    followHash();
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
   finally { $('refresh').disabled = false; }
 }
 $('refresh').onclick = refresh;
-$('preset').onchange = () => { fillHardware(); render(); };
-$('hardware').onchange = render;
-$('close-detail').onclick = () => $('run-detail').close();
+$('model-filter').onchange = render;
+function closeDetails() {
+  if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);
+  $('run-detail').close();
+}
+$('close-detail').onclick = closeDetails;
+$('run-detail').addEventListener('cancel', (event) => { event.preventDefault(); closeDetails(); });
 $('run-detail').addEventListener('click', (event) => {
   const dialog = $('run-detail');
   if (event.target !== dialog) return;
   const bounds = dialog.getBoundingClientRect();
-  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDetails();
 });
-$('run-detail').addEventListener('close', () => { if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search); });
 window.addEventListener('hashchange', followHash);
-let resizeTimer;
-window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 120); });
 refresh();
-
-window.setInterval(() => { if (!document.hidden && !$('refresh').disabled) refresh(); }, 60_000);
