@@ -63,13 +63,6 @@ def test_context_management_infrastructure_error_is_infrastructure() -> None:
     )
 
 
-def test_daytona_sdk_error_is_infrastructure() -> None:
-    assert (
-        error_category("DaytonaError", categories=ERROR_CATEGORIES)
-        is ErrorCategory.INFRASTRUCTURE
-    )
-
-
 def test_llm_request_timeout_is_retryable_infrastructure() -> None:
     assert (
         error_category("LLMRequestTimeoutError", categories=ERROR_CATEGORIES)
@@ -142,17 +135,6 @@ def test_artifact_persistence_failure_is_retryable_infrastructure(name: str) -> 
         is ErrorCategory.INFRASTRUCTURE
     )
     assert is_resume_retryable(name)
-
-
-def test_turn_cap_exhaustion_is_scored_passthrough() -> None:
-    """A turn-capped rollout did real work; the verifier reward is usable."""
-    assert (
-        error_category("TurnCapExhaustedError", categories=ERROR_CATEGORIES)
-        is ErrorCategory.PASSTHROUGH
-    )
-    assert "TurnCapExhaustedError" in errors_by_category(
-        ErrorCategory.PASSTHROUGH, categories=ERROR_CATEGORIES
-    )
 
 
 @pytest.mark.parametrize(

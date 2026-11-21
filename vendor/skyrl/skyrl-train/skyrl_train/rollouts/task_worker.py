@@ -305,6 +305,12 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
         exception_type = "VerifierTimeoutError"
+    disposition = failure.retry_disposition
+    if disposition is not RetryDisposition.PERMANENT:
+        if isinstance(error, TimeoutError):
+            disposition = record_retry_disposition(exception_type, None, failure.provider_status_code)
+        elif exception_type != failure.exception_type:
+            disposition = RetryDisposition.UNKNOWN
     return failure.model_copy(
         update={
             "exception_type": exception_type,
@@ -312,13 +318,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             "diagnostics": diagnostics,
             "cause_type": failure.cause_type
             or (failure.exception_type if exception_type != failure.exception_type else None),
-            "retry_disposition": (
-                record_retry_disposition(exception_type, None, failure.provider_status_code)
-                if isinstance(error, TimeoutError) and failure.retry_disposition is not RetryDisposition.PERMANENT
-                else failure.retry_disposition
-                if exception_type == failure.exception_type
-                else RetryDisposition.UNKNOWN
-            ),
+            "retry_disposition": disposition,
         }
     )
 

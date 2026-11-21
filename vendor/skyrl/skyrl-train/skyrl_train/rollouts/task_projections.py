@@ -37,6 +37,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.selected_topk import AlignedStudentTopK, align_student_topk
 from skyrl_train.trajectory_runners.types import (
+    ERROR_IDENTITIES_KEY,
     RESPONSE_POLICY_STEPS_KEY,
     RESPONSE_SPAN_TAGS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -424,7 +425,7 @@ def _attach_failure_channels(
 ) -> None:
     failures = [rollout.failure for rollout in rollouts]
     if any(failure is not None for failure in failures):
-        batch["error_identities"] = failures
+        batch[ERROR_IDENTITIES_KEY] = failures
     exception_types = [decision.disposition.exception_type for decision in decisions]
     if any(value is not None for value in exception_types):
         batch["exception_types"] = exception_types

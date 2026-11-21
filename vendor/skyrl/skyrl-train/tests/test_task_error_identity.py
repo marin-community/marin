@@ -30,7 +30,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 
-@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("cause", [None, TimeoutError, PermissionError])
 @pytest.mark.parametrize(
     "native_type, operation, disposition",
     [
@@ -41,15 +41,17 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
         (VerifierTimeoutError, RolloutOperation.GRADE, RetryDisposition.UNKNOWN),
     ],
 )
-def test_timeout_identity_matches_across_native_engine_and_saved_records(native_type, operation, disposition, wrapped):
+def test_timeout_identity_matches_across_native_engine_and_saved_records(native_type, operation, disposition, cause):
     native_error = native_type("deadline expired")
-    if wrapped:
-        native_error.__cause__ = TimeoutError("phase deadline")
+    if cause is not None:
+        native_error.__cause__ = cause("phase deadline")
     native = ExceptionInfo.from_exception(native_error)
     interruption = GradedRolloutInterrupted(
         Rollout("timeout", (), "error"), operation, GradeResult(Outcome.UNAVAILABLE, None)
     )
     interruption.__cause__ = TimeoutError("deadline expired")
+    if cause is not None:
+        interruption.__cause__.__cause__ = cause("phase deadline")
     engine = _interruption_identity(interruption)
     saved = ExceptionInfo(
         exception_type=native_type.__name__,
@@ -61,7 +63,8 @@ def test_timeout_identity_matches_across_native_engine_and_saved_records(native_
         persisted = ErrorIdentity.model_validate_json(failure.model_dump_json())
         assert persisted.exception_type == native_type.__name__
         assert persisted.category == native.category
-        assert persisted.retry_disposition is disposition
+        expected = RetryDisposition.PERMANENT if cause is PermissionError and failure is not saved else disposition
+        assert persisted.retry_disposition is expected
 
 
 class EvidenceTokenizer:

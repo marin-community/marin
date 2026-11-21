@@ -9,6 +9,7 @@ from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyConfig
 from skyrl_train.config.reward_shaping import LoopCreditConfig, OverlongPenaltyConfig, parse_trajectory_reward_shaping_config
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.trajectory_runners.types import (
+    ERROR_IDENTITIES_KEY,
     REWARD_SHAPING_COMPONENT_NAMES,
     TrajectoryBatch,
     RewardShapingComponents,
@@ -26,7 +27,7 @@ REWARD_SHAPING_ROW_KEYS = (
     "verification_results",
     "evidence_messages",
     "exception_types",
-    "error_identities",
+    ERROR_IDENTITIES_KEY,
     "error_treatments",
     "server_errors",
 )

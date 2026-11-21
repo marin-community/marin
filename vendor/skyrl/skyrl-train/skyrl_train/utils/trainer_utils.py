@@ -16,6 +16,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
+from skyrl_train.trajectory_runners.types import ERROR_IDENTITIES_KEY
 from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
 from transformers import AutoTokenizer
 from skyrl_train.io import io
@@ -292,7 +293,7 @@ def dump_per_dataset_eval_results(
         with io.open_file(filename, "w") as f:
             for i in indices:
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
-                failure = (trajectory_batch.get("error_identities") or [None] * len(input_prompts))[i]
+                failure = (trajectory_batch.get(ERROR_IDENTITIES_KEY) or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
                     "attempt_id": attempt_id,

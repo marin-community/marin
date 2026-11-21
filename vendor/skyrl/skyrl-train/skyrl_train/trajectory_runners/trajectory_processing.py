@@ -6,6 +6,7 @@ import numpy as np
 from skyrl_train.group_admission import group_is_fully_excluded_from_training
 from skyrl_train.task_inputs import TaskInput, PreferenceInput
 from skyrl_train.trajectory_runners.types import (
+    ERROR_IDENTITIES_KEY,
     TrajectoryBatch,
     TrajectoryRequestBatch,
     TrajectoryID,
@@ -294,7 +295,7 @@ def normalize_trajectory_batches(
             ]
 
     disposition_channels: dict[str, list[Any]] = {}
-    for key in ("exception_types", "error_treatments", "server_errors", "error_identities"):
+    for key in ("exception_types", "error_treatments", "server_errors", ERROR_IDENTITIES_KEY):
         if key in fields.present:
             disposition_channels[key] = [
                 value
