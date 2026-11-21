@@ -290,6 +290,12 @@ shards within each host.
 Authorize the inventory task service credentials for the job before submission.
 Follow the coordinator if Iris retries the child.
 
+The launch handoff contains the exact Git bundles for the frozen learner and
+held serving comparison, their acceptance tools, and the commands to restore
+both checkouts from public Marin commits. The restored serving plans reproduce
+the original artifact roots with a repository-local Git tree abbreviation.
+[Launch source bundles and audit tools][launch-handoff]
+
 - Verify all learner ranks select CUDA and load
   `open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21` at `fe666478454e`.
   Require startup placement evidence from all four learner hosts. Retrieve
@@ -960,6 +966,7 @@ arms. [Prior timing comparison][timing]
   consumers.
 
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
+[launch-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fquick-loop-launch-handoff.tar.zst
 [iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a8ae164919e7
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
 [h100-matched-audit]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-matched-audit%2F2026.11.21.1%2Fh100-matched-audit.tar.zst
