@@ -7,11 +7,11 @@ import asyncio
 import tarfile
 import tempfile
 import threading
-from collections.abc import Awaitable, Callable, Coroutine
-from contextlib import ExitStack
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO, cast
 from uuid import uuid4
 
@@ -24,6 +24,7 @@ from shellbox.backends.local.transfers import _guest_member, unpack_local_archiv
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
+    ClosableMachineFactory,
     Command,
     CommandSemantics,
     ExecutionRequirements,
@@ -125,6 +126,17 @@ class ProcessExit:
     stderr: bytes
 
 
+@dataclass(frozen=True)
+class MachineServiceUsage:
+    """Live ownership and retained RPC resources for service diagnostics."""
+
+    owners: int
+    machines: int
+    operations: int
+    transfer_blobs: int
+    cancelled_requests: int
+
+
 @dataclass
 class MachineOwner:
     machines: dict[str, Machine] = field(default_factory=dict)
@@ -152,9 +164,9 @@ async def _complete_all(operations: list[Awaitable[object]]) -> None:
         raise ExceptionGroup("Machine service cleanup failed", errors)
 
 
-def _pack(source: Path, stream: BinaryIO) -> None:
+def _pack(source: Path, stream: BinaryIO, *, name: str) -> None:
     with tarfile.open(fileobj=stream, mode="w") as archive:
-        archive.add(source, arcname="." if source.is_dir() else "payload")
+        archive.add(source, arcname="." if source.is_dir() else name)
     stream.seek(0)
 
 
@@ -218,6 +230,18 @@ class MachineService:
 
     def describe(self) -> MachineServiceContract:
         return self.contract
+
+    def usage(self) -> MachineServiceUsage:
+        return self._on_loop(self._usage())
+
+    async def _usage(self) -> MachineServiceUsage:
+        return MachineServiceUsage(
+            owners=len(self._owners),
+            machines=sum(len(owner.machines) for owner in self._owners.values()),
+            operations=len(self._operations),
+            transfer_blobs=len(self._blobs),
+            cancelled_requests=len(self._discarded),
+        )
 
     def put(self, owner: str, blob: str, offset: int, data: bytes) -> None:
         self._on_loop(self._put(owner, blob, offset, data))
@@ -297,11 +321,27 @@ class MachineService:
     async def _discard(self, owner: str, identifier: str) -> None:
         # A timed-out transport can deliver its first request after cancellation.
         # Retain the tombstone until this owner closes; never replay a mutation.
-        self._discarded.add((owner, identifier))
+        if owner not in self._closed_owners:
+            self._discarded.add((owner, identifier))
         operation = self._operations.pop((owner, identifier), None)
         if operation is not None:
             operation.cancel()
             await _complete_all([operation])
+        self._drop_blobs(owner, identifier)
+
+    def release(self, owner: str, identifier: str) -> None:
+        self._on_loop(self._release(owner, identifier))
+
+    async def _release(self, owner: str, identifier: str) -> None:
+        operation = self._operations.get((owner, identifier))
+        if operation is not None:
+            if not operation.done():
+                raise RuntimeError("Discard an interrupted operation before releasing its transfers")
+            operation.result()
+            del self._operations[owner, identifier]
+        self._drop_blobs(owner, identifier)
+
+    def _drop_blobs(self, owner: str, identifier: str) -> None:
         for name in (identifier, identifier + "-result"):
             stream = self._blobs.pop((owner, name), None)
             if stream is not None:
@@ -369,7 +409,7 @@ class MachineService:
             await await_cleanup(own_cleanup(self._machine(owner, machine).download(source, target)))
             output = TransferBlob()
             try:
-                _pack(target, output.stream)
+                _pack(target, output.stream, name=PurePosixPath(source).name)
             except BaseException:
                 output.close()
                 raise
@@ -424,10 +464,23 @@ class MachineService:
             await _complete_all(operations)
         finally:
             await _complete_all([self._close_machine(owner, machine) for machine in tuple(self._owners[owner].machines)])
+        del self._owners[owner]
+        self._discarded = {key for key in self._discarded if key[0] != owner}
+        for key, operation in tuple(self._operations.items()):
+            if key[0] == owner and operation is not current:
+                del self._operations[key]
+                self._drop_blobs(*key)
+        for key in tuple(self._blobs):
+            if key[0] == owner and (self._operations.get(key) is not current):
+                self._drop_blobs(*key)
 
     async def _shutdown(self) -> None:
         try:
-            await _complete_all([self._close_owner(owner) for owner in tuple(self._owners)])
+            try:
+                await _complete_all([self._close_owner(owner) for owner in tuple(self._owners)])
+            finally:
+                if isinstance(self.factory, ClosableMachineFactory):
+                    await self.factory.close()
         finally:
             for stream in self._blobs.values():
                 stream.close()
@@ -493,9 +546,25 @@ class RemoteMachineFactory:
     async def _discard(self, identifier: str) -> None:
         await self._rpc(self.client.discard, self.owner, identifier)
 
-    async def _call(self, operation: Operation, *arguments: object) -> object:
+    async def _release(self, identifier: str) -> None:
+        await self._rpc(self.client.release, self.owner, identifier)
+
+    @asynccontextmanager
+    async def _transfer(self) -> AsyncIterator[str]:
         identifier = uuid4().hex
         try:
+            yield identifier
+        except BaseException as error:
+            try:
+                await finish_owned(own_cleanup(self._discard(identifier)))
+            except BaseException as cleanup_error:
+                error.add_note(f"Machine service cancellation could not be confirmed: {cleanup_error}")
+            raise
+        else:
+            await await_cleanup(own_cleanup(self._release(identifier)))
+
+    async def _call(self, operation: Operation, *arguments: object) -> object:
+        async with self._transfer() as identifier:
             with tempfile.TemporaryFile() as stream:
                 cloudpickle.dump(arguments, stream)
                 stream.seek(0)
@@ -506,17 +575,10 @@ class RemoteMachineFactory:
             with tempfile.TemporaryFile() as stream:
                 await self._receive(identifier + "-result", stream)
                 outcome = cast(Outcome, cloudpickle.load(stream))
-            if outcome.kind == OutcomeKind.FAILURE:
-                raise cast(Exception, outcome.value)
-            if outcome.kind == OutcomeKind.CANCELLED:
-                raise asyncio.CancelledError
-        except BaseException as error:
-            try:
-                await finish_owned(own_cleanup(self._discard(identifier)))
-            except BaseException as cleanup_error:
-                error.add_note(f"Machine service cancellation could not be confirmed: {cleanup_error}")
-            raise
-        await self._discard(identifier)
+        if outcome.kind == OutcomeKind.FAILURE:
+            raise cast(Exception, outcome.value)
+        if outcome.kind == OutcomeKind.CANCELLED:
+            raise asyncio.CancelledError
         return outcome.value
 
     async def create(self, spec: MachineSpec) -> "RemoteMachine":
@@ -545,24 +607,18 @@ class RemoteMachine:
         return cast(Result, await self.factory._call(Operation.RUN, self.identifier, command))
 
     async def upload(self, source: Path, target: str) -> None:
-        blob = uuid4().hex
-        try:
+        async with self.factory._transfer() as blob:
             with tempfile.TemporaryFile() as stream:
-                _pack(source, stream)
+                _pack(source, stream, name="payload")
                 await self.factory._send(blob, stream)
             await self.factory._call(Operation.UPLOAD, self.identifier, blob, target)
-        finally:
-            await finish_owned(own_cleanup(self.factory._discard(blob)))
 
     async def download(self, source: str, target: Path) -> None:
-        blob = uuid4().hex
-        try:
+        async with self.factory._transfer() as blob:
             await self.factory._call(Operation.DOWNLOAD, self.identifier, source, blob)
             with tempfile.TemporaryFile() as stream:
                 await self.factory._receive(blob, stream)
-                unpack_local_archive(stream.read(), target, source_name="payload")
-        finally:
-            await finish_owned(own_cleanup(self.factory._discard(blob)))
+                unpack_local_archive(stream.read(), target, source_name=PurePosixPath(source).name)
 
     async def close(self) -> None:
         await self.factory._call(Operation.CLOSE, self.identifier)

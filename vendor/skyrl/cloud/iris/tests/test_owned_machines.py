@@ -49,6 +49,7 @@ class PipeFactory:
 
     def __init__(self, machine):
         self.machine = machine
+        self.closed = False
 
     def check_environment(self, requirements, spec):
         pass
@@ -56,11 +57,15 @@ class PipeFactory:
     async def create(self, spec):
         return self.machine
 
+    async def close(self):
+        self.closed = True
+
 
 @pytest.mark.asyncio
 async def test_rollout_owned_factory_keeps_private_http_relay_process_support():
     native = PipeMachine()
-    factory = OwnedMachineFactory(PipeFactory(native), "local")
+    native_factory = PipeFactory(native)
+    factory = OwnedMachineFactory(native_factory, "local")
     machine = await factory.create(MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64)))
 
     async def handler(_request):
@@ -78,3 +83,4 @@ async def test_rollout_owned_factory_keeps_private_http_relay_process_support():
     finally:
         await factory.close(asyncio.get_running_loop().time() + 5)
     assert len(native.processes) == 1 and native.processes[0].process.returncode is not None
+    assert native_factory.closed

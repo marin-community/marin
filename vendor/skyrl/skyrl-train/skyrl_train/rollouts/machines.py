@@ -8,6 +8,7 @@ from pathlib import Path
 from loguru import logger
 from shellbox.machine import (
     Backend,
+    ClosableMachineFactory,
     Command,
     ExecutionRequirements,
     Machine,
@@ -167,5 +168,11 @@ class OwnedMachineFactory:
                 provider=self.identifier, open_creations=len(self.creating), open_machines=len(self.machines)
             ).error("Task-machine shutdown deadline expired")
             failures.append(TimeoutError(f"Task-machine shutdown deadline expired for provider {self.identifier}"))
+        if isinstance(self.factory, ClosableMachineFactory):
+            try:
+                async with asyncio.timeout(max(0, deadline - asyncio.get_running_loop().time())):
+                    await self.factory.close()
+            except Exception as error:
+                failures.append(error)
         if failures:
             raise ExceptionGroup("Task-machine cleanup failed", failures)

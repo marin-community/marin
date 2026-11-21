@@ -302,3 +302,33 @@ async def test_failed_teardown_remains_owned_for_explicit_cleanup(service, monke
     await machine.close()
     assert selected.closed.is_set()
     await factory.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_calls_and_closed_owners_release_rpc_state(service):
+    factory, _, _ = service
+    machine = await factory.create(SPEC)
+    for number in range(8):
+        result = await machine.run(Command((sys.executable, "-c", f"print({number})")))
+        assert result.stdout == f"{number}\n".encode()
+    usage = await asyncio.to_thread(factory.client.usage)
+    assert usage.operations == usage.transfer_blobs == usage.cancelled_requests == 0
+    await factory.close()
+    usage = await asyncio.to_thread(factory.client.usage)
+    assert usage.owners == usage.machines == usage.operations == usage.transfer_blobs == usage.cancelled_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_file_downloads_into_one_directory_keep_source_basenames(service, tmp_path):
+    factory, _, _ = service
+    machine = await factory.create(SPEC)
+    target = tmp_path / "results"
+    target.mkdir()
+    for name, content in [("first.json", b'{"value":1}'), ("second.json", b'{"value":2}')]:
+        source = tmp_path / name
+        source.write_bytes(content)
+        await machine.upload(source, name)
+        await machine.download(name, target)
+    assert (target / "first.json").read_bytes() == b'{"value":1}'
+    assert (target / "second.json").read_bytes() == b'{"value":2}'
+    await factory.close()
