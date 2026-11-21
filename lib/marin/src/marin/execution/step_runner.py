@@ -421,7 +421,7 @@ def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
 
 
 def run_step(step: StepSpec) -> None:
-    """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
+    """Check a read-only input or execute a step with caching, locking, and artifact saving.
 
     An inline step that does not write its own record (``writes_record=False``) has its
     return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
