@@ -12,8 +12,10 @@ equal power-of-two tiles (a 384-wide row needs no padding), and takes ``k`` succ
 step reduces twice: the largest key, then the lowest column holding it. The key is the float32 bit
 pattern with the magnitude bits of negative values flipped, the total order XLA's sort comparator
 uses, so ``+0`` ranks above ``-0`` and a positive NaN above ``+inf``. The indices and their order are
-therefore those of ``jax.lax.top_k`` for every input, including ties, signed zeros and NaNs. Rows of
-1,024 or more go to ``jax.lax.top_k``, which XLA then runs on its own kernel.
+therefore those of ``jax.lax.top_k`` on CPU and CUDA for every input, including ties, signed zeros and
+NaNs. On MI355X, ``jax.lax.top_k`` treats ``-0`` and ``+0`` as equal for inputs of 24,576 elements or
+more, so it can order a row of signed zeros differently. Rows of 1,024 or more go to ``jax.lax.top_k``,
+which XLA then runs on its own kernel.
 
 A taken or absent entry gets the smallest key and the column ``n``, which the lowest-column
 reduction never returns. The column marks the entry dead because a negative NaN such as 0xFFFFFFFF
