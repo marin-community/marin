@@ -19,7 +19,7 @@ from finestore.rl.curation import ContentEvidenceReference
 from pydantic import ValidationError
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import ConversationInput, ExecutionRequirements, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import Controls, IntendedUse
 from taskcompendium.pipeline.oracle_filter import (
@@ -78,7 +78,11 @@ def calibration_cohort(tmp_path, count, prompt_bytes):
     return cohort, mapping
 
 
-def completed_external_trial(task, mapping, *_args, source_runtime=None, **_kwargs):
+def completed_external_trial(task, mapping, destination, *_args, source_runtime=None, **_kwargs):
+    # The persisted graded trial the fail-closed calibration gate requires.
+    result = Path(destination) / canonical_sha256(task.id) / "attempt-00" / "jobs" / "oracle" / "result.json"
+    result.parent.mkdir(parents=True, exist_ok=True)
+    result.write_text(json.dumps({"exception_info": None, "verifier_result": {"rewards": {"reward": 1.0}}}))
     return {**mapping, "task_id": task.id, "runtime": source_runtime, "calibration": {"oracle_kind": "original"}}
 
 
@@ -105,7 +109,9 @@ def test_calibration_map_is_byte_identical_to_eager_execution(tmp_path, monkeypa
     for row in pq.read_table(cohort).to_pylist():
         task = oracle_filter.row_task(row)
         assert task is not None
-        eager[task.id] = completed_external_trial(task, mappings[task.id], source_runtime=oracle_filter.row_runtime(row))
+        eager[task.id] = completed_external_trial(
+            task, mappings[task.id], tmp_path / "eager", source_runtime=oracle_filter.row_runtime(row)
+        )
     monkeypatch.setattr(oracle_filter, "calibrated_task", completed_external_trial)
     calibrate_cohort(cohort, mapping, tmp_path / "run", "local", {}, 3)
     assert (tmp_path / "run/task-map.json").read_bytes() == (json.dumps(eager, indent=2) + "\n").encode()
@@ -892,3 +898,73 @@ def test_prepare_refuses_a_task_id_that_escapes_the_tasks_root(tmp_path):
     pq.write_table(pa.Table.from_pylist([{"path": "../escape", "lowered_task_spec": json.dumps(envelope)}]), cohort)
     with pytest.raises(ValueError, match="not a package path under the tasks root"):
         prepare(cohort, tmp_path / "exported", source_revision="a" * 40)
+
+
+def _calibration_map(cohort: Path, tmp_path: Path) -> Path:
+    """A task map binding one lowered row by its spec and runtime hashes."""
+    row = pq.read_table(cohort).to_pylist()[0]
+    task = oracle_filter.row_task(row)
+    runtime = oracle_filter.row_runtime(row)
+    mapping = {
+        task.id: {
+            "task_name": task.id,
+            "task_path": str(tmp_path / "packages" / task.id),
+            "task_sha256": task_spec_sha256(task),
+            "runtime_sha256": canonical_sha256(runtime),
+        }
+    }
+    path = tmp_path / "task-map.json"
+    path.write_text(json.dumps(mapping, indent=1))
+    return path
+
+
+def _write_trial_result(destination: Path, task_id: str, *, exception: dict | None, reward: float | None) -> None:
+    result = destination / canonical_sha256(task_id) / "attempt-00" / "jobs" / "oracle" / "result.json"
+    result.parent.mkdir(parents=True)
+    result.write_text(
+        json.dumps(
+            {
+                "exception_info": exception,
+                "verifier_result": None if reward is None else {"rewards": {"reward": reward}},
+            }
+        )
+    )
+
+
+def test_calibration_fails_closed_when_no_trial_grades(tmp_path, monkeypatch):
+    """A calibration whose every control died before its verifier ran exits nonzero."""
+    envelope = json.loads(prebuilt_task("calibrated-row")["lowered_task_spec"])
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([{"path": "calibrated-row", "lowered_task_spec": json.dumps(envelope)}]), cohort)
+    mapping = _calibration_map(cohort, tmp_path)
+    destination = tmp_path / "calibrated"
+
+    def failed_task(*args, **kwargs):
+        _write_trial_result(
+            destination,
+            "calibrated-row",
+            exception={"exception_type": "DaytonaValidationError", "exception_message": "refused"},
+            reward=None,
+        )
+        return {}
+
+    monkeypatch.setattr(oracle_filter, "calibrated_task", failed_task)
+    with pytest.raises(RuntimeError, match="graded no oracle trials"):
+        oracle_filter.calibrate_cohort(cohort, mapping, destination, "daytona", {}, concurrency=1)
+    assert not (destination / "task-map.json").exists()
+
+
+def test_calibration_with_a_graded_trial_writes_its_map(tmp_path, monkeypatch):
+    envelope = json.loads(prebuilt_task("calibrated-row")["lowered_task_spec"])
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([{"path": "calibrated-row", "lowered_task_spec": json.dumps(envelope)}]), cohort)
+    mapping = _calibration_map(cohort, tmp_path)
+    destination = tmp_path / "calibrated"
+
+    def graded_task(*args, **kwargs):
+        _write_trial_result(destination, "calibrated-row", exception=None, reward=1.0)
+        return {"task_name": "calibrated-row"}
+
+    monkeypatch.setattr(oracle_filter, "calibrated_task", graded_task)
+    oracle_filter.calibrate_cohort(cohort, mapping, destination, "daytona", {}, concurrency=1)
+    assert json.loads((destination / "task-map.json").read_text())["calibrated-row"]["task_name"] == "calibrated-row"

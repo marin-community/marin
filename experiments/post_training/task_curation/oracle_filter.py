@@ -1259,6 +1259,16 @@ def calibrate_cohort(
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in completed:
                 calibrated[pending.pop(future)] = future.result()
+    graded = 0
+    for result_path in destination.glob("*/attempt-*/jobs/*/result.json"):
+        document = json.loads(result_path.read_text())
+        if document.get("exception_info") is None and (document.get("verifier_result") or {}).get("rewards"):
+            graded += 1
+    if graded == 0:
+        raise RuntimeError(
+            f"Calibration graded no oracle trials across {len(calibrated)} tasks: every control failed "
+            "before its verifier ran. Read the attempts' result.json exception_info for the cause."
+        )
     ordered = {task_id: calibrated[task_id] for task_id in task_ids}
     (destination / "task-map.json").write_text(json.dumps(ordered, indent=2) + "\n")
 
