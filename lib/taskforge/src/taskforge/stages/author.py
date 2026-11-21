@@ -5,16 +5,15 @@
 
 import json
 from pathlib import PurePosixPath
-from typing import Any
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.harness.role import Files, Fresh, Visit, sitting
 from taskforge.lowering import lowering_settings, requirements
-from taskforge.model.controls import CONTROL, CONTROLS
+from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT
 from taskforge.model.stage import Exit
@@ -26,38 +25,25 @@ from taskforge.resources.bundle import Resources
 # The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
 # wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
 AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v1.json"
+# The decision-model grader kind, inserted into v1 only where a decision model is configured: without one, the author
+# keeps v1's bytes and recorded author calls replay.
+DECISION_MODEL_GRADER = DEFAULTS_DIR / "author-reference-v1-decision-model.json"
 
 
-def author_reference() -> str:
+def author_reference(decision_model: bool) -> str:
     """The pinned reference in the compact form the system prompt embeds."""
-    return json.dumps(json.loads(AUTHOR_REFERENCE.read_text()), sort_keys=True, separators=(",", ":"))
-
-
-def task_schema(decision_model: bool) -> dict[str, Any]:
-    """TaskSpec's schema; without a configured decision model, without the grader kind that needs one.
-
-    The schema is part of every author request, so a run without a decision model keeps the bytes it had before the
-    kind existed, and its recorded author calls replay.
-    """
-    schema = TaskSpec.model_json_schema()
-    if not decision_model:
-        del schema["$defs"]["DecisionModelGrader"]
-        grader = schema["properties"]["grader"]
-        del grader["discriminator"]["mapping"]["decision_model"]
-        grader["oneOf"].remove({"$ref": "#/$defs/DecisionModelGrader"})
-    return schema
+    reference = json.loads(AUTHOR_REFERENCE.read_text())
+    if decision_model:
+        task = reference["TaskSpec"]
+        task["$defs"]["DecisionModelGrader"] = json.loads(DECISION_MODEL_GRADER.read_text())
+        task["properties"]["grader"]["discriminator"]["mapping"]["decision_model"] = "#/$defs/DecisionModelGrader"
+        task["properties"]["grader"]["oneOf"].append({"$ref": "#/$defs/DecisionModelGrader"})
+    return json.dumps(reference, sort_keys=True, separators=(",", ":"))
 
 
 def system_prompt(policy: Policy) -> str:
     """Render the author's system prompt around the pinned task and control reference."""
     decision_model = bool(policy.setting("decision_model.model", str))
-    reference = (
-        json.dumps(
-            {"TaskSpec": task_schema(True), "Control": CONTROL.json_schema()}, sort_keys=True, separators=(",", ":")
-        )
-        if decision_model
-        else author_reference()
-    )
     environments = tuple(
         environment.model_dump(mode="json", include={"docker_image", "command_semantics"})
         for environment in (
@@ -70,7 +56,7 @@ def system_prompt(policy: Policy) -> str:
         "Python 3.12 Debian container" if image == GRADER_BASE_IMAGE else ("container" if image else "ShellSim")
     )
     return policy.prompt("author.system").render(
-        reference=reference,
+        reference=author_reference(decision_model),
         decision_model=f"\n\n{policy.prompt('author.decision_model').template}" if decision_model else "",
         environment=environment,
         author_image=image or "none (ShellSim)",
