@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
-from lib.taskforge.tests.resources.iris_fakes import LocalController, local_iris_machine
+from lib.taskforge.tests.resources.iris_fakes import Fault, LocalController, local_iris_machine
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
@@ -20,6 +20,7 @@ from shellbox.machine import (
     CommandOutcomeUnknown,
     ExecSetupFailed,
     ExitReason,
+    GuestHelperFailed,
     GuestPathError,
     Machine,
     MachineCancelled,
@@ -367,21 +368,46 @@ async def test_write_backend_path_failures_are_normalized(code: int, simulated: 
     assert caught.value.filename == str(OUTPUT)
 
 
+def _faults(names: tuple[str, ...], command: str) -> list[tuple[Callable[[str], bool], Fault]]:
+    rpcs: dict[str, Callable[[str], bool]] = {
+        "command": lambda script: command in script,
+        "capture": lambda script: script.startswith("wc -c") and script.endswith("-out"),
+        "cleanup": lambda script: script.startswith("rm -f /tmp/.shellbox-"),
+    }
+    return [(rpcs[rpc], Fault(fault)) for rpc, fault in (name.split(":") for name in names)]
+
+
 # Review 2026-11-20: a lost Iris reply after the exec ran made the handler run the command again and succeed.
-@pytest.mark.parametrize("lost", ["reply", "capture"])
-async def test_command_with_a_lost_outcome_runs_once_and_restarts_the_stage(tmp_path: Path, lost: str) -> None:
+# Follow-up: so did a capture or cleanup RPC that failed before it was sent, and a cleanup failure after a lost
+# reply replaced the primary failure. A failure may be retried in place only if the command was never sent.
+@pytest.mark.parametrize(
+    "faults,restarts",
+    [
+        (("command:lose-reply",), True),
+        (("capture:lose-reply",), True),
+        (("capture:setup-failed",), True),
+        (("cleanup:setup-failed",), False),
+        (("cleanup:lose-reply",), False),
+        (("command:lose-reply", "cleanup:connect-refused"), True),
+        (("command:connect-refused",), False),
+        (("command:setup-failed",), False),
+    ],
+)
+async def test_command_runs_once_whichever_iris_rpc_fails(
+    tmp_path: Path, faults: tuple[str, ...], restarts: bool
+) -> None:
     counter = tmp_path / "counter"
-    command = f"echo ran >> {counter}"
-
-    def lose_reply(script: str) -> bool:
-        return command in script if lost == "reply" else script.startswith("wc -c") and script.endswith("-out")
-
-    env = ShellboxEnv(local_iris_machine(tmp_path, LocalController(lose_reply)), "image", Notes(), AsyncExitStack())
+    command = f"echo ran >> {counter}; printf done"
+    controller = LocalController(_faults(faults, command))
     events: list[Event[None]] = []
-    with pytest.raises(Restart, match="outcome unknown"):
-        await run_command(RunCommand(command, 5), env, notify=events.append)
+    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
+    if restarts:
+        with pytest.raises(Restart, match="outcome unknown"):
+            await run_command(RunCommand(command, 5), env, notify=events.append)
+    else:
+        result = await run_command(RunCommand(command, 5), env, notify=events.append)
+        assert (result.exit_code, result.stdout) == (0, "done")
     assert counter.read_text() == "ran\n"
-    assert not events
 
 
 async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -396,10 +422,58 @@ async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.Mon
     assert not isinstance(caught.value, OSError) and machine.calls == 0
 
 
-async def test_failing_guest_transfer_helper_is_not_a_path_failure(tmp_path: Path) -> None:
-    (tmp_path / "present.txt").write_text("present")
-    controller = LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; ")
+# Review 2026-11-20 (follow-up 1): a directory read was archived and extracted, then held as host I/O; writes
+# through a link cycle, to a dangling link whose target parent is missing, or with an overlong name escaped raw.
+async def test_ordinary_iris_path_mistakes_are_tool_feedback_before_any_transfer(tmp_path: Path) -> None:
+    (tmp_path / "directory").mkdir()
+    (tmp_path / "loop").symlink_to(tmp_path / "loop")
+    (tmp_path / "dangling").symlink_to(tmp_path / "absent" / "file")
+    (tmp_path / "parent-link").symlink_to(tmp_path / "absent")
+    controller = LocalController()
     env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
-    with pytest.raises(RuntimeError, match="wc: not found") as caught:
-        await read_file(ReadFile(PurePosixPath(tmp_path / "present.txt")), env, notify=Notes())
-    assert not isinstance(caught.value, OSError)
+    cases = [
+        (env.read(PurePosixPath(tmp_path / "directory")), errno.EISDIR, "directory"),
+        (env.write(PurePosixPath(tmp_path / "loop"), b"x"), errno.ENOENT, "loop"),
+        (env.write(PurePosixPath(tmp_path / "dangling"), b"x"), errno.ENOENT, "dangling"),
+        (env.write(PurePosixPath(tmp_path / "parent-link" / "file"), b"x"), errno.ENOENT, "parent-link/file"),
+        (env.write(PurePosixPath(tmp_path / ("n" * 300)), b"x"), errno.ENAMETOOLONG, "n" * 300),
+    ]
+    for operation, code, name in cases:
+        controller.scripts.clear()
+        with pytest.raises(OSError) as caught:
+            await operation
+        assert (caught.value.errno, caught.value.filename) == (code, str(tmp_path / name))
+        assert not isinstance(caught.value, GuestPathError)
+        assert len(controller.scripts) == 1
+
+
+# Review 2026-11-20 (follow-up 1): a missing `wc` became a bug hold, and a missing `dirname` looped forever.
+@pytest.mark.parametrize(
+    "helper,operation,expected",
+    [
+        ("wc", "read", Hold),
+        ("mkdir", "write", Hold),
+        ("dirname", "read", FileNotFoundError),
+        ("dirname", "write", None),
+    ],
+)
+async def test_broken_guest_helpers_hold_with_their_cause_in_one_bounded_probe(
+    tmp_path: Path, helper: str, operation: str, expected: type[Exception] | None
+) -> None:
+    (tmp_path / "present.txt").write_text("present")
+    controller = LocalController(prelude=f"{helper}() {{ echo '{helper}: not found' >&2; return 127; }}; ")
+    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
+    if operation == "read":
+        path = tmp_path / ("present.txt" if helper == "wc" else "absent/deeper/file.txt")
+        action = read_file(ReadFile(PurePosixPath(path)), env, notify=Notes())
+    else:
+        action = write_file(WriteFile(PurePosixPath(tmp_path / "new" / "file.txt"), b"data"), env, notify=Notes())
+    if expected is None:
+        await action
+        assert (tmp_path / "new" / "file.txt").read_bytes() == b"data"
+        return
+    with pytest.raises(expected, match=f"{helper}: not found" if expected is Hold else None) as caught:
+        await action
+    assert len(controller.scripts) == 1
+    if expected is Hold:
+        assert isinstance(caught.value.__cause__, GuestHelperFailed)

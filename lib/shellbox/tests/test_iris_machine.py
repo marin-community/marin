@@ -13,7 +13,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from errno import EACCES, EISDIR, ENOENT, ENOTDIR
+from errno import EACCES, EISDIR, ENAMETOOLONG, ENOENT, ENOTDIR
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -37,6 +37,7 @@ from shellbox.machine import (
     Command,
     CommandOutcomeUnknown,
     ExecSetupFailed,
+    GuestHelperFailed,
     GuestPathError,
     MachineCancelled,
     MachineSpec,
@@ -757,3 +758,80 @@ def test_download_of_a_file_that_vanishes_mid_read_fails_while_an_empty_file_suc
     asyncio.run(scenario())
     assert not (tmp_path / "vanishing.out").exists()
     assert (tmp_path / "empty.out").read_bytes() == b""
+
+
+class CountingRpc(LocalRpc):
+    """Runs each exec locally after ``prelude`` and records its script."""
+
+    def __init__(self, prelude: str = ""):
+        self.prelude = prelude
+        self.scripts: list[str] = []
+
+    def exec_in_container(self, request, timeout_ms):
+        *shell, script = request.command
+        self.scripts.append(script)
+        return super().exec_in_container(SimpleNamespace(command=[*shell, self.prelude + script]), timeout_ms)
+
+
+# Review 2026-11-20 (follow-up 1): a directory read was archived over five RPCs; writes through a link cycle, a
+# dangling link with a missing target parent, or an overlong name raised runtime errors; a failing `dirname`
+# looped forever. Each path fault is classified in the one exec that attempted the operation.
+@pytest.mark.parametrize(
+    "operation,name,code",
+    [
+        ("read", "directory", EISDIR),
+        ("read", "loop", ENOENT),
+        ("read", "absent/deeper/file", ENOENT),
+        ("read", "n" * 256, ENAMETOOLONG),
+        ("write", "loop", ENOENT),
+        ("write", "dangling", ENOENT),
+        ("write", "parent-link/file", ENOENT),
+        ("write", "n" * 256, ENAMETOOLONG),
+        ("write", "directory", EISDIR),
+        ("write", "regular/child", ENOTDIR),
+    ],
+)
+def test_guest_path_faults_are_classified_in_one_exec(tmp_path: Path, operation: str, name: str, code: int) -> None:
+    (tmp_path / "directory").mkdir()
+    (tmp_path / "regular").write_text("file")
+    (tmp_path / "loop").symlink_to(tmp_path / "loop")
+    (tmp_path / "dangling").symlink_to(tmp_path / "absent" / "file")
+    (tmp_path / "parent-link").symlink_to(tmp_path / "absent")
+    source = tmp_path / "input.txt"
+    source.write_text("payload")
+    rpc = CountingRpc(prelude="dirname() { return 1; }; ")
+    machine, _ = local_machine(tmp_path, rpc)
+
+    async def scenario() -> None:
+        try:
+            with pytest.raises(GuestPathError) as raised:
+                if operation == "read":
+                    await machine.download_file(str(tmp_path / name), tmp_path / "out")
+                else:
+                    await machine.upload(source, str(tmp_path / name))
+            assert (raised.value.errno, raised.value.filename) == (code, str(tmp_path / name))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert len(rpc.scripts) == 1
+
+
+def test_directory_download_stays_recursive_and_helper_failures_are_typed(tmp_path: Path) -> None:
+    (tmp_path / "tree" / "nested").mkdir(parents=True)
+    (tmp_path / "tree" / "nested" / "leaf.txt").write_text("leaf")
+    (tmp_path / "present.txt").write_text("present")
+
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        broken, _ = local_machine(tmp_path, CountingRpc(prelude="wc() { echo 'wc: not found' >&2; return 127; }; "))
+        try:
+            await machine.download(str(tmp_path / "tree"), tmp_path / "copy")
+            assert (tmp_path / "copy" / "nested" / "leaf.txt").read_text() == "leaf"
+            with pytest.raises(GuestHelperFailed, match="wc: not found"):
+                await broken.download(str(tmp_path / "present.txt"), tmp_path / "out")
+        finally:
+            await machine.close()
+            await broken.close()
+
+    asyncio.run(scenario())

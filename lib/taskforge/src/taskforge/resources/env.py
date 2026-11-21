@@ -23,6 +23,7 @@ from shellbox.machine import (
     CommandOutcomeUnknown,
     ExecSetupFailed,
     ExitReason,
+    GuestHelperFailed,
     GuestPathError,
     Machine,
     MachineCancelled,
@@ -169,7 +170,11 @@ class ShellboxEnv(_RecordedEnv):
             raise _machine_issue(error) from error
         except CommandOutcomeUnknown as error:
             # Retrying in place could run the command twice; a stage replay issues it once on a fresh machine.
+            # That is safe only for roles without network: one that can mutate an external service needs a
+            # durable command identity, or a hold on an unknown outcome.
             raise Restart(f"command outcome unknown: {error}") from error
+        except GuestHelperFailed as error:
+            raise Hold(f"environment helper failed: {describe_exception(error)}") from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment operation did not resolve") from error
         except GuestPathError as error:
@@ -223,8 +228,12 @@ class ShellboxEnv(_RecordedEnv):
             raise ValueError("offset and limit must be nonnegative")
         async with self._operation(path):
             with TemporaryDirectory() as directory:
-                target = Path(directory) / "file"
-                await self.machine.download(str(self.workdir / path), target)
+                target, source = Path(directory) / "file", str(self.workdir / path)
+                # A file read must not archive a directory the model named by mistake.
+                if isinstance(self.machine, IrisMachine):
+                    await self.machine.download_file(source, target)
+                else:
+                    await self.machine.download(source, target)
                 with target.open("rb") as source:
                     source.seek(offset)
                     return source.read() if limit is None else source.read(limit)
