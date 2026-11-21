@@ -32,6 +32,7 @@ from rolloutengine.models import ConversationRecord, GradedRollout, Model, Rollo
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.runtime.resources import inline_resource
 
 from taskforge import checkpoint, driver
 from taskforge.coordinator import run_workpiece
@@ -41,7 +42,8 @@ from taskforge.effects.issues import ContextExceeded, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
-from taskforge.harness.tools.evidence import PAGE_ROOM, ReadTool, SearchTool
+from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ReadTool, SearchTool
+from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
@@ -50,6 +52,7 @@ from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
     Accept,
+    Attribution,
     BandOutcome,
     ControlResult,
     EvidenceKind,
@@ -59,6 +62,7 @@ from taskforge.model.review import (
     ReviewEnd,
     ReviewFinding,
     SolveReview,
+    TrialAccount,
     TrialResult,
     ValidationResult,
 )
@@ -84,7 +88,7 @@ def trial(index: int, reward: float, *replies: str) -> tuple[TrialResult, Graded
 
 
 TRIALS = (trial(0, 1.0, "The answer is 12."), trial(1, 0.0, LONG, "I answer 9."))
-"""trial-1's parts: 0 the task, 1 the long reply, 2 "I answer 9.", 3 its grade."""
+"""trial/1's parts: 0 the task, 1 the long reply, 2 "I answer 9.", 3 its grade."""
 
 
 def cite(source: str, start: int, end: int, quote: str) -> dict[str, object]:
@@ -133,18 +137,18 @@ def replies(reviewer: FakeInference) -> list[str]:
 async def test_a_finding_is_kept_only_when_each_quote_occurs_in_the_evidence_it_addresses() -> None:
     """Forged, unknown and out-of-range citations drop their finding with the reason, and never fail the round. A quote
     from a task file the reviewer never opened is valid: validity is the evidence it was shown, not the pages it read."""
-    kept = finding(cite("trial-1", 2, 2, "I answer 9."))
-    unopened = finding(cite("prompt.md", 1, 1, "What is six plus six?"), kind="grader_defect")
-    forged = finding(cite("trial-1", 2, 2, "I answer 12."))
-    unknown = finding(cite("trial-7", 0, 0, "The answer"))
-    outside = finding(cite("trial-0", 5, 6, "The answer"))
+    kept = finding(cite("trial/1", 2, 2, "I answer 9."))
+    unopened = finding(cite("task/prompt.md", 1, 1, "What is six plus six?"), kind="grader_defect")
+    forged = finding(cite("trial/1", 2, 2, "I answer 12."))
+    unknown = finding(cite("trial/7", 0, 0, "The answer"))
+    outside = finding(cite("trial/0", 5, 6, "The answer"))
     review = await reviewed(FakeInference((report(kept, unopened, forged, unknown, outside),)))
     assert review.end is ReviewEnd.REPORTED
-    assert [f.citations[0].source for f in review.findings] == ["trial-1", "prompt.md"]
+    assert [f.citations[0].source for f in review.findings] == ["trial/1", "task/prompt.md"]
     assert [(f.citations[0].source, reason) for f, reason in review.dropped] == [
-        ("trial-1", "its quote does not occur verbatim in trial-1 #2..2"),
-        ("trial-7", "cites 'trial-7', which is not in the evidence"),
-        ("trial-0", "cites trial-0 #5..6, outside its parts 0..2"),
+        ("trial/1", "its quote does not occur verbatim in trial/1 #2..2"),
+        ("trial/7", "cites 'trial/7', which is not in the evidence"),
+        ("trial/0", "cites trial/0 #5..6, outside its parts 0..2"),
     ]
 
 
@@ -162,20 +166,20 @@ async def test_a_long_transcript_is_paged_whole_and_a_quote_across_a_page_bounda
     read = ReadTool(index)
     pages, offset = [], 0
     while True:
-        page = text(await read(Context(log=EventLog()), {"source": "trial-1", "start": 1, "offset": offset}))
+        page = text(await read(Context(log=EventLog()), {"source": "trial/1", "start": 1, "offset": offset}))
         pages.append(page)
         assert len(page) <= OUTPUT_CHARS - PAGE_ROOM // 2
         if (more := re.search(r"\[page ends: read start=1 offset=(\d+) next\]", page)) is None:
             break
         offset = int(more.group(1))
     whole = "".join(
-        re.sub(r"(?s)^--- trial-1 #1[^\n]*\n|\n\[page ends.*$", "", p).split("--- trial-1 #2")[0] for p in pages
+        re.sub(r"(?s)^--- trial/1 #1[^\n]*\n|\n\[page ends.*$", "", p).split("--- trial/1 #2")[0] for p in pages
     )
-    assert whole.rstrip("\n") == index.sources["trial-1"].parts[1] and len(pages) > 5
+    assert whole.rstrip("\n") == index.sources["trial/1"].parts[1] and len(pages) > 5
     boundary = int(re.findall(r"offset=(\d+)", pages[0])[0])
-    across = index.sources["trial-1"].parts[1][boundary - 25 : boundary + 25]
-    calls = [call("read_evidence", {"source": "trial-1", "start": 1, "offset": o}, f"r{o}") for o in (0, boundary)]
-    reviewer = FakeInference((*calls, report(finding(cite("trial-1", 1, 1, across)))))
+    across = index.sources["trial/1"].parts[1][boundary - 25 : boundary + 25]
+    calls = [call("read_evidence", {"source": "trial/1", "start": 1, "offset": o}, f"r{o}") for o in (0, boundary)]
+    reviewer = FakeInference((*calls, report(finding(cite("trial/1", 1, 1, across)))))
     review = await reviewed(reviewer)
     assert len(review.findings) == 1 and not review.dropped
     assert all(len(reply) <= OUTPUT_CHARS for reply in replies(reviewer))  # nothing spills to a file
@@ -185,7 +189,7 @@ async def test_search_is_bounded_and_names_what_it_left_out() -> None:
     found = text(
         await SearchTool(evidence(SUBMISSION, TRIALS, OUTPUT_CHARS))(Context(log=EventLog()), {"pattern": "carry"})
     )
-    assert found.startswith("trial-1 #1: assistant: step 0: carry") and len(found) <= OUTPUT_CHARS
+    assert found.startswith("trial/1 #1: assistant: step 0: carry") and len(found) <= OUTPUT_CHARS
     assert re.search(r"\[\d+ more matches; narrow the pattern or the sources\]$", found)
 
 
@@ -217,7 +221,7 @@ async def test_a_trial_without_a_transcript_is_a_named_stub_and_none_at_all_skip
     reviewer = FakeInference((report(accounts=(ACCOUNT, {**ACCOUNT, "trial": 2})),))
     review = await reviewed(reviewer, (*TRIALS, (budget, None)))
     opening = reviewer.requests[0].conversation[1].content
-    assert "trial-2: submission_failure reward=0.0 cause=None no transcript (output budget exhausted)" in opening
+    assert "trial/2: submission_failure reward=0.0 cause=None no transcript (output budget exhausted)" in opening
     assert review.missing == (
         MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [2] have no complete transcript"),
     )
@@ -236,12 +240,12 @@ async def test_the_entry_point_reviews_any_set_of_trials() -> None:
     """Arbitrary trial indices, as a confirmation step's three plus five would be."""
     trials = (trial(0, 1.0, "12"), trial(5, 0.0, "I answer 9."), trial(9, 1.0, "12"))
     reviewer = FakeInference(
-        (report(finding(cite("trial-5", 1, 1, "I answer 9.")), accounts=({**ACCOUNT, "trial": 5},)),)
+        (report(finding(cite("trial/5", 1, 1, "I answer 9.")), accounts=({**ACCOUNT, "trial": 5},)),)
     )
     review = await reviewed(reviewer, trials)
     opening = reviewer.requests[0].conversation[1].content
-    assert [s.split(":")[0] for s in opening.splitlines() if s.startswith("trial-")] == ["trial-0", "trial-5", "trial-9"]
-    assert [f.citations[0].source for f in review.findings] == ["trial-5"]
+    assert [s.split(":")[0] for s in opening.splitlines() if s.startswith("trial/")] == ["trial/0", "trial/5", "trial/9"]
+    assert [f.citations[0].source for f in review.findings] == ["trial/5"]
 
 
 def round_with(review: SolveReview | None) -> ValidationResult:
@@ -317,7 +321,7 @@ class FindingReviewer(CleanReviewer):
             return clean
         arguments = {
             **json.loads(clean.tool_calls[0].arguments),
-            "findings": [finding(cite("trial-1", 1, 1, "answers 12"))],
+            "findings": [finding(cite("trial/1", 1, 1, "answers 12"))],
         }
         return call("report", arguments, "review")
 
@@ -442,12 +446,12 @@ def test_a_tool_reply_keeps_the_call_it_answers() -> None:
     """Review 2026-11-21 (n11): two parallel calls whose replies swapped ids rendered identically."""
     one, other = (evidence(SUBMISSION, ((TRIALS[1][0], parallel(*ids)),), OUTPUT_CHARS) for ids in ("ab", "ba"))
     assert one.version != other.version
-    assert "tool (reply to a):\nPASS" in one.sources["trial-1"].parts[2]
+    assert "tool (reply to a):\nPASS" in one.sources["trial/1"].parts[2]
 
 
 async def test_two_parallel_evidence_reads_replay_cold_with_zero_calls(tmp_path: Path) -> None:
     reads = tuple(
-        ToolCall(f"r{start}", "read_evidence", json.dumps({"source": "trial-1", "start": start})) for start in (1, 2)
+        ToolCall(f"r{start}", "read_evidence", json.dumps({"source": "trial/1", "start": start})) for start in (1, 2)
     )
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     log = EventLog(sink=sink)
@@ -467,3 +471,35 @@ async def test_an_opening_without_the_version_slot_still_misses_on_changed_evide
     missed = FakeInference(())
     with pytest.raises(RuntimeError, match="Fake inference script exhausted"):
         await reviewed(missed, changed, EventLog(replay_from=log.records), settings=overlay)
+
+
+def with_resources(**groups: tuple[tuple[str, bytes], ...]) -> Submission:
+    task = arithmetic_task()
+    files = {group: tuple(inline_resource(path, data) for path, data in entries) for group, entries in groups.items()}
+    return replace(SUBMISSION, task=task.model_copy(update={"resources": task.resources.model_copy(update=files)}))
+
+
+def test_every_source_has_its_own_address_and_the_bytes_it_was_built_from() -> None:
+    """Review 2026-11-21 (n11 P1): a worker and a verifier file both named ``same.txt`` collapsed to one source, a
+    resource named ``prompt.md`` replaced the task prompt, one named like a trial raised, and distinct non-UTF-8 bytes
+    decoded to one text and one version."""
+
+    def index(worker: bytes) -> Evidence:
+        named = (("same.txt", worker), ("prompt.md", b"not the prompt"), ("trial-0", b"x"), ("trial/1", b"y"))
+        return evidence(with_resources(worker=named, verifier=(("same.txt", b"v"),)), TRIALS, OUTPUT_CHARS)
+
+    sources = index(b"w").sources
+    assert sources["resource/worker/same.txt"].parts == ("w",) and sources["resource/verifier/same.txt"].parts == ("v",)
+    assert sources["task/prompt.md"].parts == ("User:", "What is six plus six?")
+    assert sources["trial/1"].parts[-1].startswith("grader:")
+    assert index(b"\xff").version != index(b"\xfe").version
+    assert index(b"\xff").sources["resource/worker/same.txt"].parts == ()
+    assert "not UTF-8" in index(b"\xff").sources["resource/worker/same.txt"].summary
+
+
+def test_an_account_must_name_a_trial_of_the_review() -> None:
+    """A resource named like a trial does not make a fabricated account valid."""
+    index = evidence(with_resources(worker=(("trial-99", b"x"), ("trial/99", b"y"))), TRIALS, OUTPUT_CHARS)
+    accounts = (TrialAccount(1, Attribution.SOLVER, "misadded"), TrialAccount(99, Attribution.SOLVER, "invented"))
+    outcome = text(checked_report(index, (), accounts))
+    assert outcome == "Invalid report: trial 99 is not a solver trial. Fix these and call report again."

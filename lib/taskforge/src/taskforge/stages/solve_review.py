@@ -9,6 +9,7 @@ One implementation over any set of trials: a review ``Kind`` names its prompts a
 (the confirmation step's final review) is a new value, not a new path. Decision rules live with the review rules.
 """
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -23,7 +24,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import Returned, Stopped
 from taskforge.harness.role import Fresh, Visit, sitting
-from taskforge.harness.tools.evidence import Evidence, ReportTool, Source, evidence_tools
+from taskforge.harness.tools.evidence import RESOURCE, TASK, TRIAL, Evidence, ReportTool, Source, evidence_tools
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import TaskProposal, render
 from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
@@ -88,25 +89,38 @@ def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
         )
     status = "ungraded" if trial.grade is None else f"{trial.grade.status} reward={trial.grade.reward}"
     summary = (
-        f"trial-{trial.trial}: {status} cause={trial.cause} {ended}; parts={len(parts)} chars={sum(map(len, parts))}"
+        f"{TRIAL}{trial.trial}: {status} cause={trial.cause} {ended}; parts={len(parts)} chars={sum(map(len, parts))}"
     )
-    return Source(f"trial-{trial.trial}", summary, parts)
+    return Source(f"{TRIAL}{trial.trial}", summary, parts)
+
+
+def text_source(name: str, text: str, about: str = "") -> Source:
+    return Source(name, f"{name}: {about}lines={len(text.splitlines())} chars={len(text)}", tuple(text.splitlines()))
+
+
+def resource_source(name: str, data: bytes) -> Source:
+    """A resource read by line, its summary naming the bytes it was built from; bytes that are not UTF-8 are named
+    opaque and have no parts, never replacement characters two different files could share."""
+    about = f"bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} "
+    try:
+        return text_source(name, data.decode(), about)
+    except UnicodeDecodeError:
+        return Source(name, f"{name}: {about}binary (not UTF-8), not readable as text", ())
 
 
 def task_sources(submission: Submission) -> tuple[Source, ...]:
-    task, resources = submission.task, submission.task.resources
-    files = {
-        "task.json": task_manifest(task),
-        "prompt.md": format_conversation(task.context.events),
-        "controls.json": CONTROLS.dump_json(submission.controls, indent=1).decode(),
-        **{
-            file.path: resource_bytes(file).decode(errors="replace")
-            for file in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier)
-        },
-    }
-    return tuple(
-        Source(path, f"{path}: lines={len(text.splitlines())} chars={len(text)}", tuple(text.splitlines()))
-        for path, text in files.items()
+    """The task's documents under ``task/``, then each resource under ``resource/<group>/``: no file can take another
+    file's or a trial's address."""
+    task, groups = submission.task, submission.task.resources
+    return (
+        text_source(f"{TASK}task.json", task_manifest(task)),
+        text_source(f"{TASK}prompt.md", format_conversation(task.context.events)),
+        text_source(f"{TASK}controls.json", CONTROLS.dump_json(submission.controls, indent=1).decode()),
+        *(
+            resource_source(f"{RESOURCE}{group}/{file.path}", resource_bytes(file))
+            for group in ("all", "worker", "oracle", "verifier")
+            for file in getattr(groups, group)
+        ),
     )
 
 
@@ -126,7 +140,7 @@ def evidence(
 ) -> Evidence:
     sources = (*(trial_source(*pair) for pair in trials), *task_sources(submission))
     if len({source.name for source in sources}) != len(sources):
-        raise ValueError("A task file is named like a solver trial")
+        raise ValueError("Two evidence sources share an address")
     unpassed = frozenset(t.trial for t, _ in trials if t.grade is None or t.cause is not None or not passed(t.grade))
     return Evidence({source.name: source for source in sources}, unpassed, output_chars)
 

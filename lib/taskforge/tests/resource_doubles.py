@@ -120,7 +120,7 @@ class CleanReviewer(InferenceClient):
         opening = next(message.content for message in request.conversation if message.role == Role.USER)
         accounts = [
             {"trial": int(trial), "attribution": "solver", "reason": "its own work"}
-            for trial in re.findall(r"^trial-(\d+):", opening, re.MULTILINE)
+            for trial in re.findall(r"^trial/(\d+):", opening, re.MULTILINE)
         ]
         arguments = json.dumps({"findings": [], "accounts": accounts})
         return Completion("", (ToolCall("review", "report", arguments),), FinishReason.TOOL_CALLS)

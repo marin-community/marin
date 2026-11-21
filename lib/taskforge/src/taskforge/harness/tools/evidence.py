@@ -24,6 +24,8 @@ from taskforge.model.review import Citation, ReviewEnd, ReviewFinding, SolveRevi
 PAGE_ROOM = 200
 """Characters each reply keeps free for its headers and its continuation line."""
 SEARCH_CONTEXT = 120
+TRIAL, TASK, RESOURCE = "trial/", "task/", "resource/"
+"""Address namespaces: solver trials, the task's own documents, and resources by group."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +192,7 @@ def report(
     with its reason, never trusted and never refused back to the reviewer."""
     accounted = [account.trial for account in accounts]
     trials = {source.name for source in evidence.sources.values()}
-    problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"trial-{trial}" not in trials]
+    problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
     if problems:
