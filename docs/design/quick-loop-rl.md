@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 4:06 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 5:48 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,9 +18,9 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. All five Ray nodes joined with 40 H100s, and vLLM captured CUDA graphs. The learner failed during mesh initialization. JAX reported four CUDA slices, and the frozen runtime assigned all devices to one slice. No update or acceptance receipt was recorded. | Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. The rerun and matched runs are pending. |
+| 40-H100 learner smoke | Run `2026.11.20.5` joined all five Ray nodes and captured vLLM CUDA graphs. The learner failed during mesh initialization before any update. Corrected source `dba95c7f84` passed 15 local tests on JAX 0.11.0 and rendered the two-update recipe as version `2026.11.20.8`. | Submit the staged rerun once the inventory task service credentials are authorized for the CoreWeave job. The matched runs depend on smoke acceptance. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
-| Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Distinct TPUv4 learner and serving hosts passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
+| Native online loop based on `main` | The small BF16 fixture passed two updates with binary replay on distinct TPUv4 learner and serving hosts. Two real tool episodes and updates passed in serial on one four-chip TPUv4 host, including exact restore and final generation under the second update. | Verify concurrent tool episodes across hosts, then the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
@@ -279,10 +279,13 @@ only the envelope codec.
 
 ### 1. Qualify the Levanter learner on H100
 
-Use the frozen smoke bundle and the existing `2026.11.20.5` artifact. The
-job reserves four eight-H100 learner hosts and one eight-H100 vLLM host in
-`cw-us-east-02a`. The learner uses data4/expert8. Keep the current gang while
-it is queued and follow the coordinator if Iris retries the child.
+Use the staged `2026.11.20.8` smoke pinned to `dba95c7f84`. The prior
+`2026.11.20.5` attempt is terminal. The rerun reserves four eight-H100 learner
+hosts and one eight-H100 vLLM host in `cw-us-east-02a`. The learner places
+the four data shards across learner hosts and keeps the eight expert-axis
+shards within each host.
+Authorize the inventory task service credentials for the job before submission.
+Follow the coordinator if Iris retries the child.
 
 - Verify all learner ranks select CUDA and load
   `open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21` at `fe666478454e`.
@@ -703,6 +706,26 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   one-VM slices for it. Production-context memory remains to be qualified.
   [TPUv4 tool-turn restart run][iris-native-tool-restart-tpu] ·
   [TPUv4 gang retry][iris-native-tool-gang-tpu]
+
+  On one four-chip TPUv4 host at `4fbb38e286`, fresh learner and serving
+  processes took turns using the slice. The first optimizer update published
+  policy 1, and the second tool episode sampled that installed policy. The
+  learner reported a second update and then the fixture rejected the loss
+  `-0.9999975` for differing from `-1.0` by more than `1e-6`. The attempt
+  ended before policy 2 publication and final generation.
+  [TPUv4 serial tool-turn attempt][iris-native-tool-serial-tpu]
+
+  The retry recomputed the clipped loss from frozen learner scores and
+  normalized action weights with an FP32 roundoff bound. It passed two
+  optimizer updates and four binary replay frames across six fresh serial
+  processes on the same four TPUv4 chips. Splash learner scores differed
+  from captured raw scores by at most `2.31e-4` across four action targets,
+  with zero PPO clip-boundary crossings. A fresh learner restored model,
+  optimizer, RNG, step and averaging fingerprints exactly before step 2.
+  Serving rejected stale requests after each install, then generated and
+  evaluated a fixture sample under policy 2. The fixture uses a 524,296
+  parameter model and exercises sequential use of the TPU slice.
+  [Successful TPUv4 serial tool-turn retry][iris-native-tool-serial-retry]
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
   prompt IDs from SkyRL's chat client and binds the returned binary frame to
   the controller's expected policy identity. The turn records carry those
@@ -864,6 +887,8 @@ arms. [Prior timing comparison][timing]
 [iris-native-tool-turn-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-turn-tpu-20261121-26
 [iris-native-tool-restart-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-restart-tpu-20261121-27
 [iris-native-tool-gang-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-gang-tpu-20261121-28
+[iris-native-tool-serial-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-serial-tpu-20261121-29
+[iris-native-tool-serial-retry]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-serial-tpu-20261121-30
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
