@@ -420,7 +420,7 @@ def lowered() -> TaskRolloutSpec:
 async def test_a_cold_reload_of_the_journal_replays_the_review_with_zero_calls(tmp_path: Path) -> None:
     """Review 2026-11-21 (n11 P1): a reloaded grade came back with its detail keys sorted, which changed the rendered
     evidence and its version, so a default-policy resume paid the reviewer again."""
-    grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2, "b": 3}})
+    grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2, "b": 3}, "cut": 3.0})  # reloads as 3
     rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     log = EventLog(sink=sink)

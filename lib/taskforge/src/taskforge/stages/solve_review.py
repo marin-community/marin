@@ -52,9 +52,21 @@ class Kind:
 ROUND = Kind("solve_review", ReportTool)
 
 
+def journal_form(value: object) -> object:
+    """``value`` as the journal reloads it: an untyped integral float comes back an integer (3.0 as 3)."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, Mapping):
+        return {key: journal_form(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [journal_form(item) for item in value]
+    return value
+
+
 def canonical(value: object) -> str:
-    """Structured values as sorted JSON: the journal reloads mappings key-sorted, so live and resumed text agree."""
-    return json.dumps(value, sort_keys=True, default=str)
+    """Structured values as sorted JSON in their journal form: the journal reloads mappings key-sorted and integral
+    floats as integers, so live and resumed text agree."""
+    return json.dumps(journal_form(value), sort_keys=True, default=str)
 
 
 def render_message(message: Mapping[str, object]) -> str:
