@@ -47,7 +47,7 @@ from rolloutengine.agents.terminus.tmux_session import (
     encode_model_output,
 )
 from rolloutengine.harness.core import HarnessContext
-from rolloutengine.harness.external import AgentCompletion, AgentHarness, LengthStopPolicy
+from rolloutengine.harness.external import AgentCompletion, AgentHarness, LengthStopPolicy, ReplyMatch
 from rolloutengine.models import RolloutEnded
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ def terminus_harness(options: TerminusOptions) -> AgentHarness:
     async def run(context: HarnessContext, complete: AgentCompletion) -> None:
         await run_terminus(options, context, complete)
 
-    return AgentHarness(run, length_stop=LengthStopPolicy.NEW_CONVERSATION)
+    return AgentHarness(run, length_stop=LengthStopPolicy.NEW_CONVERSATION, reply_match=ReplyMatch.EXACT)
 
 
 async def run_terminus(options: TerminusOptions, context: HarnessContext, complete: AgentCompletion) -> None:

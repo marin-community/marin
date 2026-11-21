@@ -33,7 +33,7 @@ from taskcompendium.models import TextMessage
 from rolloutengine.agents.environment import EXEC_OUTPUT_LIMIT_BYTES
 from rolloutengine.agents.model_relay import PromptTokenizer
 from rolloutengine.harness.core import HarnessContext
-from rolloutengine.harness.external import AgentCompletion, AgentHarness, LengthStopPolicy
+from rolloutengine.harness.external import AgentCompletion, AgentHarness, LengthStopPolicy, ReplyMatch
 from rolloutengine.models import ContextWindowExceeded, ModelTurn, Prompt
 
 logger = logging.getLogger(__name__)
@@ -128,7 +128,7 @@ def mini_swe_harness(options: MiniSweOptions, tokenize: PromptTokenizer) -> Agen
     async def run(context: HarnessContext, complete: AgentCompletion) -> None:
         await run_mini_swe(options, tokenize, context, complete)
 
-    return AgentHarness(run, length_stop=LengthStopPolicy.NEW_CONVERSATION)
+    return AgentHarness(run, length_stop=LengthStopPolicy.NEW_CONVERSATION, reply_match=ReplyMatch.EXACT)
 
 
 async def run_mini_swe(

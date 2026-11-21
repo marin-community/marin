@@ -35,6 +35,16 @@ class LengthStopPolicy(StrEnum):
     """The prompt starts a new conversation with its full history."""
 
 
+class ReplyMatch(StrEnum):
+    """Which prompts that repeat the conversation so far continue it with a reply."""
+
+    EXACT = "exact"
+    """Only a prompt whose messages and options repeat the conversation exactly; the model gets what the agent sent."""
+    NORMALIZED = "normalized"
+    """Also a prompt whose messages match after dropping empty fields and normalizing tool arguments, with any
+    output limits, so that an agent that re-serializes its history keeps one conversation."""
+
+
 def _messages_equal(left: tuple[dict[str, Any], ...], right: tuple[dict[str, Any], ...]) -> bool:
     """Compare messages after normalizing empty fields and tool argument JSON."""
     return len(left) == len(right) and all(
@@ -69,12 +79,14 @@ async def complete_agent_prompt(
     prompt: Prompt,
     last: tuple[Prompt, ModelTurn] | None,
     length_stop: LengthStopPolicy = LengthStopPolicy.END,
+    reply_match: ReplyMatch = ReplyMatch.NORMALIZED,
 ) -> ModelTurn:
     """Serve an external agent's prompt as a repeat, reply, or new conversation.
 
-    A prompt that extends the last turn exactly is a reply; so is one whose messages match it after
-    normalization, unless that turn was cut by its output limit. ``length_stop`` decides whether a
-    prompt that extends a cut turn exactly is a reply, which ends the attempt, or a new conversation.
+    A prompt that extends the last turn exactly is a reply. Under ``ReplyMatch.NORMALIZED``, so is one whose
+    messages match it after normalization, unless that turn was cut by its output limit. ``length_stop``
+    decides whether a prompt that extends a cut turn exactly is a reply, which ends the attempt, or a new
+    conversation.
     """
     if last is not None:
         previous, turn = last
@@ -89,7 +101,8 @@ async def complete_agent_prompt(
             and not (cut and length_stop is LengthStopPolicy.NEW_CONVERSATION)
         )
         text_reply = (
-            prompt.token_ids is None
+            reply_match is ReplyMatch.NORMALIZED
+            and prompt.token_ids is None
             and not cut
             and reply_options_match(previous.options, prompt.options)
             and _messages_equal(prefix, history)
@@ -105,7 +118,8 @@ async def complete_agent_prompt(
 class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
-    ``length_stop`` decides what a prompt that extends a turn cut by its output limit does. When the attempt
+    ``length_stop`` decides what a prompt that extends a turn cut by its output limit does, and ``reply_match``
+    which prompts continue the conversation. When the attempt
     ends, calls wait until the cleanup, which cancels the agent before the engine grades. See the task rollouts
     reference for conversation, cancellation, and shutdown rules.
     """
@@ -114,6 +128,7 @@ class AgentHarness:
 
     agent: AgentRun
     length_stop: LengthStopPolicy = LengthStopPolicy.END
+    reply_match: ReplyMatch = ReplyMatch.NORMALIZED
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         # The agent does not get the tools that the task's own prompt advertises. A shell binding is exempt,
@@ -125,7 +140,7 @@ class AgentHarness:
             raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")
 
     async def run(self, context: HarnessContext, session: ModelSession) -> None:
-        completions = _Completions(session, self.length_stop)
+        completions = _Completions(session, self.length_stop, self.reply_match)
         agent = asyncio.create_task(self.agent(context, completions.complete))
         context.cleanup.push("agent_stop", lambda: completions.stop(agent))
         try:
@@ -145,9 +160,10 @@ class AgentHarness:
 class _Completions:
     """Answer the agent's completion calls with the model session, each call in its caller's task."""
 
-    def __init__(self, session: ModelSession, length_stop: LengthStopPolicy):
+    def __init__(self, session: ModelSession, length_stop: LengthStopPolicy, reply_match: ReplyMatch):
         self.session = session
         self.length_stop = length_stop
+        self.reply_match = reply_match
         self.last: tuple[Prompt, ModelTurn] | None = None
         self.ended: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.released = asyncio.Event()
@@ -162,7 +178,7 @@ class _Completions:
         await asyncio.sleep(0)
         if not self.ended.done():
             try:
-                turn = await complete_agent_prompt(self.session, prompt, self.last, self.length_stop)
+                turn = await complete_agent_prompt(self.session, prompt, self.last, self.length_stop, self.reply_match)
             except RolloutEnded:
                 self.end()
             else:
