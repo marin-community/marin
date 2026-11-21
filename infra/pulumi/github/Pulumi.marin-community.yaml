@@ -77,8 +77,8 @@ config:
       presence: present
       source_kind: manual
       source_ref: owner-recovery:belay-intake-token
-      disposition: keep
-      note: marin-belay-bot token used by the Belay intake workflow to comment on the locked issue.
+      disposition: remove-candidate
+      note: No consumer since the Belay intake workflow was removed (#10940); revoke the marin-belay-bot token.
     - name: CW_KUBECONFIG
       scope: repository
       repository: marin-community/marin
