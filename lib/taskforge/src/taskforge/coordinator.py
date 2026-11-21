@@ -28,6 +28,7 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.exits import Decided, Validated
+from taskforge.stages.rules import author_stopped
 from taskforge.stages.solve_review import finding_lines
 
 
@@ -79,7 +80,7 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
         case Modify(findings, placement, fallback, _, review):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
-            current = Fallback(wp.submission, placement) if wp.submission and placement else None
+            current = Fallback(wp.submission, placement, len(wp.evidence) - 1) if wp.submission and placement else None
             named = [option for option in (current, wp.fallback) if option and digest_of(option) == fallback]
             kept = named[0] if named else None  # the current submission over a stored one of its digest
             if digest_of(kept) != fallback:
@@ -112,8 +113,9 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
         case Stage.AUTHOR, Submitted(submission, session):
             return wp.with_(submission=submission, session=session), Stage.VALIDATE
         case Stage.AUTHOR, Stopped():
-            decision = Abandon((f"author stopped: {result.summary}",))
-            stopped = wp.with_(session=result.session, terminal=Terminal.ABANDONED, decisions=(*wp.decisions, decision))
+            stopped = apply_decision(
+                wp.with_(session=result.session), author_stopped(wp, result.summary), config.budget, config.policy
+            )
             return stopped, None
         case Stage.VALIDATE, Validated(evidence):
             return wp.with_(evidence=(*wp.evidence, evidence)), Stage.REVIEW

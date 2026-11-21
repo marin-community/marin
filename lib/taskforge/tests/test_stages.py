@@ -574,7 +574,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
 async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(workpiece.submission.digest, (), (), ())
-    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY), evidence=(evidence,))
+    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY, 0), evidence=(evidence,))
     expected = Modify(("Custom reviewer requires another change",))
 
     def custom_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Modify:
@@ -710,7 +710,7 @@ def test_hardening_accepts_its_placement_or_restores_the_fallback_after_a_fault(
     original = workpiece.submission
     assert original is not None
     pending = reviewed(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
-    assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY)
+    assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY, 0)
     first = pending.decisions[-1]
     assert isinstance(first, Modify) and first.placement is BandOutcome.TOO_EASY and first.fallback == original.digest
     assert "Make the task harder" in first.findings[0] and pending.terminal is None
@@ -729,7 +729,7 @@ def test_two_clean_too_hard_waves_accept_the_revision_tagged_too_hard(workpiece:
     hard = workpiece.submission
     assert hard is not None
     first = reviewed(workpiece.with_(evidence=(evidence(0),)))
-    assert first.round == 1 and first.fallback == Fallback(hard, BandOutcome.TOO_HARD)
+    assert first.round == 1 and first.fallback == Fallback(hard, BandOutcome.TOO_HARD, 0)
     easier = revised(hard, "easier")
     final = reviewed(first.with_(submission=easier, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
@@ -767,9 +767,11 @@ def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Wo
     assert stored is not None
     current = revised(stored, "current")
     # Owner's ruling (2026-11-13): a band change is never a regression; a clean too-easy revision of an in-band
-    # fallback is accepted as the revision, tagged, and only a fault restores the fallback.
+    # fallback is accepted as the revision, tagged, and only a fault restores the fallback (its rounds are spent).
     final = reviewed(
-        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.IN_BAND), evidence=(evidence(3),))
+        workpiece.with_(
+            round=2, submission=current, fallback=Fallback(stored, BandOutcome.IN_BAND, 0), evidence=(evidence(3),)
+        )
     )
     decision = accepted(final)
     assert (decision.band, decision.restore, final.submission, final.accepted_with) == (
@@ -780,12 +782,12 @@ def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Wo
     )
     # Out of band on both sides: the later submission.
     assert fallback_for(
-        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD)),
+        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD, 0), evidence=(evidence(3),)),
         BandOutcome.TOO_EASY,
         build_config(load_policy(DEFAULTS_DIR), {}).band,
-    ) == Fallback(current, BandOutcome.TOO_EASY)
+    ) == Fallback(current, BandOutcome.TOO_EASY, 0)
     # A stored fallback the current policy no longer accepts is not restored.
-    easy = workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_EASY))
+    easy = workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_EASY, 0))
     faulted = reviewed(easy.with_(evidence=(evidence(3, controls_met=False),)), {"band.accept_too_easy": False})
     assert faulted.terminal is not Terminal.ACCEPTED and faulted.submission == current and faulted.fallback is None
 
@@ -799,16 +801,16 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
         apply_decision(wp, Accept(BandOutcome.TOO_EASY, (), "elsewhere"), setup.budget, setup.policy)
     with pytest.raises(ValueError, match="Cannot keep"):
         apply_decision(wp, Modify(("harder",), BandOutcome.TOO_EASY, "elsewhere"), setup.budget, setup.policy)
-    stored = wp.with_(fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY))
+    stored = wp.with_(fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY, 0))
     assert stored.fallback is not None
     with pytest.raises(ValueError, match="Cannot restore"):  # the right digest, the wrong band
         apply_decision(
             stored, Accept(BandOutcome.TOO_HARD, (), stored.fallback.submission.digest), setup.budget, setup.policy
         )
     # Two candidates with one digest: the current submission at its own placement, as the review rule chose it.
-    same = wp.with_(fallback=Fallback(submission, BandOutcome.IN_BAND))
+    same = wp.with_(fallback=Fallback(submission, BandOutcome.IN_BAND, 0))
     kept = apply_decision(same, Modify(("x",), BandOutcome.TOO_EASY, submission.digest), setup.budget, setup.policy)
-    assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY)
+    assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY, len(same.evidence) - 1)
 
 
 # Review 2026-11-21: the exhausted-budget acceptance dropped the missing-slot denominator of its Modify.

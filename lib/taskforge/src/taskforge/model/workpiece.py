@@ -35,10 +35,12 @@ class Submission:
 
 @dataclass(frozen=True, slots=True)
 class Fallback:
-    """The submission a revision that leaves the acceptance band falls back to, and where it placed."""
+    """The submission a revision falls back to, where it placed, and the index in the workpiece's evidence of the
+    round that placed it: what ships and what is said about it come from that one round."""
 
     submission: Submission
     band: BandOutcome
+    evidence: int
 
 
 @dataclass(frozen=True, slots=True)

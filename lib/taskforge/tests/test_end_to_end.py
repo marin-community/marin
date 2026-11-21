@@ -2138,7 +2138,7 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
 # Review 2026-11-21 (follow-up 1): an empty restore and None serialised alike, so an invalid direct restore became an
 # ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
 def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
-    stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY)
+    stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY, 0)
     values: dict[str, list[object]] = {
         "detail": [TrialResult(0, None, Cause.HELD, detail) for detail in ("", "refused", " ")],
         "restore": [Accept(BandOutcome.IN_BAND, (), restore) for restore in (None, "a" * 64, "b" * 64)],

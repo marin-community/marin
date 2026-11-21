@@ -18,6 +18,7 @@ from lib.taskforge.tests.proposal_fakes import sample_proposal
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
 from lib.taskforge.tests.stage_fakes import transcript
 from lib.taskforge.tests.test_end_to_end import (
+    SETTINGS,
     Envs,
     call,
     config,
@@ -35,12 +36,13 @@ from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge import checkpoint, driver
-from taskforge.coordinator import run_workpiece
+from taskforge.config import TaskforgeConfig
+from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
 from taskforge.effects.issues import ContextExceeded, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink
-from taskforge.harness.protocol import ToolResult
+from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.role import Visit, sitting
 from taskforge.harness.tools.base import Outcome as ToolOutcome
 from taskforge.harness.tools.evidence import Evidence, ListTool, ReadTool, SearchTool, Source
@@ -48,7 +50,7 @@ from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, FinishReason, ToolCall
+from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -56,6 +58,7 @@ from taskforge.model.review import (
     Attribution,
     BandOutcome,
     ControlResult,
+    Decision,
     EvidenceKind,
     FindingKind,
     MissingEvidence,
@@ -67,7 +70,8 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import WORKPIECE, Submission, Workpiece
+from taskforge.model.stage import Stage
+from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.env import Env, EnvFactory, WriteFile
@@ -595,3 +599,76 @@ async def test_an_interrupted_recording_is_reviewed_by_its_prefix_and_named_inco
     assert evidence(SUBMISSION, trials, OUTPUT_CHARS).sources["trial/1"].parts[3] == (
         "[interrupted: the recording ends here (OutputBudgetExhausted)]"
     )
+
+
+def settings_config(**settings: object) -> TaskforgeConfig:
+    return build_config(load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, **settings}), {})
+
+
+def decided(wp: Workpiece, setup: TaskforgeConfig) -> tuple[Decision, Workpiece]:
+    decision = default_review(wp, setup.band, setup.budget)
+    return decision, apply_decision(wp, decision, setup.budget, setup.policy)
+
+
+def reviewed_round(proposal: TaskProposal, setup: TaskforgeConfig) -> Workpiece:
+    """Round 0 in band with finding A: revised, its reviewed version stored as the fallback."""
+    session = Conversation((Message(Role.SYSTEM, "author"),), ())
+    first = round_with(SolveReview("v0", ReviewEnd.REPORTED, (FOUND,)))
+    _, wp = decided(Workpiece("w", proposal, submission=SUBMISSION, evidence=(first,), session=session), setup)
+    assert wp.round == 1 and wp.fallback is not None
+    return wp
+
+
+def test_a_restore_carries_the_review_of_the_round_it_restores(proposal: TaskProposal) -> None:
+    """Review 2026-11-21 (n11 P1): a same-digest revision with other author notes faulted with finding B; the restored
+    round-0 submission shipped with B, and a variation with the revision's missing transcripts."""
+    setup = config()
+    wp = reviewed_round(proposal, setup)
+    other = ReviewFinding(FindingKind.ANSWER_LEAK, "B", "hide it", ())
+    gone = (MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [1] have no complete transcript"),)
+    faulted = replace(
+        round_with(SolveReview("v1", ReviewEnd.REPORTED, (other,), missing=gone)),
+        controls=(ControlResult(0, GradeResult(Outcome.GRADED, 0.0), False),),
+    )
+    revision = replace(SUBMISSION, notes="revised")
+    assert revision.digest == SUBMISSION.digest
+    decision, shipped = decided(wp.with_(submission=revision, evidence=(*wp.evidence, faulted)), setup)
+    assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest
+    assert shipped.submission == SUBMISSION and (decision.notes, decision.missing) == ((FOUND,), ())
+
+
+def test_a_clean_same_digest_revision_is_the_occurrence_that_ships(proposal: TaskProposal) -> None:
+    setup = settings_config(**{"budget.max_modify_rounds": 1})
+    wp = reviewed_round(proposal, setup)
+    clean = round_with(SolveReview("v1", ReviewEnd.REPORTED))
+    revision = replace(SUBMISSION, notes="revised")
+    decision, shipped = decided(wp.with_(submission=revision, evidence=(*wp.evidence, clean)), setup)
+    assert isinstance(decision, Accept) and decision.restore is None and shipped.submission == revision
+    assert (decision.notes, decision.missing) == ((), ())
+
+
+def test_an_author_stopping_restores_the_stored_fallback(proposal: TaskProposal) -> None:
+    """Review 2026-11-21 (n11 P1): the author hit its context limit in a review revision and the task was abandoned
+    with a valid fallback. Owner's ruling (2026-11-13): an author stopping reverts to the fallback."""
+    setup = config()
+    wp = reviewed_round(proposal, setup)
+    session = Conversation((Message(Role.SYSTEM, "author"),), ())
+    stopped, after = advance(wp, Stage.AUTHOR, Stopped(StopReason.CONTEXT_LIMIT, session, "window full"), setup)
+    decision = stopped.decisions[-1]
+    assert after is None and stopped.terminal is Terminal.ACCEPTED and stopped.submission == SUBMISSION
+    assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and decision.notes == (FOUND,)
+    assert any("author stopped" in reason for reason in decision.reasons)
+
+
+def test_a_stored_fallback_leaves_the_remaining_rounds_for_review(proposal: TaskProposal) -> None:
+    """Review 2026-11-21 (n11 P1): with three rounds, a fresh finding in round 1 was accepted as "no revision round
+    left"; only the shared round count ends review revisions."""
+    setup = settings_config(**{"budget.max_modify_rounds": 3})
+    wp = reviewed_round(proposal, setup)
+    fresh = ReviewFinding(FindingKind.ANSWER_LEAK, "B", "hide it", ())
+    again = replace(SUBMISSION, notes="revised")
+    decision, after = decided(
+        wp.with_(submission=again, evidence=(*wp.evidence, round_with(SolveReview("v1", ReviewEnd.REPORTED, (fresh,))))),
+        setup,
+    )
+    assert isinstance(decision, Modify) and decision.review == (fresh,) and after.round == 2
