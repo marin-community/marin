@@ -871,3 +871,24 @@ def test_native_requirements_rejects_missing_or_conflicting_native_resources(tmp
     )
     with pytest.raises(ValidationError):
         native_requirements(tmp_path)
+
+
+def test_prepare_nests_a_slashed_task_id_under_its_skill_directory(tmp_path):
+    envelope = json.loads(prebuilt_task("d01.skill/04")["lowered_task_spec"])
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([{"path": "d01.skill/04", "lowered_task_spec": json.dumps(envelope)}]), cohort)
+    output = tmp_path / "exported"
+    prepare(cohort, output, source_revision="a" * 40)
+    package = output / "tasks" / "d01.skill" / "04"
+    assert (package / "task.toml").is_file()
+    mapping = json.loads((output / "task-map.json").read_text())
+    assert list(mapping) == ["d01.skill/04"]
+
+
+def test_prepare_refuses_a_task_id_that_escapes_the_tasks_root(tmp_path):
+    envelope = json.loads(prebuilt_task("d01.skill/04")["lowered_task_spec"])
+    envelope["task"]["id"] = "../escape"
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([{"path": "../escape", "lowered_task_spec": json.dumps(envelope)}]), cohort)
+    with pytest.raises(ValueError, match="not a package path under the tasks root"):
+        prepare(cohort, tmp_path / "exported", source_revision="a" * 40)

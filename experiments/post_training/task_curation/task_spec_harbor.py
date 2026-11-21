@@ -5,7 +5,7 @@
 
 import argparse
 import importlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pyarrow.parquet as pq
 from pydantic import TypeAdapter
@@ -42,9 +42,10 @@ def prepare(
                 shape = task.execution_requirements or ExecutionRequirements.model_validate(
                     {**INITIAL_REQUIREMENTS.model_dump(), **declared_execution_limits(task)}
                 )
-                directory = tasks / task.id
-                if directory.parent != tasks:
-                    raise ValueError(f"Task ID is not a package directory name: {task.id}")
+                relative = PurePosixPath(task.id)
+                if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                    raise ValueError(f"Task ID is not a package path under the tasks root: {task.id}")
+                directory = tasks.joinpath(*relative.parts)
                 write_harbor_task(task, directory, shape, docker_build=docker_build)
                 runtime = row_runtime(row)
                 if runtime is not None:
