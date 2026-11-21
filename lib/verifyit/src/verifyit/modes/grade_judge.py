@@ -132,6 +132,8 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
+    transport: Any = field(default=None, kw_only=True, repr=False, compare=False)
+    """Optional in-process HTTP transport; runtime-only, like the endpoint credentials."""
 
 
 @dataclass(frozen=True)
@@ -774,6 +776,11 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) else {}
+    if connection is not None and connection.transport is not None:
+        # Only an in-process host transport needs httpx; staged grader runtimes need not ship it.
+        import httpx  # noqa: PLC0415
+
+        options["http_client"] = httpx.Client(transport=connection.transport)
     return (
         openai.OpenAI(
             base_url=base_url,

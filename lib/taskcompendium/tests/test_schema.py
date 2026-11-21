@@ -333,3 +333,10 @@ def test_task_json_rejects_prior_schema_version(specification):
     payload["schema_version"] = "0.26"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize("judge", [JudgeSpec(), JudgeSpec(references=(" ",)), JudgeSpec(rubric="checklist")])
+def test_invalid_script_judge_is_schema_feedback(judge):
+    # Full S 20261108 d01.discrete.graph-analysis/06: InvalidTask escaped Pydantic and held the author.
+    with pytest.raises(ValidationError, match="needs non-empty"):
+        ScriptGrader(argv=("true",), environment=GRADING_ENVIRONMENT, judge=judge)
