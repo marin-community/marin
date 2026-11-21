@@ -24,12 +24,13 @@ from finestore.rl.curation import (
     Verdict,
     register_catalog,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.curation_catalog import RUNS
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
@@ -188,7 +189,15 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
 def test_republication_refreshes_an_inventory_only_declaration(tmp_path):
     root = str(tmp_path / "production")
     runnable = number_source(tmp_path / "input")
-    pointer = RlDataSource(info=SourceInfo(id="release:pointer", title="pointer", origin="fixture"))
+    pointer = RlDataSource(
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="pointer",
+            upstream_name="pointer",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        )
+    )
     record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [runnable, pointer])
     qc = IndependentQC(verdict=Verdict.GOOD, method="release oracle", reviewed=3, admitted=2, evidence_url="pinned")
@@ -204,7 +213,10 @@ def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
     agent = RlDataSource(
         info=replace(
             runnable.info,
-            id="fixture:agent",
+            id="Marin:agent",
+            upstream_dataset="agent",
+            upstream_name="agent",
+            title=None,
             tags=("agentic",),
             daytona_snapshot_count=25,
             daytona_count_basis="shellbox-identity over pinned payloads",
@@ -214,15 +226,25 @@ def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
     publish_catalog(root, "first", [runnable, agent])
     rows = selected_sources(root)
     assert rows[runnable.info.id].declaration.daytona_safety is DaytonaSafety.SAFE
-    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
-    assert rows["fixture:agent"].declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
+    assert rows["Marin:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
+    assert rows["Marin:agent"].declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
 
 
 def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_path):
     root = str(tmp_path / "production")
     first = number_source(tmp_path / "first")
     pinned = SourceReference("agent-data", "pin-1", "https://example.org/agent")
-    agent = RlDataSource(info=replace(first.info, id="fixture:agent", tags=("agentic",), dataset=pinned))
+    agent = RlDataSource(
+        info=replace(
+            first.info,
+            id="Marin:agent",
+            upstream_dataset="agent",
+            upstream_name="agent",
+            title=None,
+            tags=("agentic",),
+            dataset=pinned,
+        )
+    )
     record_attempt(root, first, "first", "2026-10-16T10:00:00Z", "key-a", source_count=2)
     record_attempt(root, agent, "first", "2026-10-16T10:00:00Z", "key-b")
     publish_catalog(root, "first", [first, agent])
@@ -238,9 +260,9 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
     )
     publish_catalog(root, "second", [reassessed, repaired])
     rows = selected_sources(root)
-    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
-    assert rows["fixture:agent"].declaration.oracle_validation is OracleValidation.VERIFIER_EXECUTED
-    assert rows["fixture:agent"].assessment_key == "key-b"
+    assert rows["Marin:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
+    assert rows["Marin:agent"].declaration.oracle_validation is OracleValidation.VERIFIER_EXECUTED
+    assert rows["Marin:agent"].assessment_key == "key-b"
     assert rows[reassessed.info.id].assessment_key == "key-a"
 
 

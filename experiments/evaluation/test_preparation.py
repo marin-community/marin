@@ -11,6 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -40,7 +41,7 @@ from experiments.post_training.task_curation.config import InputOverrides, Pipel
 from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def decode_prefix(data: dict, _context: ConversionContext, *, prefix: str) -> dict:
@@ -69,7 +70,15 @@ def grouped_item(task):
 def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="eval-identity", title="Identity fixture", origin="test", family="test", tags=("eval",), count=1
+            data_restriction=DataRestriction.OPEN,
+            id="Marin:eval-identity",
+            upstream_dataset="eval-identity",
+            upstream_name="eval-identity",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            family="test",
+            tags=("eval",),
+            count=1,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -63,7 +64,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
     source_recipe,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     COMPILED_LOCK,
     DATA_PATH,
@@ -96,7 +97,14 @@ def config() -> SourcePipelineConfig:
 
 def source_step(recipe: CurationRecipe, options: PipelineOptions):
     source = RlDataSource(
-        info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            id=f"Marin:{recipe.name}",
+            upstream_dataset=recipe.name,
+            upstream_name=recipe.name,
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        ),
         config=recipe,
         pipeline=process_rows,
     )

@@ -28,6 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.script_grader import grade_script, script_package
 from taskcompendium.convert.tasks import conversation_task
@@ -46,7 +47,7 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     without_comments,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HERE = Path(__file__).resolve().parent
 LEAN_GRADE = grade_script(HERE / "lean_grade.py")
@@ -179,9 +180,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Hugging Face:marcusm117/ProofNet-Verified",
-                title="marcusm117/ProofNet-Verified",
-                origin="Hugging Face",
+                data_restriction=DataRestriction.OPEN,
+                origin=SourceOrigin.MARCUSM117,
+                upstream_dataset="ProofNet-Verified",
+                upstream_name="ProofNet-Verified",
+                build_path="Lean kernel replay",
                 family="math-proof",
                 tags=("eval", "lean", "theorem-proving", "single-turn", "benchmark", "license:apache-2.0"),
                 count=367,

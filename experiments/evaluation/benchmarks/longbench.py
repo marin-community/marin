@@ -5,6 +5,7 @@
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     CohortOrder,
     CohortPolicy,
@@ -34,7 +35,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 LONGBENCH_V2_REVISION = "2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9"
 # The longest item's full prompt and truncated copies.
@@ -69,9 +70,12 @@ THINKING = Sampling(
 def longbench_source(protocol_name: str, sampling: Sampling, seed: int | None) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="LongBenchV2:" + protocol_name,
-            title="LongBench v2",
-            origin="THUDM/LongBench",
+            data_restriction=DataRestriction.OPEN,
+            origin=SourceOrigin.LM_EVAL,
+            upstream_dataset="LongBench-v2",
+            upstream_name="LongBench-v2",
+            variant=protocol_name,
+            build_path="Checkpoint",
             family="long-context",
             tags=("eval", "source:longbench-v2", "benchmark", "long-context", "multiple-choice"),
             count=LONGBENCH_V2_POPULATION,
