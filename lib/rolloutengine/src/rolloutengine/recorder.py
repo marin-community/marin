@@ -60,7 +60,7 @@ FAILURE_ERROR_LIMIT = 2_000
 
 def _failure_record(operation: RolloutOperation, cause: BaseException) -> ErrorIdentity:
     """The failure of an interrupted attempt: its operation, and the cause's type, message, and notes."""
-    diagnostics: dict[str, Any] = {"error": str(cause)[:FAILURE_ERROR_LIMIT]}
+    diagnostics: dict[str, str | list[str]] = {"error": str(cause)[:FAILURE_ERROR_LIMIT]}
     notes = getattr(cause, "__notes__", ())
     if notes:
         diagnostics["notes"] = list(notes)

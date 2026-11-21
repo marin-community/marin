@@ -14,7 +14,7 @@ DAYTONA_DELETE_OPERATION = "delete"
 
 
 def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity:
-    """Classify SDK failures, including conflicts that clear during deletion."""
+    """Classify SDK failures and eligible deletion conflicts."""
     identity = exception_identity(error, operation=operation, categories=ERROR_CATEGORIES)
     if identity.retry_disposition is RetryDisposition.PERMANENT:
         return identity

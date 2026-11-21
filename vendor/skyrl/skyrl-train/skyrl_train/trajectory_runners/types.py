@@ -18,6 +18,7 @@ REWARD_SHAPING_COMPONENT_NAMES = ("passthrough", "non_termination", "overlong", 
 ROUTED_EXPERTS_KEY = "routed_experts"
 RESPONSE_POLICY_STEPS_KEY = "response_policy_steps"
 RESPONSE_SPAN_TAGS_KEY = "response_span_tags"
+ERROR_IDENTITIES_KEY = "error_identities"
 
 
 class TokenProvenance(StrEnum):
