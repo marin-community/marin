@@ -367,18 +367,24 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
     assert second["confirmation"] == "tokens role=confirmation prompt=50 cached=0 completion=25"
 
 
-# Review 2026-11-21: a gateway refusing a resumed read (HTTP 400) escaped its slot as a bug, cancelled the read of a
-# sibling slot's fresh answer, failed the child, and so made recovery buy that answer again: six solvers, not five.
+# Review 2026-11-21: a gateway refusing a resumed read (HTTP 400), or answering it with all-zero probabilities or
+# without a level's probability, escaped its slot as a bug, cancelled the read of a sibling slot's fresh answer, failed
+# the child, and so made recovery buy that answer again: six solvers, not five.
 @pytest.mark.parametrize(
     "failure, reason",
-    [("refused", "Hold: Decision model refused the read with HTTP 400: bad state"), ("off-scale", "returned 7.0")],
+    [
+        ("refused", "Hold: Decision model refused the read with HTTP 400: bad state"),
+        ("zero", "Hold: Decision model answered unusably (ValueError: probabilities [0.0, 0.0, 0.0, 0.0, 0.0] are not"),
+        ("missing", "Hold: Decision model answered unusably (KeyError: '4')"),
+        ("off-scale", "returned 7.0"),
+    ],
 )
 def test_a_resumed_read_that_fails_holds_after_its_siblings_settle_and_recovery_buys_only_confirmation(
     tmp_path: Path, failure: str, reason: str
 ) -> None:
     """Three processes: slots 0 and 1 are checkpointed in an outage; an unflagged resume grades slot 1 and generates
-    slot 2, whose read is in flight when slot 0's read is refused (or answered off the scale); the explicit recovery
-    reads slot 0 once more and buys only the five confirmation trials."""
+    slot 2, whose read is in flight when slot 0's read is refused (or answered malformed, or off the scale); the
+    explicit recovery reads slot 0 once more and buys only the five confirmation trials."""
     assert probed("sibling-record", tmp_path)["exit"] == 75
     held = dict(probed(f"sibling-{failure}", tmp_path))
     [why] = cast(list[str], held.pop("reasons"))

@@ -192,8 +192,10 @@ keeps its existing replay. Graders that run in a sandbox or through the LLM judg
 row reaches the published journal with the next checkpoint and with the held publication; if the process dies
 abruptly between the read's failure and that publication, or at any time while the read is still waiting, the
 next launch generates the answer again. A gateway refusing the resumed read (an HTTP 4xx other than 404, 408 and
-429) is no outage: the reader raises a hold naming the status, the solver batch lets every admitted slot settle and
-starts no further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
+429), or answering it with an HTTP 200 that is no distribution over the levels (a body that is not JSON, a missing
+field or level, another shape, a non-finite or negative probability, or all zero), is no outage: the reader raises a
+hold with a bounded diagnostic and records no read, the solver batch lets every admitted slot settle and starts no
+further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
 stage. A refusal of a slot's first read still restarts the stage, as before.
 
 Model calls replay from the event log; shell commands are

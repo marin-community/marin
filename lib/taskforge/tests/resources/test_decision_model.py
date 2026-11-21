@@ -672,6 +672,30 @@ async def test_the_default_reader_reads_unavailability_as_down_and_other_refusal
 
 
 @pytest.mark.parametrize(
+    "body, reason",
+    [
+        ("{", "answered unusably (JSONDecodeError"),
+        ('{"answers": {}}', "answered unusably (KeyError: 'whole')"),
+        ('{"answers": {"whole": {"probabilities": [0.5, 0.5]}}}', "answered unusably (TypeError"),
+        ('{"answers": {"whole": {"probabilities": {"0": "high"}}}}', "answered unusably (ValueError"),
+        ('{"answers": {"whole": {"probabilities": {"0": 1}}}}', "answered unusably (KeyError: '1')"),
+        (json.dumps({"answers": {"whole": {"probabilities": dict.fromkeys("01234", 0)}}}), "are not a distribution"),
+        (json.dumps({"answers": {"whole": {"probabilities": dict.fromkeys("01234", -1)}}}), "are not a distribution"),
+        (
+            '{"answers": {"whole": {"probabilities": {"0": 1, "1": NaN, "2": 0, "3": 0, "4": 0}}}}',
+            "are not a distribution",
+        ),
+    ],
+)
+async def test_the_default_reader_refuses_an_answer_that_is_no_distribution_over_the_levels(
+    body: str, reason: str
+) -> None:
+    with pytest.raises(Hold, match=re.escape(reason)) as refused:
+        await gateway(lambda _: httpx.Response(200, text=body)).read(request("12"))
+    assert not isinstance(refused.value, DecisionModelUnavailable)
+
+
+@pytest.mark.parametrize(
     "status, health",
     [
         (200, DecisionModelHealth.HEALTHY),

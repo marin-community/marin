@@ -10,6 +10,7 @@ equivalent read replays without a call and another model identity misses.
 """
 
 import asyncio
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -31,7 +32,7 @@ from taskcompendium.models import GradingAttempt
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
-from taskforge.effects.issues import DecisionModelUnavailable, Hold
+from taskforge.effects.issues import DecisionModelUnavailable, Hold, describe_exception
 from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverGeneration, SolverRollout, run_rollout
@@ -64,7 +65,8 @@ class OffScale(Exception):
 
 class DecisionModelReader(Protocol):
     """One host's decision model: ``read`` returns a level, raises ``DecisionModelDown`` while the host cannot answer,
-    or a ``Hold`` when it refuses the read itself; ``health`` is the host's own readiness answer and never a read."""
+    or a ``Hold`` when it refuses the read or answers it malformed; ``health`` is the host's own readiness answer and
+    never a read."""
 
     async def read(self, request: DecisionModelRequest) -> float: ...
 
@@ -100,10 +102,15 @@ class ClefReader(DecisionModelReader):
             raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", retry_after(response))
         if status != 200:
             raise Hold(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")  # no outage
-        probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
-        weights = [float(probabilities[str(level)]) for level in range(len(request.levels))]
-        if min(weights) < 0 or not sum(weights) > 0:
-            raise RuntimeError(f"Clef probabilities are not a distribution: {weights}")
+        try:  # any answer that is no distribution over the levels is one refusal: a retry would read it again
+            probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
+            weights = [float(probabilities[str(level)]) for level in range(len(request.levels))]
+            if not all(map(math.isfinite, weights)) or min(weights) < 0 or not sum(weights) > 0:
+                raise ValueError(f"probabilities {weights} are not a distribution")
+        except (ValueError, LookupError, TypeError) as error:  # malformed JSON, a missing field or level, another shape
+            raise Hold(
+                f"Decision model answered unusably ({describe_exception(error)}): {response.text[:300]}"
+            ) from None
         return sum(level * weight for level, weight in enumerate(weights)) / sum(weights)
 
     @override

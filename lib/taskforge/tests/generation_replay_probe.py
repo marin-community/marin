@@ -10,9 +10,10 @@ published terminal and what it awaits; ``resume`` adds the published generation 
 and confirmation usage.
 
 The ``sibling-*`` modes run three validation slots two at a time. ``sibling-record`` checkpoints slots 0 and 1 in an
-outage. ``sibling-refused`` and ``sibling-off-scale`` resume unflagged: slot 1 grades, slot 2 generates, and once slot
-2's read is in flight the gateway refuses slot 0's read with HTTP 400, or answers it off the scale. ``sibling-recover``
-then resumes with ``--resume-held`` and a healthy decision model."""
+outage. ``sibling-refused``, ``sibling-zero``, ``sibling-missing`` and ``sibling-off-scale`` resume unflagged: slot 1
+grades, slot 2 generates, and once slot 2's read is in flight the gateway refuses slot 0's read with HTTP 400, answers
+it with all-zero probabilities or without the top level's probability, or answers it off the scale.
+``sibling-recover`` then resumes with ``--resume-held`` and a healthy decision model."""
 
 import asyncio
 import json
@@ -77,20 +78,20 @@ class Answered(FakeReader):
 
 
 class Sibling(Answered):
-    """Slot 0's read ("twelve") waits for slot 2's ("a dozen") to start, then is refused with HTTP 400 through the
-    default reader (or answered off the scale); slot 2's read answers only after that."""
+    """Slot 0's read ("twelve") waits for slot 2's ("a dozen") to start, then fails through the default reader as the
+    ``gateway`` answers it (or is answered off the scale without one); slot 2's read answers only after that."""
 
-    def __init__(self, refuse: bool) -> None:
+    def __init__(self, gateway: httpx.Response | None) -> None:
         super().__init__(set())
-        self.refuse, self.reading, self.failed = refuse, asyncio.Event(), asyncio.Event()
+        self.gateway, self.reading, self.failed = gateway, asyncio.Event(), asyncio.Event()
 
     @override
     async def read(self, request: DecisionModelRequest) -> float:
         if request.candidate == "twelve":
             await self.reading.wait()
             try:
-                if self.refuse:
-                    return await gateway(lambda _: httpx.Response(400, text="bad state")).read(request)
+                if (answer := self.gateway) is not None:
+                    return await gateway(lambda _: answer).read(request)
                 return 7.0
             finally:
                 self.failed.set()
@@ -132,9 +133,16 @@ async def main(mode: str, directory: Path) -> None:
     )
     recording = mode in ("record", "sibling-record")
     time = VirtualTime()
-    reader = Sibling(mode == "sibling-refused") if mode in ("sibling-refused", "sibling-off-scale") else None
+    zero = {"answers": {"whole": {"probabilities": dict.fromkeys(map(str, range(5)), 0.0)}}}
+    missing = {"answers": {"whole": {"probabilities": {"0": 0.5, "1": 0.5, "2": 0.0, "3": 0.0}}}}
+    failing = {
+        "sibling-refused": httpx.Response(400, text="bad state"),
+        "sibling-zero": httpx.Response(200, json=zero),
+        "sibling-missing": httpx.Response(200, json=missing),
+    }
+    reader = Sibling(failing.get(mode)) if mode in (*failing, "sibling-off-scale") else None
     reader = reader or Answered(set(ANSWERS) if recording else set())
-    answers = {"sibling-refused": ["a dozen"], "sibling-off-scale": ["a dozen"]}.get(mode)
+    answers = ["a dozen"] if isinstance(reader, Sibling) else None
     answers = answers or [ANSWERS[n % 2] for n in range(2 if recording else 5)]
     solver = ScriptedProvider([segment(answer) for answer in answers])
 
@@ -169,7 +177,7 @@ async def main(mode: str, directory: Path) -> None:
         "terminal": str(published.terminal),
         "awaits": last.awaits if isinstance(last, Incomplete) else None,
     }
-    if mode in ("sibling-refused", "sibling-off-scale"):
+    if isinstance(reader, Sibling):
         outcome["reasons"] = list(last.reasons) if isinstance(last, Incomplete) else []
     if mode in ("resume", "sibling-recover"):
         rows = history(destination)
