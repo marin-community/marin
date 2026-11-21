@@ -15,6 +15,7 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge.effects.context import Context
 from taskforge.effects.log import Opened
 from taskforge.harness.protocol import Harness, Tool
+from taskforge.harness.tools.evidence import Bounded
 from taskforge.lowering import host_requirements
 from taskforge.model.llm import Message
 from taskforge.model.llm import Role as Speaker
@@ -126,6 +127,10 @@ async def sitting(
                 install_env(ctx, env)
                 await ctx.emit(WriteFiles(files))
             tools = {**role.tools, **visit.tools}
+            if env is None and (unbounded := [name for name, tool in tools.items() if not isinstance(tool, Bounded)]):
+                raise ValueError(
+                    f"{visit.scope} has no machine to hold a spilled reply; bound the replies of {unbounded}"
+                )
 
             async def session(opening: Opening) -> Exit:
                 return await role.harness.run(ctx, opened(opening, tools), resources.inference_for(role.name), tools)

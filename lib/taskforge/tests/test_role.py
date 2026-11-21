@@ -9,14 +9,16 @@ from pathlib import PurePosixPath
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
-from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
+from lib.taskforge.tests.resource_doubles import FakeInference
 from lib.taskforge.tests.stage_fakes import Environments
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import ScopeEntered
 from taskforge.effects.log import EventLog
+from taskforge.harness import role as roles
 from taskforge.harness.protocol import Stopped
 from taskforge.harness.role import Answer, Fresh, Visit, sitting
+from taskforge.harness.tools.evidence import Bounded
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.workpiece import Conversation
 from taskforge.policy import load_policy
@@ -28,11 +30,16 @@ def finish(call_id: str) -> Completion:
     return Completion("", (ToolCall(call_id, "finish", json.dumps({"reason": "done"})),), FinishReason.TOOL_CALLS)
 
 
+def machine_less(role: roles.Role) -> roles.Role:
+    """``role`` with every tool's replies bounded, as a visit without a machine requires."""
+    return replace(role, tools={name: Bounded(tool, 4000) for name, tool in role.tools.items()})
+
+
 async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() -> None:
     ctx = Context(log=EventLog())
     client = FakeInference((finish("f"),))
-    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
-    role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
+    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    role = machine_less(build_config(load_policy(DEFAULTS_DIR), {}).adversary)
     async with sitting(ctx, role, Visit("review", "unused", None), bundle) as session:
         outcome = await session(Fresh("system", "user"))
     assert isinstance(bundle.envs, Environments) and not bundle.envs.created
@@ -47,8 +54,8 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     log = EventLog()
     ctx = Context(log=log)
     client = FakeInference((finish("again"),))
-    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
-    role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
+    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    role = machine_less(build_config(load_policy(DEFAULTS_DIR), {}).adversary)
     pending = Message(Role.ASSISTANT, "", (ToolCall("report-1", "report", "{}"),))
     saved = Conversation((Message(Role.SYSTEM, "s"), Message(Role.USER, "u"), pending), ())
     visit = Visit("adversary:finder", "validate/0/0/adversary:finder/0/0", None)

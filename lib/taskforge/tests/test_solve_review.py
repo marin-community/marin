@@ -41,8 +41,9 @@ from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
 from taskforge.effects.issues import ContextExceeded, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.protocol import ToolResult
+from taskforge.harness.role import Visit, sitting
 from taskforge.harness.tools.base import Outcome as ToolOutcome
-from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ReadTool, SearchTool
+from taskforge.harness.tools.evidence import Evidence, ListTool, ReadTool, SearchTool, Source
 from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
@@ -69,7 +70,7 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Submission, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.resources.env import Env, EnvFactory
+from taskforge.resources.env import Env, EnvFactory, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, SolverRollout, solver_rollout
 from taskforge.stages.rules import default_review
@@ -161,22 +162,30 @@ async def test_a_report_must_account_for_every_trial_that_did_not_pass() -> None
     assert review.end is ReviewEnd.REPORTED and review.accounts[0].trial == 1
 
 
+async def pages(index: Evidence, name: str, start: int = 0) -> list[str]:
+    """Every page of ``name`` from part ``start``, following each continuation; each page must advance."""
+    read, out, offset = ReadTool(index), [], 0
+    while True:
+        out.append(page := text(await read(Context(log=EventLog()), {"source": name, "start": start, "offset": offset})))
+        assert len(page) <= index.output_chars
+        if (more := re.search(r"\[page ends: read start=(\d+) offset=(\d+) next\]$", page)) is None:
+            return out
+        assert (int(more.group(1)), int(more.group(2))) > (start, offset)
+        start, offset = int(more.group(1)), int(more.group(2))
+
+
+def body(read: Sequence[str]) -> str:
+    """The text of consecutive pages without their part headers and continuation lines."""
+    return "".join(
+        re.sub(r"(?m)^--- part \d+( from character \d+)? ---\n|\n?\[(page ends|end of).*$", "", p) for p in read
+    )
+
+
 async def test_a_long_transcript_is_paged_whole_and_a_quote_across_a_page_boundary_is_valid() -> None:
     index = evidence(SUBMISSION, TRIALS, OUTPUT_CHARS)
-    read = ReadTool(index)
-    pages, offset = [], 0
-    while True:
-        page = text(await read(Context(log=EventLog()), {"source": "trial/1", "start": 1, "offset": offset}))
-        pages.append(page)
-        assert len(page) <= OUTPUT_CHARS - PAGE_ROOM // 2
-        if (more := re.search(r"\[page ends: read start=1 offset=(\d+) next\]", page)) is None:
-            break
-        offset = int(more.group(1))
-    whole = "".join(
-        re.sub(r"(?s)^--- trial/1 #1[^\n]*\n|\n\[page ends.*$", "", p).split("--- trial/1 #2")[0] for p in pages
-    )
-    assert whole.rstrip("\n") == index.sources["trial/1"].parts[1] and len(pages) > 5
-    boundary = int(re.findall(r"offset=(\d+)", pages[0])[0])
+    read = await pages(index, "trial/1", 1)
+    assert len(read) > 5 and body(read).startswith(index.sources["trial/1"].parts[1])
+    boundary = int(re.findall(r"offset=(\d+)", read[0])[0])
     across = index.sources["trial/1"].parts[1][boundary - 25 : boundary + 25]
     calls = [call("read_evidence", {"source": "trial/1", "start": 1, "offset": o}, f"r{o}") for o in (0, boundary)]
     reviewer = FakeInference((*calls, report(finding(cite("trial/1", 1, 1, across)))))
@@ -503,3 +512,34 @@ def test_an_account_must_name_a_trial_of_the_review() -> None:
     accounts = (TrialAccount(1, Attribution.SOLVER, "misadded"), TrialAccount(99, Attribution.SOLVER, "invented"))
     outcome = text(checked_report(index, (), accounts))
     assert outcome == "Invalid report: trial 99 is not a solver trial. Fix these and call report again."
+
+
+async def test_a_page_is_bounded_with_its_headers_and_trailer_and_always_advances() -> None:
+    """Review 2026-11-21 (n11 P1): parts of 178 and 900 characters made a 1,143-character page under a 400-character
+    cap, continuing at offset -12."""
+    parts = ("a" * 178, "b" * 900, "c" * 3)
+    index = Evidence({"s": Source("s", "s", parts)}, frozenset(), OUTPUT_CHARS)
+    read = await pages(index, "s")
+    assert read[-1].endswith("[end of source]") and body(read).replace("\n", "") == "".join(parts)
+
+
+async def test_no_reply_to_the_machine_less_reviewer_spills_to_a_file() -> None:
+    """The real harness journalled a ``WriteFile`` for an oversized reply and pointed the reviewer at a file reader it
+    does not have; an unknown source's error listed every source."""
+    reads = [
+        call("read_evidence", {"source": "trial/1", "start": 1}, "r"),
+        call("read_evidence", {"source": "x" * 900}, "u"),
+    ]
+    log = EventLog()
+    reviewer = FakeInference((*reads, call("search_evidence", {"pattern": "."}, "s"), report()))
+    await reviewed(reviewer, log=log)
+    assert all(len(reply) <= OUTPUT_CHARS for reply in replies(reviewer))
+    assert not [record for record in log.records if isinstance(record.event, WriteFile)]
+
+
+async def test_a_machine_less_visit_refuses_a_tool_that_does_not_bound_its_replies() -> None:
+    ctx = Context(log=EventLog())
+    unbounded = {"list_evidence": ListTool(evidence(SUBMISSION, TRIALS, OUTPUT_CHARS))}
+    with pytest.raises(ValueError, match="bound"):
+        async with sitting(ctx, config().solve_review, Visit("v", "v", None, tools=unbounded), stage_resources(ctx)):
+            pass

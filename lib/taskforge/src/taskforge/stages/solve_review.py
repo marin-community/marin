@@ -24,7 +24,16 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import Returned, Stopped
 from taskforge.harness.role import Fresh, Visit, sitting
-from taskforge.harness.tools.evidence import RESOURCE, TASK, TRIAL, Evidence, ReportTool, Source, evidence_tools
+from taskforge.harness.tools.evidence import (
+    RESOURCE,
+    TASK,
+    TRIAL,
+    Evidence,
+    ReportTool,
+    Source,
+    evidence_tools,
+    source_listing,
+)
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import TaskProposal, render
 from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
@@ -177,13 +186,12 @@ async def solve_review(
     )
     if len(cut) == len(trials):  # owner's ruling: missing evidence is named on acceptance, never a hold
         return SolveReview(index.version, ReviewEnd.SKIPPED, missing=missing)
-    listing = "\n".join(source.summary for source in index.sources.values())
     opening = Fresh(
         policy.prompt(f"{kind.prompts}.system").template,
         policy.prompt(f"{kind.prompts}.user").render(
             task=task_manifest(submission.task),
             proposal=render(proposal),
-            evidence=listing,
+            evidence=source_listing(index),
         )
         + f"\n\nEvidence version: {index.version}",  # outside the template, so no overlay can drop it
     )

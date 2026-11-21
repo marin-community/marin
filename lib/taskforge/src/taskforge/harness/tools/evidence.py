@@ -11,18 +11,19 @@ checks read the same index: a citation is valid when it quotes text the reviewer
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import override
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ReturnRequest, Tool, ToolResult
-from taskforge.harness.tools.base import ValidatedTool
+from taskforge.harness.tools.base import Outcome, ValidatedTool
 from taskforge.model.content_hash import digest
+from taskforge.model.llm import ToolSchema
 from taskforge.model.review import Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
 
-PAGE_ROOM = 200
-"""Characters each reply keeps free for its headers and its continuation line."""
+PAGE_ROOM = 120
+"""Characters each reply keeps free for its continuation line; headers are counted against the page itself."""
 SEARCH_CONTEXT = 120
 TRIAL, TASK, RESOURCE = "trial/", "task/", "resource/"
 """Address namespaces: solver trials, the task's own documents, and resources by group."""
@@ -45,6 +46,10 @@ class Evidence:
     unpassed: frozenset[int]
     output_chars: int
 
+    def __post_init__(self) -> None:
+        if self.output_chars < 2 * PAGE_ROOM:
+            raise ValueError(f"tools.output_chars {self.output_chars} leaves no room for a page of evidence")
+
     @property
     def version(self) -> str:
         return digest(tuple(self.sources.values()))
@@ -54,33 +59,66 @@ def normalized(text: str) -> str:
     return " ".join(text.split())
 
 
-def bounded(lines: Sequence[str], chars: int, more: str) -> str:
-    """``lines`` in order while they fit in ``chars``, then ``more`` with the count of lines left out."""
-    out, budget = [], chars - PAGE_ROOM
-    for index, line in enumerate(lines):
-        if len(line) + 1 > budget:
-            return "\n".join((*out, more.format(len(lines) - index)))
-        out.append(line)
-        budget -= len(line) + 1
+def bounded(lines: Iterable[str], chars: int, more: Callable[[int, int], str]) -> str:
+    """``lines`` in order while they fit in ``chars``, then ``more(next, left)`` naming the first line left out and how
+    many are. A first line longer than a page is cut, so a page always advances; lines are consumed as they come."""
+    out, budget, rest = [], chars - PAGE_ROOM, iter(lines)
+    for index, line in enumerate(rest):
+        if len(line) + 1 <= budget:
+            out.append(line)
+            budget -= len(line) + 1
+        elif out:
+            return "\n".join((*out, more(index, 1 + sum(1 for _ in rest))))
+        else:
+            return "\n".join((line[: budget - 1], more(index + 1, sum(1 for _ in rest))))
     return "\n".join(out)
 
 
-@dataclass(frozen=True, slots=True)
-class NoArgs:
-    pass
+def source_listing(evidence: Evidence, start: int = 0) -> str:
+    """The source summaries from number ``start`` that fit in a reply, naming where a longer listing continues."""
+    summaries = [source.summary for source in evidence.sources.values()][start:]
+    more = lambda after, left: f"[{left} more sources: list_evidence start={start + after}]"  # noqa: E731
+    return bounded(summaries, evidence.output_chars, more) or "No more sources"
 
 
 @dataclass(frozen=True, slots=True)
-class ListTool(ValidatedTool[NoArgs]):
+class Bounded[P]:
+    """A tool whose every reply, argument diagnostics included, fits in ``chars``: a machine-less visit requires it,
+    since a longer reply would spill to a file there is no machine to hold."""
+
+    tool: Tool[P]
+    chars: int
+
+    @property
+    def schema(self) -> ToolSchema:
+        return self.tool.schema
+
+    async def __call__(self, ctx: Context, args: Mapping[str, object]) -> Outcome:
+        outcome = await self.tool(ctx, args)
+        if not isinstance(outcome, ToolResult) or len(outcome.content) <= self.chars:
+            return outcome
+        cut = f"\n[reply cut at {self.chars} characters]"
+        return ToolResult(outcome.content[: self.chars - len(cut)] + cut)
+
+
+@dataclass(frozen=True, slots=True)
+class ListArgs:
+    start: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ListTool(ValidatedTool[ListArgs]):
     evidence: Evidence
     name = "list_evidence"
-    description = "List every evidence source (each solver trial, then each task file) with its size and summary."
-    args_type = NoArgs
+    description = (
+        "List the evidence sources (each solver trial, then each task file) with their sizes and summaries, from "
+        "source number `start`; a long listing names where it continues."
+    )
+    args_type = ListArgs
 
     @override
-    async def run(self, ctx: Context, args: NoArgs) -> ToolResult:
-        lines = [source.summary for source in self.evidence.sources.values()]
-        return ToolResult(bounded(lines, self.evidence.output_chars, "[{} more sources; search narrows them]"))
+    async def run(self, ctx: Context, args: ListArgs) -> ToolResult:
+        return ToolResult(source_listing(self.evidence, max(args.start, 0)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,25 +140,26 @@ class ReadTool(ValidatedTool[ReadArgs]):
 
     @override
     async def run(self, ctx: Context, args: ReadArgs) -> ToolResult:
+        """A page that fits in a reply with its headers and continuation line, and always advances: the first part on
+        it keeps at least one character."""
         source = self.evidence.sources.get(args.source)
         if source is None:
-            return ToolResult(f"No source {args.source!r}; sources: {list(self.evidence.sources)}")
-        if not 0 <= args.start < len(source.parts) or args.offset < 0:
-            return ToolResult(f"need 0 <= start < {len(source.parts)} and offset >= 0")
-        out, budget = [], self.evidence.output_chars - PAGE_ROOM
+            return ToolResult(f"No source {args.source!r}; list_evidence lists them")
+        if not 0 <= args.start < len(source.parts) or not 0 <= args.offset <= len(source.parts[args.start]):
+            return ToolResult(f"need 0 <= start < {len(source.parts)} and 0 <= offset <= that part's length")
+        out, room = [], self.evidence.output_chars - PAGE_ROOM
         for index in range(args.start, len(source.parts)):
             skip = args.offset if index == args.start else 0
-            header = f"--- {source.name} #{index}" + (f" from character {skip}" if skip else "") + " ---\n"
+            header = f"--- part {index}" + (f" from character {skip}" if skip else "") + " ---"
+            if out and len(header) + 2 > room:  # not one character of this part fits: the next page starts here
+                return ToolResult("\n".join((*out, f"[page ends: read start={index} offset={skip} next]")))
             text = source.parts[index][skip:]
-            if len(header) + len(text) > budget:
-                kept = budget - len(header)
-                out += [header + text[:kept], f"[page ends: read start={index} offset={skip + kept} next]"]
-                break
-            out.append(header + text)
-            budget -= len(header) + len(text)
-        else:
-            out.append(f"[end of {source.name}]")
-        return ToolResult("\n".join(out))
+            kept = min(len(text), room - len(header) - 2)
+            out += [header, text[:kept]]
+            room -= len(header) + kept + 2
+            if kept < len(text):
+                return ToolResult("\n".join((*out, f"[page ends: read start={index} offset={skip + kept} next]")))
+        return ToolResult("\n".join((*out, "[end of source]")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,15 +185,15 @@ class SearchTool(ValidatedTool[SearchArgs]):
         except re.error as error:
             return ToolResult(f"Invalid pattern: {error}")
         if unknown := [name for name in args.sources if name not in self.evidence.sources]:
-            return ToolResult(f"No sources {unknown}; sources: {list(self.evidence.sources)}")
-        lines = [
+            return ToolResult(f"No sources {unknown}; list_evidence lists them")
+        lines = (
             f"{source.name} #{index}: {normalized(text[max(0, m.start() - SEARCH_CONTEXT) : m.end() + SEARCH_CONTEXT])}"
             for source in self.evidence.sources.values()
             if not args.sources or source.name in args.sources
             for index, text in enumerate(source.parts)
             for m in pattern.finditer(text)
-        ]
-        more = "[{} more matches; narrow the pattern or the sources]"
+        )
+        more = lambda _, left: f"[{left} more matches; narrow the pattern or the sources]"  # noqa: E731
         return ToolResult(bounded(lines, self.evidence.output_chars, more) or "No matches")
 
 
@@ -229,4 +268,4 @@ class ReportTool(ValidatedTool[ReportArgs]):
 
 def evidence_tools(evidence: Evidence, report_tool: type[ReportTool]) -> Mapping[str, Tool[object]]:
     tools = (ListTool(evidence), ReadTool(evidence), SearchTool(evidence), report_tool(evidence))
-    return {tool.schema.name: tool for tool in tools}
+    return {tool.schema.name: Bounded(tool, evidence.output_chars) for tool in tools}
