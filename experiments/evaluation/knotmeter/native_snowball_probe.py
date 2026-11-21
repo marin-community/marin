@@ -77,7 +77,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
-    parser.add_argument("--attention", choices=("tpu", "tpu_fp32"), default="tpu_fp32")
+    parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled"), default="scan")
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt"), default="disabled")

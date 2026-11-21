@@ -16,12 +16,14 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
+from levanter.kernels.pallas.ragged_paged_attention_v3 import ragged_paged_attention as tpu_ragged_paged_attention_v3
 
 TPU_HEAD_ALIGNMENT = 128
-PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32"]
+PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3"]
 _TPU_KV_HEAD_GROUP = 8
 _FP32_QUERIES_PER_BLOCK = 128
 _FP32_KV_PAGES_PER_BLOCK = 8
+_V5P_VMEM_LIMIT_BYTES = 50_000 * 1024
 
 
 def ragged_paged_attention(
@@ -51,6 +53,8 @@ def ragged_paged_attention(
         soft_cap: Optional tanh logit cap, applied before masking.
         implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
             `tpu_fp32` uses FP32 operands in the kernel and preserves the query dtype on output.
+            `tpu_v3` uses BF16 KV DMA and FP32 value accumulation on v5p. Small sliding-window
+            batches use the compact FP32 kernel.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. Default TPU dispatch uses the tiled kernel for
@@ -60,10 +64,10 @@ def ragged_paged_attention(
     """
     if implementation is None:
         implementation = "tpu" if jax.default_backend() == "tpu" else "reference"
-    if implementation not in ("tpu", "reference", "tpu_fp32"):
+    if implementation not in ("tpu", "reference", "tpu_fp32", "tpu_v3"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
-    if implementation == "tpu_fp32" and jax.default_backend() != "tpu":
-        raise ValueError("tpu_fp32 paged attention requires a TPU")
+    if implementation in ("tpu_fp32", "tpu_v3") and jax.default_backend() != "tpu":
+        raise ValueError(f"{implementation} paged attention requires a TPU")
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError("sliding_window must be positive")
     if soft_cap is not None and soft_cap <= 0:
@@ -71,18 +75,26 @@ def ragged_paged_attention(
     if q.ndim != 4 or kv_pages.ndim != 4 or kv_pages.shape[2:] != (2 * q.shape[1], q.shape[3]):
         raise ValueError("Expected grouped queries and interleaved KV pages with matching heads and head_dim")
 
-    backend = {
-        "tpu": _tpu_attention,
-        "tpu_fp32": partial(
-            _tpu_kernel_attention,
-            # Bound scratch space instead of using the upstream long-context tiles on v5p.
-            num_queries_per_block=min(_FP32_QUERIES_PER_BLOCK, q.shape[0]),
-            num_kv_pages_per_block=min(_FP32_KV_PAGES_PER_BLOCK, page_indices.shape[-1]),
-        ),
-        "reference": _reference_attention,
-    }
+    fp32 = partial(
+        _tpu_kernel_attention,
+        num_queries_per_block=min(_FP32_QUERIES_PER_BLOCK, q.shape[0]),
+        num_kv_pages_per_block=min(_FP32_KV_PAGES_PER_BLOCK, page_indices.shape[-1]),
+    )
+    if implementation == "tpu_v3":
+        if jax.devices()[0].device_kind != "TPU v5":
+            raise ValueError("tpu_v3 paged attention currently requires a TPU v5p")
+        short_window = sliding_window is not None and q.shape[0] <= _FP32_QUERIES_PER_BLOCK
+        supports_v3 = (
+            not short_window
+            and q.dtype == kv_pages.dtype == jnp.bfloat16
+            and q.shape[-1] == kv_pages.shape[1] == TPU_HEAD_ALIGNMENT
+            and isinstance(sm_scale, (float, int))
+        )
+        backend = _tpu_v3_attention if supports_v3 else fp32
+    else:
+        backend = {"tpu": _tpu_attention, "tpu_fp32": fp32, "reference": _reference_attention}[implementation]
     fn = partial(
-        backend[implementation],
+        backend,
         sm_scale=sm_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
@@ -104,6 +116,33 @@ def ragged_paged_attention(
             check_vma=False,
         )
     return fn(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs)
+
+
+def _tpu_v3_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    dummy_kv = jnp.zeros((q.shape[0], q.shape[1], q.shape[-1]), dtype=q.dtype)
+    active = jnp.arange(kv_lens.shape[0]) < num_seqs
+    decode = jnp.where(jnp.all((jnp.diff(cu_q_lens) == 1) | ~active), num_seqs, 0)
+    pages = jnp.where((page_indices >= 0) & (page_indices < kv_pages.shape[0]), page_indices, 0)
+    output, _ = tpu_ragged_paged_attention_v3(
+        q.reshape(q.shape[0], -1, q.shape[-1]),
+        dummy_kv,
+        dummy_kv,
+        kv_pages.reshape(*kv_pages.shape[:2], q.shape[1], 2, q.shape[-1]),
+        jnp.maximum(kv_lens, 0),
+        pages.reshape(-1),
+        cu_q_lens,
+        jnp.stack((decode, decode, num_seqs)),
+        update_kv_cache=False,
+        sm_scale=sm_scale,
+        soft_cap=soft_cap,
+        sliding_window=sliding_window,
+        out_dtype=jnp.float32,
+        d_block_sizes=(1, 2048, 1, 512),
+        m_block_sizes=(min(q.shape[0], 128), 1024, min(q.shape[0], 64), 512),
+        vmem_limit_bytes=_V5P_VMEM_LIMIT_BYTES,
+    )
+    valid = jnp.arange(q.shape[0]) < cu_q_lens[num_seqs]
+    return jnp.where(valid[:, None, None, None], output.reshape(q.shape), 0)
 
 
 class _QueryMetadata(NamedTuple):

@@ -110,14 +110,18 @@ workload=gs://marin-us-central1/tmp/ttl=30d/agentx-workload/95f345f596f40f84b64c
   --cpu 32 --memory 340g --disk 80g --timeout 3600 --sync-package marin-core --extra tpu \
   -e JAX_PLATFORMS tpu -e LIBTPU_INIT_ARGS '--xla_tpu_scoped_vmem_limit_kib=50000' \
   -- uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
-  --weights "$weights" --workload "$workload"
+  --weights "$weights" --workload "$workload" --attention tpu_v3 --decode-layers unrolled \
+  --prefill-buckets 4096 8192 16384 32768 --prefix-cache last_prompt
 ```
 
-Use `--decode-layers unrolled` to select the unrolled decode path and
-`--profile-decode` to capture short and long warmed decode after the
-measurement. The fused attention prototypes ran from experimental Iris bundles
-with a locally adapted kernel from the pinned vLLM TPU fork. To rebuild an
-expired workload receipt on a CPU worker, run
+The `tpu_v3` mode uses the pinned vLLM TPU fork's paged attention kernel with
+FP32 value accumulation and BF16 inputs and outputs on v5p. It passes
+packed-prefill and decode comparisons against a dense reference.
+[Kernel source](https://github.com/marin-community/tpu-inference/commit/2f327d385a90347681a7de86472b4bace6e940b2) · [v5p correctness job](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v3-v5p-integrated-tests-20261121-v2)
+
+Add `--profile-decode` to capture short and long warmed decode after the
+measurement. Use `--attention tpu_fp32` to select the earlier bounded
+attention kernel. To rebuild an expired workload receipt on a CPU worker, run
 `python -m experiments.evaluation.knotmeter.workload` with the
 `experiments/evaluation/knotmeter/snowball-v01-tpu-64k.yaml` series, a fresh
 local output directory, and a region-local `--cache-root`. It writes the

@@ -132,3 +132,26 @@ def test_grug_tpu_paged_attention_compacts_distinct_packed_windows():
         cu_q_lens=jnp.pad(args.cu_q_lens, (0, 1), constant_values=-1),
     )
     np.testing.assert_array_equal(actual, attention(*untrimmed))
+
+
+@pytest.mark.skipif(jax.devices()[0].device_kind != "TPU v5", reason="v5p Pallas configuration")
+@pytest.mark.parametrize("window,offsets", [(None, [0, 1, 2, -1]), (96, [0, 129, 130, -1])])
+def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
+    rng = np.random.default_rng(21)
+    args = _PagedCase(
+        q=jnp.asarray(rng.normal(size=(256, 5, 4, 128)), jnp.bfloat16),
+        kv_pages=jnp.asarray(rng.normal(size=(32, 128, 10, 128)), jnp.bfloat16),
+        kv_lens=jnp.array([643, 1191, -1], jnp.int32),
+        page_indices=jnp.array([rng.choice(32, 16, replace=False) for _ in range(2)] + [[-1] * 16], jnp.int32),
+        cu_q_lens=jnp.array(offsets, jnp.int32),
+        num_seqs=jnp.array(2, jnp.int32),
+    )
+    scale = 128**-0.5
+    attention = jax.jit(
+        partial(ragged_paged_attention, sm_scale=scale, sliding_window=window, implementation="tpu_v3")
+    )
+    actual = attention(*args)
+    expected = _dense_reference(args, window, None, scale)
+    assert actual.dtype == args.q.dtype
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), rtol=0.008, atol=2e-4)
+    np.testing.assert_array_equal(actual[offsets[2] :], jnp.zeros_like(actual[offsets[2] :]))
