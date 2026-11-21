@@ -24,6 +24,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from relay_health import RelaySenderStatus
+from segment_backlog import TableSegments
 from server import create_app
 from starlette.testclient import TestClient
 from training_observability import training_overview_dataset
@@ -198,6 +199,9 @@ class _FakeFinelog:
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         return ()
+
+    def table_segments(self) -> tuple[TableSegments, ...]:
+        return (TableSegments(namespace="log", segment_count=40, row_count=9, byte_size=4096),)
 
 
 class _UnavailableFinelog(_FakeFinelog):
@@ -435,6 +439,15 @@ def test_finelog_relay_alert_pages_stalled_or_missing_namespaces():
     assert rule["data"][0]["model"]["url"] == "/alerts/relay_status"
 
 
+def test_finelog_segment_backlog_alert_pages_critical_after_fifteen_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-segment-backlog"]
+    assert rule["for"] == "15m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["noDataState"] == "Alerting"
+    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
+    assert rule["data"][0]["model"]["url"] == "/alerts/table_segments"
+
+
 def test_node_deadlock_alert_pages_critical_after_five_minutes():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "k8s-node-kernel-deadlock"]
     assert rule["for"] == "5m"
@@ -518,6 +531,17 @@ def test_clusters_dashboard_shows_finelog_fleet_health():
     assert panel["datasource"]["uid"] == "finelog-marin"
     selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_clusters_dashboard_shows_finelog_table_segments():
+    (panel,) = [
+        panel
+        for panel in _all_panels(_stitched_dashboards()["clusters.json"])
+        if any(target.get("url") == "/table_segments" for target in panel.get("targets", []))
+    ]
+    assert panel["datasource"]["uid"] == "finelog-marin"
+    selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
+    assert selectors == {"namespace", "segment_count", "row_count", "byte_size"}
 
 
 def test_clusters_dashboard_shows_finelog_forwarding_failures_and_drops():
