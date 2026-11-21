@@ -28,6 +28,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
+from taskcompendium.decision_model import DecisionModelConnection, DecisionModelRequest
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
@@ -36,6 +37,7 @@ from taskcompendium.models import (
     ArtifactKind,
     CommandSemantics,
     ConversationInput,
+    DecisionModelGrader,
     DockerBuildContext,
     EnvironmentRequirements,
     ExitCodeReward,
@@ -295,6 +297,15 @@ def judge_task(answer_type: AnswerType = AnswerType.TEXT, *, model: str = "fixtu
         model=model,
     )
     return arithmetic_task(answer_type=answer_type, grader=verifyit_package(spec, environment=GRADER_ENVIRONMENT).grader)
+
+
+def decision_model_task() -> TaskSpec:
+    grader = DecisionModelGrader(deliverable="Six plus six.", rubric="Any numeral.", reference="12", cut=3.0)
+    return arithmetic_task(grader=grader)
+
+
+def decision_model_spec(task: TaskSpec, connection: DecisionModelConnection | None) -> TaskRolloutSpec:
+    return rollout_spec(task).model_copy(update={"decision_model": connection})
 
 
 def judge_url(judge_server) -> str:
@@ -1442,6 +1453,13 @@ def bash_binding_task() -> TaskSpec:
 JUDGE_CONNECTION = JudgeConnection("http://judge.invalid/v1", "private-test-key")
 
 
+async def _unused_read(request: DecisionModelRequest) -> float:
+    raise AssertionError("validation must not read")
+
+
+DECISION_MODEL = DecisionModelConnection("fixture-decision-model", _unused_read)
+
+
 @pytest.mark.parametrize(
     "spec,error,message",
     [
@@ -1485,6 +1503,12 @@ JUDGE_CONNECTION = JudgeConnection("http://judge.invalid/v1", "private-test-key"
             id="answer-call-agent",
         ),
         pytest.param(lambda: rollout_spec(judge_task()), ValueError, BASE_URL_ENV, id="judge-without-service"),
+        pytest.param(
+            lambda: decision_model_spec(decision_model_task(), None),
+            ValueError,
+            "TaskRolloutSpec.decision_model",
+            id="decision-model-without-connection",
+        ),
         pytest.param(
             lambda: rollout_spec(judge_task(model=""), judge_connection=JUDGE_CONNECTION),
             ValueError,
@@ -3159,6 +3183,73 @@ def test_a_judge_connection_never_reaches_the_serialized_spec():
     assert (restored.judge_connection, restored.task, restored.limits) == (None, spec.task, spec.limits)
     # The spec in memory keeps its connection.
     assert spec.judge_connection is not None
+
+
+async def test_a_decision_model_task_grades_on_the_host_through_the_callers_read():
+    requests: list[DecisionModelRequest] = []
+
+    async def read(request: DecisionModelRequest) -> float:
+        requests.append(request)
+        return 3.2
+
+    factory = RecordingShellSimFactory()
+    spec = decision_model_spec(decision_model_task(), DecisionModelConnection("fixture-decision-model", read))
+    record = await engine(ReplayModel([{"role": "assistant", "content": "twelve"}]), {"local": factory}).run_task(spec)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert factory.machines == []
+    assert [(request.reference, request.candidate) for request in requests] == [("12", "twelve")]
+
+
+async def test_a_decision_model_outage_reaches_the_caller_as_the_grading_cause():
+    class Outage(Exception):
+        pass
+
+    async def read(request: DecisionModelRequest) -> float:
+        raise Outage("decision model unavailable")
+
+    spec = decision_model_spec(decision_model_task(), DecisionModelConnection("fixture-decision-model", read))
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(ReplayModel([{"role": "assistant", "content": "twelve"}])).run_task(spec)
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert isinstance(caught.value.__cause__, Outage)
+
+
+async def test_a_waiting_decision_model_read_ends_at_the_verifier_deadline_or_on_cancellation():
+    entered, released = asyncio.Event(), asyncio.Event()
+
+    async def read(request: DecisionModelRequest) -> float:
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            released.set()
+        raise AssertionError("unreachable")
+
+    connection = DecisionModelConnection("fixture-decision-model", read)
+    timed = rollout_spec(decision_model_task(), verifier_timeout=0.1).model_copy(update={"decision_model": connection})
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(ReplayModel([{"role": "assistant", "content": "twelve"}])).run_task(timed)
+    assert (caught.value.grade.failure, released.is_set()) == (GradingFailure.TIMEOUT, True)
+    entered.clear()
+    released.clear()
+    pending = asyncio.create_task(
+        engine(ReplayModel([{"role": "assistant", "content": "twelve"}])).run_task(
+            decision_model_spec(decision_model_task(), connection)
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert released.is_set()
+
+
+def test_a_decision_model_connection_never_reaches_the_serialized_spec():
+    spec = decision_model_spec(decision_model_task(), DECISION_MODEL)
+    assert TaskRolloutSpec.model_validate_json(spec.model_dump_json()).decision_model is None
+    restored = pickle.loads(pickle.dumps(spec))
+    assert (restored.decision_model, restored.task) == (None, spec.task)
+    assert "decision_model" not in TaskRolloutSpec.model_json_schema()["properties"]
 
 
 async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_loop():
