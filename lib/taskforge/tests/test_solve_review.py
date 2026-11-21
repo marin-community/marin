@@ -94,7 +94,7 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.env import Env, EnvFactory, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, SolverRollout
-from taskforge.stages.rules import default_review
+from taskforge.stages.rules import INSTRUCTIONS, default_review
 from taskforge.stages.solve_review import evidence, solve_review
 from taskforge.wiring import build_config, install
 
@@ -1054,3 +1054,20 @@ def test_a_revision_request_carries_live_forge_s_band_line(
         Workpiece("w", proposal, submission=SUBMISSION, evidence=(current,)), setup.band, setup.budget
     )
     assert isinstance(decision, Modify) and decision.findings[0] == line
+
+
+def test_a_restore_for_an_unaccepted_placement_labels_it_a_placement(proposal: TaskProposal) -> None:
+    """Review 2026-11-21 (n11 follow-up 3): with ``band.accept_too_easy`` false, a clean too-easy revision restores the
+    reviewed version, as it should, but its placement instruction was labelled ``Revision fault:``. Only an actual
+    fault carries that label."""
+    setup = settings_config(**{"band.accept_too_easy": False, "budget.max_modify_rounds": 2})
+    wp = reviewed_round(proposal, setup)
+    easy = replace(
+        round_with(SolveReview("v1", ReviewEnd.REPORTED)),
+        solver=tuple(TrialResult(index, GradeResult(Outcome.GRADED, 1.0)) for index in range(3)),
+    )
+    decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
+    assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest
+    line = f"3 of 3 trials solved: too_easy. {INSTRUCTIONS[BandOutcome.TOO_EASY]}"
+    assert f"Revision placement: {line}" in decision.reasons
+    assert not any(reason.startswith("Revision fault:") for reason in decision.reasons)

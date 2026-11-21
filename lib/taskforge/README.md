@@ -285,7 +285,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   finding by number, with a reason, on `submit`), which is validated again and restores the reviewed
   version through the fallback on a fault; after that they are the acceptance's `notes`. A restore carries
   the review, missing evidence, placement denominator and adversary exhaustion of the round it restores, and
-  labels the fault that triggered it `Revision fault:`. An acceptance names what it went without in
+  labels what triggered it: `Revision fault:` for a fault, `Revision placement:` for a placement
+  the policy does not accept. An acceptance names what it went without in
   `missing`: no review ran or it ended without a report (`solve_review`), or trials lacked a complete
   transcript (`transcripts`; an interrupted trial is reviewed by its prefix, and only a round where no
   trial recorded a message skips the review). Missing evidence never holds a task. The review runs over

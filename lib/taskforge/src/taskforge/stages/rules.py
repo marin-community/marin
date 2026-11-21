@@ -181,7 +181,8 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
-    faults = (f"Revision fault: {finding}" for finding in decision.findings)
+    label = "Revision fault" if decision.placement is None else "Revision placement"  # a band the policy refuses
+    faults = (f"{label}: {finding}" for finding in decision.findings)
     restored = Accept(chosen.band, (*tagged(chosen.band), why, *faults), chosen.submission.digest)
     return accepted(restored, workpiece)
 
