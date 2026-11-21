@@ -164,6 +164,47 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 pytestmark = pytest.mark.usefixtures("isolated_admission_census")
 
 
+def test_history_checksums_cover_each_confidence_load_and_detect_archived_edits(catalog_query, tmp_path):
+    root = str(tmp_path / "confidence-history")
+    publish_sample(root, "confidence-history")
+    load_catalog(CurationCatalog(root), catalog_query)
+    for load in ("archived", "current", "empty"):
+        catalog_query(
+            "INSERT INTO curriculum_loads(load_id,release_id,release_uri,manifest) "
+            "VALUES (:load,:load,'s3://fixture/release.json','{}')",
+            {"load": load},
+        )
+    catalog_query(
+        "INSERT INTO curriculum_confidence VALUES "
+        "('archived','z','placement','math','algebra',ARRAY[9,3]),"
+        "('archived','a','denominator','','',ARRAY[10,10]),"
+        "('current','a','denominator','','',ARRAY[11,11])",
+        {},
+    )
+    expected = catalog_query(
+        "SELECT l.load_id,"
+        "(SELECT COUNT(*) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS vectors,"
+        "(SELECT md5(COALESCE(string_agg(md5(to_jsonb(v)::text),'' ORDER BY v.scope_id,v.metric,"
+        "v.subject_id,v.node_id),'')) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS checksum "
+        "FROM curriculum_loads l ORDER BY l.load_id",
+        {},
+    )["rows"]
+    observed_loads = []
+
+    def bounded_query(sql, parameters):
+        if "FROM curriculum_confidence" in sql:
+            assert parameters.get("load_id") in {"archived", "current", "empty"}
+            observed_loads.append(parameters["load_id"])
+        return catalog_query(sql, parameters)
+
+    before = catalog_state(bounded_query)
+    assert before["confidence_vectors"] == expected
+    assert observed_loads == ["archived", "current", "empty"]
+    catalog_query("UPDATE curriculum_confidence SET instances=ARRAY[8,3] WHERE load_id='archived' AND scope_id='z'", {})
+    with pytest.raises(ValueError, match="Historical confidence_vectors"):
+        verify_preservation(before, catalog_state(bounded_query))
+
+
 def test_release_gate_preserves_archived_packets_even_during_an_explicit_catalog_refresh(
     catalog_database, catalog_query, tmp_path
 ):
