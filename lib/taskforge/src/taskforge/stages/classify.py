@@ -102,9 +102,11 @@ async def grader_infra_unavailable(event: Resolved[object]) -> None:
 
 
 def replayable_grade(event: Resolved[object]) -> bool:
-    """Resume successful evidence, generation-limited trials and slot holds, but reevaluate unavailable grading."""
+    """Resume successful evidence, generation cutoffs and slot holds, but reevaluate unavailable grading. A cutoff is
+    exempt only without a grade (no answer reached the grader); a graded answer cut at its limit whose grader failed
+    is retried like any grader infrastructure failure."""
     value = event.value
-    if isinstance(value, GradedRollout) and generation_limited(value):
+    if isinstance(value, GradedRollout) and generation_limited(value) and grade_cause(value.grade) is Cause.NO_GRADE:
         return True
     grade = value.grade if isinstance(value, GradedRollout) else value
     unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
