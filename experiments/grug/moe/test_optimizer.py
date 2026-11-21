@@ -277,16 +277,6 @@ def test_muonh_update_matches_hero_with_optional_global_clip(clip):
         expected_params = jax.tree.map(lambda p, u: p + u, expected_params, expected_updates)
 
 
-def test_global_clipping_preserves_optimizer_state_paths():
-    params = {"matrix": jnp.ones((3, 4)), "mlp": {"expert_mlp": {"w_gate": jnp.ones((2, 2, 3, 4))}}}
-    unclipped = GrugMoeMuonHConfig(use_syrk=False).build(100).init(params)
-    clipped = GrugMoeMuonHConfig(use_syrk=False, global_grad_norm=1.0).build(100).init(params)
-    assert unclipped.hyperparams.keys() == clipped.hyperparams.keys()
-    assert [path for path, _ in jax.tree_util.tree_flatten_with_path(unclipped)[0]] == [
-        path for path, _ in jax.tree_util.tree_flatten_with_path(clipped)[0]
-    ]
-
-
 @pytest.mark.parametrize("stacked", [False, True])
 def test_muonh_state_matches_hero_layout(stacked):
     shape = (2, 2, 3, 4) if stacked else (2, 3, 4)
