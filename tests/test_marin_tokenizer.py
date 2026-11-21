@@ -18,7 +18,7 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.chat_render import render_chat_record, render_marin_chat
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE, MARIN_INFERENCE_CHAT_TEMPLATE
 from openai_harmony import Author, Message, Role
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -162,9 +162,70 @@ def test_trace_chat_processor_labels_marin_tool_trace(marin_chat_tokenizer: Mari
     assert "The final answer is done." in final_text
 
 
-def test_generation_prompt(marin_chat_tokenizer: MarinTokenizer):
-    rendered = marin_chat_tokenizer.apply_chat_template(CONVERSATION, tokenize=False, add_generation_prompt=True)
-    assert rendered.endswith("<|start_header_id|>assistant<|end_header_id|>\n")
+ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>\n"
+
+
+@pytest.mark.parametrize(
+    "template,template_kwargs,reasoning_line,prompt_suffix",
+    [
+        (MARIN_CHAT_TEMPLATE, {"enable_thinking": True}, "Reasoning: /think", ASSISTANT_HEADER),
+        (MARIN_CHAT_TEMPLATE, {"enable_thinking": False}, "Reasoning: /nothink", ASSISTANT_HEADER),
+        (MARIN_CHAT_TEMPLATE, {}, None, ASSISTANT_HEADER),
+        (
+            MARIN_INFERENCE_CHAT_TEMPLATE,
+            {"enable_thinking": True},
+            "Reasoning: /think",
+            ASSISTANT_HEADER + "<|start_think|>",
+        ),
+        (MARIN_INFERENCE_CHAT_TEMPLATE, {"enable_thinking": False}, "Reasoning: /nothink", ASSISTANT_HEADER),
+        (MARIN_INFERENCE_CHAT_TEMPLATE, {}, "Reasoning: /think", ASSISTANT_HEADER + "<|start_think|>"),
+    ],
+    ids=[
+        "training-think",
+        "training-nothink",
+        "training-unset",
+        "inference-think",
+        "inference-nothink",
+        "inference-unset",
+    ],
+)
+def test_only_inference_think_prompts_open_think_span(
+    marin_tokenizer, template, template_kwargs, reasoning_line, prompt_suffix
+):
+    question = [{"role": "user", "content": "What is 2 + 2?"}]
+    prompt = marin_tokenizer.apply_chat_template(
+        question, chat_template=template, tokenize=False, add_generation_prompt=True, **template_kwargs
+    )
+    completed = marin_tokenizer.apply_chat_template(
+        question, chat_template=template, tokenize=False, add_generation_prompt=False, **template_kwargs
+    )
+
+    assert prompt == completed + prompt_suffix
+    assert completed.endswith("What is 2 + 2?<|eot_id|>\n")
+    if reasoning_line is None:
+        assert "Reasoning:" not in prompt
+    else:
+        assert reasoning_line in prompt
+
+
+@pytest.mark.parametrize("template_kwargs", [{"enable_thinking": True}, {}], ids=["think", "unset"])
+def test_inference_prompt_plus_completion_matches_training_render(marin_tokenizer, template_kwargs):
+    """A completion that starts inside the opened span reproduces the training render of the turn."""
+    question = [{"role": "user", "content": "What is 2 + 2?"}]
+    answered = [*question, {"role": "assistant", "reasoning_content": "Add two and two.", "content": "4"}]
+    prompt = marin_tokenizer.apply_chat_template(
+        question,
+        chat_template=MARIN_INFERENCE_CHAT_TEMPLATE,
+        tokenize=False,
+        add_generation_prompt=True,
+        **template_kwargs,
+    )
+    rendered = marin_tokenizer.apply_chat_template(
+        answered, chat_template=MARIN_CHAT_TEMPLATE, tokenize=False, enable_thinking=True
+    )
+
+    assert prompt + "Add two and two.<|end_think|>4<|eot_id|>" == rendered
+    assert rendered.count("<|start_think|>") == 1
 
 
 @pytest.mark.parametrize(

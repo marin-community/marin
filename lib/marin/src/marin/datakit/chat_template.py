@@ -130,3 +130,37 @@ You can use the following tools in your python code like regular functions:
   {{- '<|start_header_id|>assistant<|end_header_id|>\n' -}}
 {%- endif -%}
 """.strip()
+
+_TRAINING_UNSET_MODE = "{%- set _reasoning_mode = none -%}"
+_INFERENCE_UNSET_MODE = '{%- set _reasoning_mode = "/think" -%}'
+_TRAINING_GENERATION_PROMPT = "{{- '<|start_header_id|>assistant<|end_header_id|>\n' -}}"
+_INFERENCE_GENERATION_PROMPT = (
+    _TRAINING_GENERATION_PROMPT
+    + """
+  {%- if _reasoning_mode == "/think" -%}
+    {{- '<|start_think|>' -}}
+  {%- endif -%}"""
+)
+
+
+def _replace_once(template: str, old: str, new: str) -> str:
+    if template.count(old) != 1:
+        raise ValueError(f"Expected exactly one {old!r} in the Marin chat template")
+    return template.replace(old, new)
+
+
+MARIN_INFERENCE_CHAT_TEMPLATE = _replace_once(
+    _replace_once(MARIN_CHAT_TEMPLATE, _TRAINING_UNSET_MODE, _INFERENCE_UNSET_MODE),
+    _TRAINING_GENERATION_PROMPT,
+    _INFERENCE_GENERATION_PROMPT,
+)
+"""Template for serving Grug SFT models.
+
+Exports embed ``MARIN_CHAT_TEMPLATE``, so a server uses this one only when it is
+passed explicitly (``--chat-template``). Omitting ``enable_thinking`` selects
+``/think``, as the 10.05 release template does. In ``/think`` mode the
+generation prompt ends with ``<|start_think|>``, so the completion begins inside
+the reasoning span: everything before the first ``<|end_think|>`` is reasoning.
+For an explicit reasoning mode, prompt plus completion equals the
+``MARIN_CHAT_TEMPLATE`` render of that conversation.
+"""
