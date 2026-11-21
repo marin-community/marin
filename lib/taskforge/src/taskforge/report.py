@@ -83,12 +83,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 last = workpiece.decisions[-1] if workpiece is not None and workpiece.decisions else None
                 for reason in {reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}:
                     reasons[terminal, reason] += 1
-            # A checkpointed generation is charged by its own row; a slot graded from it adds no second charge.
-            generated = {
-                (event_digest(event.request.slot), event.fingerprints)
-                for event in (record.event for record in records)
-                if isinstance(event, Resolved) and isinstance(event.request, SolverGeneration)
-            }
+            generated: set[tuple[str, object]] = set()
             decision_time = None
             scopes: dict[str, list[float]] = defaultdict(list)
             previous = records[0].wall_time if records else 0.0
@@ -96,6 +91,10 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 event, stamp = record.event, record.wall_time
                 if isinstance(event, StageCompleted) and event.terminal is Terminal.ACCEPTED:
                     decision_time = stamp
+                # A checkpointed generation is charged by its own row, and the slot results after it are graded from
+                # it; a slot result before it paid for an earlier generation. Tracked ahead of the window.
+                if isinstance(event, Resolved) and isinstance(event.request, SolverGeneration):
+                    generated.add((event_digest(event.request.slot), event.fingerprints))
                 if isinstance(event, ScopeEntered):
                     if event.name == "workpiece":
                         scopes.clear()

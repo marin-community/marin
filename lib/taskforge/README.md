@@ -182,15 +182,19 @@ row before the slot holds. It is keyed by the slot's own identity (task spec, tr
 rollout fingerprint. The next execution of that slot (an unflagged relaunch after an outage, `--resume-held` after
 an off-scale level) dispatches no solver request: it grades the recorded generation again through the same
 TaskCompendium decision-model grade and recorded read, so an equal answer reads the decision model once. `report`
-charges each generation once, by its checkpoint row when it has one, including a generation still awaiting its
-grade. Limits: a generation interrupted before it finished (a machine or model failure, a cancelled process) is
+charges each generation once, reading the journal in order: a checkpoint row charges its generation (including one
+still awaiting its grade), the slot results after it were graded from it and add nothing, and a slot result before it
+(a refused slot's paid turns, a format-8 off-scale result) paid for an earlier generation and keeps its charge. The
+order is read over the whole journal, so `--since-hours` charges only rows inside the window. Limits: a generation interrupted before it finished (a machine or model failure, a cancelled process) is
 generated again, as is a slot whose solver fingerprint changed (solver model, sampling, execution settings or the
 grader identities it records). A trial with no answer, or a refused slot, is no generation awaiting a grade and
 keeps its existing replay. Graders that run in a sandbox or through the LLM judge keep their existing path. The
 row reaches the published journal with the next checkpoint and with the held publication; if the process dies
 abruptly between the read's failure and that publication, or at any time while the read is still waiting, the
-next launch generates the answer again. A non-outage failure of the resumed read (for example a gateway refusing
-it with a 4xx) holds the workpiece for a person instead of restarting the stage.
+next launch generates the answer again. A gateway refusing the resumed read (an HTTP 4xx other than 404, 408 and
+429) is no outage: the reader raises a hold naming the status, the solver batch lets every admitted slot settle and
+starts no further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
+stage. A refusal of a slot's first read still restarts the stage, as before.
 
 Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held

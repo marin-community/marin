@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """A solver generation whose decision-model grade an outage or an off-scale level ended is journalled before the slot
-holds, so that resuming the slot grades it again without generating it (n12 review finding 8 and follow-up 1)."""
+holds, so that resuming the slot grades it again without generating it."""
 
 import asyncio
 import json
@@ -45,8 +45,11 @@ from rolloutengine.models import (
     LENGTH_STOP_REASON,
     ConversationRecord,
     GradedRollout,
+    Model,
     ModelTurn,
     Rollout,
+    RolloutInterrupted,
+    RolloutOperation,
     RolloutStep,
     TaskRolloutSpec,
     TraceMode,
@@ -62,7 +65,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Invalidated, Resolved, ScopeEntered, ScopeExited, event_digest
 from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status
-from taskforge.llm.client import AttemptOutcome, Segment
+from taskforge.llm.client import AttemptOutcome, ModelRequestRejected, Segment
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import FinishReason, ToolCall
 from taskforge.model.proposal import TaskProposal
@@ -70,8 +73,9 @@ from taskforge.model.review import Cause
 from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.report import report
-from taskforge.resources.rollouts import SolverGeneration, SolverRollout, refused
+from taskforge.resources.rollouts import Engine, SolverGeneration, SolverRollout, refused
 from taskforge.stages.classify import replaced_refusals, replayable_grade, trial_cause
+from taskforge.wiring import install
 
 WAIT: Mapping[str, object] = {"decision_model.unavailable_wait": 10.0}
 NATIVE = '{"arguments":{"value":12},"name":"answer","type":"function_call"}'
@@ -104,15 +108,19 @@ async def slot(
     resume: bool = False,
     native: bool = False,
     overlay: Mapping[str, object] = WAIT,
+    engine: Engine | None = None,
 ) -> tuple[GradedRollout | DecisionModelUnavailable, int, Sequence[Record]]:
     """Slot 0 of a decision-model task, one launch replaying ``sink`` as the driver builds its log (``resume`` is
-    ``--resume-held``): what the slot came to, the solver requests it dispatched, and the launch's records."""
+    ``--resume-held``): what the slot came to, the solver requests it dispatched, and the launch's records. ``engine``
+    replaces RolloutEngine, under the same fingerprint."""
     history = local_records(sink) if Path(sink.path).exists() else ()
     policy = overlaid().overlaid(overlay)
     solver, replaces = ScriptedProvider(script), replaced_refusals(history, resume)
     log = EventLog(sink=sink, replay_from=history, replayable=replayable_grade, replaces=replaces)
     ctx = Context(log=log)
-    installed(policy, reader, solver, ctx, VirtualTime())
+    built = installed(policy, reader, solver, ctx, VirtualTime())
+    if engine is not None:
+        install(ctx, replace(built, rollouts=replace(built.rollouts, engine=engine)))  # the later handlers answer
     outcome: GradedRollout | DecisionModelUnavailable
     try:
         outcome = await ctx.emit(SolverRollout(native_spec(policy) if native else decision_spec(policy), 0, 0))
@@ -268,14 +276,67 @@ async def test_a_checkpointed_generation_is_charged_once_in_validation_and_confi
         generation(3, 1),
         ScopeExited("confirm", True),
     )
-    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
-    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
-    sink.claim(None)
-    await sink.local.write(records)
-    await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
-    lines = await report(str(tmp_path / "root"))
+    lines = await reported(tmp_path, proposal, [Record(i, time.time(), e) for i, e in enumerate(events, 1)])
     assert "tokens role=solver prompt=80 cached=0 completion=14" in lines
     assert "tokens role=confirmation prompt=80 cached=0 completion=14" in lines
+
+
+async def reported(
+    tmp_path: Path, proposal: TaskProposal, records: Sequence[Record], since_hours: float | None = None
+) -> tuple[str, ...]:
+    """The report of a held root whose journal is ``records``."""
+    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink.claim(None)
+    await sink.local.write(tuple(records))
+    await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
+    return await report(str(tmp_path / "root"), since_hours)
+
+
+class RejectedAfterATurn(Engine):
+    """A rollout whose first model turn was paid (10 prompt, 5 completion tokens) and whose second was refused."""
+
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        rejected = ModelRequestRejected(400, "bad request", ())
+        raise RolloutInterrupted(metered(10, 5), RolloutOperation.MODEL) from rejected
+
+
+# Review 2026-11-21: the report suppressed every slot result whose key had a checkpoint anywhere in the journal, so a
+# refused slot that had paid for a shell turn lost its charge once its replacement checkpointed: 10/5 instead of 20/10.
+async def test_a_paid_refusal_before_its_replacements_checkpoint_keeps_its_charge(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    held, _, _ = await slot(FakeReader(LEVELS), sink, (), engine=RejectedAfterATurn())
+    assert isinstance(held, GradedRollout) and refused(held)
+    off, solved, _ = await slot(FakeReader({"12": 7}), sink, (segment("12"),), resume=True)
+    assert isinstance(off, GradedRollout) and off.grade.status is Outcome.INFRA_ERROR and solved == 1
+    graded, solved, _ = await slot(FakeReader(LEVELS), sink, (), resume=True)
+    assert isinstance(graded, GradedRollout) and (graded.grade.reward, solved) == (1.0, 0)
+    assert "tokens role=solver prompt=20 cached=0 completion=10" in await reported(
+        tmp_path, proposal, local_records(sink)
+    )
+
+
+# Review 2026-11-21: a format-8 root's off-scale slot result predates any checkpoint, yet the replacement's checkpoint
+# suppressed it; and a window opening between a checkpoint and its regrade must not charge the regrade.
+@pytest.mark.parametrize("since_hours, charged", [(None, (20, 10)), (1.0, (0, 0))], ids=["all time", "after the gen"])
+async def test_a_slot_result_is_charged_unless_it_follows_its_checkpoint(
+    tmp_path: Path, proposal: TaskProposal, since_hours: float | None, charged: tuple[int, int]
+) -> None:
+    spec, rollout = decision_spec(overlaid()), metered(10, 5)
+    off, graded = GradeResult(Outcome.INFRA_ERROR, None, "off-scale"), GradeResult(Outcome.GRADED, 1.0)
+    old, now = time.time() - 3 * 3600, time.time()
+    events = [
+        (old, Resolved(SolverRollout(spec, 0, 0), (), GradedRollout(rollout, off))),  # a format-8 writer's result
+        (old, Resolved(SolverGeneration(spec, 0, 0, rollout), (), rollout)),  # its replacement, checkpointed
+        (old, Resolved(SolverRollout(spec, 0, 0), (), GradedRollout(rollout, off))),
+        (now, Resolved(SolverRollout(spec, 0, 0), (), GradedRollout(rollout, graded))),  # graded from the checkpoint
+    ]
+    records = [Record(i, stamp, event) for i, (stamp, event) in enumerate(events, 1)]
+    prompt, completion = charged
+    assert f"tokens role=solver prompt={prompt} cached=0 completion={completion}" in await reported(
+        tmp_path, proposal, records, since_hours
+    )
 
 
 PROBE = [sys.executable, "-m", "lib.taskforge.tests.generation_replay_probe"]
@@ -305,10 +366,37 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
     assert second["confirmation"] == "tokens role=confirmation prompt=50 cached=0 completion=25"
 
 
+# Review 2026-11-21: a gateway refusing a resumed read (HTTP 400) escaped its slot as a bug, cancelled the read of a
+# sibling slot's fresh answer, failed the child, and so made recovery buy that answer again: six solvers, not five.
+@pytest.mark.parametrize(
+    "failure, reason",
+    [("refused", "Hold: Decision model refused the read with HTTP 400: bad state"), ("off-scale", "returned 7.0")],
+)
+def test_a_resumed_read_that_fails_holds_after_its_siblings_settle_and_recovery_buys_only_confirmation(
+    tmp_path: Path, failure: str, reason: str
+) -> None:
+    """Three processes: slots 0 and 1 are checkpointed in an outage; an unflagged resume grades slot 1 and generates
+    slot 2, whose read is in flight when slot 0's read is refused (or answered off the scale); the explicit recovery
+    reads slot 0 once more and buys only the five confirmation trials."""
+    assert probed("sibling-record", tmp_path)["exit"] == 75
+    held = dict(probed(f"sibling-{failure}", tmp_path))
+    [why] = held.pop("reasons")
+    assert held == {"exit": 0, "solves": 1, "reads": ["a dozen", "thirteen"], "terminal": "held", "awaits": None}
+    assert reason in why  # the ordinary hold, never a bug, keeps the gateway's diagnostic
+    recovered = probed("sibling-recover", tmp_path)
+    assert (recovered["exit"], recovered["terminal"], recovered["solves"], recovered["reads"]) == (
+        0,
+        "accepted",
+        5,
+        ["twelve"],
+    )
+    assert recovered["solver"] == "tokens role=solver prompt=30 cached=0 completion=15"
+
+
 # The checkpoint row is new at format 9, and every format-8 row means the same at 9: a format-8 root, written before
 # this change, resumes with its completed slots and author calls replayed, and its claim fences it from format-8 readers.
 async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_format_9(
-    driver_args: Namespace,
+    driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     confirming(driver_args)

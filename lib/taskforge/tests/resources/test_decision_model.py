@@ -656,7 +656,7 @@ async def test_the_installed_grade_reads_clef_through_the_callers_iris_client() 
     assert (grade.reward, [str(call.url) for call in sent]) == (1.0, ["http://gateway/v1/systemone"])
 
 
-async def test_the_default_reader_reads_unavailability_as_down_and_other_refusals_as_bugs() -> None:
+async def test_the_default_reader_reads_unavailability_as_down_and_other_refusals_as_holds() -> None:
     with pytest.raises(DecisionModelDown, match="HTTP 503: clef_unavailable") as raised:
         await gateway(lambda _: httpx.Response(503, text="clef_unavailable", headers={"retry-after": "30"})).read(
             request("12")
@@ -666,8 +666,9 @@ async def test_the_default_reader_reads_unavailability_as_down_and_other_refusal
         await gateway(lambda call: (_ for _ in ()).throw(httpx.ConnectError("refused", request=call))).read(
             request("12")
         )
-    with pytest.raises(RuntimeError, match="refused the read with HTTP 400"):
+    with pytest.raises(Hold, match="refused the read with HTTP 400") as refused:
         await gateway(lambda _: httpx.Response(400, text="bad state")).read(request("12"))
+    assert not isinstance(refused.value, DecisionModelUnavailable)  # a refusal is no outage: nothing defers on it
 
 
 @pytest.mark.parametrize(
@@ -709,10 +710,10 @@ async def length_stopped(
     return outcome, len(solver.bodies)
 
 
-# Review 2026-11-21 (n12 follow-up 1): an answer cut at its length limit is still graded, and an off-scale level is a
-# grader infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made
-# no solver call and no read and republished the hold. Since n14 the explicit resume reads its checkpointed generation
-# again and generates nothing.
+# Review 2026-11-21: an answer cut at its length limit is still graded, and an off-scale level is a grader
+# infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made no
+# solver call and no read and republished the hold. The explicit resume reads the checkpointed generation again and
+# generates nothing.
 async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_the_model_recovers(
     tmp_path: Path,
 ) -> None:

@@ -31,7 +31,7 @@ from taskcompendium.models import GradingAttempt
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
-from taskforge.effects.issues import DecisionModelUnavailable
+from taskforge.effects.issues import DecisionModelUnavailable, Hold
 from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverGeneration, SolverRollout, run_rollout
@@ -63,8 +63,8 @@ class OffScale(Exception):
 
 
 class DecisionModelReader(Protocol):
-    """One host's decision model: ``read`` returns a level or raises ``DecisionModelDown``; ``health`` is the host's
-    own readiness answer and never a read."""
+    """One host's decision model: ``read`` returns a level, raises ``DecisionModelDown`` while the host cannot answer,
+    or a ``Hold`` when it refuses the read itself; ``health`` is the host's own readiness answer and never a read."""
 
     async def read(self, request: DecisionModelRequest) -> float: ...
 
@@ -99,7 +99,7 @@ class ClefReader(DecisionModelReader):
         if (status := response.status_code) in DOWN_STATUSES or status >= 500:
             raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", retry_after(response))
         if status != 200:
-            raise RuntimeError(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")
+            raise Hold(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")  # no outage
         probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
         weights = [float(probabilities[str(level)]) for level in range(len(request.levels))]
         if min(weights) < 0 or not sum(weights) > 0:
