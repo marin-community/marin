@@ -33,6 +33,8 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | [Native prototype, stacked KV and fused prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v8) | 4 | 1,917 | 9.13 | 12.10 |
 | [Native prototype, unrolled decode and small KV updates](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v9) | 8 | 2,905 | 16.14 | 26.85 |
 | [Native prototype, prompt-page reuse and fused full-context attention](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v10) | 12 | 4,133 | 21.83 | 31.46 |
+| [Native, expert-sharded KV heads](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v11) | 18 | 6,461 | 33.22 | 61.13 |
+| [Native prototype, split expert weights with replicated KV](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v12) | 13 | 4,505 | 24.33 | 36.53 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -95,6 +97,13 @@ Three later turns reused 47,488 to 50,560 prompt tokens. Their server-side
 prefill and extraction took 0.29 to 0.46 seconds. Warming the buckets took 118
 seconds before the AgentX measurement. [Prefix reuse job](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v10)
 
+Padding five KV heads to eight makes two head slots per expert shard. The
+v5p-8 job moved attention off the replicated cache, raising native decode to
+61.13 tokens/s/user. The same 594-output-token turn took 13.05 seconds with
+a 3.23-second time to first token. The trace measured about 88 ms per
+32-token round in full-vocabulary sort and gather operations.
+[KV sharding and trace](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p-decode-profile-analysis-20261121-v11)
+
 ### Reproduce the native diagnostic
 
 Run from the inference branch and point `iris_client` and `iris_config` to
@@ -111,7 +120,7 @@ workload=gs://marin-us-central1/tmp/ttl=30d/agentx-workload/95f345f596f40f84b64c
   -e JAX_PLATFORMS tpu -e LIBTPU_INIT_ARGS '--xla_tpu_scoped_vmem_limit_kib=50000' \
   -- uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
   --weights "$weights" --workload "$workload" --attention tpu_v3 --decode-layers unrolled \
-  --prefill-buckets 4096 8192 16384 32768 --prefix-cache last_prompt
+  --prefill-buckets 4096 8192 16384 32768 --prefix-cache last_prompt --kv-sharding expert
 ```
 
 The `tpu_v3` mode uses the pinned vLLM TPU fork's paged attention kernel with

@@ -982,6 +982,8 @@ class InferenceEngine:
         axis_resources: ResourceMapping | None = None,
     ) -> "InferenceEngine":
         """Build an engine using a EngineConfig for sizing knobs."""
+        if isinstance(model, SnowballLMHeadModel) and model.config.inference_kv_sharding == "expert":
+            axis_resources = {**(axis_resources or {}), "kv_head": "expert"}
         if config.max_pages is None:
             inferred_pages = _infer_max_pages_from_hbm(model, config, axis_resources)
             config = dataclasses.replace(config, max_pages=int(inferred_pages))

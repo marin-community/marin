@@ -484,6 +484,7 @@ class SnowballConfig(HFCompatConfig):
     attention_implementation: Optional[GrugAttentionImplementation] = None
     inference_attention_implementation: PagedAttentionImplementation | None = None
     inference_decode_implementation: Literal["scan", "unrolled"] = "scan"
+    inference_kv_sharding: Literal["model", "expert"] = "model"
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -747,6 +748,17 @@ class GatedNorm(eqx.Module):
         return x * gate
 
 
+def _inference_kv_layout(cfg: SnowballConfig) -> tuple[str, int]:
+    if cfg.inference_kv_sharding == "model":
+        return "model", cfg.num_kv_heads
+    mesh = _current_mesh()
+    if _mesh_axis_size(mesh, "model") != 1 or cfg.shared_attention_implementation == "fixed_schedule":
+        raise ValueError("Expert-sharded KV requires model_axis_size=1 and native paged attention")
+    expert_size = _mesh_axis_size(mesh, "expert")
+    padded_heads = (cfg.num_kv_heads + expert_size - 1) // expert_size * expert_size
+    return "expert", padded_heads
+
+
 class SnowballAttention(eqx.Module):
     """GQA + half-RoPE + XSA + per-head sigmoid gate (pinned production attention).
 
@@ -872,17 +884,25 @@ class SnowballAttention(eqx.Module):
         """Attend a flat batch of serving tokens with the June attention recipe."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
+        kv_axis, kv_heads = _inference_kv_layout(cfg)
+        extra_heads = kv_heads - cfg.num_kv_heads
         q, k, v = self._project_qkv(x, disable_rope=use_long, position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
-        kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
-        cache_k = reshard(k[:, 0], P(None, "model", None))
-        cache_v = reshard(v[:, 0], P(None, "model", None))
+        kv_axes = (token_axis, Axis("kv_head", kv_heads), Axis("head_size", head_dim))
+        cache_k, cache_v = k[:, 0], v[:, 0]
+        if extra_heads:
+            cache_k = jnp.pad(cache_k, ((0, 0), (0, extra_heads), (0, 0)))
+            cache_v = jnp.pad(cache_v, ((0, 0), (0, extra_heads), (0, 0)))
+        cache_k = reshard(cache_k, P(None, kv_axis, None))
+        cache_v = reshard(cache_v, P(None, kv_axis, None))
         cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
         if cfg.shared_attention_implementation == "fixed_schedule":
             out = _fixed_shared_attention_decode(q, cache, batch_info, pos_ids, use_long=use_long, cfg=cfg)
             return self._project_output(x, out, v), cache
         q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
-        q = reshard(q, P(None, "model", None, None))
+        if extra_heads:
+            q = jnp.pad(q, ((0, 0), (0, extra_heads), (0, 0), (0, 0)))
+        q = reshard(q, P(None, kv_axis, None, None))
         implementation = cfg.inference_attention_implementation
         if implementation is None and cfg.attention_implementation == "reference":
             implementation = "reference"
@@ -896,7 +916,11 @@ class SnowballAttention(eqx.Module):
             sm_scale=head_dim**-0.5,
             sliding_window=None if use_long else cfg.sliding_window,
             implementation=implementation,
-        ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
+        )
+        if kv_axis == "expert":
+            # Restore token sharding before trimming the padded KV heads.
+            out = reshard(out, P(_BATCH_AXES, None, None, None))[:, : cfg.num_kv_heads]
+        out = out.reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
 
 
@@ -1873,12 +1897,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
-        kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
+        kv_axis, kv_head_count = _inference_kv_layout(cfg)
+        kv_heads, head_size = Axis("kv_head", kv_head_count), Axis("head_size", cfg.inferred_head_dim)
         layer = Axis("layer", len(self.transformer.blocks))
         page = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
         stacked = page.broadcast_axis(layer).rearrange((layer, ...))
         # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-        pages = reshard(stacked.array, P(None, None, None, "model", None))
+        pages = reshard(stacked.array, P(None, None, None, kv_axis, None))
         return StackedKvPageCache(hax.named(pages, stacked.axes))
 
     def decode(

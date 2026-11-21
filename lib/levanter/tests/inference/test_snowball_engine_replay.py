@@ -20,6 +20,7 @@ from levanter.inference.snowball_engine_replay import (
     replay_snowball_logits,
     replay_snowball_loss,
 )
+from levanter.layers.kv_cache import StackedKvPageCache
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 
@@ -131,6 +132,41 @@ def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, cap
     with caplog.at_level(logging.INFO):
         assert cached.generate([next_turn]) == expected
     assert "Reused" not in caplog.text
+
+
+@pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
+def test_snowball_expert_sharded_cache_preserves_five_head_generation(serving_model):
+    config = dataclasses.replace(
+        serving_model.config, hidden_dim=160, num_heads=20, num_kv_heads=5, inference_decode_implementation="unrolled"
+    )
+    serving = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=4,
+        max_seqs=1,
+        page_size=2,
+        max_queued_tokens=4,
+        max_seqs_in_prefill=1,
+        max_tokens_per_round=4,
+        prefix_cache="last_prompt",
+        compute_dtype=jnp.float32,
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=4)):
+        first, second = _requests()[:2]
+        second = dataclasses.replace(second, prompt_tokens=[1, 2, 5])
+        vocab, key = hax.Axis("vocab", 23), jax.random.key(41)
+        model = SnowballLMHeadModel.init(vocab, config, key=key)
+        model_cache = InferenceEngine.from_model_with_config(model, None, serving)
+        expert_config = dataclasses.replace(config, inference_kv_sharding="expert")
+        sharded = SnowballLMHeadModel.init(vocab, expert_config, key=key)
+        expert_cache = InferenceEngine.from_model_with_config(sharded, None, serving)
+        for request in (first, second):
+            assert expert_cache.generate([request]) == model_cache.generate([request])
+        cache = expert_cache.gen_state.cache
+        assert isinstance(cache, StackedKvPageCache)
+        assert cache.kv_pages.axis_size("kv_head") == 16
+        sharding = cache.kv_pages.array.sharding
+        assert isinstance(sharding, jax.sharding.NamedSharding)
+        assert sharding.spec[3] == "expert"
 
 
 @eqx.filter_jit

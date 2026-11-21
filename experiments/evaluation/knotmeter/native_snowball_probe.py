@@ -79,6 +79,7 @@ def main() -> None:
     parser.add_argument("--workload", required=True)
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled"), default="scan")
+    parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
@@ -124,6 +125,7 @@ def main() -> None:
             model_config,
             inference_attention_implementation=args.attention,
             inference_decode_implementation=args.decode_layers,
+            inference_kv_sharding=args.kv_sharding,
         )
         tokenizer = load_tokenizer(series["tokenizer"], revision=series["tokenizer_revision"])
         with trainer.use_device_mesh():
@@ -156,6 +158,7 @@ def main() -> None:
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,
             "decode_layers": args.decode_layers,
+            "kv_sharding": args.kv_sharding,
             "prefill_buckets": service.prefill_bucket_sizes,
             "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,

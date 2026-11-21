@@ -112,7 +112,7 @@ class StackedKvPageCache(PageCache):
     kv_pages: NamedArray  # [Layer, Page, Slot, 2 * KVHeads, Embed]
 
     def reset(self) -> "StackedKvPageCache":
-        return StackedKvPageCache(hax.zeros_like(self.kv_pages))
+        return StackedKvPageCache(hax.named(jnp.zeros_like(self.kv_pages.array), self.kv_pages.axes))
 
     def copy_page(self, src_page: int, dst_page: int) -> "StackedKvPageCache":
         pages = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
