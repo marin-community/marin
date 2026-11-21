@@ -436,7 +436,9 @@ def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) 
     )
     for changed in native_changes:
         assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
-    assert sorted(leg_paths(select_matrix([*native_changes, runner], tmp_path), "marin")) == [runner, census]
+    matrix = select_matrix([*native_changes, runner], tmp_path)
+    paths = [path for leg in matrix if leg.package == UV_PACKAGE["marin"] for path in leg.test_paths.split()]
+    assert sorted(paths) == [runner, census]
 
 
 @pytest.mark.parametrize(
