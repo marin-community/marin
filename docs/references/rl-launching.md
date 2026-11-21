@@ -448,12 +448,17 @@ memory in colocated-role capacity estimates.
 
 ## Run-owned retrieval
 
-Tasks with `openresearcher-bm25:v1` use one private BM25 service per RL run.
-The run coordinator owns `marin.rl.retrieval_service.retrieval_service` until
-all rollouts and checks that call retrieval finish. Build a
+For tasks with `openresearcher-bm25:v1`, the caller must enter
+`marin.rl.retrieval_service.retrieval_service` once per RL run and pass its
+endpoint to the worker configuration. Keep the context open until every rollout
+and check that calls retrieval finishes. Long-loop launch wiring is a separate
+follow-up. Build a
 `RetrievalServiceLaunch` with explicit CPU, RAM, disk, concurrency, startup
 timeout and lifetime. Set the lifetime longer than that entire interval. Leave
-`target_cluster` unset so the child inherits the run cluster. The launcher
+`target_cluster` unset so the child inherits the run cluster. CoreWeave CPU
+nodes have no region labels, so the child clears any inherited GPU region
+selector and stays on the run’s single-region controller. Select the regional
+CoreWeave cluster when launching the root run. The launcher
 passes the parent's CoreWeave storage keys as file-delivered secrets. Supply
 any other required credentials explicitly in the child environment.
 

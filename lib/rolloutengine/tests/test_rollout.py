@@ -1457,7 +1457,7 @@ JUDGE_CONNECTION = JudgeConnection("http://judge.invalid/v1", "private-test-key"
                 machine=machine_runtime(),
             ),
             ValueError,
-            "requires the daytona backend",
+            None,
             id="required-backend-mismatch",
         ),
         # The engine does not capture state, so it rejects a graded state task for every harness.

@@ -52,8 +52,8 @@ def rollout_spec(
     return TaskRolloutSpec(
         task=task,
         harness=harness,
-        task_machine=_declared_machine(task_machine, task.execution_requirements),
-        verifier_machine=_declared_machine(verifier_machine, task.verifier_execution_requirements),
+        task_machine=_machine_with_declared_minimums(task_machine, task.execution_requirements),
+        verifier_machine=_machine_with_declared_minimums(verifier_machine, task.verifier_execution_requirements),
         limits=rollout_limits(task, RolloutLimits.model_validate(settings), minimum_verifier_timeout=None),
         trace=trace,
     )
@@ -83,7 +83,7 @@ def rollout_limits(task: TaskSpec, limits: RolloutLimits, *, minimum_verifier_ti
     )
 
 
-def _declared_machine(
+def _machine_with_declared_minimums(
     runtime: MachineRuntimeSpec | None, requirements: ExecutionRequirements | None
 ) -> MachineRuntimeSpec | None:
     if runtime is None or requirements is None:
