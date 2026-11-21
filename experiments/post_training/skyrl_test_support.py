@@ -21,11 +21,13 @@ from experiments.post_training.rl_presets import ModelPresets
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 
 
-def with_current_control_revisions(table: ModelPresets) -> ModelPresets:
+def with_fixture_control_pins(table: ModelPresets) -> ModelPresets:
+    """Use current revisions with the fixture's original control paths and placement."""
     return replace(
         table,
         control_pins={
-            name: replace(pin, revision=table.by_name[name].revision) for name, pin in table.control_pins.items()
+            name: replace(pin, revision=table.by_name[name].revision, retries=(), cluster=None)
+            for name, pin in table.control_pins.items()
         },
     )
 

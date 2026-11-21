@@ -68,7 +68,7 @@ from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
-    with_current_control_revisions,
+    with_fixture_control_pins,
     write_training_families,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
@@ -359,7 +359,7 @@ def evaluation_task_rows(
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
+    monkeypatch.setattr(snowball_model, "SNOWBALL", with_fixture_control_pins(snowball_model.SNOWBALL))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))

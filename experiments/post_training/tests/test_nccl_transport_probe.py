@@ -129,6 +129,7 @@ def test_gate_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mon
     monkeypatch.setenv("GLOO_SOCKET_IFNAME", "lo")
     monkeypatch.setattr(probe, "RESULT_DIR", tmp_path)
     monkeypatch.setattr(probe, "run_variant", run_variant)
+    monkeypatch.setattr(probe, "collect_ib_port_inventory", lambda: [])
     run_task(first_job, 0)
 
     assert groups[second_job, 1] == groups[second_job, 0]
