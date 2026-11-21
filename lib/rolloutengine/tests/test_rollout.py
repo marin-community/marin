@@ -70,6 +70,7 @@ from verifyit.spec import (
 )
 
 import rolloutengine.engine as engine_runtime
+import rolloutengine.event_delivery as event_delivery_runtime
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
@@ -2657,13 +2658,12 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
         AttemptEnded("stop", None, None, 0.0, 2, 9),
     ]
     assert [event.index for event in observer.events] == list(range(len(observer.events)))
-    times = [event.time for event in observer.events]
-    assert times == sorted(times) and started <= times[0] and times[-1] <= finished
-    assert asdict(replace(observer.events[-1], time=0.0)) == {
+    assert all(started <= event.emitted_at <= finished for event in observer.events)
+    assert asdict(replace(observer.events[-1], emitted_at=0.0)) == {
         "run_id": "arithmetic/3",
         "task_id": "arithmetic",
         "index": len(observer.events) - 1,
-        "time": 0.0,
+        "emitted_at": 0.0,
         "payload": {
             "stop_reason": "stop",
             "operation": None,
@@ -2697,6 +2697,52 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
         AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0, 1, 3),
     ]
+
+
+async def test_dropped_events_leave_index_gaps_and_delivered_events_keep_their_emit_time(monkeypatch):
+    monkeypatch.setattr(event_delivery_runtime, "EVENT_QUEUE_CAPACITY", 4)
+    gate = asyncio.Event()
+    room = asyncio.Event()
+    opened_at = []
+
+    class GatedObserver(RecordingObserver):
+        async def on_event(self, event: RolloutEvent) -> None:
+            await gate.wait()
+            await super().on_event(event)
+            if isinstance(event.payload, ToolCallCompleted):
+                room.set()
+
+    class Burst:
+        context_recovery = ContextRecovery.NEVER
+
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            # No await separates the emits, so the blocked observer takes none of them and the queue overflows.
+            for call in range(10):
+                context.events.emit(ToolCallCompleted(f"burst-{call}", "burst", 0, False, 0.0))
+            opened_at.append(time.time())
+            gate.set()
+            # The first delivered burst event leaves a place in the queue, so this event is not dropped.
+            await room.wait()
+            context.events.emit(ToolCallCompleted("after", "burst", 0, False, 0.0))
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    observer = GatedObserver()
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": Burst()}, observer=observer
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+
+    after = next(event for event in observer.events if getattr(event.payload, "call_id", None) == "after")
+    burst = [event for event in observer.events if getattr(event.payload, "name", None) == "burst"][:-1]
+    indexes = [event.index for event in observer.events]
+    missing = set(range(after.index)) - set(indexes)
+    assert indexes == sorted(indexes)
+    assert [event.payload.call_id for event in burst] == [f"burst-{call}" for call in range(len(burst))]
+    assert 0 < len(missing) == 10 - len(burst) <= record.rollout.metrics["observer_dropped_events"]
+    # The observer received the burst after the gate opened, and each event has the time of its emit.
+    assert all(event.emitted_at <= opened_at[0] for event in burst)
 
 
 async def test_attempts_without_a_run_id_keep_their_events_apart():

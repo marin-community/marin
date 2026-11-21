@@ -455,9 +455,11 @@ Archive command failures, archive timeouts, and provider or host I/O failures re
 
 `RolloutEngine(machine_factories, harnesses, observer=observer)` reports progress while an attempt runs.
 The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
-A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, its `index`, its `time`, and a `payload`.
-`index` is the event's position in the attempt, counted when the engine emits it, so a missing index is an
-event that the observer did not receive. `time` is the wall-clock time of the emit, because delivery is later.
+A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, its `index`, its `emitted_at`, and a
+`payload`. `index` is the event's position in the attempt, counted when the engine emits it, so a missing index
+is an event that the observer did not receive. The last events of an attempt can be lost without a gap, so the
+events are complete when `AttemptEnded` is among them and every lower index is present. `emitted_at` is the
+wall-clock time of the emit in seconds since the epoch, because delivery is later.
 `run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
 of repeated attempts of a task stay apart. `Rollout.run_id` returns the ID, so a caller can match a rollout with
 its events.
@@ -466,7 +468,7 @@ Durations are wall-clock seconds.
 
 | Payload | Emitted | Fields |
 | --- | --- | --- |
-| `AttemptStarted` | After validation, before machine acquisition | `harness`, `trace`, and the `dataset` of the task's source |
+| `AttemptStarted` | After validation, before machine acquisition | `harness`; `trace`, which tells whether the attempt's token counts are checked; and the `dataset` of the task's source |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
 | `ConversationStarted` | When the session records the first request of a conversation: the model answered or failed, or the harness ended | the request's `messages` and `options`; `duration` from the start of the harness, or from the last model turn, to the request |
 | `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, assistant `message`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `usage`, `ModelTurn.metadata`, `duration` |

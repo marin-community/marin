@@ -322,7 +322,11 @@ class RolloutEventType(StrEnum):
 
 @dataclass(frozen=True)
 class AttemptStarted:
-    """The attempt passed validation: the spec's harness and trace mode, and the dataset of the task's source."""
+    """The attempt passed validation: the spec's harness and trace mode, and the dataset of the task's source.
+
+    ``trace`` tells a reader whether the token counts in the attempt's events are checked. Under
+    ``TraceMode.MESSAGES`` they are the endpoint's report.
+    """
 
     harness: str
     trace: "TraceMode"
@@ -439,14 +443,15 @@ class RolloutEvent:
     """One event of the attempt that ``RolloutEngine.run_task`` started with ``run_id`` for task ``task_id``.
 
     ``index`` is the event's position in the attempt, counted when the engine emits it, so a missing index
-    is an event that the observer did not receive. ``time`` is the wall-clock time of the emit, because
-    delivery is later.
+    is an event that the observer did not receive. The last events of an attempt can be lost without a gap,
+    so the events are complete when ``AttemptEnded`` is among them and every lower index is present.
+    ``emitted_at`` is the wall-clock time of the emit in seconds since the epoch, because delivery is later.
     """
 
     run_id: str
     task_id: str
     index: int
-    time: float
+    emitted_at: float
     payload: RolloutEventPayload
 
 
