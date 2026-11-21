@@ -49,6 +49,10 @@ so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
 Linux limits still apply to each original argument. The wrapper is removed with
 the command's other temporary files.
+Daytona retries repeatable provider requests using the shared error classifier.
+A lost command reply reattaches to the same command directory, so the command
+executes once. Authentication and certificate failures stop the request;
+sandbox deletion can retry a state-change conflict.
 If command execution fails or is cancelled, later sandbox-deletion failures are
 attached as exception notes. Cleanup failure after a successful command still
 raises an error.
@@ -267,6 +271,11 @@ Ordinary `Machine.run` behavior is unchanged.
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
+
+Daytona repeats a request that failed in transit: one that lost its connection or got a 502, 503, or 504 status.
+A command whose request failed in transit runs once: the command script claims its private directory before it runs,
+and the exit trap records the exit code that the machine then reads. The machine waits for that exit code until the command's timeout.
+If the command shell was killed before it recorded an exit code, or the failure persists, `Machine.run` raises an infrastructure error.
 
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
 Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
