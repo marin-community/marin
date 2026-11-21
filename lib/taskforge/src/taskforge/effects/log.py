@@ -355,7 +355,6 @@ class EventLog:
         self._pending: list[Record] = []
         self._latest: dict[Key, Resolved[object]] = {}
         """Each cached key's latest recorded resolution, unless an ``Invalidated`` row names it after that."""
-        self._invalidated: set[Key] = set()
         for record in replay_from:
             self._fold(record.event)
         self._owners = Owners(replay_from)
@@ -414,21 +413,15 @@ class EventLog:
 
     def _fold(self, event: Event[object]) -> None:
         """The one cache update, for history and live rows alike: per full key, the latest resolution replaces any
-        earlier one and clears an invalidation, and an ``Invalidated`` row retires the resolution before it."""
+        earlier one, and an ``Invalidated`` row retires the resolution before it."""
         if isinstance(event, Invalidated):
-            self._invalidated.add((event_digest(event.request), event.fingerprints))
+            self._latest.pop((event_digest(event.request), event.fingerprints), None)
         elif isinstance(event, Resolved) and cached(event.fingerprints):
-            key = (event_digest(event.request), event.fingerprints)
-            self._latest[key] = event
-            self._invalidated.discard(key)
-
-    def _current(self, key: Key) -> Resolved[object] | None:
-        latest = self._latest.get(key)
-        return None if latest is None or key in self._invalidated else latest
+            self._latest[event_digest(event.request), event.fingerprints] = event
 
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
         """The cached result to replay for ``event``: its key's current resolution, unless this launch replaces it."""
-        latest = self._current((event_digest(event), fingerprints))
+        latest = self._latest.get((event_digest(event), fingerprints))
         if latest is None or not self._replayable(latest) or self._replaces(latest):
             return Missing()
         return cast(T, latest.value)
@@ -436,7 +429,7 @@ class EventLog:
     def invalidate(self, event: Event[object], fingerprints: tuple[Fingerprint, ...]) -> Record | None:
         """As ``event`` executes, the ``Invalidated`` row for its key's current resolution when this launch replaces
         it: one row per replaced result."""
-        latest = self._current((event_digest(event), fingerprints))
+        latest = self._latest.get((event_digest(event), fingerprints))
         return None if latest is None or not self._replaces(latest) else self.append(Invalidated(event, fingerprints))
 
     def attempt(self, sequence: int) -> Attempt:
