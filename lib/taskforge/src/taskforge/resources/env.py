@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from tarfile import TarError
 from tempfile import TemporaryDirectory
 from typing import Protocol, override
 from uuid import uuid4
@@ -305,6 +306,8 @@ async def reexecuted[T](
     """
     try:
         fresh = await retry_effect(event, operation, notify)
+    except TarError as error:  # a transfer archive the backend could not unpack is infrastructure, not the caller's
+        raise Restart(f"{event.kind} transfer failed: {describe_exception(error)}") from error
     except OSError as error:
         if isinstance(recorded, Missing):
             raise

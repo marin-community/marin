@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from taskforge.effects.events import Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
+from taskforge.effects.events import HANDLED_FAILURE, Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
 from taskforge.effects.issues import Restart, Unreproducible
 from taskforge.effects.log import Attempt, EventLog, Missing, Opened, Record, cached
 
@@ -67,7 +67,7 @@ class Context:
 
         An inner scope's handler wins. A re-executed resource's executor also receives ``recorded=``, the outcome at
         this request's position in the innermost opened scope's history (a result, ``Failed`` or ``Missing``), and
-        returns what the caller sees; an ``OSError`` it raises is recorded as ``Failed``.
+        returns what the caller sees; a ``HANDLED_FAILURE`` it raises is recorded as ``Failed``.
         """
         self._chain.get()[-1].handlers += (_Handler(etype, fn, resource),)
 
@@ -102,7 +102,7 @@ class Context:
             request = self._publish(self._log.append(event, attempt=attempt.sequence), chain).sequence
             try:
                 value = await handler.fn(event, *uses, recorded=self._log.recorded(request))
-            except OSError as error:
+            except HANDLED_FAILURE as error:
                 self._publish(self._log.append(failure(error), answers=request), chain)
                 raise
             self._publish(self._log.append(Resolved(event, fingerprints, value), answers=request), chain)

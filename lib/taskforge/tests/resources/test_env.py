@@ -6,9 +6,11 @@ import errno
 import os
 import shutil
 import subprocess
+import tarfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path, PurePosixPath
+from tarfile import AbsoluteLinkError, TarInfo
 from typing import override
 
 import pytest
@@ -214,6 +216,17 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
     if operation != "run":
         assert caught.value.filename == str(OUTPUT)
     assert machine.calls == 1
+
+
+# Review 2026-11-20: a corrupt directory-transfer archive reached the model as a handled file error, unrecorded.
+@pytest.mark.parametrize("failure", [tarfile.ReadError("not a gzip file"), AbsoluteLinkError(TarInfo("/etc/passwd"))])
+async def test_an_archive_the_backend_cannot_unpack_restarts_the_stage(failure: tarfile.TarError) -> None:
+    machine = MemoryMachine()
+    machine.failure = failure
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
+    with pytest.raises(Restart, match="env.read_file transfer failed") as caught:
+        await read_file(ReadFile(OUTPUT), env, notify=Notes())
+    assert caught.value.__cause__ is failure and machine.calls == 1
 
 
 async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:

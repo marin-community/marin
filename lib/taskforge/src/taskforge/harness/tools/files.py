@@ -7,8 +7,9 @@ from pathlib import PurePosixPath
 from typing import override
 
 from taskforge.effects.context import Context
+from taskforge.effects.events import HANDLED_FAILURE
 from taskforge.harness.protocol import ToolResult
-from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
+from taskforge.harness.tools.base import ValidatedTool
 from taskforge.resources.env import ReadFile, WriteFile
 
 
@@ -42,7 +43,7 @@ class ReadFileTool(ValidatedTool[ReadArgs]):
             return ToolResult("offset and limit must be nonnegative")
         try:
             data = await ctx.emit(ReadFile(PurePosixPath(args.path), offset=args.offset, limit=args.limit))
-        except FILE_ERRORS as error:
+        except HANDLED_FAILURE as error:
             return ToolResult(f"File operation failed: {error}")
         return ToolResult(base64.b64encode(data).decode() if args.base64 else data.decode(errors="replace"))
 
@@ -61,6 +62,6 @@ class WriteFileTool(ValidatedTool[WriteArgs]):
             return ToolResult(f"Invalid base64: {error}")
         try:
             await ctx.emit(WriteFile(PurePosixPath(args.path), data))
-        except FILE_ERRORS as error:
+        except HANDLED_FAILURE as error:
             return ToolResult(f"File operation failed: {error}")
         return ToolResult("File written")

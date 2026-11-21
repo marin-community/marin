@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import partial
 from pathlib import Path, PurePosixPath
-from tarfile import AbsoluteLinkError, TarInfo
 from typing import override
 
 import httpx
@@ -259,7 +258,6 @@ async def test_tool_output_spill_slices_and_persisted_replay(
         FileNotFoundError(2, "missing", "/bad"),
         IsADirectoryError(21, "directory", "/bad"),
         NotADirectoryError(20, "parent", "/bad"),
-        AbsoluteLinkError(TarInfo("/bad")),
     ],
 )
 async def test_file_path_errors_return_feedback(write: bool, failure: Exception) -> None:

@@ -6,7 +6,6 @@
 import json
 from abc import abstractmethod
 from collections.abc import Mapping
-from tarfile import TarError
 from typing import ClassVar, override
 
 from pydantic import TypeAdapter, ValidationError
@@ -16,9 +15,6 @@ from taskforge.harness.protocol import FinishRequest, ReturnRequest, SubmitReque
 from taskforge.model.llm import ToolSchema
 
 type Outcome = ToolResult | SubmitRequest | ReturnRequest[object] | FinishRequest
-# A model-chosen path that is missing, a directory, unreadable or an unsafe archive member. Environments
-# turn connection and timeout failures into effect issues before they reach a tool.
-FILE_ERRORS: tuple[type[Exception], ...] = (OSError, TarError)
 
 
 class ValidatedTool[A](Tool[object]):

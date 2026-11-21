@@ -9,6 +9,7 @@ import json
 import logging
 import shutil
 import sys
+import tarfile
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -2023,3 +2024,49 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
         return
     assert workpiece.terminal is Terminal.ACCEPTED and statuses[-1] is AdversaryStatus.REPORTED
     assert len(adversary.requests) == 1  # only the report turn is new
+
+
+class CorruptArchiveOnce(DriftingEnvs):
+    """The first machine's backend hands back a corrupt archive for the read of ``STAMP``."""
+
+    @override
+    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        env = await super().create(requirements)
+        first, read = len(self.created) == 1, env.read
+
+        async def corrupt(path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes:
+            if first and path == STAMP:
+                raise tarfile.ReadError("not a gzip file")
+            return await read(path, offset=offset, limit=limit)
+
+        env.read = corrupt  # type: ignore[method-assign]
+        return env
+
+
+# Review 2026-11-20: a corrupt transfer archive became "File operation failed" feedback without a recorded outcome,
+# so the author's next tool call on that machine held on "no attempt ... ready for a request".
+@pytest.mark.parametrize("held", [False, True], ids=["same launch", "resumed through the failure"])
+async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming_feedback(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, held: bool
+) -> None:
+    envs = CorruptArchiveOnce(1)
+    inference = FakeInference((*drifting_script()[:3], Hold("relay unavailable")) if held else drifting_script())
+    first = replace(resources(envs, ()), inference=inference)
+    serve(monkeypatch, first)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert [env.executed for env in envs.created[:2]] == [["stamp"], ["stamp", "write-draft"]]
+    assert published_workpiece(destination).terminal is (Terminal.HELD if held else Terminal.ACCEPTED)
+    assert len(inference.requests) == (4 if held else len(drifting_script()))  # no turn was paid for twice
+    if held:
+        served = ServedOnce(drifting_script()[3:], inference.requests[:-1])
+        resumed = replace(resources(DriftingEnvs(2), ()), inference=served)
+        serve(monkeypatch, resumed)
+        driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+        await driver.one(driver_args)
+        assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
+        assert executions(resumed) == (len(drifting_script()) - 3, 2)
+    workpiece = published_workpiece(destination)
+    assert workpiece.terminal is Terminal.ACCEPTED and tool_output(workpiece, "read") == "ok"
+    assert workpiece.session is not None
+    assert not any("File operation failed" in message.content for message in workpiece.session.messages)

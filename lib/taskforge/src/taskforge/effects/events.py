@@ -131,6 +131,11 @@ class Failed(Event[None]):
         return error
 
 
+HANDLED_FAILURE = OSError
+"""The one caller-visible, recoverable failure of a re-executed request: recorded as ``Failed`` and handed to the model
+as tool feedback. Argument and JSON validation errors are not effects; transfer and machine failures are effect issues."""
+
+
 def failure(error: OSError) -> Failed:
     return Failed(errno.errorcode.get(error.errno or 0, "OSError"), str(error))
 
