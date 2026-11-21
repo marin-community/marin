@@ -64,7 +64,8 @@ class FindingKind(StrEnum):
     ENVIRONMENT_PROBLEM = "environment_problem"
 
 
-type Text = Annotated[str, Field(min_length=1)]
+type Text = Annotated[str, Field(pattern=r"\S")]
+"""Prose with at least one character beyond whitespace, kept as entered."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +101,7 @@ class Attribution(StrEnum):
 class TrialAccount:
     trial: int
     attribution: Attribution
-    reason: str
+    reason: Text
 
 
 class EvidenceKind(StrEnum):

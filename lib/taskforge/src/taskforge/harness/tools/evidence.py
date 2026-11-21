@@ -20,7 +20,7 @@ from taskforge.harness.protocol import ReturnRequest, Tool, ToolResult
 from taskforge.harness.tools.base import Outcome, ValidatedTool
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import ToolSchema
-from taskforge.model.review import Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
+from taskforge.model.review import Attribution, Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
 
 PAGE_ROOM = 120
 """Characters each reply keeps free for its continuation line; headers are counted against the page itself."""
@@ -227,16 +227,24 @@ def report(
     findings: Sequence[ReviewFinding],
     accounts: Sequence[TrialAccount],
 ) -> ToolResult | ReturnRequest[SolveReview]:
-    """The review, once its accounts cover every trial that did not pass; a finding whose citations fail is dropped
-    with its reason, never trusted and never refused back to the reviewer."""
+    """The review, once its accounts cover every trial that did not pass and a failure blamed on a task defect has a
+    finding that survives its citations; any other finding whose citations fail is dropped with its reason, never
+    trusted and never refused back to the reviewer."""
     accounted = [account.trial for account in accounts]
     trials = {source.name for source in evidence.sources.values()}
     problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
+    kept, dropped = checked(evidence, findings)
+    if not kept:
+        why = "".join(f" ({reason})" for _, reason in dropped)
+        problems += [
+            f"trial {account.trial} is attributed to a task defect, but no finding survived its citation check{why}"
+            for account in accounts
+            if account.attribution is Attribution.DEFECT
+        ]
     if problems:
         return ToolResult("Invalid report: " + "; ".join(problems) + ". Fix these and call report again.")
-    kept, dropped = checked(evidence, findings)
     review = SolveReview(evidence.version, ReviewEnd.REPORTED, tuple(kept), tuple(dropped), tuple(accounts))
     return ReturnRequest("report", review)
 

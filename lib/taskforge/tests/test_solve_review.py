@@ -543,3 +543,32 @@ async def test_a_machine_less_visit_refuses_a_tool_that_does_not_bound_its_repli
     with pytest.raises(ValueError, match="bound"):
         async with sitting(ctx, config().solve_review, Visit("v", "v", None, tools=unbounded), stage_resources(ctx)):
             pass
+
+
+async def test_a_failure_attributed_to_a_defect_needs_a_finding_that_survives_its_citations() -> None:
+    """Review 2026-11-21 (n11 P1): an account blaming a grader defect beside no finding shipped as a clean review."""
+    defect = {**ACCOUNT, "attribution": "defect", "reason": "the grader rejects 12"}
+    forged = finding(cite("trial/1", 2, 2, "I answer 12."))
+    reviewer = FakeInference((report(accounts=(defect,)), report(forged, accounts=(defect,)), report()))
+    review = await reviewed(reviewer)
+    refused = "Invalid report: trial 1 is attributed to a task defect, but no finding survived its citation check"
+    assert len(replies(reviewer)) == 2 and all(reply.startswith(refused) for reply in replies(reviewer))
+    assert "its quote does not occur verbatim" in replies(reviewer)[1]
+    assert review.accounts[0].attribution is Attribution.SOLVER and not review.findings
+
+
+@pytest.mark.parametrize("field", ["description", "edit"])
+async def test_a_finding_or_account_needs_prose_beyond_whitespace(field: str) -> None:
+    """A quoted finding with a whitespace-only description and edit bought an author round; the quote stays as
+    entered."""
+    blank = {**finding(cite("trial/1", 2, 2, "  I answer 9.  ")), field: "   "}
+    reviewer = FakeInference((report(blank), report(accounts=({**ACCOUNT, "reason": " \n"},)), report()))
+    await reviewed(reviewer)
+    shown = replies(reviewer)
+    assert len(shown) == 2 and all("report arguments failed validation" in reply for reply in shown)
+
+
+async def test_a_decline_needs_a_reason_beyond_whitespace() -> None:
+    tool = RevisedSubmitTool(SubmitTool(lambda _: (), "/t.json", "/c.json"), (FOUND,))
+    outcome = await tool(Context(log=EventLog()), {"declined": [{"finding": 0, "reason": "   "}]})
+    assert "submit arguments failed validation" in text(outcome)
