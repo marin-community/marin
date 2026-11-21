@@ -11,6 +11,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.resources import files
+from inspect import Parameter, signature
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, Optional, Protocol
@@ -89,6 +90,29 @@ class HPCGeometry(Protocol):
     gpus_per_node: int
 
 
+def _validate_installed_agent_kwargs(terminal_bench: Mapping[str, Any]) -> None:
+    installed = terminal_bench.get("installed_agent")
+    if installed is None:
+        return
+    from harbor.agents.factory import AgentFactory  # noqa: PLC0415 - only installed-agent recipes need Harbor
+    from harbor.agents.installed.base import BaseInstalledAgent  # noqa: PLC0415 - only installed-agent recipes need Harbor
+
+    agent = installed["agent"]
+    adapter = AgentFactory.get_agent_class(agent["name"])
+    if not issubclass(adapter, BaseInstalledAgent):
+        raise ValueError("The selected agent must be an installed Harbor agent")
+    supported = {descriptor.kwarg for descriptor in (*adapter.CLI_FLAGS, *adapter.ENV_VARS)}
+    for base in adapter.__mro__:
+        if "__init__" in base.__dict__:
+            supported.update(
+                parameter.name
+                for parameter in signature(base.__init__).parameters.values()
+                if parameter.kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+            )
+    if unknown := sorted(agent.get("kwargs", {}).keys() - supported):
+        raise ValueError(f"Unknown {agent['name']} recipe kwargs: {', '.join(unknown)}")
+
+
 def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> Dict[str, Any]:
     """Populate launch-owned token limits from the authored request budget."""
     materialized = copy.deepcopy(raw)
@@ -161,11 +185,14 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
     recipe = SkyRLRecipe.from_document(raw)
+    _validate_installed_agent_kwargs(raw.get("terminal_bench") or {})
     distillation_plan = compile_distillation_plan(raw)
     entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
     materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
     trainer = materialized_raw["trainer"]
     generator = materialized_raw["generator"]
+    if recipe.trainer.policy.megatron_config.moe_router_replay:
+        generator.setdefault("engine_init_kwargs", {}).setdefault("enable_return_routed_experts", True)
     terminal_bench = materialized_raw.get("terminal_bench")
     data = dict(raw.get("data", {}))
     data.pop("kind", None)

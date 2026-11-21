@@ -109,13 +109,14 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
         inference_engine_expert_parallel_size=4,
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
+    raw["skyrl"]["trainer"].update(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
     parser = export_hf_checkpoint.argument_parser()
     args = [
         "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
         "--model_path", "Qwen/Qwen3-8B", "--num-nodes", "1", "--gpus-per-node", "4",
-        "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model",
+        "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model", "--hf-hub-revision", "release",
     ]
     if private:
         args.append("--hf-hub-private")
@@ -132,8 +133,7 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.iris.allocation.gpu_variant == "H100"
     assert config.skyrl.trainer.placement.policy_num_nodes == 1
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert request.hf_hub_repo_id == "org/model"
-    assert request.hf_hub_private is private
+    assert (request.hf_hub_repo_id, request.hf_hub_private, request.hf_hub_revision) == ("org/model", private, "release")
     assert OmegaConf.to_container(config.skyrl.checkpoint_export) == {
         "step": request.step,
         "checkpoint_path": request.checkpoint_path,
@@ -265,6 +265,64 @@ def test_export_selection_requires_the_best_initializer_uri(tmp_path: Path) -> N
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 0, "model_format": "hf"}))
     with pytest.raises(ValueError, match="initializer HF model URI"):
         selected_export_checkpoint(str(tmp_path), "best", 20)
+
+
+@pytest.mark.parametrize("mode", ["export", "dry-run", "missing", "initializer"])
+def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_path, monkeypatch, capsys, mode):
+    checkpoints, exports = tmp_path / "checkpoints", tmp_path / "exports"
+    for step in (15, 20):
+        checkpoint = checkpoints / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+    (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("20")
+    initial_model = "s3://models/sft/policy"
+    if mode != "missing":
+        selection = {"step": 15, "model_format": "native"}
+        if mode == "initializer":
+            selection = {"step": 0, "model_format": "hf", "model_uri": initial_model}
+        (checkpoints / "best_checkpoint.json").write_text(json.dumps(selection))
+    document = raw_launch_config()
+    document["artifacts"].update(checkpoint_root=str(checkpoints), export_root=str(exports))
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(document), path)
+
+    def child_export(command, *, stdout):
+        args = launch.create_parser().parse_args(command[3:])
+        config = load_launch_config(args.config)
+        policy = Path(policy_export_path(config.artifacts.export_root, config.skyrl.checkpoint_export.step))
+        policy.mkdir(parents=True)
+        (policy / "model.safetensors").write_bytes(save({"weight": np.ones(1, dtype=np.float32)}))
+        for name in ("config.json", "tokenizer.json", "tokenizer_config.json"):
+            (policy / name).write_text("{}")
+        write_local_model_manifest(policy)
+        return 0
+
+    monkeypatch.setattr(export_hf_checkpoint.subprocess, "call", child_export)
+    argv = ["export_hf_checkpoint", "--launch-config", str(path), "--recover-best"]
+    if mode == "dry-run":
+        argv.append("--dry-run")
+    monkeypatch.setattr("sys.argv", argv)
+    if mode == "missing":
+        with pytest.raises(ValueError, match="No best checkpoint record"):
+            export_hf_checkpoint.main()
+    else:
+        export_hf_checkpoint.main()
+    request = read_hf_export_request(str(checkpoints / "global_step_15"))
+    if mode == "export":
+        assert request.status is HFExportStatus.COMPLETE
+        assert not (exports / "global_step_20").exists()
+        policy = Path(policy_export_path(str(exports), 15))
+        (policy / "model.safetensors").unlink()
+        with pytest.raises(ValueError, match="completed request has no verified policy export"):
+            export_hf_checkpoint.main()
+        assert read_hf_export_request(str(checkpoints / "global_step_15")) == request
+    else:
+        assert not exports.exists()
+        assert request is None
+        if mode == "dry-run":
+            assert "cloud.iris.launch" in capsys.readouterr().out
+        elif mode == "initializer":
+            assert initial_model in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(("selection", "expected_step", "private"), [("best", 15, False), ("latest", 20, True)])
