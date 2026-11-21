@@ -215,6 +215,22 @@ def _tpu_kernel_attention(
     num_queries_per_block: int | None = None,
     num_kv_pages_per_block: int | None = None,
 ):
+    if sliding_window is not None and num_kv_pages_per_block is not None:
+        # The Pallas kernel masks the window but reads every page in its page table.
+        # Drop only whole tiles to keep the softmax accumulation order.
+        page_size = kv_pages.shape[1]
+        block_tokens = page_size * num_kv_pages_per_block
+        window_pages = (sliding_window + q.shape[0] + block_tokens + page_size - 3) // page_size
+        if window_pages < page_indices.shape[1] and window_pages * kv_lens.shape[0] < kv_pages.shape[0]:
+            query_lengths = jnp.maximum(jnp.diff(cu_q_lens), 0)
+            first_keys = jnp.maximum(kv_lens - query_lengths - sliding_window + 1, 0)
+            first_pages = first_keys // block_tokens * num_kv_pages_per_block
+            page_offsets = first_pages[:, None] + jnp.arange(window_pages)
+            physical_pages = jnp.take_along_axis(page_indices, page_offsets, axis=1, mode="clip")
+            kv_pages = kv_pages[jnp.maximum(physical_pages, 0).reshape(-1)]
+            page_indices = jnp.arange(physical_pages.size, dtype=jnp.int32).reshape(physical_pages.shape)
+            kv_lens = kv_lens - first_pages * page_size
+
     original_dim = q.shape[-1]
     padding = (-original_dim) % TPU_HEAD_ALIGNMENT
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
