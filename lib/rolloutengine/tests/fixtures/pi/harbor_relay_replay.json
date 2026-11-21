@@ -1,0 +1,2232 @@
+{
+ "recorded_from": "Requests of the Pi 0.87.0 CLI, with the upstream requests and answers of Harbor's model relay, marin-community/harbor 9d099696a567 (Harbor 0.8.1) as vendored at Marin commit d23db7690f",
+ "scenarios": {
+  "context_rejection": {
+   "answers": [
+    {
+     "body": "{\"count\":89,\"max_model_len\":32768,\"tokens\":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88]}",
+     "content_type": "application/json",
+     "status": 200
+    },
+    {
+     "body": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"Maximum context length exceeded\"}}",
+     "content_type": "application/json",
+     "status": 400
+    }
+   ],
+   "instruction": "Say done.",
+   "model": [
+    {
+     "path": "/tokenize",
+     "request": {
+      "add_generation_prompt": true,
+      "chat_template_kwargs": {
+       "enable_thinking": true,
+       "preserve_thinking": true
+      },
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp282h9f3w\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "response": {
+      "count": 89,
+      "max_model_len": 32768,
+      "tokens": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11,
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       18,
+       19,
+       20,
+       21,
+       22,
+       23,
+       24,
+       25,
+       26,
+       27,
+       28,
+       29,
+       30,
+       31,
+       32,
+       33,
+       34,
+       35,
+       36,
+       37,
+       38,
+       39,
+       40,
+       41,
+       42,
+       43,
+       44,
+       45,
+       46,
+       47,
+       48,
+       49,
+       50,
+       51,
+       52,
+       53,
+       54,
+       55,
+       56,
+       57,
+       58,
+       59,
+       60,
+       61,
+       62,
+       63,
+       64,
+       65,
+       66,
+       67,
+       68,
+       69,
+       70,
+       71,
+       72,
+       73,
+       74,
+       75,
+       76,
+       77,
+       78,
+       79,
+       80,
+       81,
+       82,
+       83,
+       84,
+       85,
+       86,
+       87,
+       88
+      ]
+     },
+     "status": 200
+    },
+    {
+     "path": "/v1/chat/completions",
+     "request": {
+      "chat_template_kwargs": {
+       "enable_thinking": true,
+       "preserve_thinking": true
+      },
+      "max_completion_tokens": 8192,
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp282h9f3w\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "store": false,
+      "stream": false,
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "response": {
+      "error": {
+       "code": 400,
+       "message": "This model's maximum context length is 32768 tokens. However, your request has 40000 input tokens. Please reduce the length of the input messages.",
+       "param": null,
+       "type": "BadRequestError"
+      }
+     },
+     "status": 400
+    }
+   ],
+   "options": {
+    "thinking_format": "qwen-chat-template"
+   },
+   "relay_requests": [
+    {
+     "body": {
+      "add_generation_prompt": true,
+      "chat_template_kwargs": {
+       "enable_thinking": true,
+       "preserve_thinking": true
+      },
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp282h9f3w\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "method": "POST",
+     "path": "/tokenize"
+    },
+    {
+     "body": {
+      "chat_template_kwargs": {
+       "enable_thinking": true,
+       "preserve_thinking": true
+      },
+      "max_completion_tokens": 8192,
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp282h9f3w\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "store": false,
+      "stream": true,
+      "stream_options": {
+       "include_usage": true
+      },
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "method": "POST",
+     "path": "/v1/chat/completions"
+    }
+   ]
+  },
+  "tool_loop": {
+   "answers": [
+    {
+     "body": "{\"count\":89,\"max_model_len\":32768,\"tokens\":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88]}",
+     "content_type": "application/json",
+     "status": 200
+    },
+    {
+     "body": "data: {\"id\": \"chatcmpl-1\", \"created\": 0, \"model\": \"fixture-model\", \"object\": \"chat.completion.chunk\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": null, \"reasoning_content\": \"I will write the file with bash.\", \"tool_calls\": [{\"function\": {\"arguments\": \"{\\\"command\\\": \\\"echo hello > ~/notes.txt && cat ~/notes.txt\\\"}\", \"name\": \"bash\"}, \"id\": \"call_1\", \"type\": \"function\", \"index\": 0}]}, \"finish_reason\": null}]}\n\ndata: {\"id\": \"chatcmpl-1\", \"created\": 0, \"model\": \"fixture-model\", \"object\": \"chat.completion.chunk\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"tool_calls\"}]}\n\ndata: {\"id\": \"chatcmpl-1\", \"created\": 0, \"model\": \"fixture-model\", \"object\": \"chat.completion.chunk\", \"choices\": [], \"usage\": {\"prompt_tokens\": 100, \"completion_tokens\": 10, \"total_tokens\": 110}}\n\ndata: [DONE]\n\n",
+     "content_type": "text/event-stream",
+     "status": 200
+    },
+    {
+     "body": "{\"count\":94,\"max_model_len\":32768,\"tokens\":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93]}",
+     "content_type": "application/json",
+     "status": 200
+    },
+    {
+     "body": "data: {\"id\": \"chatcmpl-2\", \"created\": 0, \"model\": \"fixture-model\", \"object\": \"chat.completion.chunk\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"Done.\", \"reasoning_content\": \"The file holds hello.\"}, \"finish_reason\": null}]}\n\ndata: {\"id\": \"chatcmpl-2\", \"created\": 0, \"model\": \"fixture-model\", \"object\": \"chat.completion.chunk\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}]}\n\ndata: {\"id\": \"chatcmpl-2\", \"created\": 0, \"model\": \"fixture-model\", \"object\": \"chat.completion.chunk\", \"choices\": [], \"usage\": {\"prompt_tokens\": 100, \"completion_tokens\": 10, \"total_tokens\": 110}}\n\ndata: [DONE]\n\n",
+     "content_type": "text/event-stream",
+     "status": 200
+    }
+   ],
+   "instruction": "Write 'hello' to notes.txt in your home directory, then say done.",
+   "model": [
+    {
+     "path": "/tokenize",
+     "request": {
+      "add_generation_prompt": true,
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "response": {
+      "count": 89,
+      "max_model_len": 32768,
+      "tokens": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11,
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       18,
+       19,
+       20,
+       21,
+       22,
+       23,
+       24,
+       25,
+       26,
+       27,
+       28,
+       29,
+       30,
+       31,
+       32,
+       33,
+       34,
+       35,
+       36,
+       37,
+       38,
+       39,
+       40,
+       41,
+       42,
+       43,
+       44,
+       45,
+       46,
+       47,
+       48,
+       49,
+       50,
+       51,
+       52,
+       53,
+       54,
+       55,
+       56,
+       57,
+       58,
+       59,
+       60,
+       61,
+       62,
+       63,
+       64,
+       65,
+       66,
+       67,
+       68,
+       69,
+       70,
+       71,
+       72,
+       73,
+       74,
+       75,
+       76,
+       77,
+       78,
+       79,
+       80,
+       81,
+       82,
+       83,
+       84,
+       85,
+       86,
+       87,
+       88
+      ]
+     },
+     "status": 200
+    },
+    {
+     "path": "/v1/chat/completions",
+     "request": {
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "max_completion_tokens": 8192,
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "store": false,
+      "stream": false,
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "response": {
+      "choices": [
+       {
+        "finish_reason": "tool_calls",
+        "index": 0,
+        "message": {
+         "content": null,
+         "reasoning_content": "I will write the file with bash.",
+         "role": "assistant",
+         "tool_calls": [
+          {
+           "function": {
+            "arguments": "{\"command\": \"echo hello > ~/notes.txt && cat ~/notes.txt\"}",
+            "name": "bash"
+           },
+           "id": "call_1",
+           "type": "function"
+          }
+         ]
+        }
+       }
+      ],
+      "created": 0,
+      "id": "chatcmpl-1",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "usage": {
+       "completion_tokens": 10,
+       "prompt_tokens": 100,
+       "total_tokens": 110
+      }
+     },
+     "status": 200
+    },
+    {
+     "path": "/tokenize",
+     "request": {
+      "add_generation_prompt": true,
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       },
+       {
+        "content": null,
+        "reasoning_content": "I will write the file with bash.",
+        "role": "assistant",
+        "tool_calls": [
+         {
+          "function": {
+           "arguments": "{\"command\":\"echo hello > ~/notes.txt && cat ~/notes.txt\"}",
+           "name": "bash"
+          },
+          "id": "call_1",
+          "type": "function"
+         }
+        ]
+       },
+       {
+        "content": "hello\n",
+        "role": "tool",
+        "tool_call_id": "call_1"
+       }
+      ],
+      "model": "fixture-model",
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "response": {
+      "count": 94,
+      "max_model_len": 32768,
+      "tokens": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11,
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       18,
+       19,
+       20,
+       21,
+       22,
+       23,
+       24,
+       25,
+       26,
+       27,
+       28,
+       29,
+       30,
+       31,
+       32,
+       33,
+       34,
+       35,
+       36,
+       37,
+       38,
+       39,
+       40,
+       41,
+       42,
+       43,
+       44,
+       45,
+       46,
+       47,
+       48,
+       49,
+       50,
+       51,
+       52,
+       53,
+       54,
+       55,
+       56,
+       57,
+       58,
+       59,
+       60,
+       61,
+       62,
+       63,
+       64,
+       65,
+       66,
+       67,
+       68,
+       69,
+       70,
+       71,
+       72,
+       73,
+       74,
+       75,
+       76,
+       77,
+       78,
+       79,
+       80,
+       81,
+       82,
+       83,
+       84,
+       85,
+       86,
+       87,
+       88,
+       89,
+       90,
+       91,
+       92,
+       93
+      ]
+     },
+     "status": 200
+    },
+    {
+     "path": "/v1/chat/completions",
+     "request": {
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "max_completion_tokens": 8192,
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       },
+       {
+        "content": null,
+        "reasoning_content": "I will write the file with bash.",
+        "role": "assistant",
+        "tool_calls": [
+         {
+          "function": {
+           "arguments": "{\"command\":\"echo hello > ~/notes.txt && cat ~/notes.txt\"}",
+           "name": "bash"
+          },
+          "id": "call_1",
+          "type": "function"
+         }
+        ]
+       },
+       {
+        "content": "hello\n",
+        "role": "tool",
+        "tool_call_id": "call_1"
+       }
+      ],
+      "model": "fixture-model",
+      "store": false,
+      "stream": false,
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "response": {
+      "choices": [
+       {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+         "content": "Done.",
+         "reasoning_content": "The file holds hello.",
+         "role": "assistant"
+        }
+       }
+      ],
+      "created": 0,
+      "id": "chatcmpl-2",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "usage": {
+       "completion_tokens": 10,
+       "prompt_tokens": 100,
+       "total_tokens": 110
+      }
+     },
+     "status": 200
+    }
+   ],
+   "options": {
+    "thinking_format": "chat-template"
+   },
+   "relay_requests": [
+    {
+     "body": {
+      "add_generation_prompt": true,
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "method": "POST",
+     "path": "/tokenize"
+    },
+    {
+     "body": {
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "max_completion_tokens": 8192,
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       }
+      ],
+      "model": "fixture-model",
+      "store": false,
+      "stream": true,
+      "stream_options": {
+       "include_usage": true
+      },
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "method": "POST",
+     "path": "/v1/chat/completions"
+    },
+    {
+     "body": {
+      "add_generation_prompt": true,
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       },
+       {
+        "content": null,
+        "reasoning_content": "I will write the file with bash.",
+        "role": "assistant",
+        "tool_calls": [
+         {
+          "function": {
+           "arguments": "{\"command\":\"echo hello > ~/notes.txt && cat ~/notes.txt\"}",
+           "name": "bash"
+          },
+          "id": "call_1",
+          "type": "function"
+         }
+        ]
+       },
+       {
+        "content": "hello\n",
+        "role": "tool",
+        "tool_call_id": "call_1"
+       }
+      ],
+      "model": "fixture-model",
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "method": "POST",
+     "path": "/tokenize"
+    },
+    {
+     "body": {
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "max_completion_tokens": 8192,
+      "messages": [
+       {
+        "content": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /tmp/harbor-port-pi/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<cwd>\n/tmp/tmp42cpw7lg\n</cwd>",
+        "role": "system"
+       },
+       {
+        "content": [
+         {
+          "text": "Write 'hello' to notes.txt in your home directory, then say done.",
+          "type": "text"
+         }
+        ],
+        "role": "user"
+       },
+       {
+        "content": null,
+        "reasoning_content": "I will write the file with bash.",
+        "role": "assistant",
+        "tool_calls": [
+         {
+          "function": {
+           "arguments": "{\"command\":\"echo hello > ~/notes.txt && cat ~/notes.txt\"}",
+           "name": "bash"
+          },
+          "id": "call_1",
+          "type": "function"
+         }
+        ]
+       },
+       {
+        "content": "hello\n",
+        "role": "tool",
+        "tool_call_id": "call_1"
+       }
+      ],
+      "model": "fixture-model",
+      "store": false,
+      "stream": true,
+      "stream_options": {
+       "include_usage": true
+      },
+      "tools": [
+       {
+        "function": {
+         "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+         "name": "read",
+         "parameters": {
+          "properties": {
+           "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+           },
+           "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+           },
+           "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+         "name": "bash",
+         "parameters": {
+          "properties": {
+           "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+           },
+           "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+           }
+          },
+          "required": [
+           "command"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "name": "edit",
+         "parameters": {
+          "properties": {
+           "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+             "properties": {
+              "newText": {
+               "description": "Replacement text for this targeted edit.",
+               "type": "string"
+              },
+              "oldText": {
+               "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "oldText",
+              "newText"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "edits"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       },
+       {
+        "function": {
+         "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+         "name": "write",
+         "parameters": {
+          "properties": {
+           "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+           },
+           "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "path",
+           "content"
+          ],
+          "type": "object"
+         }
+        },
+        "type": "function"
+       }
+      ]
+     },
+     "method": "POST",
+     "path": "/v1/chat/completions"
+    }
+   ]
+  }
+ }
+}

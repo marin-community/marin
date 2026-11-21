@@ -570,11 +570,14 @@ identity; lock-backed worker environments retain their existing identities.
 
 A task's grader is one of three kinds:
 
-- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
-  in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment. A `judge` grades on the host,
-  through its judge service, also when it declares an environment.
-- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
+- `VerifyitGrader` names a stock verifyit mode. Without a placement it grades
+  in process; with
+  `placement=GraderMachine(environment=required_grader_environment(context))` it
+  grades in a fresh machine of the grader's environment. A `judge` grades on the
+  host, through its judge service, also when it declares a placement.
+- `ScriptGrader` runs a command in the machine its placement selects: a fresh
+  machine of the grader's environment (`GraderMachine`), or the agent's machine
+  after the agent finishes (`AgentMachine`). Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
 - `NoGrader` records a source evaluator this repository cannot run, with the

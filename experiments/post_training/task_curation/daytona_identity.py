@@ -27,7 +27,7 @@ from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
-from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader, require_resolved_environment
+from taskcompendium.models import EnvironmentRequirements, grader_environment
 
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.lowered_envelope import LoweredSpec, MachineShape
@@ -132,8 +132,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> S
 
     Package-lock graders require a local host and are recorded as execution
     failures for Daytona. They never borrow the agent's image or contribute a
-    fabricated snapshot. Unbuilt contexts retain their identity but are refused
-    by the runtime's unresolved-environment check.
+    fabricated snapshot. Docker build contexts are identified by their contents.
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
@@ -141,11 +140,10 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> S
     factory = DaytonaMachineFactory()
     for task_id, spec in tasks:
         grader = spec.task.grader
-        # Only a grader that runs in a machine declares one; the other kinds borrow none.
-        grader_environment = grader.environment if isinstance(grader, ScriptGrader | VerifyitGrader) else None
+        # Only a grader that runs in a fresh machine declares one; the other kinds borrow none.
         slots = (
             ("agent", spec.task.environment_requirements, spec.task_machine),
-            ("grader", grader_environment, spec.verifier_machine),
+            ("grader", grader_environment(grader), spec.verifier_machine),
         )
         mapping_errors: list[str] = []
         execution_errors: list[str] = []
@@ -244,7 +242,6 @@ def _declared_identity(
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=f"{role}: {error}")
         try:
             factory.check_environment(declared, machine)
-            require_resolved_environment(declared)
         except UnsupportedMachineSpec as error:
             # An execution refusal still reports the identity: snapshot counts measure
             # what the cohort would provision, whether or not Daytona would run it.

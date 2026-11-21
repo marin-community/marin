@@ -25,6 +25,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     Grader,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     Source,
@@ -119,8 +120,12 @@ def lowered(
 
 def test_a_judge_takes_no_verifier_machine_whatever_environment_its_grader_names():
     environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE)
-    judge = verifyit_package(JudgeSpec(references=("r",), question="q", model="m"), environment=environment).grader
-    numeric = verifyit_package(NumericSpec("1", tolerance_abs=0, tolerance_rel=0), environment=environment).grader
+    judge = verifyit_package(
+        JudgeSpec(references=("r",), question="q", model="m"), placement=GraderMachine(environment=environment)
+    ).grader
+    numeric = verifyit_package(
+        NumericSpec("1", tolerance_abs=0, tolerance_rel=0), placement=GraderMachine(environment=environment)
+    ).grader
 
     assert grading_environment(lowered(None, grader=judge).task) is None
     assert grading_environment(lowered(None, grader=numeric).task) == environment
@@ -176,8 +181,8 @@ def test_factories_construct_exactly_the_selected_backends(monkeypatch, backends
 async def test_a_taskforge_shellsim_machine_runs_the_catalogs_cpython():
     """Fetches ``SHELLSIM_CATALOG``'s CPython, which the unit suite leaves to ShellSim's own tests."""
     factory = machine_factories((Backend.SHELLSIM,), controller_url=None)[Backend.SHELLSIM.value]
-    spec = _machine_spec(draft.requirements(image=None), selection(Backend.SHELLSIM))
-    machine = await factory.create(spec)
+    with _machine_spec(draft.requirements(image=None), selection(Backend.SHELLSIM)) as spec:
+        machine = await factory.create(spec)
     try:
         result = await machine.run(
             Command(argv=("python3", "-c", "import sys; print(6 * 7, sys.implementation.name)"), timeout=120)

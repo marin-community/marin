@@ -38,7 +38,7 @@ process exit after a verdict has been written.
 | `pytest` | pytest JSON report with required and protected tests |
 | `junit` | JUnit XML report |
 | `gotest` | `go test -json` events |
-| `judge` | reference-answer, checklist, label or pairwise rubric through a configured model endpoint |
+| `judge` | reference, checklist, labels or pairwise rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 `structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
@@ -98,22 +98,6 @@ imports. A healthy baseline makes the failed task run a scored startup error; an
 baseline remains an infrastructure error. The task's original import paths and tests still
 run unchanged, so a candidate named after a standard-library module is graded as submitted.
 
-For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
-budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
-request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with
-each request. Reference verdicts record `attempt_count` and `attempts` in `detail`; checklist
-verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
-and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
-`infra_error`, with the available attempt diagnostics in `detail`.
-
-The `judge` pairwise rubric ports Arena-Hard's comparison with one baseline answer in `references`.
-It sends the judge two requests, with the baseline as assistant A and then as assistant B. Each
-reply's verdict is the last match of the first `verdict_patterns` entry that matches. `label_scores`
-gives assistant A's score for each verdict and `label_weights` counts a verdict as several games.
-The reward is the candidate's weighted mean score over both games. `detail.metrics.win_rate` repeats
-it and `detail.metric_weights.win_rate` holds the game count, so a weighted mean over rows equals
-Arena-Hard's mean over games. A reply without a declared verdict is an `infra_error`.
-
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
 invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes
@@ -160,6 +144,71 @@ classification: `unsolvable` earns one and every other mode earns zero. Callers 
 terminal action and its provenance before invoking this function. Refusal text and answer strings
 never count as ejections. In-process task validation retains invalid-task and infrastructure-error
 verdicts. File grading of `unsolvable` always scores zero because a file cannot establish an ejection.
+
+### Judge
+
+A `judge` spec prepares the answer, applies its deterministic gates, and then asks an
+OpenAI-compatible endpoint for a verdict.
+
+`candidate_steps` rewrite the answer, in order, before the IFEval `constraints`, the exact gates
+and the prompt. They apply to every rubric:
+
+- `{kind = "strip_reasoning_blocks"}` removes reasoning blocks, any text before the last closing
+  delimiter, outer whitespace and a final `<|eot_id|>`. An unclosed block leaves an empty answer.
+- `{kind = "strip_outer_whitespace"}` removes outer whitespace.
+- `{kind = "extract_group", pattern = "..."}` replaces the answer with the first group of the first
+  `re.search` match. Without a match, the answer is unchanged.
+
+The rubric decides how the prepared answer is scored:
+
+- `reference`: an answer equal to a reference after normalization (of its `\boxed{}` content, when
+  present) scores 1 without a model call, unless `exact_gate = false`. Otherwise the judge compares
+  the answer with `references` and replies `SCORE: 0`, `0.5` or `1`.
+- `checklist`: the judge answers one yes/no question per entry of `criteria`, with the `context`
+  file shown alongside the answer. The score is the fraction answered yes.
+- `labels`: an answer equal to one of `exact_gate_answers` scores as `exact_gate_label` without a
+  model call. Otherwise `system_prompt` and `prompt_template` are filled with `{question}`,
+  `{reference}` (the single entry of `references`) and `{candidate}`, and the score is the
+  `label_scores` entry for the label the judge replies with.
+- `pairwise`: ports Arena-Hard's comparison with the single baseline answer in `references`. The
+  judge receives two requests, with the baseline as assistant A and then as assistant B;
+  `prompt_template` places the answers with `{answer_a}` and `{answer_b}`. Each reply's verdict is
+  the last match of the first `verdict_patterns` entry that matches. `label_scores` gives assistant
+  A's score for each verdict and `label_weights` counts a verdict as several games. The reward is
+  the candidate's weighted mean score over both games. `detail.metrics.win_rate` repeats it and
+  `detail.metric_weights.win_rate` holds the game count, so a weighted mean over rows equals
+  Arena-Hard's mean over games.
+
+`label_scan` sets how the `labels` rubric reads the label from the reply:
+
+- `literal`: the last line is the label, and no other declared label appears anywhere in the reply.
+- `lines`: the last line is the label, and no other declared label fills a whole line.
+- `whole`: the whole reply is the label.
+- `json`: the reply is a JSON object, optionally in a Markdown code fence, and its `label_field`
+  member is the label. A boolean member is read as the label `true` or `false`.
+
+`label_case = "upper"` matches labels and pairwise verdicts case-insensitively.
+`strip_reasoning_blocks` removes reasoning blocks from the judge's reply before the label or verdict
+is read. A `labels` reply that matches no label or more than one, and a `pairwise` reply without a
+declared verdict, are scored `infra_error`.
+
+The request options are:
+
+- `system_role` sends `system_prompt` as a `system` (default) or `developer` message.
+- `response_format` is sent with each `labels` request over Chat Completions.
+- `sampling` is a table of options sent with each Chat Completions request. The default is
+  `sampling = { temperature = 0.0 }`; `sampling = {}` sends none, so the endpoint's defaults apply.
+  `temperature` is the only member.
+- `api = "responses"` sends the `labels` rubric through the Responses API instead. Responses
+  requests carry no sampling options, so `sampling` does not apply.
+- `reasoning_effort`, when set, is sent with each request.
+
+`max_completion_tokens` sets the initial request budget of every rubric (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
+request when a reply ends with `finish_reason="length"`. Reference verdicts record `attempt_count`
+and `attempts` in `detail`; checklist verdicts record them under each entry in `detail.criteria`.
+Each attempt contains `finish_reason` and `completion_tokens` (`null` when the endpoint omits
+usage). An exhausted retry remains `infra_error`, with the available attempt diagnostics in
+`detail`.
 
 ## Install and use
 

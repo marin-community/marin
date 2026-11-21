@@ -407,8 +407,7 @@ class ToolSession:
                     "outcome": status,
                     "control": False,
                     "error": (
-                        "The answer format rejects this answer, so it is no control. Grade answers in the "
-                        "answer format."
+                        "The answer format rejects this answer, so it is no control. Grade answers in the answer format."
                     ),
                 }
             )
@@ -898,8 +897,8 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
     if task.answer_type not in ANSWER_TYPES:
         problems.append(f"The answer type must be one of {sorted(ANSWER_TYPES)}, not {task.answer_type}")
     grader = task.grader
-    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
-        problems.append("The grader must be a verifyit grader without an environment")
+    if not isinstance(grader, VerifyitGrader) or grader.placement is not None:
+        problems.append("The grader must be a verifyit grader without a placement")
     else:
         try:
             if grades_with_judge(grader):

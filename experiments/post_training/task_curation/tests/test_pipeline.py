@@ -22,6 +22,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
+    GraderMachine,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
@@ -517,7 +518,11 @@ def convert_judge_fixture(row, context):
             label_scores={"PASS": 1.0, "FAIL": 0.0},
             empty_output=EmptyOutputPolicy.GRADE,
         ),
-        environment=EnvironmentRequirements(docker_image=AGENT_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(
+                docker_image=AGENT_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS
+            )
+        ),
     )
     return task.model_copy(update={"grader": package.grader})
 

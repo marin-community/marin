@@ -6,8 +6,9 @@
 import asyncio
 import dataclasses
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import partial
+from types import MappingProxyType
 from typing import Any
 
 from evalrecords.records import (
@@ -15,6 +16,7 @@ from evalrecords.records import (
     JudgeIdentity,
     TaskEvidence,
     TaskEvidenceSetting,
+    TaskImageBuild,
     scoring_settings,
 )
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
@@ -35,7 +37,11 @@ from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
+from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
+from rolloutengine.agents.pi.agent import AgentKilledBySignalError, ModelAuthenticationError, PiThinkingFormat
+from rolloutengine.agents.terminus.tmux_session import TmuxBatchProtocolError, TmuxCommandError, TmuxSessionEndedError
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.core import Harness
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
 from rolloutengine.models import (
@@ -52,7 +58,8 @@ from rolloutengine.models import (
     TokenUsage,
     TraceMode,
 )
-from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
+from rolloutengine.validation import task_machine_reason
+from shellbox.machine import MachineDiskFull, MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol, text_prompt
 from taskcompendium.evaluation.metrics import likelihood_metrics
 from taskcompendium.evaluation.response import completion_text
@@ -64,21 +71,65 @@ from taskcompendium.evaluation.selection import (
     wire_messages,
 )
 from taskcompendium.evaluation.spec import (
+    CHAT_OPERATIONS,
+    AgentEpisode,
     ChatGeneration,
     ChoiceLikelihood,
     ContinuationLikelihood,
+    EpisodeAgent,
+    EpisodeInputs,
     EvaluationProtocol,
     MetricKind,
+    MiniSweAgent,
+    OperationKind,
+    PiAgent,
     TextGeneration,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, judge_spec
+from taskcompendium.models import (
+    ScriptGrader,
+    TaskSpec,
+    VerifyitGrader,
+    grader_environment,
+    grades_with_judge,
+    judge_spec,
+)
+from taskcompendium.runtime.environment import host_variables
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
+
+
+@dataclasses.dataclass(frozen=True)
+class EpisodeBudget:
+    """The token budgets of one agent attempt: the agent's context limit, each reply's limit and the served window."""
+
+    max_input_tokens: int
+    max_output_tokens: int
+    context_window: int
+
+
+HarnessFactory = Callable[[EpisodeAgent, EpisodeBudget], Harness]
+"""Builds the harness an ``AgentEpisode`` declares for one attempt's model budgets."""
+NO_HARNESSES: Mapping[str, HarnessFactory] = MappingProxyType({})
+# Errors after the harness starts that leave an attempt retryable on resume; other unexpected errors stop the
+# run. Pi's signal kills, terminal failures the model did not cause and model authentication failures are
+# infrastructure, as Harbor classifies them.
+RETRYABLE_ERRORS = (
+    APIError,
+    ModelResponseError,
+    ConnectionError,
+    TimeoutError,
+    MachineTerminated,
+    AgentKilledBySignalError,
+    TmuxBatchProtocolError,
+    TmuxCommandError,
+    TmuxSessionEndedError,
+    ModelAuthenticationError,
+)
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -113,8 +164,23 @@ class EvaluationRunConfig(RunModel):
     source_limit: int | None = Field(default=None, gt=0)
     seed: int | None = None
     task_machine: MachineRuntimeSpec | None = None
+    """The backend and default resources of task machines; agent episodes require one."""
+    image_build: TaskImageBuild = Field(
+        default=TaskImageBuild.SNAPSHOT, exclude_if=lambda value: value is TaskImageBuild.SNAPSHOT
+    )
+    """How Daytona task machines get their images."""
     verifier_machine: MachineRuntimeSpec | None = None
     judge: JudgeIdentity | None = None
+    agent_extra_body: dict[str, Any] = Field(default_factory=dict)
+    """The model's request body keys for agents, which replace the protocol's in shell and Terminus requests."""
+    pi_thinking_format: PiThinkingFormat | None = None
+    """How Pi switches the served model's thinking; Pi episodes require it."""
+    mini_swe_model_format: MiniSweModelFormat = Field(
+        default=MiniSweModelFormat.OPENAI, exclude_if=lambda value: value is MiniSweModelFormat.OPENAI
+    )
+    """How mini-swe-agent formats the served model's history."""
+    task_secrets: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
+    """Worker variables that task machines may read through ``${NAME}`` templates; the run supplies their values."""
     task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
 
 
@@ -128,7 +194,7 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
     sampling = protocol.sampling
     assert sampling is not None
     extra: dict[str, Any] = {}
-    if protocol.operation == "chat_generation":
+    if protocol.operation in CHAT_OPERATIONS:
         extra["chat_template_kwargs"] = sampling.chat_template_kwargs
     if sampling.top_k is not None:
         extra["top_k"] = sampling.top_k
@@ -152,7 +218,7 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
 def effective_protocol(protocol: EvaluationProtocol, config: EvaluationRunConfig) -> EvaluationProtocol:
     """Use the same resolved chat policy for context admission and generation."""
     sampling = protocol.sampling
-    if sampling is None or protocol.operation != "chat_generation":
+    if sampling is None or protocol.operation not in CHAT_OPERATIONS:
         return protocol
     kwargs = {**config.chat_template_kwargs, **sampling.chat_template_kwargs}
     if sampling.chat_template_kwargs.get("enable_thinking") is False and config.thinking_off_template_kwargs:
@@ -271,6 +337,36 @@ async def generation_turn(
             "evaluation_request": dataclasses.asdict(request),
         },
     )
+
+
+async def episode_turn(request: ModelRequest, *, model: Model, options: Mapping[str, Any]) -> ModelTurn:
+    """Apply the protocol's sampling to a harness request, keeping the harness's tools and extra body keys.
+
+    The protocol's ``max_tokens`` caps the output limit the harness asks for, such as a summary's reserved budget.
+    """
+    extra_body = {**request.options.get("extra_body", {}), **options["extra_body"]}
+    merged = {**request.options, **options, "extra_body": extra_body}
+    if (requested := request.options.get("max_tokens")) is not None:
+        merged["max_tokens"] = min(requested, options["max_tokens"])
+    return await model(dataclasses.replace(request, options=merged))
+
+
+def episode_machine(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
+    """The run's task machine with the task's network policy and the resources it sets."""
+    return runtime.model_copy(
+        update={
+            "network": inputs.network,
+            "cpus": runtime.cpus if inputs.cpus is None else inputs.cpus,
+            "memory_mb": runtime.memory_mb if inputs.memory_mb is None else inputs.memory_mb,
+            "storage_mb": runtime.storage_mb if inputs.storage_mb is None else inputs.storage_mb,
+            "gpus": inputs.gpus,
+        }
+    )
+
+
+def episode_limits(run: RolloutLimits, operation: AgentEpisode, inputs: EpisodeInputs) -> RolloutLimits:
+    """Task limits over the protocol's; the run supplies only tool-turn and cleanup deadlines."""
+    return run.model_copy(update=operation.limits_for(inputs).model_dump())
 
 
 def _save_attempt(
@@ -407,7 +503,7 @@ async def _score_likelihood(
     return outcome
 
 
-async def _score_generation(
+async def _score_rollout(
     case: EvaluationCase,
     protocol: EvaluationProtocol,
     config: EvaluationRunConfig,
@@ -417,47 +513,70 @@ async def _score_generation(
     max_tokens: int,
     *,
     machine_factories: Mapping[str, MachineFactory],
+    harnesses: Mapping[str, HarnessFactory],
     judge_connection: JudgeConnection | None,
     retry_turn: ModelTurn | None,
 ) -> Outcome:
     task = case.task
     options = generation_options(protocol, config, attempt.trial)
     options["max_tokens"] = max_tokens
-    engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
-    verifier = config.verifier_machine
+    operation = case.item.operation
+    if isinstance(operation, AgentEpisode):
+        assert case.item.episode is not None and config.task_machine is not None
+        window = config.model.context_window
+        budget = EpisodeBudget(min(operation.max_input_tokens or window, window), max_tokens, window)
+        harness = operation.harness.kind
+        engine = RolloutEngine(machine_factories, {harness: harnesses[harness](operation.harness, budget)})
+        task_machine = episode_machine(config.task_machine, case.item.episode)
+        limits = episode_limits(config.limits, operation, case.item.episode)
+        # Pi and mini-swe-agent send their own sampling and output limit, and Pi its thinking switch, as they do
+        # under Harbor. Other agents also send the model's agent request body, as Harbor's agents do.
+        agent_options = {**options, "extra_body": {**options["extra_body"], **config.agent_extra_body}}
+        policy_model = (
+            model
+            if isinstance(operation.harness, PiAgent | MiniSweAgent)
+            else partial(episode_turn, model=model, options=agent_options)
+        )
+    else:
+        assert isinstance(operation, ChatGeneration | TextGeneration)
+        engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
+        harness = EXACT_CHAT_HARNESS
+        # A mixed run's task machine serves only the generation tasks that need one.
+        task_machine = config.task_machine if task_machine_reason(task) is not None else None
+        limits = config.limits
+        policy_model = (
+            partial(_saved_model_turn, turn=retry_turn)
+            if retry_turn is not None
+            else partial(generation_turn, model=model, operation=operation)
+        )
+    # A host judge grades without a machine; an agent-machine grader uses the task machine and its network.
+    grader_build = (
+        None
+        if isinstance(task.grader, VerifyitGrader) and grades_with_judge(task.grader)
+        else grader_environment(task.grader)
+    )
+    verifier = config.verifier_machine if grader_build is not None else None
     if (
         verifier is not None
+        and grader_build is not None
         and isinstance(task.grader, ScriptGrader)
         and task.grader.judge is not None
-        and "network" in task.grader.environment.capabilities
+        and "network" in grader_build.capabilities
     ):
         verifier = verifier.model_copy(update={"network": NetworkPolicy.ALLOW})
     spec = TaskRolloutSpec(
         task=task,
-        harness=EXACT_CHAT_HARNESS,
-        task_machine=config.task_machine,
-        verifier_machine=(
-            verifier
-            if isinstance(task.grader, ScriptGrader | VerifyitGrader)
-            and task.grader.environment is not None
-            and not (isinstance(task.grader, VerifyitGrader) and grades_with_judge(task.grader))
-            else None
-        ),
+        harness=harness,
+        task_machine=task_machine,
+        verifier_machine=verifier,
         judge_connection=judge_connection,
-        limits=config.limits,
+        limits=limits,
         trace=TraceMode.MESSAGES,
-    )
-    operation = case.item.operation
-    assert isinstance(operation, ChatGeneration | TextGeneration)
-
-    policy_model = (
-        partial(_saved_model_turn, turn=retry_turn)
-        if retry_turn is not None
-        else partial(generation_turn, model=model, operation=operation)
     )
 
     failure_evidence = None
     permanent_error = None
+    agent_filled_disk = False
     try:
         result = await engine.run_task(spec, policy_model)
         rollout, grade = result.rollout, result.grade
@@ -468,12 +587,20 @@ async def _score_generation(
             failure_evidence = {"response": cause.response, "response_json": cause.response_json}
         elif isinstance(cause, APIError):
             failure_evidence = {"provider_error": cause.body}
-        if cause is not None and (
-            _permanent_api_error(cause)
-            or not isinstance(cause, (APIError, ModelResponseError, ConnectionError, TimeoutError, MachineTerminated))
+        agent_filled_disk = isinstance(cause, MachineDiskFull) and error.operation is not RolloutOperation.START
+        if agent_filled_disk:
+            # As Harbor scores a trial whose agent filled its machine's disk, the attempt is a failed submission.
+            grade = GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"The task machine's disk is full: {cause}")
+        # Machine creation, setup and backend failures before the harness starts are retryable infrastructure.
+        elif (
+            cause is not None
+            and error.operation is not RolloutOperation.START
+            and (_permanent_api_error(cause) or not isinstance(cause, RETRYABLE_ERRORS))
         ):
             permanent_error = cause
-    if rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
+    if agent_filled_disk:
+        outcome = Outcome.SUBMISSION_FAILURE
+    elif rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
         outcome = Outcome.INFRA_ERROR
     else:
         outcome = grade.status
@@ -488,6 +615,7 @@ async def _score_generation(
         "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
         "failure_evidence": failure_evidence,
         "options": options,
+        "limits": limits.model_dump(mode="json"),
         "reused_response_from_retry": attempt.retry - 1 if retry_turn is not None else None,
     }
     prompt_tokens = (
@@ -541,6 +669,13 @@ def _validate_judge(task: TaskSpec, identity: JudgeIdentity | None) -> None:
         raise ValueError(f"Judge model has no recorded immutable revision: {alias!r} ({task.id})")
 
 
+def _validate_task_secrets(task: TaskSpec, supplied: tuple[str, ...]) -> None:
+    """The runtime resolves templates from the worker's environment, so each name must be one the run supplies."""
+    unsupplied = host_variables(task.environment_requirements.environment_variables) - set(supplied)
+    if unsupplied:
+        raise ValueError(f"Task machine reads host variables the run does not supply: {sorted(unsupplied)} ({task.id})")
+
+
 async def run_evaluation(
     datasets: tuple[str, ...],
     output: str,
@@ -548,6 +683,7 @@ async def run_evaluation(
     model: Model,
     *,
     machine_factories: Mapping[str, MachineFactory],
+    harnesses: Mapping[str, HarnessFactory] = NO_HARNESSES,
     tokenizer: EvaluationTokenizer | None = None,
     judge_connection: JudgeConnection | None = None,
     completion_model: Model | None = None,
@@ -558,6 +694,9 @@ async def run_evaluation(
     Every physical attempt has an append-only start and finish. Its sample, terminal state and raw
     evidence commit together. Infrastructure failures remain retryable on a later invocation with the
     same run identity and seed. Summaries belong to the consumer of these raw results.
+
+    ``harnesses`` builds agent harnesses, keyed by the kind of ``AgentEpisode.harness``; their task machines use
+    ``config.task_machine`` and the factory registered for its backend.
     """
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
@@ -576,6 +715,8 @@ async def run_evaluation(
             raise ValueError(f"Likelihood scoring requires an explicit scorer: {protocol.benchmark}")
         if protocol.operation == "text_generation" and completion_model is None:
             raise ValueError(f"Text generation requires an explicit completion transport: {protocol.benchmark}")
+        if protocol.operation == OperationKind.AGENT_EPISODE and config.task_machine is None:
+            raise ValueError(f"Agent episodes require a task machine in the run config: {protocol.benchmark}")
     run = {
         "schema_version": 1,
         "driver_revision": EVALUATION_EXECUTION_REVISION,
@@ -650,6 +791,12 @@ async def run_evaluation(
                     if case is None:
                         continue
                     _validate_judge(case.task, config.judge)
+                    _validate_task_secrets(case.task, config.task_secrets)
+                    operation = case.item.operation
+                    if isinstance(operation, AgentEpisode) and operation.harness.kind not in harnesses:
+                        raise ValueError(
+                            f"No harness is registered for {operation.harness.kind!r}: {protocol.benchmark}"
+                        )
                     selected += 1
                     # Cohort decisions are durable before expanding trials, including on resumed runs.
                     for trial in range(protocol.trials.count):
@@ -713,7 +860,7 @@ async def run_evaluation(
                     continue
                 transport = completion_model if isinstance(case.item.operation, TextGeneration) else model
                 assert transport is not None and selection.max_tokens is not None
-                outcome = await _score_generation(
+                outcome = await _score_rollout(
                     case,
                     protocol,
                     config,
@@ -722,6 +869,7 @@ async def run_evaluation(
                     attempt,
                     selection.max_tokens,
                     machine_factories=machine_factories,
+                    harnesses=harnesses,
                     judge_connection=judge_connection,
                     retry_turn=retry_turn,
                 )

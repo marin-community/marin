@@ -15,6 +15,7 @@ from taskcompendium.models import (
     ConversationEvent,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskResource,
@@ -54,7 +55,7 @@ def workspace_task(
     under ``/tests`` for the grader only; ``worker`` files are mounted for the agent and ``oracle``
     files for the grader controls.
     """
-    package = verifyit_package(spec, verifier, environment=grader_environment)
+    package = verifyit_package(spec, verifier, placement=GraderMachine(environment=grader_environment))
     return TaskSpec(
         id=row.id,
         source=row.source,

@@ -47,6 +47,7 @@ from taskcompendium.models import (
     ExitCodeReward,
     FileReward,
     FunctionDefinition,
+    GraderMachine,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -58,6 +59,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
     VerifierCommand,
+    VerifyitGrader,
     under_grader_root,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
@@ -316,9 +318,7 @@ def script_grader(
         argv=tuple(argv),
         cwd=cwd,
         env=dict(env or {}),
-        environment=environment,
-        collect=tuple(collect),
-        artifacts=tuple(artifacts),
+        placement=GraderMachine(environment=environment, collect=tuple(collect), artifacts=tuple(artifacts)),
         answer_path=answer_path,
         reward=reward,
         timeout=timeout,
@@ -393,7 +393,7 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
             "\"No module named 'verifyit'\"); grade_candidate calls no model either, so write deterministic checks "
             "with python_grader"
         )
-    return verifyit_package(spec, environment=environment)
+    return verifyit_package(spec, placement=None if environment is None else GraderMachine(environment=environment))
 
 
 def assemble(
@@ -607,18 +607,21 @@ def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> Tas
             *visible_writes,
             *task.output_paths,
         ]
-        if isinstance(task.grader, ScriptGrader):
-            grader_writes += [task.grader.cwd, *(artifact.target for artifact in task.grader.artifacts)]
-            if task.grader.answer_path is not None:
-                grader_writes.append(task.grader.answer_path)
-        update["grader"] = task.grader.model_copy(
+        grader = task.grader
+        assert isinstance(grader, ScriptGrader | VerifyitGrader) and isinstance(grader.placement, GraderMachine)
+        if isinstance(grader, ScriptGrader):
+            grader_writes += [artifact.target for artifact in grader.placement.artifacts]
+            grader_writes += [path for path in (grader.cwd, grader.answer_path) if path is not None]
+        placement = grader.placement.model_copy(
             update={"environment": host_requirements(grading, factories, grader_writes)}
         )
+        update["grader"] = grader.model_copy(update={"placement": placement})
     return task.model_copy(update=update)
 
 
 def _reads_task_machine(grader: GraderPackage) -> bool:
-    return isinstance(grader.grader, ScriptGrader) and bool(grader.grader.artifacts or grader.grader.collect)
+    placement = grader.grader.placement if isinstance(grader.grader, ScriptGrader) else None
+    return isinstance(placement, GraderMachine) and bool(placement.artifacts or placement.collect)
 
 
 def _conversation(instruction: str, system: str | None = None) -> ConversationInput:

@@ -30,6 +30,7 @@ from taskcompendium.models import (
     FileReward,
     FinalAction,
     FunctionDefinition,
+    GraderMachine,
     JsonValueAnswer,
     NoGrader,
     PlainText,
@@ -380,7 +381,7 @@ def test_answer_grader_needs_an_environment_for_a_mode_that_does_not_grade_in_pr
 
     package = answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(IMAGE))
 
-    assert isinstance(package.grader, VerifyitGrader) and package.grader.environment is not None
+    assert isinstance(package.grader, VerifyitGrader) and isinstance(package.grader.placement, GraderMachine)
 
 
 def test_answer_grader_refuses_the_grader_base_image_which_has_no_verifyit():
@@ -434,8 +435,10 @@ def test_script_grader_keeps_its_files_private_and_its_image_on_the_verifier():
 
     assert isinstance(task.grader, ScriptGrader)
     assert (task.grader.argv, task.grader.answer_path, task.grader.timeout) == (("python3", "/tests/grade.py"), None, 60)
-    assert task.grader.environment == EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE, environment_variables={"STRICT": "1"}
+    assert task.grader.placement == GraderMachine(
+        environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE, environment_variables={"STRICT": "1"}
+        )
     )
     assert [item.path for item in task.resources.verifier] == ["grade.py"]
     assert [item.path for item in task.resources.worker] == ["app/run.sh"]
@@ -491,7 +494,7 @@ TEXT_SHELL = script_grader(("true",), ExitCodeReward(), environment=BASE, answer
     [
         (AnswerType.FILE, PLAIN, SHELL, (), "needs output paths or grader artifacts"),
         (AnswerType.WORKSPACE_STATE, PLAIN, SHELL, (), "needs output paths or grader artifacts"),
-        (AnswerType.FILE, PLAIN, EXACT, ("/workspace/answer",), "requires a grading environment"),
+        (AnswerType.FILE, PLAIN, EXACT, ("/workspace/a", "/workspace/b"), "requires exactly one output path"),
         (AnswerType.FILE, PLAIN, TEXT_SHELL, ("/workspace/answer",), "no extracted answer to write"),
         (AnswerType.JSON, PLAIN, EXACT, (), "cannot carry a json answer"),
         (AnswerType.NATIVE_ACTION, FinalAction(), EXACT, (), "not accepted by the selected verifier"),
@@ -628,7 +631,8 @@ def test_a_shellsim_task_machine_asks_for_the_catalogs_cpython():
     assert lowered.task_machine is not None
 
     # ShellSim installs the catalog's CPython for any set ``pypi_packages``, here none beyond it.
-    assert _machine_spec(environment, lowered.task_machine).source == PackageSpec(pypi_packages=())
+    with _machine_spec(environment, lowered.task_machine) as spec:
+        assert spec.source == PackageSpec(pypi_packages=())
     assert requirements(image=IMAGE).package_spec is None
 
 
@@ -682,11 +686,15 @@ def machine_sources(lowered: TaskRolloutSpec) -> tuple[tuple[str, object], tuple
     """Each machine's backend and the ``MachineSpec`` source RolloutEngine creates it from."""
     task = lowered.task
     assert lowered.task_machine is not None and lowered.verifier_machine is not None
-    assert isinstance(task.grader, ScriptGrader)
-    return (
-        (lowered.task_machine.backend, _machine_spec(task.environment_requirements, lowered.task_machine).source),
-        (lowered.verifier_machine.backend, _machine_spec(task.grader.environment, lowered.verifier_machine).source),
-    )
+    assert isinstance(task.grader, ScriptGrader) and isinstance(task.grader.placement, GraderMachine)
+    with (
+        _machine_spec(task.environment_requirements, lowered.task_machine) as task_spec,
+        _machine_spec(task.grader.placement.environment, lowered.verifier_machine) as verifier_spec,
+    ):
+        return (
+            (lowered.task_machine.backend, task_spec.source),
+            (lowered.verifier_machine.backend, verifier_spec.source),
+        )
 
 
 def test_grader_base_machines_run_a_local_cpython_when_the_host_has_the_local_backend():
