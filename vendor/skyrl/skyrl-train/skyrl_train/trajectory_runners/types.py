@@ -3,6 +3,7 @@ from enum import StrEnum
 from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict, Union
 
 import numpy as np
+from rigging.task_errors import ErrorIdentity
 
 from skyrl_gym.verification import VerificationResult
 from taskcompendium.grading_result import Outcome
@@ -17,6 +18,7 @@ REWARD_SHAPING_COMPONENT_NAMES = ("passthrough", "non_termination", "overlong", 
 ROUTED_EXPERTS_KEY = "routed_experts"
 RESPONSE_POLICY_STEPS_KEY = "response_policy_steps"
 RESPONSE_SPAN_TAGS_KEY = "response_span_tags"
+ERROR_IDENTITIES_KEY = "error_identities"
 
 
 class TokenProvenance(StrEnum):
@@ -130,6 +132,7 @@ class TrajectoryBatch(TypedDict):
     verifier_tests: Optional[List[Optional[VerifierTestCollection]]]
     loss_masks: List[List[int]]
     stop_reasons: Optional[List[str]]
+    error_identities: NotRequired[list[ErrorIdentity | None]]
     exception_types: Optional[List[Optional[str]]]
     error_treatments: Optional[List[Optional[str]]]
     server_errors: Optional[List[Optional[Dict[str, Any]]]]

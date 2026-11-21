@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings, retry_delay
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import ExceptionInfo, TrialResult
@@ -64,7 +64,7 @@ class TrialQueue:
     def __init__(
         self,
         n_concurrent: int,
-        retry_config: RetryConfig | None = None,
+        retry_config: RetrySettings | None = None,
         hooks: dict[TrialEvent, list[HookCallback]] | None = None,
         release_trial_payloads_in_memory: bool = False,
         planned_attempts: dict[str, int] | None = None,
@@ -80,7 +80,7 @@ class TrialQueue:
         self._n_concurrent = n_concurrent
         self._host_capabilities = host_capabilities
         self._guest_environment = dict(guest_environment)
-        self._retry_config = retry_config if retry_config is not None else RetryConfig()
+        self._retry_config = retry_config if retry_config is not None else RetrySettings()
         self._hooks = hooks
         self._release_trial_payloads_in_memory = release_trial_payloads_in_memory
         self._planned_attempts = planned_attempts or {}
@@ -128,35 +128,6 @@ class TrialQueue:
     def on_trial_cancelled(self, callback: HookCallback) -> "TrialQueue":
         """Register a callback that runs when a queued trial is cancelled."""
         return self.add_hook(TrialEvent.CANCEL, callback)
-
-    def _should_retry_exception(self, exception_type: str) -> bool:
-        if (
-            self._retry_config.exclude_exceptions
-            and exception_type in self._retry_config.exclude_exceptions
-        ):
-            self._logger.debug(
-                "Exception %s is in exclude_exceptions, not retrying",
-                exception_type,
-            )
-            return False
-
-        if (
-            self._retry_config.include_exceptions
-            and exception_type not in self._retry_config.include_exceptions
-        ):
-            self._logger.debug(
-                "Exception %s is not in include_exceptions, not retrying",
-                exception_type,
-            )
-            return False
-
-        return True
-
-    def _calculate_backoff_delay_sec(self, attempt: int) -> float:
-        delay_sec = self._retry_config.min_wait_sec * (
-            self._retry_config.wait_multiplier**attempt
-        )
-        return min(delay_sec, self._retry_config.max_wait_sec)
 
     def _setup_hooks(
         self,
@@ -440,25 +411,18 @@ class TrialQueue:
             with bind_attempt(attempt_context):
                 result = await self._run_admitted_attempt(trial_config, attempt)
 
-            if result.exception_info is None:
-                break
-            # The archive rejects a final attempt whose teardown was not
-            # confirmed, so a failed attempt without completion always retries.
-            if result.completion is not None and not self._should_retry_exception(
-                result.exception_info.exception_type
-            ):
-                break
-            if attempt == self._retry_config.max_retries:
+            delay = retry_delay(result.exception_info, self._retry_config, attempt)
+            if delay is None:
                 break
 
-            delay_sec = self._calculate_backoff_delay_sec(attempt)
+            assert result.exception_info is not None
             self._logger.debug(
                 "Trial %s failed with exception %s. Retrying in %.2f seconds...",
                 trial_config.trial_name,
                 result.exception_info.exception_type,
-                delay_sec,
+                delay,
             )
-            await asyncio.sleep(delay_sec)
+            await asyncio.sleep(delay)
 
         if result is None:
             raise RuntimeError(f"Trial {trial_config.trial_name} produced no result.")

@@ -7,13 +7,12 @@ from typing import Any, Dict, Set
 
 from omegaconf import DictConfig, OmegaConf
 from skyrl_train.trajectory_runners.harbor.identity_aware_reward import IDENTITY_AWARE_SHAPER
-from skyrl_train.utils.harbor_errors import (
+from skyrl_train.task_error_handling import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
-    retry_excluded_exception_types,
 )
 
-from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, RetryConfig, VerifierConfig
+from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, VerifierConfig
 
 
 @dataclass
@@ -75,19 +74,6 @@ TRIAL_SCHEMA = SectionSchema(
     fields={
         "timeout_multiplier": FieldMapping("timeout_multiplier", default=1.0),
         "trial_attempt_timeout_sec": FieldMapping("trial_attempt_timeout_sec"),
-    }
-)
-
-# Retry settings for the task worker.
-RETRY_SCHEMA = SectionSchema(
-    fields={
-        "max_retries": FieldMapping("max_retries", default=2),
-        "min_wait_sec": FieldMapping("min_wait_sec", default=1.0),
-        "max_wait_sec": FieldMapping("max_wait_sec", default=60.0),
-        "wait_multiplier": FieldMapping("wait_multiplier", default=2.0),
-        # Exception filtering - comma-separated strings in YAML, converted to sets
-        "include_exceptions": FieldMapping("include_exceptions"),
-        "exclude_exceptions": FieldMapping("exclude_exceptions"),
     }
 )
 
@@ -226,7 +212,6 @@ HARBOR_SCHEMA = {
     "environment": ENVIRONMENT_SCHEMA,
     "verifier": VERIFIER_SCHEMA,
     "trial": TRIAL_SCHEMA,
-    "retry": RETRY_SCHEMA,
     "orchestrator": ORCHESTRATOR_SCHEMA,
     "reward_shaping": REWARD_SHAPING_SCHEMA,
     "error_handling": ERROR_HANDLING_SCHEMA,
@@ -325,38 +310,6 @@ class HarborConfigBuilder:
                 trial_fields[mapping.harbor_field] = value
 
         return trial_fields
-
-    def build_retry_config(self) -> RetryConfig:
-        """Build the shared worker retry policy.
-
-        Explicit and Harbor-default exclusions are combined with every exception
-        type that the shared taxonomy and campaign overrides classify as pass-through.
-        Pass-through failures are terminal results that may retain verifier output;
-        retrying would discard that result.
-
-        Returns:
-            RetryConfig with exponential backoff and resolved terminal exceptions.
-        """
-        retry_fields = {}
-
-        for yaml_key, mapping in RETRY_SCHEMA.fields.items():
-            value = self._get_field_value(yaml_key, mapping)
-            if value is not None:
-                # Handle exception sets (YAML lists -> Python sets)
-                if yaml_key in ("include_exceptions", "exclude_exceptions"):
-                    if isinstance(value, (list, tuple)):
-                        value = set(value)
-                    elif isinstance(value, str):
-                        # Support comma-separated string
-                        value = {s.strip() for s in value.split(",") if s.strip()}
-                retry_fields[mapping.harbor_field] = value
-
-        retry_config = RetryConfig(**retry_fields)
-        excluded = retry_excluded_exception_types(
-            retry_config.exclude_exceptions,
-            self.get_error_handling_config(),
-        )
-        return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
 
     def get_reward_shaping_config(self) -> Dict[str, Any]:
         """

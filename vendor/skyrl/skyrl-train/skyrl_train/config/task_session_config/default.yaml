@@ -4,6 +4,8 @@ max_verifier_workers: 32 # verifier threads in each rollout worker
 remote_judge: null # Set base_url and api_key_env to grade judge tasks on the rollout host.
 daytona: null # Set api_key_env and ttl_minutes for tasks with the daytona backend.
 
+retry: {} # Shared RetrySettings: no retries unless a launch sets max_retries.
+
 session:
   max_turns: ${generator.max_turns}
   model_turn_timeout: null

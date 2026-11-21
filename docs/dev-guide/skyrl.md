@@ -79,6 +79,68 @@ results.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Task errors
+
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py)
+owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
+Each framework owns its remaining categories: Shellbox owns machine and Daytona
+errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
+SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
+is installed. Composition rejects names assigned by more than one owner.
+
+With error classification enabled, `skyrl_train.task_error_handling` maps
+infrastructure failures to masking, agent failures to zero reward, and passthrough
+failures to the available verifier reward. Unknown names use the configured
+fallback and emit an error log. With classification disabled, the rollout
+projection masks all failed rollouts.
+
+Add a new persisted exception name to its producer's category map. Put a name
+used by several producers in the shared map once. Per-name training overrides
+belong in `ErrorHandlingConfig`.
+
+The shared `ErrorIdentity` records the task error name, category, provider cause, operation,
+provider status, and retry disposition. Native Harbor exception records extend
+this identity with message and traceback details. TaskCompendium grades preserve
+the identity when a trial supplies one. Consumers use its stored category and
+disposition without loading the producer framework. Evaluation JSONL exports these
+fields under `failure`; diagnostics retain only additional allowlisted metadata.
+Named phase timeouts use the producer's timeout policy. Structured provider status
+and permanent causes take precedence.
+
+Configure task retries at `environment.task_sessions.retry`. The settings apply
+across Harbor and other task kinds. The base budget is zero retries; the
+`terminal_bench` preset explicitly selects two retries with a multiplier of two.
+Mixed-task Snowball and Mochi recipes select one retry with their verifier
+exclusions for every task kind.
+For example:
+
+```yaml
+environment:
+  task_sessions:
+    retry:
+      max_retries: 3
+      min_wait_sec: 1
+      max_wait_sec: 60
+      wait_multiplier: 2
+      include_categories: [infrastructure]
+      exclude_exceptions: [AgentTimeoutError, VerifierTimeoutError]
+```
+
+`rigging.task_errors.retry_delay` makes the decision for both the task worker
+and native Harbor's trial queue. Filters match the error name, cause name, or
+category; exclusions win. Permanent failures stop even when included. Unknown
+failures need an explicit inclusion. The budget counts retries after the first
+attempt, and backoff is capped at `max_wait_sec`.
+
+Machine startup connection loss can retry with a fresh machine before any model
+turn. A machine failure during a model command or grading is terminal because
+replaying may duplicate work. SkyRL also keeps passthrough results terminal so
+that retries do not discard usable verifier output. Reward and masking treatment
+remain separate from the infrastructure retry classification. Native Harbor may
+retry a passthrough failure when environment teardown is unconfirmed. A selected
+native terminal failure can seal as an unscored archive row;
+its reward and partial trajectory remain raw evidence.
+
 ## Run records
 
 Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).

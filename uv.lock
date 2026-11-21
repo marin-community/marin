@@ -5894,6 +5894,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "msgspec" },
     { name = "psutil" },
@@ -5919,7 +5920,6 @@ secrets = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "prometheus-client" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -5927,7 +5927,6 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
-    { name = "httpx" },
     { name = "prometheus-client" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -5947,6 +5946,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
     { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.21.0" },
     { name = "msgspec", specifier = ">=0.20.0" },
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.24" },
@@ -5963,7 +5963,6 @@ provides-extras = ["iap", "prometheus", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -5971,7 +5970,6 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -6099,13 +6097,13 @@ source = { editable = "lib/shellbox" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'" },
     { name = "httpx" },
+    { name = "marin-rigging" },
     { name = "pydantic" },
 ]
 
 [package.optional-dependencies]
 daytona = [
     { name = "daytona" },
-    { name = "marin-rigging" },
 ]
 iris = [
     { name = "marin-iris" },
@@ -6114,7 +6112,6 @@ qemu = [
     { name = "quicksand-qemu" },
 ]
 shellsim = [
-    { name = "marin-rigging" },
     { name = "shellsim", extra = ["pypi"] },
 ]
 
@@ -6131,8 +6128,7 @@ requires-dist = [
     { name = "daytona", marker = "extra == 'daytona'", specifier = "==0.200.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "marin-iris", marker = "extra == 'iris'", editable = "lib/iris" },
-    { name = "marin-rigging", marker = "extra == 'daytona'", editable = "lib/rigging" },
-    { name = "marin-rigging", marker = "extra == 'shellsim'", editable = "lib/rigging" },
+    { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "quicksand-qemu", marker = "extra == 'qemu'", specifier = ">=0.5.12,<0.6" },
     { name = "shellsim", extras = ["pypi"], marker = "extra == 'shellsim'", specifier = ">=0.1.38" },

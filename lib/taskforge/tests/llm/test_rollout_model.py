@@ -10,10 +10,9 @@ The live checks write ``<evidence_root>/validate/rollout_model/<check>-<utc>.jso
 """
 
 import asyncio
-import json
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +34,7 @@ from rolloutengine.models import (
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
+from taskforge.content_hash import pretty_json
 from taskforge.ledger.records import EntryKind
 from taskforge.ledger.test_support import ListLedger
 from taskforge.llm.glm_client import GlmClient
@@ -260,12 +260,12 @@ def write_live_evidence(
         "policy": repr(POLICY),
         "wall_time": wall_time,
         "turns": [turn_record(result) for result in results],
-        "grades": [asdict(result.grade) for result in results],
-        "rollouts": [asdict(result.rollout) for result in results],
+        "grades": [result.grade for result in results],
+        "rollouts": [result.rollout for result in results],
     }
     evidence_dir.mkdir(parents=True, exist_ok=True)
     path = evidence_dir / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
-    path.write_text(json.dumps(record, indent=1, default=str))
+    path.write_text(pretty_json(record))
     return path
 
 

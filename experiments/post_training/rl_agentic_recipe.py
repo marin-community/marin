@@ -6,8 +6,11 @@
 from dataclasses import replace
 from fractions import Fraction
 
+from rigging.task_errors import (
+    DEFAULT_RETRY_EXCLUSIONS,
+    VERIFIER_RUNTIME_ERROR,
+)
 from skyrlrecipe import RecipePatch, sections
-from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
 from experiments.post_training.rl_presets import HARBOR_EVALUATION, BatchMix, Preset
 from experiments.post_training.task_curation.task_health import task_health_step
@@ -21,6 +24,13 @@ _AGENTIC_RECIPE = RecipePatch(
         task_sessions={
             "daytona": {"api_key_env": _DAYTONA_RL_KEY, "eval_api_key_env": _DAYTONA_EVAL_KEY},
             "task_spec": {"harness_by_dataset": {"long-loop-smartie-swesmith": "harbor_trial"}},
+            "retry": {
+                "max_retries": 1,
+                "wait_multiplier": 2,
+                "exclude_exceptions": sorted(
+                    DEFAULT_RETRY_EXCLUSIONS | {"AddTestsDirError", "DownloadVerifierDirError", VERIFIER_RUNTIME_ERROR}
+                ),
+            },
         }
     ),
     terminal_bench={
@@ -30,11 +40,7 @@ _AGENTIC_RECIPE = RecipePatch(
             "eval_daytona_api_key_env": _DAYTONA_EVAL_KEY,
             "verifier_override_timeout_sec": 900,
             "n_concurrent_trials": 256,
-            "max_retries": 1,
             "enable_reward_shaping": False,
-            "exclude_exceptions": sorted(
-                DEFAULT_RETRY_EXCLUSIONS | {"AddTestsDirError", "DownloadVerifierDirError", "VerifierRuntimeError"}
-            ),
         },
         "installed_agent": {
             "agent": {

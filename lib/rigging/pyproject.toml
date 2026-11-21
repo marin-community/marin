@@ -20,6 +20,7 @@ dependencies = [
     "gcsfs>=2024.0.0",
     "google-auth>=2.0.0",
     "huggingface-hub>=1.21.0",
+    "httpx>=0.28.1",
     "msgspec>=0.20.0",
     # EdDSA (Ed25519) service-token signing/verification in rigging.token_authority.
     # The [crypto] extra pulls in `cryptography`, which the EdDSA algorithm needs.
@@ -48,8 +49,6 @@ secrets = ["google-cloud-secret-manager>=2.16.0"]
 
 [dependency-groups]
 test = [
-    # starlette.testclient needs an HTTP client; rigging has no runtime httpx dep.
-    "httpx>=0.28.1",
     # Exercises the optional telemetry bridge without enabling it for every consumer.
     "prometheus-client>=0.24",
     "pytest>=8.3.2",

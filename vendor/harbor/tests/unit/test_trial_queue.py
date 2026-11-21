@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
@@ -47,35 +47,13 @@ def queue(hooks):
     """Create a TrialQueue instance."""
     return TrialQueue(
         n_concurrent=2,
-        retry_config=RetryConfig(),
+        retry_config=RetrySettings(),
         hooks=hooks,
     )
 
 
 class TestTrialQueue:
     """Tests for TrialQueue."""
-
-    @pytest.mark.unit
-    def test_initialization(self, hooks):
-        """Test TrialQueue initialization."""
-        queue = TrialQueue(
-            n_concurrent=3,
-            retry_config=RetryConfig(max_retries=5),
-            hooks=hooks,
-        )
-
-        assert queue._n_concurrent == 3
-        assert queue._retry_config.max_retries == 5
-        assert queue._semaphore._value == 3
-
-    @pytest.mark.unit
-    def test_initialization_with_defaults(self):
-        """Test TrialQueue initialization with public API defaults."""
-        queue = TrialQueue(n_concurrent=3)
-
-        assert queue._n_concurrent == 3
-        assert queue._retry_config == RetryConfig()
-        assert queue._hooks == {event: [] for event in TrialEvent}
 
     @pytest.mark.unit
     async def test_submit_single_trial(self, queue, trial_config, trial_result):
@@ -198,35 +176,6 @@ class TestTrialQueue:
         ):
             with pytest.raises(ValueError, match="Test error"):
                 await queue.submit(trial_config)
-
-    @pytest.mark.unit
-    def test_should_retry_exception(self, queue):
-        """Test retry logic for exceptions."""
-        assert queue._should_retry_exception("SomeError")
-
-        queue._retry_config.exclude_exceptions = {"TimeoutError"}
-        assert not queue._should_retry_exception("TimeoutError")
-        assert queue._should_retry_exception("ValueError")
-
-        queue._retry_config.exclude_exceptions = None
-        queue._retry_config.include_exceptions = {"TimeoutError", "ValueError"}
-        assert queue._should_retry_exception("TimeoutError")
-        assert queue._should_retry_exception("ValueError")
-        assert not queue._should_retry_exception("RuntimeError")
-
-    @pytest.mark.unit
-    def test_calculate_backoff_delay_sec(self, queue):
-        """Test backoff delay calculation."""
-        queue._retry_config.min_wait_sec = 1.0
-        queue._retry_config.wait_multiplier = 2.0
-        queue._retry_config.max_wait_sec = 10.0
-
-        assert queue._calculate_backoff_delay_sec(0) == 1.0
-        assert queue._calculate_backoff_delay_sec(1) == 2.0
-        assert queue._calculate_backoff_delay_sec(2) == 4.0
-        assert queue._calculate_backoff_delay_sec(3) == 8.0
-        assert queue._calculate_backoff_delay_sec(4) == 10.0  # capped at max
-        assert queue._calculate_backoff_delay_sec(5) == 10.0  # capped at max
 
     @pytest.mark.unit
     async def test_concurrent_execution(self, queue):

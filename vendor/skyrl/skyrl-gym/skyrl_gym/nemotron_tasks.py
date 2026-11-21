@@ -55,7 +55,8 @@ from skyrl_gym.python_execution import PythonKernel
 from skyrl_gym.lean_execution import compile_lean
 from skyrl_gym.task_records import fold_grades, grade_result, skipped_grade
 from skyrl_gym.task_sessions import BlockingOperations
-from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR, VerificationResult
+from skyrl_gym.verification import VerificationResult
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 
 NS_TOOLS_AGENT = "ns_tools_simple_agent"
 IPI_AGENT = "indirect_prompt_injection_simple_agent"
