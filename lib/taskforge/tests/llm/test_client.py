@@ -579,7 +579,7 @@ def test_a_reply_whose_head_arrives_in_fragments_within_the_read_timeout_complet
     assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 0)
 
 
-# Review 2026-11-21 follow-up 3: JSON false compared equal to zero workers and vetoed a generation cutoff.
+# Review 2026-11-21 follow-up 3: JSON false compared equal to zero workers.
 @pytest.mark.parametrize(("workers", "empty"), [(0, True), (False, False), (None, False), ("0", False), (1, False)])
 def test_only_an_integer_zero_worker_count_reports_the_pool_empty(
     fake_glm: FakeGlm, workers: object, empty: bool

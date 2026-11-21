@@ -828,8 +828,8 @@ class Fleet(Provider):
     """A solver fleet on a virtual clock. While it is up, requests get ``acts`` in order; ``lose`` takes every worker
     away, after which each request is refused with a 503 and ``/health`` reports the pool empty."""
 
-    def __init__(self, time: LoopTime, acts: Sequence[Act], health_delay: float = 0.0) -> None:
-        self.time, self.acts, self.alive, self.health_delay = time, list(acts), True, health_delay
+    def __init__(self, time: LoopTime, acts: Sequence[Act]) -> None:
+        self.time, self.acts, self.alive = time, list(acts), True
         self.requests = 0
         self.served = asyncio.Event()
 
@@ -847,9 +847,6 @@ class Fleet(Provider):
 
     @override
     async def no_workers(self) -> bool:
-        """Answers after ``health_delay`` seconds, which pass on the shared clock one second at a time."""
-        for _ in range(int(self.health_delay)):
-            await self.time.sleep(1.0)
         return not self.alive
 
     async def answer(self, _progress: Progress) -> Segment:
@@ -918,12 +915,11 @@ class Fleet(Provider):
         self.alive = False
         raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
 
-    async def tails_past_the_bound(self, progress: Progress, pool_empties: bool) -> Segment:
+    async def tails_past_the_bound(self, progress: Progress) -> Segment:
         """The worker exits at second 4,140 of the bound; its queued output keeps arriving past the bound, two frames
-        1.2 s apart, while ``/health`` reports the pool empty or another replica keeps it positive."""
+        1.2 s apart."""
         await self.served.wait()
         await self.generate(progress, 4140)
-        self.alive = not pool_empties
         for delay in (TOKEN_INTERVAL + 0.5, 1.2):
             await self.time.sleep(delay)
             report(progress, chunk(content="x"))
@@ -945,10 +941,6 @@ FLEET_FAULTS = {
     "empty-tool-deltas": lambda fleet: (fleet.streams_empty_tool_deltas, fleet.answer),
     "abort-past-the-bound": lambda fleet: (fleet.aborts_past_the_bound, fleet.answer),
     "buffered-token-past-the-bound": lambda fleet: (fleet.delivers_a_buffered_token_past_the_bound, fleet.answer),
-    "tail-past-the-bound-on-an-empty-pool": lambda fleet: (
-        partial(fleet.tails_past_the_bound, pool_empties=True),
-        fleet.answer,
-    ),
 }
 
 
@@ -983,8 +975,7 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
 
 
 # Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. Follow-up 1 added
-# empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker; follow-up 2
-# a dead worker's tail confirmed past the bound (1.2 s apart) while /health reported the pool empty.
+# empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
@@ -1001,19 +992,14 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
     assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
 
 
-# Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged while the pool reports healthy
-# (a known limit of the client-side bound); only a pool reported empty vetoes it (the empty-pool fault above).
-# Follow-up 3: a /health read slower than the rest of the turn, made after confirmation, turned the limit into a Restart.
-@pytest.mark.parametrize(
-    ("tail", "health_delay"),
-    [(False, 0.0), (True, 0.0), (False, 100.0)],
-    ids=["live", "tail-on-a-healthy-pool", "slow-health"],
-)
+# Review 2026-11-21, follow-up 2: a confirmed tail from an exited worker is still charged (a known limit of the
+# client-side bound, which consults no pool state).
+@pytest.mark.parametrize("tail", [False, True], ids=["live", "exited-worker-tail"])
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
-    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: bool, health_delay: float
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: bool
 ) -> None:
-    fleet = Fleet(LoopTime(), (), health_delay)
-    past = partial(fleet.tails_past_the_bound, pool_empties=False) if tail else fleet.generates_past_the_bound
+    fleet = Fleet(LoopTime(), ())
+    past = fleet.tails_past_the_bound if tail else fleet.generates_past_the_bound
     fleet.acts = [past, fleet.answer]
     serve(monkeypatch, fleet_resources(driver.run_policy(driver_args.policy), fleet))
     await driver.one(driver_args)

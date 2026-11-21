@@ -23,9 +23,8 @@ Progress is a payload carrying nonempty generated text (``progressed``); the bou
 renewal all use it. ``generation_timeout`` bounds the seconds a call spends generating: from the first generated token
 of each attempt, adding the call's completed segments, so neither admission nor an earlier fault counts. Crossing the
 bound is not itself evidence: the call ends as ``GenerationTimedOut`` only when the same stream delivers progress again
-``CONFIRMATION_INTERVAL`` after its first progress past the bound, with no finish, abort, cut or stall in between, and
-a pool read begun at that first progress has not already reported the pool empty (an outage); one still pending then
-is unknown availability, cancelled without delaying the decision.
+``CONFIRMATION_INTERVAL`` after its first progress past the bound, with no finish, abort, cut or stall in between. The
+cutoff consults no pool state.
 """
 
 import asyncio
@@ -60,7 +59,7 @@ CONFIRMATION_INTERVAL = 1.0
 """Seconds after its first progress past the generation bound that a stream must progress again to end the call there.
 A live stream progresses every decode step (tens of milliseconds), so confirming costs about a second of the 60-second
 turn margin. Output queued on the path when its worker exited can still arrive for longer than this; that tail is
-charged unless the pool reports empty (a known limit: README, Models and providers)."""
+charged (a known limit: README, Models and providers)."""
 
 
 class AttemptOutcome(StrEnum):
@@ -193,9 +192,8 @@ class Progress:
     stream.
     """
 
-    def __init__(self, clock: Callable[[], float], remaining: float | None, pool: Callable[[], Awaitable[bool]]) -> None:
-        self.clock, self.remaining, self.pool_empty = clock, remaining, pool
-        self.pool_read: asyncio.Future[bool] | None = None
+    def __init__(self, clock: Callable[[], float], remaining: float | None) -> None:
+        self.clock, self.remaining = clock, remaining
         self.events: list[str] = []
         self.admitted: float | None = None
         self.first_token: float | None = None
@@ -222,19 +220,10 @@ class Progress:
         if any(choice.get("finish_reason") for choice in chunk.get("choices") or ()):
             return True
         if self.past_bound is None:
-            self.past_bound, self.pool_read = now, asyncio.ensure_future(self.pool_empty())
+            self.past_bound = now
         elif now - self.past_bound >= CONFIRMATION_INTERVAL:
             raise _BoundReached
         return True
-
-    async def end_pool_read(self) -> bool:
-        """Cancel the pool read begun past the bound; whether it had already finished reporting no workers."""
-        if (read := self.pool_read) is None:
-            return False
-        empty = read.done() and not read.cancelled() and read.exception() is None and read.result()
-        read.cancel()
-        await asyncio.gather(read, return_exceptions=True)  # a failed read is unknown, not an unhandled error
-        return empty
 
     def generated(self) -> float:
         """Seconds from the attempt's first generated token to its last."""
@@ -371,20 +360,15 @@ class ModelClient:
         limit = min((body[key] for key in TOKEN_LIMIT_FIELDS if key in body), default=None)
         bound = self.retry.generation_timeout
         while True:
-            progress = Progress(self.clock, None if bound is None else bound - call.generated, self.provider.no_workers)
+            progress = Progress(self.clock, None if bound is None else bound - call.generated)
             started_wall, started = time.time(), time.monotonic()
             result, failure = None, None
             try:
                 result = await self.provider.stream(body, progress)
             except _BoundReached as reached:
-                # A pool reported empty vetoes the cutoff; a healthy, pending or failed read certifies nothing.
-                if not await progress.end_pool_read():
-                    raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
-                failure = AttemptFailed(AttemptOutcome.ABORTED, "generation bound reached on a pool with no workers")
+                raise GenerationTimedOut(f"{self._name()} generated for {bound}s without finishing") from reached
             except AttemptFailed as error:
                 failure = error
-            finally:
-                await progress.end_pool_read()
             outcome, status, detail = (
                 (failure.outcome, failure.http_status, failure.detail)
                 if failure
