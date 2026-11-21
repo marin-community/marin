@@ -17,7 +17,7 @@ import pytest
 
 pytest.importorskip("daytona")
 
-from daytona import DaytonaNotFoundError
+from daytona import DaytonaNotFoundError, DaytonaTimeoutError
 from shellbox.backends.daytona.machine import DaytonaMachine
 from shellbox.http_service import HttpResponse, serve_http
 from shellbox.image import RegistryImage
@@ -36,6 +36,7 @@ class SessionAPI:
         self.delete_release = asyncio.Event()
         self.delete_release.set()
         self.corrupt_output = None
+        self.input_failure = None
         self.withheld_tail = 0
         self.leaked_marker = b""
 
@@ -85,6 +86,8 @@ class SessionAPI:
         await process.wait()
 
     async def send_session_command_input(self, name, command, data, request_timeout):
+        if self.input_failure is not None:
+            raise self.input_failure
         process = self.sessions[name]
         process.stdin.write(data.encode("ascii"))
         await process.stdin.drain()
@@ -141,7 +144,7 @@ def session_machine(tmp_path):
     resources = AsyncExitStack()
     resources.push_async_callback(api.close)
     machine = DaytonaMachine(
-        SimpleNamespace(process=api),
+        SimpleNamespace(process=api, id="fixture-sandbox"),
         MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), env={"TAG": "spec"}),
         resources,
     )
@@ -346,6 +349,23 @@ def test_daytona_process_rejects_corrupt_or_truncated_provider_stream_and_stops_
             await session.close()
             assert not api.sessions
             assert all(child.returncode is not None for child in api.children)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_linux_process_api
+def test_daytona_process_reports_a_provider_timeout_on_input_as_a_lost_connection(session_machine):
+    async def scenario():
+        machine, api = session_machine
+        try:
+            session = await machine.open_process(Command((sys.executable, "-c", "import signal; signal.pause()")))
+            api.input_failure = DaytonaTimeoutError("Failed to send session command input")
+            # Callers retry a lost connection; the SDK's own timeout type is not a TimeoutError.
+            with pytest.raises(ConnectionError):
+                await session.write(b"request\n")
+            await session.close()
         finally:
             await machine.close()
 

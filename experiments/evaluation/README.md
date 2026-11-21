@@ -6,7 +6,7 @@ results and `record.json`. Serving workers stop when the launch ends.
 
 Run commands from the repository root. You need Iris access and permission to use
 the selected compute and storage. Daytona runs also need a credential; see
-[Harbor credentials](../../docs/tutorials/run-lm-evals.md#harbor-credentials).
+[Daytona and verifier credentials](../../docs/tutorials/run-lm-evals.md#daytona-and-verifier-credentials).
 
 For Hugging Face checkpoint preparation, cache placement, and failure behavior,
 see [running evaluations](../../docs/tutorials/run-lm-evals.md).
@@ -31,7 +31,7 @@ Choose exactly one model source:
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 `smoke`, `core`, `nlp`, `chat`, `math`, `code`, `econevals`, `econevals-o3`, `econevals-sampled`,
 `econevals-sampled-o3`, and `agentic`.
-[configs/evalchemy.yaml](configs/evalchemy.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
+[configs/evaluations.yaml](configs/evaluations.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
 Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. With no selection, the launcher uses `smoke`.
 
@@ -57,6 +57,7 @@ uv run python -m experiments.evaluation.cli launch \
 | `--instances N` | Start N candidate serving instances, each with the selected accelerator shape. Default: 1. |
 | `--max-concurrent N` | Run at most N evaluators at once on shared serving. Default: 1. |
 | `--seed N` | Override the curated run seed. Default: 0, or unseeded on TPU vLLM, which rejects seeded sampling. |
+| `--task-machine-backend daytona\|docker\|local` | Run curated agent benchmarks' task machines on this backend. Default: each selection's `run.task_machine`, else Daytona. |
 | `--version <label>` | Set the cohort label. Labels do not change evaluator settings. |
 | `--records-prefix <URI>` | Choose the root for records and default result paths. |
 | `--run-id <id>` | Set a launch ID that you can reuse to retry failed evaluations. |
@@ -109,7 +110,7 @@ evaluations:
     num_fewshot: 5
 ```
 
-`prompt_format: chat` or `completion` selects an explicit supported format. Otherwise planning selects the benchmark's supported format for the model and records it. `partitions` selects named dataset-owned partitions, such as MMLU subjects. Each `run` can override `limit`, `max_tokens`, `seed` and judge deployment bindings. Protocol sampling, stopping, grading, metrics and population remain in curation. Output caps also respect the model budget and actual server context. `standard-local` excludes external-judge protocols. GraphWalks needs at least 8,192 output tokens even in a bounded smoke.
+`prompt_format: chat` or `completion` selects an explicit supported format. Otherwise planning selects the benchmark's supported format for the model and records it. `partitions` selects named dataset-owned partitions, such as MMLU subjects. Each `run` can override `limit`, `max_tokens`, `seed`, judge deployment bindings and, for agent benchmarks, `task_machine` (see [curated agent benchmarks](../../docs/tutorials/run-lm-evals.md#curated-agent-benchmarks)). Protocol sampling, stopping, grading, metrics and population remain in curation. Output caps also respect the model budget and actual server context. `standard-local` excludes external-judge protocols. GraphWalks needs at least 8,192 output tokens even in a bounded smoke.
 
 The driver writes raw attempts, samples, selection decisions and evidence. Evaldash
 computes metadata-driven summaries and selects the latest terminal retry for both
@@ -243,8 +244,11 @@ To extend the catalog:
 - Add a curated benchmark by following
   [Add an evaluation benchmark](../../docs/tutorials/add-evaluation.md). It covers
   source pins, prompts, scorers, protocols, catalog registration and validation.
-- Add Harbor files under `configs/harbor/` and register them with
-  `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
+- Add an agentic benchmark by declaring a `HarborDataset` in
+  [benchmarks/agentic.py](benchmarks/agentic.py), locking its images with
+  `uv run python -m experiments.evaluation.benchmarks.agentic lock <lock>`, and adding
+  a `protocol: terminus-2` entry to [configs/evaluations.yaml](configs/evaluations.yaml).
+  Add keys to a suite when they belong in one.
 
 ## Archive maintenance
 

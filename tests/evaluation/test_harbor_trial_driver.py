@@ -73,7 +73,7 @@ def test_preflight_reports_declared_host_environment_dependencies(tmp_path):
 
 def test_preflight_reports_agent_context_resolved_from_served_model(tmp_path):
     served = {"model_info": {"max_input_tokens": 1048576, "max_output_tokens": 393216}}
-    (result,) = json.loads(preflight(tmp_path, [(_POLICIES / "tb2.yaml", served)]).stdout)
+    (result,) = json.loads(preflight(tmp_path, [(_POLICIES / "swebench-recovery.yaml", served)]).stdout)
     assert (result["max_input_tokens"], result["max_output_tokens"]) == (1048576, 393216)
 
 

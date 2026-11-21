@@ -8,6 +8,7 @@ import base64
 import json
 import shlex
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
 from daytona import DaytonaNotFoundError, SessionExecuteRequest
@@ -48,7 +49,11 @@ STREAM_MARKER_BYTES = b"\x01\x02"
 
 
 class DaytonaProcessSession(StreamProcessSession):
-    """A command whose provider session owns all of its processes."""
+    """A command whose provider session owns all of its processes.
+
+    ``provider_failures`` translates the provider's errors as the machine's commands do, so a lost
+    connection raises ``ConnectionError`` and a stopped sandbox ``MachineTerminated``.
+    """
 
     def __init__(
         self,
@@ -58,8 +63,10 @@ class DaytonaProcessSession(StreamProcessSession):
         stderr_limit: int,
         release: Callable[["DaytonaProcessSession"], None],
         failed_cleanup: Callable[[], Awaitable[None]],
+        provider_failures: Callable[[], AbstractAsyncContextManager[None]],
     ):
         self._process = process
+        self._provider_failures = provider_failures
         self.name = name
         self._release = release
         self._failed_cleanup = failed_cleanup
@@ -81,7 +88,7 @@ class DaytonaProcessSession(StreamProcessSession):
 
     async def start(self, argv: tuple[str, ...], cwd: str | None, environment: dict[str, str]) -> None:
         config = base64.b64encode(json.dumps({"argv": argv, "cwd": cwd, "environment": environment}).encode()).decode()
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        async with asyncio.timeout(INTERRUPT_TIMEOUT), self._provider_failures():
             await self._process.create_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
             result = await self._process.execute_session_command(
                 self.name,
@@ -98,9 +105,10 @@ class DaytonaProcessSession(StreamProcessSession):
     async def _follow(self) -> None:
         assert self._command is not None
         try:
-            await self._process.get_session_command_logs_async(
-                self.name, self._command, self._receive_stdout, self._receive_stderr
-            )
+            async with self._provider_failures():
+                await self._process.get_session_command_logs_async(
+                    self.name, self._command, self._receive_stdout, self._receive_stderr
+                )
             self._stdout_frames.finish()
             self._stderr_lines.finish()
             if self._code is None:
@@ -143,9 +151,10 @@ class DaytonaProcessSession(StreamProcessSession):
             if self._closing is not None or self._finished.is_set():
                 raise MachineTerminated("Daytona process session is closed")
             text = encode_frame(STDIN, data[offset : offset + CHUNK_BYTES]).decode("ascii")
-            await self._process.send_session_command_input(
-                self.name, self._command, text, request_timeout=INTERRUPT_TIMEOUT
-            )
+            async with self._provider_failures():
+                await self._process.send_session_command_input(
+                    self.name, self._command, text, request_timeout=INTERRUPT_TIMEOUT
+                )
 
     async def _wait_provider(self) -> int:
         await self._finished.wait()

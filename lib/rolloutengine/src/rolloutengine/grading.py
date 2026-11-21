@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a finished rollout with the task's grader, outside the model's machine."""
+"""Grade a finished rollout with the task's grader, in process, in a fresh machine, or in the task machine."""
 
 import asyncio
 import os
@@ -15,14 +15,15 @@ from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    AgentMachine,
+    GraderMachine,
     GradingAttempt,
     NoGrader,
-    ScriptGrader,
     VerifyitGrader,
     grades_with_judge,
     judge_spec,
 )
-from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.grading import grade_in_agent_machine, grade_in_sandbox
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
@@ -68,30 +69,37 @@ async def _grade_rollout(
     *,
     stop_reason: str,
 ) -> GradeResult:
-    """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
+    """Grade in process, through the judge service, in the task machine, or in a fresh verifier machine.
 
-    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
+    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended. The
+    attempt owns the verifier machine. Grading in the task machine runs after the harness has returned.
     """
     task = spec.task
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    conversation = chat_conversation(list(messages))
+    attempt = GradingAttempt(chat_conversation(list(messages)), outputs, stop_reason=stop_reason)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
-        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
-    if isinstance(grader, VerifyitGrader) and grader.environment is None:
-        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
-    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
-    assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
+    placement = grader.placement
+    if placement is None:
+        return await asyncio.to_thread(grade_answer, task, attempt)
+    judge = judge_connection(spec) if grades_with_judge(grader) else None
+    if isinstance(placement, AgentMachine):
+        assert machine is not None
+        return await grade_in_agent_machine(
+            task, attempt, machine, timeout=spec.limits.verifier_timeout, judge_connection=judge
+        )
+    assert isinstance(placement, GraderMachine)
     selection = spec.verifier_machine
     assert selection is not None
-    return await grade_in_sandbox(
-        task,
-        attempt,
-        _AttemptMachineFactory(selection, factories, cleanup, resources),
-        _machine_spec(grader.environment, selection),
-        task_machine=machine,
-        timeout=spec.limits.verifier_timeout,
-        judge_connection=judge_connection(spec) if grades_with_judge(grader) else None,
-    )
+    with _machine_spec(placement.environment, selection) as machine_spec:
+        return await grade_in_sandbox(
+            task,
+            attempt,
+            _AttemptMachineFactory(selection, factories, cleanup, resources),
+            machine_spec,
+            task_machine=machine,
+            timeout=spec.limits.verifier_timeout,
+            judge_connection=judge,
+        )

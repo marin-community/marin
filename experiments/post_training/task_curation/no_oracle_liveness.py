@@ -40,7 +40,7 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader
+from taskcompendium.models import EnvironmentRequirements, grader_environment
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
@@ -118,11 +118,11 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
         task = spec.task
         runtime = _verifier_runtime(spec)
         grader = task.grader
-        if not isinstance(grader, ScriptGrader | VerifyitGrader) or grader.environment is None:
+        requirements = grader_environment(grader)
+        if requirements is None:
             return LivenessResult(
                 task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "Grader declares no sandbox environment"
             )
-        requirements = grader.environment
         if runtime.gpus:
             return LivenessResult(
                 task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "CPU qualification cannot provision GPUs"

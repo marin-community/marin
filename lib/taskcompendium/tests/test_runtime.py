@@ -60,6 +60,7 @@ from taskcompendium.models import (
     FinalAction,
     FunctionCall,
     FunctionDefinition,
+    GraderMachine,
     GradingAttempt,
     NoGrader,
     PlainText,
@@ -256,7 +257,7 @@ def test_resource_upload_preserves_nested_bytes_executable_modes_and_last_write(
 
 
 @pytest.mark.parametrize("entrypoint", ["factory", "episode"])
-def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
+def test_actor_build_rejects_a_machine_not_built_from_its_dockerfile(shell_task, entrypoint):
     requirements = shell_task.environment_requirements.model_copy(
         update={"docker_build": DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))}
     )
@@ -271,23 +272,23 @@ def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
     assert machines.machines == []
 
 
-@pytest.mark.parametrize("entrypoint", ["grade", "empty", "no_machine_spec"])
-def test_unresolved_grader_build_never_creates_a_machine(shell_task, entrypoint):
+@pytest.mark.parametrize("entrypoint", ["grade", "empty"])
+def test_grader_build_rejects_a_machine_not_built_from_its_dockerfile(shell_task, entrypoint):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
     )
     task = shell_task.model_copy(
-        update={"grader": ScriptGrader(argv=("true",), answer_path=None, environment=environment)}
+        update={
+            "grader": ScriptGrader(argv=("true",), answer_path=None, placement=GraderMachine(environment=environment))
+        }
     )
     machines = FileMachines()
     with pytest.raises(UnsupportedMachineSpec):
         if entrypoint == "grade":
             asyncio.run(grade_in_sandbox(task, GradingAttempt(finished(task)), machines, GRADER_MACHINE))
-        elif entrypoint == "empty":
-            asyncio.run(grade_empty_in_sandbox(task, machines, GRADER_MACHINE))
         else:
-            grade_task(task, GradingAttempt(finished(task)))
+            asyncio.run(grade_empty_in_sandbox(task, machines, GRADER_MACHINE))
     assert machines.machines == []
 
 
@@ -389,7 +390,7 @@ def trusted_bootstrap_task(shell_task):
     package = verifyit_package(
         ScriptSpec(path="grader.py", verdict_file="verdict.json", timeout=60),
         (inline_resource("grader.py", script), inline_resource("config.json", b'{"expected": "42"}')),
-        environment=GRADER_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADER_ENVIRONMENT),
     )
     task = shell_task.model_copy(
         update={
@@ -405,7 +406,9 @@ def trusted_bootstrap_task(shell_task):
 @pytest.mark.parametrize("policy", [EmptyOutputPolicy.GRADE, EmptyOutputPolicy.ZERO])
 @pytest.mark.asyncio
 async def test_sandbox_verifyit_honors_the_declared_empty_text_policy(tmp_path, content, policy):
-    package = verifyit_package(ExactSpec(expected=("",), empty_output=policy), environment=GRADER_ENVIRONMENT)
+    package = verifyit_package(
+        ExactSpec(expected=("",), empty_output=policy), placement=GraderMachine(environment=GRADER_ENVIRONMENT)
+    )
     task = TaskSpec(
         id="empty-text",
         source=Source(dataset="fixture/empty-text", revision="1", row="0", importer_revision="1"),
@@ -439,7 +442,7 @@ async def test_script_grader_can_record_metrics_for_empty_answers(tmp_path, shel
             "output_paths": (),
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py", "/app/answer.txt", "/logs/verifier/verdict.json"),
-                environment=GRADER_ENVIRONMENT,
+                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
                 empty_output=policy,
                 reward=FileReward(
                     files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
@@ -513,7 +516,7 @@ def test_script_judge_receives_explicit_connection_without_serializing_credentia
             "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py", "/app/answer.txt", "/logs/verifier/verdict.json"),
-                environment=GRADER_ENVIRONMENT,
+                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
                 reward=FileReward(
                     files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
                 ),
@@ -598,7 +601,7 @@ SCRIPT_GRADER = (
 def script_grading_task(trusted_bootstrap_task):
     grader = ScriptGrader(
         argv=("bash", "/tests/test.sh"),
-        environment=GRADER_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADER_ENVIRONMENT),
         answer_path=None,
         reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
         timeout=30,
@@ -640,7 +643,7 @@ def test_native_action_judge_exact_gate_receives_the_semantic_action(shell_task)
             exact_gate_answers=(candidate,),
             exact_gate_label="PASS",
         ),
-        environment=GRADER_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADER_ENVIRONMENT),
     )
     task = shell_task.model_copy(
         update={
@@ -786,11 +789,13 @@ async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(she
         cwd="/grading",
         answer_path=None,
         reward=ExitCodeReward(),
-        environment=EnvironmentRequirements(
-            command_semantics=CommandSemantics.LINUX_PROCESS,
-            docker_image=GRADER_IMAGE,
-            working_directory="/setup",
-            setup_commands=("cp ../workspace/people.csv prepared.csv",),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image=GRADER_IMAGE,
+                working_directory="/setup",
+                setup_commands=("cp ../workspace/people.csv prepared.csv",),
+            )
         ),
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
@@ -810,8 +815,10 @@ async def test_local_script_grader_stages_inputs_and_runs_setup_as_host_user(she
         cwd="/grading",
         answer_path=None,
         reward=ExitCodeReward(),
-        environment=environment.model_copy(
-            update={"working_directory": "/setup", "setup_commands": ("cp /workspace/people.csv prepared.csv",)}
+        placement=GraderMachine(
+            environment=environment.model_copy(
+                update={"working_directory": "/setup", "setup_commands": ("cp /workspace/people.csv prepared.csv",)}
+            )
         ),
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
@@ -963,11 +970,13 @@ async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task
         cwd="/app",
         answer_path=None,
         reward=ExitCodeReward(),
-        environment=GRADER_ENVIRONMENT.model_copy(
-            update={
-                "working_directory": "/app",
-                "setup_commands": ("test ! -e solution.txt && echo initial > solution.txt",),
-            }
+        placement=GraderMachine(
+            environment=GRADER_ENVIRONMENT.model_copy(
+                update={
+                    "working_directory": "/app",
+                    "setup_commands": ("test ! -e solution.txt && echo initial > solution.txt",),
+                }
+            )
         ),
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ("/app/solution.txt",)})

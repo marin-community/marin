@@ -28,7 +28,15 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import function_prompt, mbpp_prompt
 from taskcompendium.importers.fewshot import FEWSHOT_SEED, parquet_documents
-from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.models import (
+    FileReward,
+    GraderMachine,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
@@ -118,7 +126,7 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
         ScriptGrader(
             argv=("sh", "-c", "python3 /tests/prepare.py && exec python3 /app/program.py"),
             cwd="/app",
-            environment=environment,
+            placement=GraderMachine(environment=environment),
             timeout=60,
             answer_path="/app/answer.txt",
             reward=FileReward(

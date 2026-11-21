@@ -4647,6 +4647,9 @@ datakit = [
     { name = "scikit-learn" },
     { name = "scipy" },
 ]
+daytona = [
+    { name = "marin-shellbox", extra = ["daytona"] },
+]
 dedup = [
     { name = "marin-dupekit" },
 ]
@@ -4780,6 +4783,7 @@ requires-dist = [
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", extras = ["daytona"], marker = "extra == 'daytona'", editable = "lib/shellbox" },
     { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
@@ -4822,7 +4826,7 @@ requires-dist = [
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rocm", "vizier", "dedup", "datakit"]
+provides-extras = ["gpu", "tpu", "cpu", "rocm", "vizier", "dedup", "daytona", "datakit"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5984,10 +5988,12 @@ name = "marin-rolloutengine"
 version = "0.1.0"
 source = { editable = "lib/rolloutengine" }
 dependencies = [
+    { name = "jinja2" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -6001,10 +6007,12 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [package.metadata.requires-dev]
@@ -6180,6 +6188,7 @@ dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "tomli" },
     { name = "tomlkit" },
 ]
@@ -6215,6 +6224,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomli", specifier = ">=2.0.1" },
     { name = "tomlkit", specifier = ">=0.13" },

@@ -48,7 +48,7 @@ interaction (that is a Harbor benchmark).
   changes; corpus identity does not hash that code. Changing an existing
   `multiple_choice_evaluation` template means bumping `EXPLICIT_TEMPLATE_VERSION`,
   which republishes every benchmark that helper builds; say so in the PR.
-- Do not add the benchmark to a suite in `configs/evalchemy.yaml` unless the
+- Do not add the benchmark to a suite in `configs/evaluations.yaml` unless the
   user asks.
 
 ## Validate

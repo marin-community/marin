@@ -19,7 +19,13 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
-from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    TaskSpec,
+    VerifyitGrader,
+    grader_environment,
+    grades_with_judge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +132,6 @@ def grading_environment(task: TaskSpec) -> EnvironmentRequirements | None:
     A verifyit judge takes none: RolloutEngine grades it on the host, through the judge service.
     """
     grader = task.grader
-    if isinstance(grader, ScriptGrader | VerifyitGrader) and not grades_with_judge(grader):
-        return grader.environment
-    return None
+    if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
+        return None
+    return grader_environment(grader)

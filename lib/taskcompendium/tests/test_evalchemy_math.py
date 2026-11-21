@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from verifyit.grade import GradingInfraError
+from verifyit.modes.grade_judge import BASE_URL_ENV, MODEL_ENV
+from verifyit.spec import RUBRIC_LABELS, JudgeSpec
 
 from taskcompendium.importers.evalchemy.scorers import minerva
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
@@ -83,3 +85,20 @@ def test_minerva_worker_crash_remains_an_infrastructure_failure(tmp_path, monkey
     with ThreadPoolExecutor(max_workers=1) as workers:
         with pytest.raises(GradingInfraError):
             workers.submit(is_equiv, r"\sqrt{4}", "2").result(timeout=45)
+
+
+def test_judged_olympiad_sends_an_unmatched_boxed_answer_to_the_supplied_judge(judge_server, monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv(BASE_URL_ENV, f"http://127.0.0.1:{judge_server.server_port}/v1")
+    monkeypatch.setenv(MODEL_ENV, "fixture-judge")
+    judge = JudgeSpec(
+        references=("1/2",),
+        rubric=RUBRIC_LABELS,
+        exact_gate=False,
+        prompt_template="Reference: {reference}\nCandidate: {candidate}",
+        label_scores={"PASS": 1.0, "FAIL": 0.0},
+    )
+    verdict = score("olympiad", {"expected": ["1/2"], "judged": True}, r"The answer is \boxed{one half}", judge)
+    assert (verdict.reward, verdict.detail["method"], verdict.detail["extracted"]) == (1.0, "llm_judge", "one half")
+    [request] = judge_server.requests
+    assert request["messages"][-1]["content"] == "Reference: 1/2\nCandidate: one half"
