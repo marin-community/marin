@@ -35,6 +35,7 @@ from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from rigging.task_errors import ErrorIdentity
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
@@ -224,8 +225,8 @@ def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | No
     saved = reader.read_blob(old.result_blob)
     assert saved is not None
     raw = json.loads(saved)
-    failure = raw["failure"]
-    if failure is not None and failure["diagnostics"]["operation"] != RolloutOperation.GRADE:
+    failure = None if raw["failure"] is None else ErrorIdentity.model_validate(raw["failure"])
+    if failure is not None and failure.operation != RolloutOperation.GRADE:
         return None
     if failure is None and raw["grade"]["status"] not in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
         return None
