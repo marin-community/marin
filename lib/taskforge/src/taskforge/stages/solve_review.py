@@ -86,13 +86,16 @@ def render_message(message: Mapping[str, object]) -> str:
 
 
 def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
-    """A trial's messages, every conversation in order, then its grade; how the recording ended, or why there is no
-    transcript, is in its summary."""
+    """A trial's messages, every conversation in order, an interruption's marker, then its grade; how the recording
+    ended, or why there is no transcript, is in its summary."""
     messages = (
         ()
         if rollout is None
         else tuple(map(render_message, (m for c in rollout.rollout.conversations for m in c.messages)))
     )
+    failure = None if rollout is None else rollout.rollout.failure
+    if messages and failure:
+        messages = (*messages, f"[interrupted: the recording ends here ({failure.exception_type})]")
     grade = TypeAdapter(GradeResult | None).dump_python(trial.grade, mode="json")
     parts = (
         *messages,
@@ -104,9 +107,8 @@ def trial_source(trial: TrialResult, rollout: GradedRollout | None) -> Source:
         )
         ended = f"no transcript ({why or trial.cause}); the grade is all there is"
     else:
-        failure = rollout.rollout.failure
         ended = f"stop={rollout.rollout.stop_reason}" + (
-            f", recorder kept the prefix before {failure}" if failure else ""
+            f", interrupted: the recorder kept the prefix before {failure.exception_type}" if failure else ""
         )
     status = "ungraded" if trial.grade is None else f"{trial.grade.status} reward={trial.grade.reward}"
     summary = (
@@ -145,13 +147,14 @@ def task_sources(submission: Submission) -> tuple[Source, ...]:
     )
 
 
+def recorded(rollout: GradedRollout | None) -> bool:
+    """Whether a trial recorded any message to read, an interrupted prefix included."""
+    return rollout is not None and any(c.messages for c in rollout.rollout.conversations)
+
+
 def transcribed(rollout: GradedRollout | None) -> bool:
-    """Whether a trial's recording is whole: its rollout recorded messages and was not cut by an interruption."""
-    return (
-        rollout is not None
-        and rollout.rollout.failure is None
-        and any(c.messages for c in rollout.rollout.conversations)
-    )
+    """Whether a trial's recording is whole: it recorded messages and was not cut by an interruption."""
+    return recorded(rollout) and rollout is not None and rollout.rollout.failure is None
 
 
 def evidence(
@@ -196,7 +199,7 @@ async def solve_review(
     missing = (MissingEvidence(EvidenceKind.TRANSCRIPTS, f"solver trials {cut} have no complete transcript"),) * bool(
         cut
     )
-    if len(cut) == len(trials):  # owner's ruling: missing evidence is named on acceptance, never a hold
+    if not any(recorded(rollout) for _, rollout in trials):  # owner's ruling: named on acceptance, never a hold
         return SolveReview(index.version, ReviewEnd.SKIPPED, missing=missing)
     opening = Fresh(
         policy.prompt(f"{kind.prompts}.system").template,

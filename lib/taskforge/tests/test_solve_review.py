@@ -28,7 +28,7 @@ from lib.taskforge.tests.test_end_to_end import (
     unexpected_runtime,
 )
 from pydantic import TypeAdapter
-from rolloutengine.models import ConversationRecord, GradedRollout, Model, Rollout, TaskRolloutSpec
+from rolloutengine.models import ConversationRecord, GradedRollout, Model, Rollout, RolloutFailure, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
@@ -572,3 +572,26 @@ async def test_a_decline_needs_a_reason_beyond_whitespace() -> None:
     tool = RevisedSubmitTool(SubmitTool(lambda _: (), "/t.json", "/c.json"), (FOUND,))
     outcome = await tool(Context(log=EventLog()), {"declined": [{"finding": 0, "reason": "   "}]})
     assert "submit arguments failed validation" in text(outcome)
+
+
+async def test_an_interrupted_recording_is_reviewed_by_its_prefix_and_named_incomplete() -> None:
+    """Review 2026-11-21 (n11 P2): two interrupted recordings of two and three messages were skipped as missing."""
+    cut = RolloutFailure("OutputBudgetExhausted", {"z": 1, "a": 2})
+
+    def interrupted(index: int, *replies: str) -> tuple[TrialResult, GradedRollout]:
+        result, rollout = trial(index, 0.0, *replies)
+        assert rollout is not None
+        return result, replace(rollout, rollout=replace(rollout.rollout, failure=cut))
+
+    trials = (interrupted(0, "I add."), interrupted(1, "I add.", "I answer 9."))
+    accounts = [{**ACCOUNT, "trial": index} for index in (0, 1)]
+    reviewer = FakeInference((report(finding(cite("trial/1", 2, 2, "I answer 9.")), accounts=accounts),))
+    review = await reviewed(reviewer, trials)
+    opening = reviewer.requests[0].conversation[1].content
+    assert review.end is ReviewEnd.REPORTED and len(review.findings) == 1 and opening.count("interrupted") == 2
+    assert review.missing == (
+        MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [0, 1] have no complete transcript"),
+    )
+    assert evidence(SUBMISSION, trials, OUTPUT_CHARS).sources["trial/1"].parts[3] == (
+        "[interrupted: the recording ends here (OutputBudgetExhausted)]"
+    )
