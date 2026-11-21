@@ -6243,6 +6243,7 @@ dependencies = [
     { name = "marin-verifyit" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "s3fs" },
     { name = "typing-extensions" },
 ]
 
@@ -6266,6 +6267,7 @@ requires-dist = [
     { name = "marin-verifyit", editable = "lib/verifyit" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "typing-extensions", specifier = ">=4.10" },
 ]
 
