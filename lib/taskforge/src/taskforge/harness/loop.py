@@ -57,7 +57,13 @@ class AgenticHarness(Harness):
 
     @override
     async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+        self,
+        ctx: Context,
+        session: Conversation,
+        client: InferenceClient,
+        tools: Mapping[str, Tool[object]],
+        *,
+        spill: bool = True,
     ) -> Exit:
         prompt_tokens, empty_completions, degenerate_completions = 0, 0, 0
         turns = sum(message.role == Role.ASSISTANT for message in session.messages)
@@ -132,7 +138,13 @@ class AgenticHarness(Harness):
                     if isinstance(outcome, FinishRequest):
                         return Stopped(StopReason.FINISHED, session, outcome.reason, turns)
                     content = outcome.content
-                    if len(content) > self.output_chars:
+                    if len(content) > self.output_chars and not spill:  # every reply passes here, diagnostics too
+                        cut = (
+                            f"\n[reply cut at {self.output_chars} characters: "
+                            "this session has no machine to hold the rest]"
+                        )
+                        content = content[: max(self.output_chars - len(cut), 0)] + cut[: self.output_chars]
+                    elif len(content) > self.output_chars:
                         path = PurePosixPath(".tool-output") / f"{digest((call.id, content))}.txt"
                         data = content.encode()
                         await ctx.emit(WriteFile(path, data))

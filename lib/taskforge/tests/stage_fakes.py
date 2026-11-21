@@ -53,7 +53,13 @@ class RecordingHarness(Harness):
 
     @override
     async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+        self,
+        ctx: Context,
+        session: Conversation,
+        client: InferenceClient,
+        tools: Mapping[str, Tool[object]],
+        *,
+        spill: bool = True,
     ) -> Exit:
         self.session = session
         self.client = client

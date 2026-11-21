@@ -17,9 +17,8 @@ from typing import override
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ReturnRequest, Tool, ToolResult
-from taskforge.harness.tools.base import Outcome, ValidatedTool
+from taskforge.harness.tools.base import ValidatedTool
 from taskforge.model.content_hash import digest
-from taskforge.model.llm import ToolSchema
 from taskforge.model.review import Attribution, Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
 
 PAGE_ROOM = 120
@@ -79,26 +78,6 @@ def source_listing(evidence: Evidence, start: int = 0) -> str:
     summaries = [source.summary for source in evidence.sources.values()][start:]
     more = lambda after, left: f"[{left} more sources: list_evidence start={start + after}]"  # noqa: E731
     return bounded(summaries, evidence.output_chars, more) or "No more sources"
-
-
-@dataclass(frozen=True, slots=True)
-class Bounded[P]:
-    """A tool whose every reply, argument diagnostics included, fits in ``chars``: a machine-less visit requires it,
-    since a longer reply would spill to a file there is no machine to hold."""
-
-    tool: Tool[P]
-    chars: int
-
-    @property
-    def schema(self) -> ToolSchema:
-        return self.tool.schema
-
-    async def __call__(self, ctx: Context, args: Mapping[str, object]) -> Outcome:
-        outcome = await self.tool(ctx, args)
-        if not isinstance(outcome, ToolResult) or len(outcome.content) <= self.chars:
-            return outcome
-        cut = f"\n[reply cut at {self.chars} characters]"
-        return ToolResult(outcome.content[: self.chars - len(cut)] + cut)
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,4 +255,4 @@ class ReportTool(ValidatedTool[ReportArgs]):
 
 def evidence_tools(evidence: Evidence, report_tool: type[ReportTool]) -> Mapping[str, Tool[object]]:
     tools = (ListTool(evidence), ReadTool(evidence), SearchTool(evidence), report_tool(evidence))
-    return {tool.schema.name: Bounded(tool, evidence.output_chars) for tool in tools}
+    return {tool.schema.name: tool for tool in tools}

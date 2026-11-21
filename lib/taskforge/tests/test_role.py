@@ -4,8 +4,9 @@
 """The role runner: openings, machine-less sittings and the session it hands its caller."""
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
+from typing import override
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
@@ -15,14 +16,14 @@ from lib.taskforge.tests.stage_fakes import Environments
 from taskforge.effects.context import Context
 from taskforge.effects.events import ScopeEntered
 from taskforge.effects.log import EventLog
-from taskforge.harness import role as roles
-from taskforge.harness.protocol import Stopped
+from taskforge.harness.protocol import Stopped, ToolResult
 from taskforge.harness.role import Answer, Fresh, Visit, sitting
-from taskforge.harness.tools.evidence import Bounded
+from taskforge.harness.tools.base import ValidatedTool
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.workpiece import Conversation
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.env import WriteFile
 from taskforge.wiring import build_config
 
 
@@ -30,16 +31,11 @@ def finish(call_id: str) -> Completion:
     return Completion("", (ToolCall(call_id, "finish", json.dumps({"reason": "done"})),), FinishReason.TOOL_CALLS)
 
 
-def machine_less(role: roles.Role) -> roles.Role:
-    """``role`` with every tool's replies bounded, as a visit without a machine requires."""
-    return replace(role, tools={name: Bounded(tool, 4000) for name, tool in role.tools.items()})
-
-
 async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() -> None:
     ctx = Context(log=EventLog())
     client = FakeInference((finish("f"),))
     bundle = replace(resources(ctx), role_inference={"adversary": client})
-    role = machine_less(build_config(load_policy(DEFAULTS_DIR), {}).adversary)
+    role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     async with sitting(ctx, role, Visit("review", "unused", None), bundle) as session:
         outcome = await session(Fresh("system", "user"))
     assert isinstance(bundle.envs, Environments) and not bundle.envs.created
@@ -55,7 +51,7 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     ctx = Context(log=log)
     client = FakeInference((finish("again"),))
     bundle = replace(resources(ctx), role_inference={"adversary": client})
-    role = machine_less(build_config(load_policy(DEFAULTS_DIR), {}).adversary)
+    role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
     pending = Message(Role.ASSISTANT, "", (ToolCall("report-1", "report", "{}"),))
     saved = Conversation((Message(Role.SYSTEM, "s"), Message(Role.USER, "u"), pending), ())
     visit = Visit("adversary:finder", "validate/0/0/adversary:finder/0/0", None)
@@ -69,3 +65,38 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     with pytest.raises(ValueError, match="pending tool call"):
         async with sitting(ctx, role, Visit("x", "y", None), bundle) as session:
             await session(Answer(Conversation(saved.messages[:2], ()), "late"))
+
+
+@dataclass(frozen=True, slots=True)
+class NoArgs:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Loud(ValidatedTool[NoArgs]):
+    name = "loud"
+    description = "Reply with far more than a reply may hold."
+    args_type = NoArgs
+
+    @override
+    async def run(self, ctx: Context, args: NoArgs) -> ToolResult:
+        return ToolResult("x" * 50_000)
+
+
+async def test_a_machine_less_session_gets_every_reply_clipped_and_never_a_spill() -> None:
+    """Review 2026-11-21 (n11 follow-up 1, P1): the loop's own unknown-tool diagnostic spilled a reply to a file a
+    machine-less reviewer could never read. Every reply, tool output and loop diagnostic alike, is clipped instead."""
+    log = EventLog()
+    ctx = Context(log=log)
+    unknown = Completion("", (ToolCall("u", "x" * 50_000, "{}"),), FinishReason.TOOL_CALLS)
+    loud = Completion("", (ToolCall("l", "loud", "{}"),), FinishReason.TOOL_CALLS)
+    client = FakeInference((unknown, loud, finish("f")))
+    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
+    chars = load_policy(DEFAULTS_DIR).setting("tools.output_chars", int)
+    async with sitting(ctx, role, Visit("review", "unused", None, tools={"loud": Loud()}), bundle) as session:
+        await session(Fresh("system", "user"))
+    replies = [m.content for m in client.requests[-1].conversation if m.role == "tool"]
+    assert len(replies) == 2 and all(len(reply) <= chars for reply in replies)
+    assert all("this session has no machine" in reply for reply in replies)
+    assert not [record for record in log.records if isinstance(record.event, WriteFile)]

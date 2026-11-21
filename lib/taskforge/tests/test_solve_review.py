@@ -43,9 +43,8 @@ from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
 from taskforge.effects.issues import ContextExceeded, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
-from taskforge.harness.role import Visit, sitting
 from taskforge.harness.tools.base import Outcome as ToolOutcome
-from taskforge.harness.tools.evidence import Evidence, ListTool, ReadTool, SearchTool, Source
+from taskforge.harness.tools.evidence import Evidence, ReadTool, SearchTool, Source
 from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
@@ -534,14 +533,6 @@ async def test_no_reply_to_the_machine_less_reviewer_spills_to_a_file() -> None:
     await reviewed(reviewer, log=log)
     assert all(len(reply) <= OUTPUT_CHARS for reply in replies(reviewer))
     assert not [record for record in log.records if isinstance(record.event, WriteFile)]
-
-
-async def test_a_machine_less_visit_refuses_a_tool_that_does_not_bound_its_replies() -> None:
-    ctx = Context(log=EventLog())
-    unbounded = {"list_evidence": ListTool(evidence(SUBMISSION, TRIALS, OUTPUT_CHARS))}
-    with pytest.raises(ValueError, match="bound"):
-        async with sitting(ctx, config().solve_review, Visit("v", "v", None, tools=unbounded), stage_resources(ctx)):
-            pass
 
 
 async def test_a_failure_attributed_to_a_defect_needs_a_finding_that_survives_its_citations() -> None:
