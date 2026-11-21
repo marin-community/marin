@@ -58,7 +58,7 @@ def local_machine_factory(settings: LocalMachineSettings) -> LocalMachineFactory
 
 
 def cached_mirror_image(cache: ImageCache, mirror: LocalImageMirror, *, region: str) -> PreparedImage:
-    """Verify a same-region OCI mirror and atomically publish it in the digest cache."""
+    """Return a verified cache entry, or atomically cache its same-region OCI mirror."""
     require_regional_coreweave_bucket(mirror.uri, region)
     source = StoragePath(mirror.uri)
     image = RegistryImage(mirror.image)
