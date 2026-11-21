@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import re
 import tarfile
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
@@ -38,11 +39,15 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.grading_result import GradingFailure
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
-from experiments.post_training.task_curation.difficulty_config import CandidateRun
+from experiments.post_training.task_curation.difficulty_config import (
+    TASK_PROVIDER_SECRETS,
+    CandidateRun,
+)
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
@@ -56,11 +61,9 @@ MISSING_PREPARED_IMAGE_REASON = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = difficulty_gap_reason(DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT)
 NETWORK_POLICY_REASON = difficulty_gap_reason(DifficultyGap.NETWORK_POLICY_VIOLATION)
 MATH_DEADLINE_LIMIT = 3
-
-# Provider credential env names a task bundle may resolve from its granted guest
-# environment. Each resolves from the GSM-backed secret bundle at wave start; a
-# bundle naming any other provider credential fails the wave closed at dispatch.
-TASK_PROVIDER_SECRETS: frozenset[str] = frozenset({"TOGETHER_API_KEY"})
+# The judge transport records one of these typed tokens per failed attempt;
+# anything else in a verdict's transport evidence stays out of the ledger.
+_TYPED_TRANSPORT_IDENTITIES = re.compile(r"http_[1-5]\d{2}|timeout|connection")
 
 
 def task_required_provider_secrets(task_dirs: Iterable[Path]) -> frozenset[str]:
@@ -116,10 +119,11 @@ def grader_infrastructure_reason(*, verifier_reached: bool, verdict: dict | None
     """Typed reason when the grading infrastructure consumed the attempt.
 
     The verifier phase ran and either produced an ``infra_error`` verdict or
-    died before producing one. Task-input conditions, provider waits and
-    solver-side failures never reach this classification, and the identity is a
-    typed transport token (for example ``http_401``) or grading-failure value,
-    never free text.
+    died before producing one. run_task only calls this for attempts that
+    already excluded task-input conditions, provider waits and solver-side
+    failures; the verdict decides. The identity is one of the judge transport's
+    typed tokens (for example ``http_401``) or a grading-failure value; any
+    other evidence stays out of the ledger.
     """
     if not verifier_reached:
         return None
@@ -138,10 +142,13 @@ def grader_infrastructure_reason(*, verifier_reached: bool, verdict: dict | None
                     and record.get("outcome") == "failed"
                     and isinstance(record.get("reason"), str)
                 ):
-                    identity = record["reason"]
+                    candidate = record["reason"]
+                    if _TYPED_TRANSPORT_IDENTITIES.fullmatch(candidate):
+                        identity = candidate
                     break
-        if identity is None and isinstance(detail.get("failure"), str):
-            identity = detail["failure"]
+        failure = detail.get("failure")
+        if identity is None and failure in {item.value for item in GradingFailure}:
+            identity = failure
     return difficulty_gap_reason(DifficultyGap.GRADER_INFRASTRUCTURE_FAILURE, identity)
 
 

@@ -9,6 +9,12 @@ from pydantic import BaseModel, ConfigDict
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
 DATA_ACCOUNT = "data"
+TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
+# Provider credential env names a task bundle may resolve from its granted
+# guest environment. Each resolves from the GSM-backed secret bundle at wave
+# start; a bundle naming any other provider credential fails the wave closed
+# at dispatch.
+TASK_PROVIDER_SECRETS: frozenset[str] = frozenset({TOGETHER_API_KEY_ENV})
 SNOWBALL_VLLM_RELEASE_TAG = "marin-vllm-gpu-20260924-01911be34fac"
 
 

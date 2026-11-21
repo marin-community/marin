@@ -25,13 +25,19 @@ from marin.inference.config import VllmEngineConfig
 from marin.inference.iris import remote_inference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SECRETS_DIR, SECRETS_DIR_ENV, forwarded_secrets, require_secret
+from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret, secret_path
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
-from experiments.post_training.task_curation.difficulty_config import DATA_ACCOUNT, CandidateRun, JudgeRun
+from experiments.post_training.task_curation.difficulty_config import (
+    DATA_ACCOUNT,
+    TASK_PROVIDER_SECRETS,
+    TOGETHER_API_KEY_ENV,
+    CandidateRun,
+    JudgeRun,
+)
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
@@ -50,12 +56,7 @@ from experiments.post_training.task_curation.difficulty_serving_probe import (
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
 
 TOGETHER_BASE_URL = "https://api.together.xyz/v1"
-TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
 TOGETHER_MODEL = "zai-org/GLM-5.3"
-# Provider credential files the wave forwards from its job bundle into the
-# worker's private framework-secrets directory, where the dispatch scan resolves
-# them for task bundles that reference them.
-FORWARDED_PROVIDER_SECRET_FILES = ("TOGETHER_API_KEY",)
 
 
 def hosted_liveness_response(base_url: str, api_key: str, model: str) -> httpx.Response:
@@ -324,13 +325,16 @@ def run_trial_worker(
     # references one this wave cannot grant. Forward the job bundle's provider
     # credential files so that scan can resolve them without a second copy of
     # the value in this process.
-    job_secrets = Path(os.environ.get(SECRETS_DIR_ENV, str(SECRETS_DIR)))
-    for name in FORWARDED_PROVIDER_SECRET_FILES:
-        source = job_secrets / name
+    for name in sorted(TASK_PROVIDER_SECRETS):
+        source = secret_path(name)
         if source.is_file():
             target = secrets_dir / name
             target.write_bytes(source.read_bytes())
             target.chmod(0o600)
+        else:
+            LOGGER.info(
+                "Provider credential %s is absent from the job bundle; tasks referencing it fail at dispatch", name
+            )
     worker_env = {**os.environ}
     if daytona_api_key is not None:
         worker_env["DAYTONA_DATA_API_KEY"] = daytona_api_key

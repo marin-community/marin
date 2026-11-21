@@ -66,6 +66,25 @@ class Aggregation(StrEnum):
     PRODUCT = "product"
 
 
+# The provider's per-model authentication gate answers this exact identity with
+# HTTP 401 transiently while the credential itself is valid. It is a known
+# transient failure; the judge transport and provider relays retry exactly this
+# identity within their bounded backoff budgets.
+TRANSIENT_MODEL_AUTH_MESSAGE = "Model authentication required"
+
+
+def transient_model_auth(status_code: int, body: bytes | str) -> bool:
+    """Whether an upstream reply carries the provider's transient model-auth identity."""
+    if status_code != 401:
+        return False
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return isinstance(error, dict) and error.get("message") == TRANSIENT_MODEL_AUTH_MESSAGE
+
+
 class InvalidTask(Exception):
     """The task is malformed: a reference is missing or its grading contract is invalid."""
 

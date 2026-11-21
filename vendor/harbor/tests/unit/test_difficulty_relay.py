@@ -20,6 +20,7 @@ from transformers import PreTrainedTokenizerFast
 from taskcompendium.request_budget import RequestBudget
 
 from experiments.post_training.task_curation import difficulty_provider, difficulty_relay
+from verifyit.grade import TRANSIENT_MODEL_AUTH_MESSAGE
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_trials import preserved_model_traffic
 
@@ -104,7 +105,7 @@ def test_provider_retries_the_transient_model_auth_401_with_bounded_backoff(tmp_
     calls = []
     body = json.dumps({
         "error": {"type": "authentication_error", "code": "authentication_error",
-                  "message": difficulty_provider.TRANSIENT_MODEL_AUTH_MESSAGE},
+                  "message": TRANSIENT_MODEL_AUTH_MESSAGE},
     })
 
     def upstream(request):

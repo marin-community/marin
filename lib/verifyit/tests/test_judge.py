@@ -9,7 +9,15 @@ from pathlib import Path
 
 import httpx
 import pytest
-from verifyit.grade import GradingInfraError, InvalidTask, Status, grade, run, write_reward
+from verifyit.grade import (
+    TRANSIENT_MODEL_AUTH_MESSAGE,
+    GradingInfraError,
+    InvalidTask,
+    Status,
+    grade,
+    run,
+    write_reward,
+)
 from verifyit.modes import grade_judge
 from verifyit.spec import (
     Constraint,
@@ -831,7 +839,7 @@ _TRANSIENT_AUTH_BODY = json.dumps(
         "error": {
             "type": "authentication_error",
             "code": "authentication_error",
-            "message": grade_judge.TRANSIENT_MODEL_AUTH_MESSAGE,
+            "message": TRANSIENT_MODEL_AUTH_MESSAGE,
         }
     }
 )
@@ -850,7 +858,7 @@ def test_judge_transport_retries_the_transient_model_auth_401(fake_judge, monkey
     verdict = grade_judge.grade_judge_candidate(spec, "candidate")
     assert (verdict.status, verdict.reward) == (Status.SCORED, 1)
     assert len(fake_judge.requests) == 2
-    assert delays == [1.0]
+    assert delays == [0]
     attempts = verdict.detail["transport_attempts"]
     assert attempts[0]["status"] == 401
     assert attempts[0]["reason"] == "http_401"

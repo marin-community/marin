@@ -7,11 +7,11 @@ import pytest
 
 pytest.importorskip("harbor")
 
-from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason  # noqa: E402
+from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason
 
-from experiments.post_training.task_curation import difficulty_trials  # noqa: E402
-from experiments.post_training.task_curation.difficulty_prepared import PreparedTask  # noqa: E402
-from experiments.post_training.task_curation.difficulty_trials import (  # noqa: E402
+from experiments.post_training.task_curation import difficulty_trials
+from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
+from experiments.post_training.task_curation.difficulty_trials import (
     grader_infrastructure_reason,
     resolve_provider_secrets,
     task_guest_environment,
@@ -25,9 +25,7 @@ def judged_bundle(tmp_path):
     directory = tmp_path / "packet"
     directory.mkdir()
     (directory / "task.toml").write_text(
-        "[verifier]\n"
-        'timeout_sec = 600.0\n'
-        'env = { TOGETHER_API_KEY = "${TOGETHER_API_KEY}" }\n'
+        "[verifier]\n" "timeout_sec = 600.0\n" 'env = { TOGETHER_API_KEY = "${TOGETHER_API_KEY}" }\n'
     )
     (directory / "instruction.md").write_text("Original task")
     (directory / "tests").mkdir()
@@ -49,15 +47,20 @@ def test_bundle_without_credential_templates_requires_nothing(tmp_path):
     assert task_required_provider_secrets((directory,)) == frozenset()
 
 
-def test_ungrantable_provider_credentials_fail_the_wave_closed(judged_bundle):
+def test_ungrantable_provider_credentials_fail_the_wave_closed():
     with pytest.raises(ValueError, match="cannot grant"):
         resolve_provider_secrets(("OPENAI_API_KEY",))
 
 
 def test_unresolved_credentials_fail_the_task_before_any_attempt(judged_bundle):
     task = PreparedTask(
-        task_id="task", runtime_sha256="a" * 64, path=str(judged_bundle),
-        workload="native", backend="local", reason=None, judge_model=None,
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(judged_bundle),
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
     )
     with pytest.raises(ValueError, match="did not resolve"):
         task_guest_environment(task, {})
@@ -67,8 +70,13 @@ def test_resolved_credentials_grant_the_guest_environment(judged_bundle, monkeyp
     monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "resolved-" + name.lower())
     resolved = resolve_provider_secrets(("TOGETHER_API_KEY",))
     task = PreparedTask(
-        task_id="task", runtime_sha256="a" * 64, path=str(judged_bundle),
-        workload="native", backend="local", reason=None, judge_model=None,
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(judged_bundle),
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
     )
     assert task_guest_environment(task, resolved) == {"TOGETHER_API_KEY": "resolved-together_api_key"}
 

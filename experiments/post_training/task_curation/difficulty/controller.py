@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.difficulty.launch import cpu_job_co
 from experiments.post_training.task_curation.difficulty.ledger import read_rows
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason
+from experiments.post_training.task_curation.difficulty_config import TOGETHER_API_KEY_ENV
 from experiments.post_training.task_curation.difficulty_report import list_iris_jobs
 
 LOGGER = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ def launch_controller(
     command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:" + REFRESH_TOKEN_ENV])
     for name in CONTROLLER_SECRET_NAMES:
         command.extend(["--secret", name, "env:" + name])
-    command.extend(["--secret", "TOGETHER_API_KEY", TOGETHER_API_KEY_SECRET_REF])
+    command.extend(["--secret", TOGETHER_API_KEY_ENV, TOGETHER_API_KEY_SECRET_REF])
     command.extend(
         [
             "--secret",

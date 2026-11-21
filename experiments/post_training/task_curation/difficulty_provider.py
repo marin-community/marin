@@ -14,26 +14,11 @@ from threading import BoundedSemaphore, Lock
 
 import httpx
 from rigging.timing import ExponentialBackoff
+from verifyit.grade import transient_model_auth
 
 LOGGER = logging.getLogger(__name__)
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
-# The provider's per-model authentication gate answers this exact identity with
-# HTTP 401 transiently while the credential itself is valid. It is a known
-# transient failure and retries within the provider's bounded backoff.
-TRANSIENT_MODEL_AUTH_MESSAGE = "Model authentication required"
 ADMISSION_POLL_SECONDS = 1.0
-
-
-def transient_model_auth(status_code: int, body: bytes) -> bool:
-    """Whether an upstream reply carries the provider's transient model-auth identity."""
-    if status_code != 401:
-        return False
-    try:
-        payload = json.loads(body)
-    except ValueError:
-        return False
-    error = payload.get("error") if isinstance(payload, dict) else None
-    return isinstance(error, dict) and error.get("message") == TRANSIENT_MODEL_AUTH_MESSAGE
 
 
 @dataclass(frozen=True)
