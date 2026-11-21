@@ -3,12 +3,12 @@
 November 21, 2026 (PST).
 
 The learner-only integration and CPU proofs are ready; H100 acceptance remains
-pending. Smoke `2026.11.21.5`, from `832147b475a17ed9c803e8cbbb901203c85bccdd`,
-failed during model initialization with a 45.28-GiB GPU allocation request in
-`jit_load_from_state_dict`. A targeted import-memory fix passes local checks
-and independent review. Fresh smoke `2026.11.21.6` is submitted at BATCH priority
-from `40184fec60e355aefeb0a0f2075d429922b20c0e`. At 14:09 PST its CPU
-coordinator was running, with no GPU child yet discovered.
+pending. Smoke `2026.11.21.6`, from `40184fec60e355aefeb0a0f2075d429922b20c0e`,
+ran at BATCH priority and failed at 14:25:55 PST during model import: a
+56.79-GiB GPU allocation request in `jit_load_from_state_dict` exhausted memory.
+The failure occurred at the import-readiness barrier, before Adam allocation.
+The owned-buffer donation fix passes local checks and independent review, but
+does not make the full import fit. Converter peak-memory diagnosis is ongoing.
 Native Snowball initialization, updates, publication, generation,
 and checkpoint continuation remain unverified on H100. The matched comparison
 is gated on smoke acceptance.
@@ -65,7 +65,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Earlier smokes exposed device selection, mesh validation, response framing, and initialization timeout failures. Smoke `2026.11.21.5` reached HF model conversion, then failed a 45.28-GiB GPU allocation. No all-rank initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
+| Actual H100 | Earlier smokes exposed device selection, mesh validation, response framing, and initialization timeout failures. Smokes `2026.11.21.5` and `2026.11.21.6` failed GPU allocations during HF model conversion; the latter failed before Adam allocation. No all-rank initialization or update completed. | Current-source 32-GPU Snowball initialization, scoring, and two real parameter updates. |
 | Publication and resume | CPU Gloo replay and fresh-process native checkpoint transactions passed, including exact model, Adam, RNG, step, and model-averaging fingerprints. Four native child/host restart cases passed. | H100 NCCL/vLLM receiver replay with zero byte mismatches, subsequent nonempty generation stamped with the updated policy, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
@@ -98,7 +98,7 @@ independent source review passed for these fixes. The earlier broad suite had
 17 failures: six sandbox and ten router failures reproduced on clean main;
 one nested-launcher setup failure remained unclassified.
 
-## Failed smokes, current submission, and reproduction
+## Failed smokes and reproduction
 
 Smoke `2026.11.20.5` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2`,
@@ -177,7 +177,7 @@ for the imported model before allocating Adam state. Previously the donation
 flag covered only an abstract template. A tiny CPU compiler probe showed zero
 aliased bytes before that correction and 68,816 afterward, while retaining
 exact FP32 values and final shardings. This is local evidence of buffer reuse;
-the repaired source still requires an H100 fit check.
+the full-model import still failed its H100 fit check.
 
 The public import regression passes for FP32 and BF16 serialized weights with
 exact promoted-FP32 values, unchanged final shardings, and consumption of owned
@@ -187,10 +187,20 @@ a shared-storage Torch checkpoint probe. A shape-only census gives 9.30 GiB of
 FP32 model parameters per device on data4/expert8; it excludes optimizer state,
 import scratch, activations, and allocator overhead, and does not prove H100 fit.
 
-Fresh smoke `2026.11.21.6` was submitted through coordinator
+Smoke `2026.11.21.6` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.6-coordinator-6eb0f104`.
-It has verified BATCH priority, and its accepted archive matches all 4,582
-frozen entries, including 42 required runtime files. Native initialization
+Its child suffix was `users-dlwh-checkpoints-snowball-inventory-2026.11.21.6-a450bbb12bfe`.
+Both jobs had verified BATCH priority. Their accepted archives match all 4,582
+frozen entries, including 42 required runtime files. The executed input identities,
+native settings, allocation, and Ray configuration match the source freeze.
+The child failed at `2026-11-21T22:25:55.714Z`, with `RESOURCE_EXHAUSTED`
+requesting 56.79 GiB in `jit_load_from_state_dict`. This surfaced at
+`jax.block_until_ready(model)`, before optimizer state allocation. The source
+fix therefore separates import from Adam, but the converter itself still exceeds
+available GPU memory. No native initialization or update acceptance passed.
+Both jobs are failed, with zero preemptions and zero automatic failure retries.
+
+Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch
 and finalization. Ordinary RPCs retain their 1,800-second limit. This changes
