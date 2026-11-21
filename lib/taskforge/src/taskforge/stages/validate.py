@@ -267,7 +267,7 @@ async def run_adversary(
             )
         revisions = config.policy.setting("adversary.max_revisions", int)
         replays: list[tuple[AdversaryFinding, tuple[str, ...]]] = []
-        end, how = SearchEnd.REPORTED, "its session ended with a report and no reproduced finding"
+        end, how, limit = SearchEnd.REPORTED, "its session ended with a report and no reproduced finding", None
         ended: Exit | Conversation | None = report
         for revision in itertools.count(1):  # the first report is reproduced whatever the revision budget
             async with asyncio.TaskGroup() as group:
@@ -275,22 +275,24 @@ async def run_adversary(
                     group.create_task(reproduced(ctx, spec, claim, len(replays) + index))
                     for index, claim in enumerate(report.payload.findings)
                 ]
-            results = [claim.result() for claim in claims]
-            replays += results
+            replays += (results := [claim.result() for claim in claims])
             missed = tuple(finding for finding, failure in results if not failure and not actionable(finding))
             if not missed or revision > revisions:
                 break
             ctx.notify(Note(f"Adversary {name}: {len(missed)} finding(s) did not reproduce; revision {revision}"))
             try:
                 ended = await session(Answer(report.session, replay_feedback(missed, revisions - revision)))
-            except* OutputBudgetExhausted as error:
-                # It consumes the remaining revisions; the search ends at the conversation the exhausted command left.
-                end, how = SearchEnd.BUDGET_EXHAUSTED, f"its output budget ran out during revision {revision}"
+            except* OutputBudgetExhausted as error:  # ends at the conversation the exhausted command left
+                limit = SearchLimit.OUTPUT_BUDGET
                 ended = next((e.session for e in error.exceptions if isinstance(e, OutputBudgetExhausted)), None)
             if (revised := report_of(ended)) is None:  # the last report stands
-                how = how if end is SearchEnd.BUDGET_EXHAUSTED else f"its revision {revision} ended without a report"
+                how = f"its revision {revision} ended without a report"
                 break
             report = revised
+        if isinstance(ended, Stopped) and ended.reason is StopReason.CONTEXT_LIMIT:
+            limit = SearchLimit.CONTEXT_WINDOW
+        if limit is not None:  # a revision ran out of search budget, which consumes the remaining revisions
+            end, how = SearchEnd.BUDGET_EXHAUSTED, f"its {limit} ran out during revision {revision}"
         findings = tuple(finding for finding, _ in replays)
         # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
         reasons = tuple(

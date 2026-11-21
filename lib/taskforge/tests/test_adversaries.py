@@ -36,7 +36,7 @@ from taskforge.effects.log import EventLog, decode
 from taskforge.llm.policy import replay_arguments
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, Message
+from taskforge.model.llm import Completion, Message, Usage
 from taskforge.model.llm import Role as Speaker
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
@@ -318,6 +318,55 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     assert reject.continuation == Continuation(owner, SearchEnd.BUDGET_EXHAUSTED, digest(final), 2)
     decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Accept)
+
+
+# Review 2026-11-21 (follow-up 2): a revision that ran into the context window, through a provider rejection or the
+# harness's own prompt-window cutoff, kept the last report but typed the search end as reported with the generic note.
+# A voluntary finish is the control.
+@pytest.mark.parametrize(
+    ("revision", "stopped", "how", "turns"),
+    [
+        (
+            ContextExceeded("model window exceeded"),
+            SearchEnd.BUDGET_EXHAUSTED,
+            "its context window ran out during revision 1",
+            1,
+        ),
+        (
+            Completion("No report yet", usage=Usage(prompt_tokens=262144)),
+            SearchEnd.BUDGET_EXHAUSTED,
+            "its context window ran out during revision 1",
+            2,
+        ),
+        (
+            call("finish", {"reason": "nothing more"}, "finish"),
+            SearchEnd.REPORTED,
+            "its revision 1 ended without a report",
+            2,
+        ),
+    ],
+    ids=["provider rejection", "local cutoff", "voluntary finish"],
+)
+async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_with_its_last_report(
+    workpiece: Workpiece, revision: Completion | ContextExceeded, stopped: SearchEnd, how: str, turns: int
+) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
+    first = call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first")
+    client = FakeInference((first, revision))
+    ctx = Context(log=EventLog())
+    bundle = replace(stage_resources(ctx), role_inference={"adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    (reject,) = result.adversary
+    assert len(client.requests) == 2 and reject.status is AdversaryStatus.REPORTED
+    assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False)]
+    (reason,) = reject.reasons
+    assert reason == f"ran out of search budget without a finding ({how}); this is not a validation of the task"
+    assert reject.continuation is not None and reject.continuation.stopped is stopped
+    assert reject.continuation.turns == turns and reject.continuation.conversation is not None
+    if isinstance(revision, ContextExceeded):  # the conversation the rejected request carried
+        held = Conversation(client.requests[1].conversation, client.requests[1].tools)
+        assert reject.continuation.conversation == digest(held)
+    assert isinstance(default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget), Accept)
 
 
 # Review 2026-11-21: a report alleging a wrong score whose fresh verifier crashed correctly led to Modify, but the review
