@@ -18,7 +18,7 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 22 more H100 and 22 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris replaced the Kueue group for child `a8ae164919e7`. The five current tasks are waiting for 32 more H100 and 32 more InfiniBand allocations. | Admit the existing gang and bind native state, weight receiver and generation receipts to the successful task attempts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Distinct TPUv4 learner and serving hosts passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
@@ -345,7 +345,7 @@ with 100 verified scores per panel. Report incomplete panels with their
 attempted and verified counts.
 [Frozen evaluator UID assignment][frozen-validation-uid] · [Pinned validation panel in Filer][frozen-validation-panel]
 
-Current `main` uses the `experiments.post_training.rl` runner and named
+The baseline at `2bf3f721c9` uses the `experiments.post_training.rl` runner and named
 Snowball presets. The local port adds `levanter-smoke`, `learner-control`
 and `learner-levanter` presets for synchronous BATCH runs. Both Levanter
 presets emit native checkpoints. The existing `learning-medium`
@@ -664,17 +664,19 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   `1.58e-4` of the corresponding captured raw scores.
   [Cross-host tool-turn probe][iris-native-tool-turn-tpu]
 
-  Replay each turn with its own causal prefix and exact captured expert
-  routes. Retain the QB thresholds in each captured frame. Scatter its
-  sampled target scores back to their original response positions before
-  applying the original batch's RLOO-N advantages and normalized objective
-  weights in one update. A scratch CPU binder preserved the exact captured
-  routes, including different expert assignments in a shared prefix, and
-  rejected changed observations and missing or duplicate action owners.
-  The production loss gave identical values and gradients for the scattered
-  scores and the sum of globally weighted turn contributions, with zero
-  direct objective gradient at all nine tool tokens. Production learner
-  integration and a two-update TPU rerun remain open.
+  The typed learner replays each turn with its own causal prefix and exact
+  captured expert routes and retains each frame's QB thresholds. It selects
+  the predictor for each action on the original response axis, then runs one
+  vocabulary projection and applies the original batch's RLOO-N advantages
+  and normalized objective weights. The production loss gives identical
+  values and gradients for the assembled scores and the sum of globally
+  weighted turn contributions, with zero direct objective gradient at all
+  nine tool tokens. The integrated forward on CPU, with Splash in interpret
+  mode, matched the archived turns' independent fused scores bit for bit.
+  With reference attention, the learner scored a mixed-turn batch across two
+  microbatches, completed a real optimizer step and published changed weights.
+  Two accelerator updates across a tool turn, fresh-process restore and
+  production-context memory remain to be qualified.
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
   prompt IDs from SkyRL's chat client and binds the returned binary frame to
   the controller's expected policy identity. The turn records carry those
