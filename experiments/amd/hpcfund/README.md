@@ -19,8 +19,11 @@ repository root; the job changes to `$SLURM_SUBMIT_DIR` before it starts:
 ```bash
 mkdir -p logs
 sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh \
-    experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
+    experiments/amd/june_67b_a2b/synthetic_benchmark.py --size full --expert-axis 8
 ```
+
+`experiments/amd/june_67b_a2b/` is the June 67B-A2B model with the kernels
+selected on MI355X; its README has the multi-node benchmark command.
 
 The wrapper turns off XLA command buffers and allocator preallocation, keeps
 XLA autotune results out of the JAX compilation cache, and filters repeated
@@ -41,12 +44,12 @@ Pass `--overlap-collectives` to the wrapper, before the script, to add five XLA 
 
 ```bash
 sbatch -N2 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh --overlap-collectives \
-    experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --gpus-per-node 8 --expert-axis 8 --replica-axis 2
+    experiments/amd/june_67b_a2b/synthetic_benchmark.py --size full --gpus-per-node 8 --expert-axis 8 --replica-axis 2
 ```
 
 The flags are off by default because of the correctness caveat below.
 
-June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and data parallelism across nodes (`--expert-axis 8 --replica-axis 2`), 8 sequences of 4,096 tokens per GPU, `--moe-impl ring_filtered --pooled-transport-capacity-factor 1.1 --attention gpu_pallas_triton_flash --remat-mode save_moe`, step time as the median of steps 2-19:
+June Snowball (`experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full`), EP8 inside each node and data parallelism across nodes (`--expert-axis 8 --replica-axis 2`), 8 sequences of 4,096 tokens per GPU, `--moe-impl ring_filtered --pooled-transport-capacity-factor 1.1 --attention gpu_pallas_triton_flash --remat-mode save_moe`, step time as the median of steps 2-19:
 
 | Hardware | Nodes | Without the flags | With the flags | Change |
 |---|---|---|---|---|
