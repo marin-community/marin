@@ -25,6 +25,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     Grader,
     GradingAttempt,
+    JsonValueAnswer,
     PlainText,
     Source,
     TaskSpec,
@@ -86,6 +87,17 @@ def test_a_decision_model_task_round_trips_through_json():
 def test_a_cut_outside_the_level_band_is_rejected(cut):
     with pytest.raises(ValidationError):
         TypeAdapter(Grader).validate_python({**GRADER.model_dump(), "cut": cut})
+
+
+@pytest.mark.parametrize(
+    "answer_type,answer_format",
+    [(AnswerType.FILE, PlainText()), (AnswerType.JSON, JsonValueAnswer())],
+    ids=["file-answer", "json-only-format"],
+)
+def test_a_task_the_decision_model_cannot_read_is_rejected_at_construction(answer_type, answer_format):
+    fields = {**_task().model_dump(), "answer_type": answer_type, "answer_format": answer_format.model_dump()}
+    with pytest.raises(ValidationError, match="decision_model grader reads a text or action answer"):
+        TaskSpec.model_validate(fields)
 
 
 @pytest.mark.parametrize(

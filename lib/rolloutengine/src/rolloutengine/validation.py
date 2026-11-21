@@ -20,7 +20,6 @@ from taskcompendium.models import (
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
-from taskcompendium.submission import require_submission_compatibility
 
 from rolloutengine.grading import judge_connection
 from rolloutengine.machines import _machine_spec
@@ -60,17 +59,12 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     grader_environment = (
         grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not host_judge else None
     )
-    decision_model = isinstance(grader, DecisionModelGrader)
-    if decision_model and spec.decision_model is None:
+    if isinstance(grader, DecisionModelGrader) and spec.decision_model is None:
         raise ValueError("A decision_model grader needs TaskRolloutSpec.decision_model")
     if judge:
         judge_connection(spec)
-    if (judge or decision_model) and task.answer_type not in CONVERSATION_ANSWERS:
-        raise NotImplementedError(
-            f"The engine grades a {grader.kind} grader only on a conversation answer, not {task.answer_type}"
-        )
-    if decision_model:
-        require_submission_compatibility(task)
+        if task.answer_type not in CONVERSATION_ANSWERS:
+            raise NotImplementedError(f"The engine grades a judge only on a conversation answer, not {task.answer_type}")
     if task.answer_type == AnswerType.STATE and not isinstance(grader, NoGrader):
         raise NotImplementedError("The engine does not capture a state answer, so it cannot grade one")
     require_resolved_environment(task.environment_requirements)

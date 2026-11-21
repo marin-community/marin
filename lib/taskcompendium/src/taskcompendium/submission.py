@@ -32,7 +32,6 @@ from taskcompendium.models import (
     BaseAnswerFormat,
     Boxed,
     ConversationEvent,
-    DecisionModelGrader,
     FinalAction,
     FunctionDefinition,
     GradingAttempt,
@@ -187,10 +186,6 @@ def submission_compatibility(task: TaskSpec) -> SubmissionCompatibility:
         accepted = accepted_submission_types(verifier)
         if not any(produced in accepted for produced in answer_format.submission_types):
             return SubmissionCompatibility(("Submission envelope is not accepted by the selected verifier",))
-    if isinstance(task.grader, DecisionModelGrader) and not {TextSubmission, ActionSubmission} & set(
-        answer_format.submission_types
-    ):
-        return SubmissionCompatibility(("A decision model reads a text or action answer, not JSON",))
     if isinstance(answer_format, FinalAction) and not task.final_tools:
         return SubmissionCompatibility(("final action requires at least one final tool",))
     if isinstance(visible_format(answer_format), AnswerCall) and any(

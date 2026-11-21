@@ -299,9 +299,9 @@ def judge_task(answer_type: AnswerType = AnswerType.TEXT, *, model: str = "fixtu
     return arithmetic_task(answer_type=answer_type, grader=verifyit_package(spec, environment=GRADER_ENVIRONMENT).grader)
 
 
-def decision_model_task(answer_type: AnswerType = AnswerType.TEXT, **update) -> TaskSpec:
+def decision_model_task() -> TaskSpec:
     grader = DecisionModelGrader(deliverable="Six plus six.", rubric="Any numeral.", reference="12", cut=3.0)
-    return arithmetic_task(answer_type=answer_type, grader=grader, **update)
+    return arithmetic_task(grader=grader)
 
 
 def decision_model_spec(task: TaskSpec, connection: DecisionModelConnection | None) -> TaskRolloutSpec:
@@ -1508,20 +1508,6 @@ DECISION_MODEL = DecisionModelConnection("fixture-decision-model", _unused_read)
             ValueError,
             "TaskRolloutSpec.decision_model",
             id="decision-model-without-connection",
-        ),
-        pytest.param(
-            lambda: decision_model_spec(decision_model_task(AnswerType.FILE), DECISION_MODEL),
-            NotImplementedError,
-            "conversation answer",
-            id="decision-model-file-answer",
-        ),
-        pytest.param(
-            lambda: decision_model_spec(
-                decision_model_task(AnswerType.JSON, answer_format=JsonValueAnswer()), DECISION_MODEL
-            ),
-            ValueError,
-            "A decision model reads a text or action answer",
-            id="decision-model-json-answer",
         ),
         pytest.param(
             lambda: rollout_spec(judge_task(model=""), judge_connection=JUDGE_CONNECTION),

@@ -971,6 +971,14 @@ class TaskSpec(BaseModel):
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
         validate_output_paths(self.output_paths)
+        if isinstance(self.grader, DecisionModelGrader) and (
+            self.answer_type not in CONVERSATION_ANSWERS
+            or not {TextSubmission, ActionSubmission} & set(self.answer_format.submission_types)
+        ):
+            raise ValueError(
+                f"A decision_model grader reads a text or action answer, not a {self.answer_type} answer "
+                f"in {self.answer_format.kind}"
+            )
         if (
             isinstance(self.grader, VerifyitGrader)
             and self.grader.environment is None
