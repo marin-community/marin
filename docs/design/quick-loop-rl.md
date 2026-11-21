@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 21, 2026 at 3:42 a.m. PST.
+Draft for review. Accelerator status last checked November 21, 2026 at 4:06 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 24 more H100 and 24 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a8ae164919e7`. Kueue needs 22 more H100 and 22 more InfiniBand allocations to admit the five-task gang. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Distinct TPUv4 learner and serving hosts passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
@@ -586,22 +586,31 @@ CUDA and the TPU path also falls back for BF16. Benchmark that path at the
 current context and compare with a qualified faster kernel before
 concluding that native serving improves time per rollout group.
 
-The local qualification command at `c8fb8787cc` uses the pinned regional
-67B export, tokenizer revision and the maintained inventory preset's
-precision and fused projection settings. It drives four independently
-seeded requests on a fixed synthetic prompt to 24,576 tokens with 32
-targets per response, validates their binary frames and runs the fused
-learner scorer on the same loaded model. The full-forward scorer is
-configured to use FA4 on H100. Paged generation selects its own attention
-kernel.
+The local qualification command at `f9685c68dd` uses the regional 67B
+export, its completion manifest, the pinned tokenizer revision and the
+maintained inventory precision settings. Its inventory case uses four
+independently seeded samples with a 16,384-token prompt and an 8,192-token
+response each. The engine keeps the inventory's 24,576-token prefill
+capacity. The long-prompt case uses 24,544 prompt tokens and 32 generated
+tokens for a shorter diagnostic.
 
-The probe records load, allocation, generation and score timings, peak
-device bytes when available, raw score deltas and ratios outside the PPO
-clip range. A local EP2 run on two CPU devices retained exact FP32 router
-and router bias values from a mixed-precision HF export. It completed four
-requests at 128 tokens each including the prompts and rescored all 16 sampled
-targets. The maximum raw score difference was `2.69e-4` and no ratios
-crossed the clip bounds. The pinned 67B accelerator result remains open.
+The probe checks the regional completion manifest, config and shard index
+against their recorded hashes. It checks the loaded parameter count and
+stored FP32 router and QB dtypes before applying the serving compute cast.
+It records the weight manifest identity separately from the tokenizer
+revision. The paged generator uses its serving precision, and the FA4
+learner forward uses the learner's launch precision and fused projection.
+The inventory case requires all 32,768 targets and zero PPO clip crossings.
+
+The receipt records resolved inputs and loaded geometry before starting
+generation. It captures per-device allocator reports at each phase and
+separate first-invocation timings for KV allocation, generation, frame
+encoding, replay binding and fused scoring. The timing includes any
+compilation or cache reuse during that invocation. A two-device EP2 CPU
+control preserved FP32 router and QB values from a mixed-precision export,
+rejected rounded BF16 routing weights and mismatched metadata, and scored
+all targets for two prompt/response splits. The pinned 67B accelerator
+result remains open.
 
 The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
 the 524K-parameter fixture on one four-chip TPUv4 host. Each run used
@@ -628,7 +637,7 @@ for `marin-core` and `marin-levanter`.
 
 ```bash
 JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball_native_qualification \
-  "$IRIS_OUTPUT_DIR/snowball-native-full-context.json"
+  --case inventory "$IRIS_OUTPUT_DIR/snowball-native-full-context.json"
 ```
 
 - Connect the native backend to the RolloutEngine operations used by the
@@ -640,6 +649,27 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   and four CPU devices, learner replay matched both turns' raw scores and
   gave every added tool or boundary token zero objective gradient. Both
   frames used the same acknowledged installed policy.
+
+  The two-host TPUv4 probe at `63fb947665` executed the tool and captured
+  both binary replies under policy 0. All 24 overlapping tokens and
+  positions matched, and all 48 overlapping expert assignments matched.
+  The first turn's terminal token was captured through decode. The second
+  turn recomputed it during prefill. Two QB threshold values differed at
+  that shared token, with a maximum absolute difference of `1.91e-4`.
+  The exact overlap assertion stopped the probe before learner scoring.
+  The typed learner on CPU then rejected the same archived frames at
+  the production overlap check, using the same weights and model binding.
+  [Cross-host tool-turn probe][iris-native-tool-turn-tpu]
+
+  Replay each turn with its own causal prefix and exact captured expert
+  routes. Retain the QB thresholds in each captured frame. Scatter its
+  sampled target scores back to their original response positions before
+  applying the original batch's
+  RLOO-N advantages and normalized objective weights in one update. Tool
+  tokens carry context with zero direct objective weight. A merged route
+  map has one value per position and cannot represent two distinct captures
+  of the same prefix. Validate exact action coverage and keep the changed
+  observation rejection when qualifying the per-turn path on TPU.
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
   prompt IDs from SkyRL's chat client and binds the returned binary frame to
   the controller's expected policy identity. The turn records carry those
@@ -729,7 +759,14 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
 - Run a matched Levanter/vLLM versus Levanter/native comparison. Hold learner,
   task mix, sampling and fixed evaluation panel constant. Record hardware
   and cost, time per admitted group and optimizer update, and fixed-panel
-  reward. Both maintained arms log `timing/rollout_admission_window_seconds`
+  reward. For the maintained two-update pair, the primary fixed panel is
+  `eval-lite@2026.11.17.1`. The published 100-task Parquet has SHA-256
+  `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
+  Require all four attempt-scoped panels at steps 0 and 2, with each task
+  ID, prompt token sequence and score reconciled against the successful
+  attempts. Compare step 2 separately because step 1 includes the learner
+  subprocess checkpoint round trip. Both maintained arms log
+  `timing/rollout_admission_window_seconds`
   and `rollout/admission_window_groups` for fresh, full batches at zero
   staleness. The buffer's clock measures from policy lease opening through
   final group admission. Divide the sum of elapsed seconds by the sum of
@@ -790,6 +827,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-runtime-splash]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-splash-tpu-20261121-09
 [iris-native-runtime-protobuf]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-protobuf-tpu-20261121-11
 [iris-native-cross-host]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-12
+[iris-native-tool-turn-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-turn-tpu-20261121-26
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
