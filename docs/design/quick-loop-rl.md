@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 20, 2026 at 11:13 p.m. PST.
+Draft for review. Accelerator status last checked November 20, 2026 at 11:30 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,10 +18,10 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. Kueue still denied quota for the five-task gang at 11:13 p.m. It reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris retried the preempted coordinator and created child `a4f09610f02b`. Kueue still denied quota for the five-task gang at 11:30 p.m. It reported a shortfall of 24 GPUs and 24 InfiniBand allocations. | Admit the existing gang and collect native state, weight receiver and generation receipts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer and replay gate below. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two fused-scorer optimizer updates passed on four TPUv4 chips at `a5cfd7cbcc` with local cache installation. A separate CPU proof installed optimizer updates in a serving subprocess with fresh KV. | Verify the deployed handoff from four learner hosts to one serving host. |
-| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and mixed-precision serving. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
+| Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns, four-way batching and exact verification of the installed compute weights. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
 | Typed binary protocol | Separate Snowball serving and learner processes exchanged protobuf and binary tensor frames through two updates. Native SkyRL trajectory rows carry those frame bytes. The existing learner pipe uses a binary pickle envelope, and expert-block publication uses binary NCCL. | Use the bounded binary stream at the deployed native service boundary. Migrate the learner envelope after learner acceptance. |
 
 [Quick-loop branch status][learner-status] · [Regional Iris smoke][iris-smoke] ·
@@ -176,15 +176,23 @@ byte-for-byte. Both proofs ran on one and four CPU devices. See the local
 controller and multi-process publication checks for the next integration
 boundary.
 
-The real learner worker now publishes immutable, weights-only TensorStore
-snapshots through its command path at `457bde3a3d`. Each learner process
-hashes its owned FP32 weight slices and exchanges only the small digests.
-The serving restore validates those logical slices before casting for
-inference. CPU tests with one and two learner processes verified steps
-0 through 2, exact retry receipts, rejection of mismatched weights, and a
-bitwise-identical next update after learner restore. The digest includes
-the publisher's shard layout. A single serving host can verify the same
-receipt on a different local layout.
+The learner worker publishes immutable, weights-only TensorStore snapshots.
+Each learner process hashes its owned logical slices and exchanges only
+the digests. The `snowball-weights-v2` protocol at `4594784248` publishes
+the learner's compute weights. Inventory uses BF16 with FP32 router
+weights and router bias. The serving process restores the same bytes and
+verifies their dtypes and digests before it acknowledges the new policy
+and opens generation with fresh KV state. The receipt includes the
+publisher's shard layout, so the serving host can verify the same slices
+on a different local layout. Native learner checkpoints retain the FP32
+master weights and optimizer state.
+
+Local CPU tests installed versions 0 through 2 across the worker pipe and
+rejected stale identities. They exercised publication from one and two
+learner processes and a bitwise-identical next update after restoring the
+trainer. A local Ray run installed two mixed-precision snapshots while
+preserving exact binary replay across tool turns. Verification across
+accelerator hosts remains open.
 
 The local `snowball_rl` artifact main at `2a8cbaf1c7` renders two-update
 presets named `levanter-inventory-native` and `levanter-inventory-vllm`.
@@ -203,19 +211,13 @@ client and that the isolated JAX interpreter can import the binary endpoint.
 These checks passed on CPU with JAX and JAXLIB 0.11.0. GPU startup remains a
 qualification step.
 
-The first deployed install uses regional TensorStore as a correctness
-baseline. It writes the learner's FP32 weights and verifies the restored
-FP32 slices. The serving process then casts to BF16 using the learner's FP32
-overrides for routers and router bias. Twelve CPU serving and learner tests
-passed together, including exact checkpoint continuation and installed-policy
-evaluation sampling. Verification of each rank's installed BF16 shards remains
-open. At 67.078B parameters one write and one
-full read move about 537 GB of logical weight data per publication, or
-13.4 TB over 25 updates before compression, initialization and retries.
-Measure upload, restore, byte verification and cache allocation separately.
-If publication dominates update time, the serving compute view is the first
-candidate for a smaller payload. Any transport change must preserve the
-install barrier and verified tensor identity.
+Regional TensorStore is the first deployment transport. At 67.078B
+parameters, including about 17 million FP32 routing values, one write and
+one read of the compute weights move about 268 GB of logical data per
+publication. The earlier FP32 transport would move about 537 GB. The
+compute-weight estimate is 6.7 TB over 25 publications before compression,
+initialization and retries. Measure upload, restore, byte verification
+and cache allocation separately on H100.
 
 The serving endpoint at `74414c2cdb` uses the existing bounded Marin
 worker pipe. The host client works without JAX or Torch. It passes exact
@@ -279,6 +281,15 @@ against the regional task selection. Megatron uses version `2026.11.20.6`
 and Levanter uses `2026.11.20.7`. Both enable publication verification.
 The trainer differences are the learner strategy, batch builder and
 Levanter policy configuration. Submission follows smoke acceptance.
+
+For each arm, collect Finelog rows for the successful child and attempt.
+The trainer mirrors its metrics as `WANDB_MIRROR` events. Match them by
+optimizer step with the rollout and update completion lines. The frozen
+evaluator writes per-dataset rows beneath `exports/dumped_evals`.
+Verify both arms evaluated the same 100 task IDs at the initial and final
+steps. Check attempted and scored counts and verifier coverage before
+comparing fixed-panel reward. Keep incomplete panels visible in the
+report.
 
 Current `main` uses the `experiments.post_training.rl` runner and named
 Snowball presets. The local port adds `levanter-smoke`, `learner-control`
@@ -521,14 +532,15 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
 - Run a matched Levanter/vLLM versus Levanter/native comparison. Hold learner,
   task mix, sampling and fixed evaluation panel constant. Record hardware
   and cost, time per admitted group and optimizer update, and fixed-panel
-  reward. For group throughput, divide total elapsed time from opening
-  each policy's rollout leases to completing group admission by the actual
-  admitted group count across those steps. Use the `Rollout batch completed`
-  count, `timing/wait_for_generation_buffer`, `timing/step`, and
-  `timing/sync_weights` from the trainer. Use trajectory timings to
-  distinguish generation, tool execution and grading. In the prior FP8 run,
-  mean decode time fell 13%, the wait for rollout groups rose 6.1 minutes
-  and time to the same evaluation target rose 5.7 minutes.
+  reward. Sum `timing/wait_for_generation_buffer` over the same completed
+  updates and divide by the sum of admitted groups from the matching
+  `Rollout batch completed` lines. Compare `timing/step` over that window
+  and report `timing/sync_weights` separately. Use trajectory timings to
+  distinguish generation, tool execution and grading. In the prior FP8
+  comparison, the archived trainer events reproduce 37.0 versus 43.1
+  minutes waiting for groups through update 15. The initial and update-15
+  dumps contain the same 100 task IDs across both arms. FP8 mean decode
+  time fell 13% and time to the same evaluation target rose 5.7 minutes.
   [Prior timing comparison][timing]
 
 ## Open decisions
