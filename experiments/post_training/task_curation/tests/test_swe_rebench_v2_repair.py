@@ -15,8 +15,6 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     SETUP_TIMEOUT_SEC,
-)
-from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     _flatten,
     admission_receipt_labels,
     dockerfile,
@@ -545,11 +543,19 @@ def test_gate_doubles_the_setup_deadline_for_the_slow_tail():
     population finishes its setup in ~126-185 s, but a long tail of heavy installs exceeds
     the declared 1800 s and dies as "Public fixture initialization timed out". The gate's
     trial package doubles the setup deadline (the 4cpu/8GB profile stretches the tail)."""
-    row = {**PYTHON_ROW, "tags": ["swe-rebench"], "quality_flags": [], "env": [],
-           "image_name": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64,
-           "problem_statement": "Fix the bug.", "patch": "diff --git a/x",
-           "FAIL_TO_PASS": ["tests/test_x.py::test_a"], "PASS_TO_PASS": ["tests/test_x.py::test_b"],
-           "test_files": ["tests/test_x.py"], "test_patch": "diff --git a/tests/test_x.py"}
+    row = {
+        **PYTHON_ROW,
+        "tags": ["swe-rebench"],
+        "quality_flags": [],
+        "env": [],
+        "image_name": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64,
+        "problem_statement": "Fix the bug.",
+        "patch": "diff --git a/x",
+        "FAIL_TO_PASS": ["tests/test_x.py::test_a"],
+        "PASS_TO_PASS": ["tests/test_x.py::test_b"],
+        "test_files": ["tests/test_x.py"],
+        "test_patch": "diff --git a/tests/test_x.py",
+    }
     files = row_variant_files(row, "condensed", "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64)
     document = tomlkit.parse(files["task.toml"])
     assert document["environment"]["setup"]["timeout_sec"] == SETUP_TIMEOUT_SEC * 2
