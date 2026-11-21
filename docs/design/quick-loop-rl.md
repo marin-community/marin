@@ -18,7 +18,7 @@ protocol for internal rollout and learner traffic.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris replaced the Kueue group for child `a8ae164919e7`. The five current tasks are waiting for 32 more H100 and 32 more InfiniBand allocations. | Admit the existing gang and bind native state, weight receiver and generation receipts to the successful task attempts. |
+| H100 smoke `2026.11.20.5` | Source `6936528c55`. Iris replaced the Kueue group for child `a8ae164919e7`. All five current tasks are waiting for the regional H100 and InfiniBand quota. | Admit the existing gang and bind native state, weight receiver and generation receipts to the successful task attempts. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | Two updates passed on one four-chip TPUv4 host with serial learner and serving subprocesses, exact restores and binary replay. The 256-token BF16 learner passed with both reference and Splash Attention. Distinct TPUv4 learner and serving hosts passed two updates using regional GCS. | Verify the deployed handoff from four learner hosts to one serving host. |
 | Native inventory backend | Both inventory presets pass regional read-only plans and local Iris driver checks. CPU tests cover two policy windows, binary tool turns and four-way batching. A small TPUv4 run reproduced the exact continuation after an interrupted checkpoint save. | Run the pinned 67B probe, then qualify the native inventory launcher and compare serving backends. GPU submission is pending. |
@@ -674,9 +674,13 @@ JAX_PLATFORMS=cuda uv run --no-sync python -m experiments.post_training.snowball
   nine tool tokens. The integrated forward on CPU, with Splash in interpret
   mode, matched the archived turns' independent fused scores bit for bit.
   With reference attention, the learner scored a mixed-turn batch across two
-  microbatches, completed a real optimizer step and published changed weights.
-  Two accelerator updates across a tool turn, fresh-process restore and
-  production-context memory remain to be qualified.
+  microbatches and published weights from a real optimizer step. A separate
+  CPU control on `e58727f2b0` completed two real SkyRL tool episodes and
+  updates. A fresh learner restored step 1 exactly. One serving process
+  installed v0 through v2, rejected stale requests after both updates and
+  generated and evaluated under v2. The two-host TPUv4 replay of this control
+  is running. Production-context memory remains to be qualified.
+  [TPUv4 tool-turn restart run][iris-native-tool-restart-tpu]
 - The local `NativeReplayChat` adapter at `59dd3a0277` sends the exact
   prompt IDs from SkyRL's chat client and binds the returned binary frame to
   the controller's expected policy identity. The turn records carry those
@@ -835,6 +839,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-runtime-protobuf]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-protobuf-tpu-20261121-11
 [iris-native-cross-host]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-12
 [iris-native-tool-turn-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-turn-tpu-20261121-26
+[iris-native-tool-restart-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-tool-restart-tpu-20261121-27
 [iris-native-cross-host-typed-tpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-tpu-20261121-25
 [iris-native-cross-host-cpu]: https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-crosshost-cpu-20261121-13
 [native-cross-host-learner]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-proof%2F2026.11.21.13%2Flearner.tar.zst
