@@ -442,6 +442,18 @@ def data_buckets() -> Mapping[str, BucketSpec]:
     return MappingProxyType(registry)
 
 
+def require_regional_coreweave_bucket(uri: str, region: str) -> None:
+    """Require a declared CoreWeave S3 bucket in the supplied execution region."""
+    source = StoragePath(uri)
+    if source.scheme != "s3":
+        raise ValueError("Regional artifacts require CoreWeave S3")
+    bucket = data_buckets()[source.bucket]
+    if bucket.store is not StoreType.COREWEAVE or bucket.signing_region is None:
+        raise ValueError("Regional artifacts require a declared CoreWeave bucket region")
+    if bucket.signing_region.casefold() != region.casefold():
+        raise ValueError("Stage the artifact in the execution region before use")
+
+
 @functools.cache
 def store_configs() -> Mapping[StoreType, StoreConfig]:
     """Every declared :class:`StoreConfig` across all cluster configs.
