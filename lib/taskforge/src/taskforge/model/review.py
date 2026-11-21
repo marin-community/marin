@@ -15,6 +15,11 @@ from taskcompendium.grading_result import GradeResult
 
 from taskforge.model.controls import Candidate
 
+OMIT_DEFAULT = Field(exclude_if=lambda value: value is None or value == "")
+"""Persistence rule: a new optional persisted field is omitted from the serialised form when it holds its default, so
+adding it changes no existing bytes (the author hydrates earlier evidence into the sandbox and replays it by position).
+Mark every such field ``Annotated[T, OMIT_DEFAULT]``; a change of meaning instead bumps the journal format."""
+
 
 class Cause(StrEnum):
     """Why a trial has no grade. Incomplete evaluation cannot support acceptance."""
@@ -55,7 +60,7 @@ class Accept:
 
     band: BandOutcome
     reasons: tuple[str, ...] = ()
-    restore: str | None = None
+    restore: Annotated[str | None, OMIT_DEFAULT] = None
     kind: Literal["accept"] = "accept"
 
 
@@ -72,7 +77,7 @@ class Modify:
 
     findings: tuple[str, ...]
     placement: BandOutcome | None = None
-    fallback: str | None = None
+    fallback: Annotated[str | None, OMIT_DEFAULT] = None
     kind: Literal["modify"] = "modify"
 
 
@@ -130,7 +135,7 @@ class TrialResult:
     trial: int
     grade: GradeResult | None
     cause: Cause | None = None
-    detail: str = ""
+    detail: Annotated[str, OMIT_DEFAULT] = ""
 
 
 @dataclass(frozen=True, slots=True)

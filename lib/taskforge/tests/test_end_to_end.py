@@ -76,6 +76,7 @@ from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, R
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import (
+    VALIDATION_RESULT,
     Abandon,
     Accept,
     AdversaryStatus,
@@ -84,6 +85,7 @@ from taskforge.model.review import (
     Budget,
     Cause,
     Decision,
+    Incomplete,
     Modify,
     Retry,
 )
@@ -92,7 +94,15 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpie
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand, ShellboxEnv, WriteFile
+from taskforge.resources.env import (
+    CommandResult,
+    EnvFactory,
+    ReadFile,
+    RunCommand,
+    ShellboxEnv,
+    WriteFile,
+    WriteFiles,
+)
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
 from taskforge.resources.inference import InferenceClient, InferenceRequest
@@ -2015,24 +2025,55 @@ def plant_root(directory: Path, fixture: Path) -> Path:
     return directory
 
 
+N8_AUTHOR_HELD = Path(__file__).parent / "fixtures" / "n8-author-revision-held-root.json.gz"
+N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restored-root.json.gz"
+
+
 # Review 2026-11-21: n7 resumed this n6 head, accepted a fresh empty adversary report and published a round-0 Accept
 # without the author repair, dropping the finding both verifier grades had confirmed and the Modify it caused.
+# Review 2026-11-21 (n9): a format-4 root held in author revision re-held forever at its first positional write, and
+# an accepted one lost its restoration provenance on read.
 @pytest.mark.parametrize("resume_held", [True, False])
-async def test_a_format_3_root_needs_migration_before_claim_and_stays_untouched(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool
+@pytest.mark.parametrize(
+    "fixture,found",
+    [(N6_MODIFY_HELD, 3), (N8_AUTHOR_HELD, 4), (N8_ACCEPTED_RESTORED, 4)],
+    ids=["n6 modify held", "n8 author revision held", "n8 accepted restored"],
+)
+async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool, fixture: Path, found: int
 ) -> None:
-    """The fixture is the whole root the n6 driver (d510505b69) published under ``{"adversary.roster":
-    ["adversary"]}``: a finding with an expected reward band that both verifier grades confirmed, Modify, and the
-    author held in round 1 (73 rows). Format 4 changed what an adversary finding means, so no reader resumes it."""
-    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), N6_MODIFY_HELD)
-    assert json.loads((destination / HEAD).read_text())["format"] == 3
+    """Each fixture is a whole published root. The n6 one (d510505b69, ``{"adversary.roster": ["adversary"]}``)
+    holds a finding both verifier grades confirmed, Modify, and the author held in round 1 (73 rows); format 4
+    changed what an adversary finding means. The n8 ones (0fc30838db, this file's ``SETTINGS``, every first-attempt
+    trial solved and every later one failed) are 58 rows held at the round-1 author's first model call and 96 rows
+    accepted on the restored too-easy baseline; format 5 changed what a decision, a fallback and a solver slot
+    mean."""
+    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
+    assert json.loads((destination / HEAD).read_text())["format"] == found
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)  # no model, sandbox or verifier is ever built
     driver_args.resume_held = resume_held
-    with pytest.raises(LogFailure, match=f"has journal format 3, not {checkpoint.JOURNAL_FORMAT}") as raised:
+    with pytest.raises(LogFailure, match=f"has journal format {found}, not {checkpoint.JOURNAL_FORMAT}") as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert tree(destination) == before and not Path(driver_args.work_dir).exists()
+
+
+def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(proposal: TaskProposal) -> None:
+    """Adding an optional persisted field changes no existing bytes: the n8 author hydrated these exact bytes."""
+    root = json.loads(gzip.decompress(N8_AUTHOR_HELD.read_bytes()))
+    records = decode("".join(root[f"chunks/{name}"] for name in json.loads(root[HEAD])["chunks"]).encode())
+    (written,) = {
+        data
+        for record in records
+        if isinstance(record.event, WriteFiles)
+        for path, data in record.event.files
+        if path.name == "0.json" and path.parent.name == ".validation"
+    }
+    assert VALIDATION_RESULT.dump_json(VALIDATION_RESULT.validate_json(written)) == written
+    decisions = (Accept(BandOutcome.IN_BAND), Modify(("harder",), BandOutcome.TOO_EASY), Incomplete(("held",)))
+    snapshot = json.loads(WORKPIECE.dump_json(Workpiece("w", proposal, decisions=decisions)))
+    assert "fallback" not in snapshot and not {"restore", "fallback"} & {key for d in snapshot["decisions"] for key in d}
 
 
 STATUS = PurePosixPath("/workspace/status.txt")
