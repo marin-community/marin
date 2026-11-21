@@ -1226,10 +1226,11 @@ def test_expert_weight_import_preserves_template_partitioning():
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=random.key(31))
             template = model.transformer
+            gate_up_spec = P("context", "data", "model")
             for index in range(len(template.blocks)):
                 for field, spec in (
-                    ("w_gate", P("context", "data", "model")),
-                    ("w_up", P("context", "data", "model")),
+                    ("w_gate", gate_up_spec),
+                    ("w_up", gate_up_spec),
                     ("w_down", P("context", "model", "data")),
                 ):
                     weight = getattr(template.blocks[index].mlp.expert_mlp, field)
