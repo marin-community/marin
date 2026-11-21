@@ -933,3 +933,41 @@ and verifies their SHA-256 hashes. It uses the original step-zero mixture weight
 remains pinned by `specs/sft-data.yaml` for production SFT. Stored parameters must
 be FP32. Tests that read these production pins are CPU
 integration tests; ordinary offline tests do not require object-store access.
+
+## Serving load measurements
+
+`experiments.post_training.long_loop.throughput --spec <regional-json-uri>` runs
+qualification or a load sweep inside an Iris GPU gang. It uses the shared Marin
+`VllmBackend`, the pinned GPU wheel and native Iris/vLLM topology. Qualification
+requires successful streaming requests and captured CUDA graphs in each task's
+retained log. It does not enable eager execution.
+
+The JSON spec declares `mode` (`qualify` or `benchmark`), `source_revision`,
+`model` (`ModelSpec` fields), `engine` (`VllmEngineConfig` fields other than the
+pinned launcher/source/release), `geometry` (`ServingGeometry` fields), and
+`output_uri`. A benchmark also declares `workloads`, `seeds`, `concurrencies`,
+`warmup_seconds`, `measurement_seconds` and `request_timeout_seconds`.
+Synthetic workloads declare `kind: synthetic`, a `name`, `context_repetitions`
+and `output_tokens`. Replay workloads declare `kind: replay`, a `name`, an
+immutable JSONL `uri` and the `request_digest({"requests": rows})` SHA-256.
+Replay rows contain `identity`, `path` and `body` from `LoadRequest`.
+
+`marin.inference.load_workloads` builds the same synthetic text for both models
+and extracts assistant-turn prompt prefixes from retained native Micro210 rows.
+The replay excludes the response being regenerated. Tool-dependent prefixes
+require recorded tool declarations. Preserve a source inventory and its hashes
+beside the replay; keep prompts and results in private object storage.
+
+`marin.inference.load_test` keeps a closed-loop client load active through warmup
+and the measurement window. It records final token usage, request TTFT, TPOT,
+decode rate, errors, server token-counter deltas, queue time, KV use and prefix
+hits. Server counters define window throughput. Request-cohort throughput
+includes drain and is reported separately. Prompt counters include cache hits;
+they are not isolated prefill compute throughput. Missing/reset counters remain
+unavailable, and a failed request invalidates the run. Retain raw per-request
+timings and labeled metric samples to audit normalization across DP ranks.
+
+Submit through Iris at production priority, with explicit GPU count, rack
+locality and job deadline. Prepare large model snapshots with a CPU job in the
+same region before reserving accelerators. Record every submission ID and hand
+long jobs to the task's watchdog.
