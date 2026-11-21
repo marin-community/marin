@@ -11,8 +11,9 @@ from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from verifyit.modes.grade_judge import JudgeCompletion, JudgeRequest
 
 from taskforge.effects.context import Context
+from taskforge.effects.issues import ContextExceeded
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
-from taskforge.model.llm import Completion, Message, Role
+from taskforge.model.llm import Completion, FinishReason, Message, Role
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 from taskforge.resources.rollouts import Engine
 
@@ -58,7 +59,10 @@ class JudgeEngine:
             sampling = LLMPolicy(request.max_output_tokens, effort, temperature=0.0, max_continuations=0)
             async with self.ctx.scope("judge"):
                 self.ctx.handle(InferenceRequest, execute, self.client)
-                return await self.ctx.emit(InferenceRequest(messages, (), sampling, sample=sample))
+                result = await self.ctx.emit(InferenceRequest(messages, (), sampling, sample=sample))
+            if result.finish_reason is FinishReason.CONTEXT_EXCEEDED:
+                raise ContextExceeded(result.content)
+            return result
 
         def judge(request: JudgeRequest) -> JudgeCompletion:
             # VerifyIt calls this from its grading thread; the owning loop alone executes and records effects.
