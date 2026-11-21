@@ -199,9 +199,9 @@ def sources() -> list[RlDataSource]:
             config=PrebuiltCohort(
                 intended_use=IntendedUse.TRAIN,
                 name="forge-main-20261117",
-                version="2026.11.18.2",
+                version="2026.11.21.1",
                 repo="open-athena/forge-main-taskcompendium-20261117",
-                revision="d2a2f487aa4a6a2dab1582a94e31a6ddfe93a54f",
+                revision="a0b34e259acf4ac7acebc3dd61e4bc1a4e3ec9e9",
                 expected_rows=4000,
             ),
             info=SourceInfo(
@@ -234,9 +234,11 @@ def sources() -> list[RlDataSource]:
                     "reviewer note or missing evidence; the ranking favoured GLM-5.3 solve rates near one half. "
                     "955 in band, 3,021 too easy and 24 too hard for GLM-5.3 over eight trials; 2,978 "
                     "answer-only, 670 Linux and 352 simulated-shell tasks. Machines that forge's local sandbox "
-                    "recorded without an image are restored to the image their authors declared. Known defect: "
-                    "task resources install at /<path>, not under the working directory. Not re-executed through "
-                    "the Atlas rollout path. The repository is private pending release."
+                    "recorded without an image are restored to the image their authors declared. The 2026.11.21.1 "
+                    "conversion re-roots the 6,855 workspace resources of 850 tasks at their declared working "
+                    "directories, so the runtime's root install lands each file where its author declared it "
+                    "(the card's Known issues carries the repair). Not re-executed through the Atlas rollout "
+                    "path. The repository is private pending release."
                 ),
             ),
         ),
