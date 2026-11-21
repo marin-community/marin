@@ -15,7 +15,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 @dataclass(frozen=True)
 class Micro210Subset:
-    benchmarks: tuple[str, ...]
+    benchmarks: tuple[str, ...] = ()
+    row_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,14 +39,14 @@ def prepared_subset(
     if hashlib.sha256(raw).hexdigest() != source_sha256:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
     table = pq.read_table(io.BytesIO(raw))
-    benchmarks = table.column("benchmark").to_pylist()
-    allowed = set(subset.benchmarks)
-    if not allowed or len(allowed) != len(subset.benchmarks):
-        raise ValueError("Micro210 benchmark allow-list must be nonempty and contain no duplicates")
-    unknown = allowed - set(benchmarks)
-    if unknown:
-        raise ValueError(f"Unknown frozen Micro210 benchmarks: {sorted(unknown)}")
-    indices = [index for index, benchmark in enumerate(benchmarks) if benchmark in allowed]
+    if subset.row_indices:
+        indices = sorted(set(subset.row_indices))
+        if subset.benchmarks or len(indices) != len(subset.row_indices):
+            raise ValueError("Choose distinct prepared row indices or benchmarks, not both")
+        if indices[0] < 0 or indices[-1] >= len(table):
+            raise ValueError("Micro210 row selection is outside the frozen prepared inputs")
+    else:
+        indices = benchmark_indices(table, subset.benchmarks)
     selected = table.take(pa.array(indices, type=pa.int64()))
     buffer = io.BytesIO()
     pq.write_table(selected, buffer)
@@ -60,6 +61,17 @@ def prepared_subset(
             "attempts": len(indices),
         },
     )
+
+
+def benchmark_indices(table: pa.Table, requested: tuple[str, ...]) -> list[int]:
+    benchmarks = table.column("benchmark").to_pylist()
+    allowed = set(requested)
+    if not allowed or len(allowed) != len(requested):
+        raise ValueError("Micro210 benchmark allow-list must be nonempty and contain no duplicates")
+    unknown = allowed - set(benchmarks)
+    if unknown:
+        raise ValueError(f"Unknown frozen Micro210 benchmarks: {sorted(unknown)}")
+    return [index for index, benchmark in enumerate(benchmarks) if benchmark in allowed]
 
 
 def prepare_subset(

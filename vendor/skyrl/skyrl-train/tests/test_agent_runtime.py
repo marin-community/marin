@@ -6,11 +6,13 @@ import shutil
 from contextlib import asynccontextmanager
 
 import daytona
+import httpx
 import pytest
 from harbor.host_capabilities import HostCapabilities
 from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.pi import Pi
 from harbor.environments.factory import EnvironmentFactory
+from harbor.environments.model_relay import JudgeAccess, task_model_relays
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
@@ -20,7 +22,9 @@ from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRolloutInterrupted
 from shellbox.machine import ExitReason, Result
+from shellbox.http_service import HttpRequest
 from taskcompendium.models import Source
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
@@ -55,23 +59,39 @@ async def test_worker_spec_builds_installed_agent_with_separate_judge_and_phase_
     monkeypatch.setenv("TEST_JUDGE_KEY", "judge-key")
     monkeypatch.setenv("TEST_RL_KEY", "training-key")
     monkeypatch.setenv("TEST_EVAL_KEY", "evaluation-key")
-    config = OmegaConf.merge(get_default_config(), {
-        "trainer": {"policy": {"model": {"path": "fixture/model"}}},
-        "environment": {"task_sessions": {
-            "max_verifier_workers": 0,
-            "remote_judge": {"base_url": "https://judge.invalid", "api_key_env": "TEST_JUDGE_KEY"},
-        }},
-    })
-    harbor = OmegaConf.create({
-        "harbor": {"environment_type": "daytona", "daytona_api_key_env": "TEST_RL_KEY",
-                   "eval_daytona_api_key_env": "TEST_EVAL_KEY"},
-        "installed_agent": {
-            "agent": {"name": "pi"}, "output_path": str(tmp_path),
-            "setup_timeout": 5, "run_timeout": 5, "cleanup_timeout": 5,
-            "service_startup_timeout": 5, "service_shutdown_timeout": 5,
+    config = OmegaConf.merge(
+        get_default_config(),
+        {
+            "trainer": {"policy": {"model": {"path": "fixture/model"}}},
+            "environment": {
+                "task_sessions": {
+                    "max_verifier_workers": 0,
+                    "remote_judge": {"base_url": "https://judge.invalid", "api_key_env": "TEST_JUDGE_KEY"},
+                }
+            },
         },
-    })
-    worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=harbor).build(UnusedDecoder(), WorkerShard(0, 1))
+    )
+    harbor = OmegaConf.create(
+        {
+            "harbor": {
+                "environment_type": "daytona",
+                "daytona_api_key_env": "TEST_RL_KEY",
+                "eval_daytona_api_key_env": "TEST_EVAL_KEY",
+            },
+            "installed_agent": {
+                "agent": {"name": "pi"},
+                "output_path": str(tmp_path),
+                "setup_timeout": 5,
+                "run_timeout": 5,
+                "cleanup_timeout": 5,
+                "service_startup_timeout": 5,
+                "service_shutdown_timeout": 5,
+            },
+        }
+    )
+    worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=harbor).build(
+        UnusedDecoder(), WorkerShard(0, 1)
+    )
     try:
         assert worker.judge_connection.base_url == "https://judge.invalid"
         assert worker.installed_agents.daytona_connection.api_key == "training-key"
@@ -118,6 +138,13 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     tmp_path, monkeypatch, phase, harbor_package
 ):
     package = harbor_package
+    with (package / "task.toml").open("a") as config_file:
+        config_file.write("""
+[verifier.env]
+OPENAI_API_KEY = "${OPENAI_API_KEY}"
+OPENAI_BASE_URL = "https://original-provider.invalid/v1"
+MODEL_NAME = "fixture-judge"
+""")
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     task = task.model_copy(
         update={
@@ -127,6 +154,9 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         }
     )
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
+    lowered = lowered.model_copy(
+        update={"judge_connection": JudgeConnection("https://judge.invalid/v1", "judge-secret")}
+    )
     settings = InstalledAgentSettings(
         agent=AgentConfig(name="pi", kwargs={"thinking_format": "qwen-chat-template"}),
         output_path=str(tmp_path / "attempts"),
@@ -147,9 +177,13 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
     )
-    harbor = HarborTaskSettings.from_config(OmegaConf.create({
-        "harbor": {"override_storage_mb": 8192, "eval_override_storage_mb": 16384},
-    }))
+    harbor = HarborTaskSettings.from_config(
+        OmegaConf.create(
+            {
+                "harbor": {"override_storage_mb": 8192, "eval_override_storage_mb": 16384},
+            }
+        )
+    )
     worker = TaskRolloutWorker(
         OmegaConf.create({}),
         WholeTaskProjection(OmegaConf.create({}), UnusedDecoder()),
@@ -211,6 +245,8 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     assert result.exception_info.exception_type == "ProviderUnavailable"
     archived_config = TrialConfig.model_validate_json((result_path.parent / "config.json").read_text())
     assert archived_config.environment.override_storage_mb == (16384 if phase == "eval" else 8192)
+    assert archived_config.verifier.env["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert "judge-secret" not in (result_path.parent / "config.json").read_text()
 
 
 @pytest.mark.asyncio
@@ -228,6 +264,83 @@ async def test_borrowed_machine_commands_use_explicit_environment_and_reject_hos
     assert result.stdout == "task-value:unset"
     with pytest.raises(ValueError, match="host credential material"):
         await environment.exec("true", env={"DISGUISED": "host-secret"})
+
+
+@pytest.mark.asyncio
+async def test_original_verifier_uses_host_authenticated_relay_without_guest_provider_key(
+    tmp_path, monkeypatch, harbor_package
+):
+    (harbor_package / "task.toml").write_text("""
+[environment]
+docker_image = "fixture/image:latest"
+[verifier.env]
+OPENAI_API_KEY = "${OPENAI_API_KEY}"
+OPENAI_BASE_URL = "https://original-provider.invalid/v1"
+MODEL_NAME = "fixture-judge"
+""")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    task = harbor_trial_task(
+        harbor_package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    )
+    lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5).model_copy(
+        update={"judge_connection": JudgeConnection("https://judge.invalid/v1", "host-only-key")}
+    )
+    runtime = InstalledAgentRuntime(
+        InstalledAgentSettings(
+            agent=AgentConfig(name="pi"),
+            output_path=str(tmp_path / "attempts"),
+            setup_timeout=5,
+            run_timeout=5,
+            cleanup_timeout=5,
+            service_startup_timeout=5,
+            service_shutdown_timeout=5,
+        ),
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
+        daytona_connection=DaytonaConnection(api_key="training-key"),
+        eval_daytona_connection=DaytonaConnection(api_key="evaluation-key"),
+    )
+    binding = runtime.original_trial_binding(lowered, HarborTaskSettings.from_config(OmegaConf.create({})), "eval", {})
+    environment = BorrowedMachineEnvironment(
+        ProcessTransport(),
+        tmp_path,
+        "verifier",
+        EnvironmentConfig(),
+        host_capabilities=binding.host_capabilities,
+    )
+    guest = environment.resolve_env_vars(binding.verifier_environment)
+    result = await environment.exec('printf "%s:%s" "$OPENAI_API_KEY" "$OPENAI_BASE_URL"', env=guest)
+    assert result.stdout == "EMPTY:http://127.0.0.1:8787/v1"
+    assert "host-only-key" not in json.dumps({"environment": binding.environment.model_dump(), "guest": guest})
+    with pytest.raises(ValueError, match="host credential material"):
+        environment.resolve_env_vars({"LEAK": "host-only-key"})
+    relay, candidate = task_model_relays(
+        model_endpoint=binding.environment.kwargs["model_endpoint"],
+        model_name=binding.environment.kwargs["model_name"],
+        candidate_model_endpoint=None,
+        candidate_model_name=None,
+        authentication=binding.host_capabilities.model_authentication,
+        judge_access=JudgeAccess.VERIFIER,
+        environments=(),
+    )
+    assert relay is not None and candidate is None
+    requests = []
+
+    def provider(request):
+        requests.append(request)
+        return httpx.Response(200, json={"grade": 1})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(provider), **kwargs)
+    )
+    response = await relay.handle(
+        HttpRequest("POST", "/v1/chat/completions", json.dumps({"model": "guest-alias"}).encode())
+    )
+    assert response.status == 200
+    assert requests[0].url == "https://judge.invalid/v1/chat/completions"
+    assert requests[0].headers["authorization"] == "Bearer host-only-key"
+    assert json.loads(requests[0].content)["model"] == "fixture-judge"
 
 
 @pytest.mark.asyncio
@@ -286,8 +399,13 @@ async def test_original_trial_runs_setup_before_installation_and_retains_failure
     evidence = tmp_path / "setup-evidence"
     backend = AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder())
     result = await run_harbor_trial(
-        trial, backend, unexpected_model_request, evidence,
-        setup_commands=commands, setup_cwd=str(tmp_path), setup_timeout=5,
+        trial,
+        backend,
+        unexpected_model_request,
+        evidence,
+        setup_commands=commands,
+        setup_cwd=str(tmp_path),
+        setup_timeout=5,
     )
     assert (tmp_path / "prepared").read_text() == "task-value"
     evidence = evidence / "task-setup"

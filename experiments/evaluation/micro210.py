@@ -377,6 +377,9 @@ def micro210_artifact_step(
     "--serving-profile", type=click.Choice([profile.value for profile in ServingProfileName]), default="policy"
 )
 @click.option("--benchmark", multiple=True, help="Evaluate only these benchmark rows from the frozen prepared inputs.")
+@click.option(
+    "--row-index", multiple=True, type=int, help="Recover exact zero-based rows from the frozen prepared inputs."
+)
 @rl_build_options
 def main(
     model_uri: str,
@@ -385,6 +388,7 @@ def main(
     tokenizer_revision: str,
     name: str,
     benchmark: tuple[str, ...],
+    row_index: tuple[int, ...],
     serving_profile: str,
 ) -> ArtifactStep:
     configure_coreweave_s3()
@@ -393,7 +397,7 @@ def main(
         model,
         name=name,
         version=resolve_version(name, None),
-        subset=Micro210Subset(tuple(sorted(benchmark))) if benchmark else None,
+        subset=Micro210Subset(tuple(sorted(benchmark)), tuple(sorted(row_index))) if benchmark or row_index else None,
         serving_profile=ServingProfileName(serving_profile),
     )
 

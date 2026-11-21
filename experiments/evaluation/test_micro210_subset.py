@@ -65,6 +65,23 @@ def test_subset_rejects_unknown_benchmark_and_changed_source(tmp_path, inputs):
         prepare_subset(**inputs, subset=Micro210Subset(("keep",)), output=str(output))
 
 
+def test_recovery_selects_exact_original_rows_and_preserves_uid_mapping(tmp_path, inputs):
+    output = tmp_path / "recovery"
+    output.mkdir()
+    subset = Micro210Subset(row_indices=(2, 1))
+    prepare_subset(**inputs, subset=subset, output=str(output))
+    receipt = validate_subset(**inputs, subset=subset, selected_inputs=str(output))
+    assert receipt["source_row_indices"] == [1, 2]
+    assert pq.read_table(output / "rollouts.parquet").to_pylist() == [
+        {"benchmark": "skip", "prompt": "other", "seed": 8},
+        {"benchmark": "keep", "prompt": "last", "seed": 9},
+    ]
+    receipt["source_row_indices"] = [0, 2]
+    (output / "selection.json").write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="differs from the frozen prepared rows"):
+        validate_subset(**inputs, subset=subset, selected_inputs=str(output))
+
+
 def test_standard_micro210_graph_binds_subset_without_changing_protocol(tmp_path, monkeypatch, inputs):
     reference = policy_fixture_reference()
     policy = json.loads(StoragePath(reference.uri).read_text())

@@ -262,6 +262,26 @@ source files. Read each command's `--help` before writing to production storage.
 
 ## Micro210 judge policy
 
+For a bounded recovery, pass `--row-index 3 --row-index 9` on the standard
+`experiments.evaluation.micro210` command for each authorized zero-based row in
+the prepared table pinned by the selected policy. Duplicate indices are rejected;
+flag order does not change source order. This is mutually exclusive with `--benchmark`.
+The CPU selection stage validates the original table digest against the policy
+and preserves complete row contents in source order. It writes `selection.json` with the original row
+indices and selected-table digest. Recovery dump UIDs are dense indices into
+that selection: UID 0 maps to its first `source_row_indices` entry. Use this map
+before combining results.
+Preserve previously scored attempts and report coverage against the full
+declared population.
+
+The runtime emits structured `request_timing` log records keyed by request and
+session ID. Engine events record queue and first-scheduling times; token
+observations record first-token observation time and periodic decode progress
+before a response completes. Compute queue intervals within one engine's monotonic clock; do not
+subtract timestamps from different engines or clients.
+These diagnostics contain no prompts or provider credentials and do not change
+the evaluation's grading policy.
+
 The default Micro210 policy uses Together serverless `zai-org/GLM-5.3-Flash`
 (FP4) and Secret Manager version `TOGETHER_API_KEY/versions/1`. It allocates
 GPUs only for the candidate model. `JudgeConfig` records temperature 0,
