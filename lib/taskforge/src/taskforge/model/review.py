@@ -136,7 +136,6 @@ class SolveReview:
     findings: tuple[ReviewFinding, ...] = ()
     dropped: tuple[tuple[ReviewFinding, str], ...] = ()
     accounts: tuple[TrialAccount, ...] = ()
-    reasons: tuple[str, ...] = ()
     missing: tuple[MissingEvidence, ...] = ()
 
 

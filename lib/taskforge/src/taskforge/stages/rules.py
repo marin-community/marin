@@ -139,15 +139,9 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     notes = exhausted_notes(result)
     if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
         stored = workpiece.fallback
-        why = (
-            f"Clean revision placed {chosen.band}, not {stored.band}: a placement change is tagged, not reverted"
-            if stored and stored.band is not chosen.band
-            else (
-                f"Clean revision placed {chosen.band} after its band round"
-                if stored
-                else "Shared modification budget exhausted"
-            )
-        )
+        changed = f", not {stored.band}: a placement change is tagged, not reverted" if stored else ""
+        changed = changed if stored and stored.band is not chosen.band else " after its band round"
+        why = f"Clean revision placed {chosen.band}{changed}" if stored else "Shared modification budget exhausted"
         return accepted(Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes)), workpiece)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"

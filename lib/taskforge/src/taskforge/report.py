@@ -19,7 +19,7 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 from taskforge.resources.env import RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
-from taskforge.resources.rollouts import solver_rollout
+from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.solve_review import reviewing
 
 EVENT_GAPS = {RunCommand.kind: "RunCommand", WriteFile.kind: "WriteFile", InferenceRequest.kind: "InferenceRequest"}
@@ -107,8 +107,8 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                         # The reviewer runs beside the adversaries: its request names it by its own tools.
                         role = "solve_review" if reviewing(event.request) else role
                         tokens[role].update(asdict(event.value.usage))
-                    elif (trial := solver_rollout(event)) is not None:
-                        for conversation in trial[1].rollout.conversations:
+                    elif isinstance(event.request, SolverRollout):
+                        for conversation in event.value.rollout.conversations:
                             for step in conversation.steps:
                                 tokens["solver"].update(
                                     step.turn.metadata.get("usage", asdict(step.turn.usage) if step.turn.usage else {})

@@ -5,14 +5,14 @@
 
 """The solve-review: a machine-less agent that reads recorded solver trials and reports the task defects they show.
 
-One implementation over any set of trials: a review ``Kind`` names its prompts and its report tool, so a later kind
-(the confirmation step's final review) is a new value, not a new path. Decision rules live with the review rules.
+One implementation over any set of trials: a review names its prompts and its report tool, so a later kind (the
+confirmation step's final review) passes its own, not a new path. Decision rules live with the review rules.
 """
 
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout
@@ -45,15 +45,6 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.inference import InferenceRequest
 from taskforge.stages.rules import passed
 from taskforge.stages.summary import task_manifest
-
-
-@dataclass(frozen=True, slots=True)
-class Kind:
-    prompts: str
-    report: type[ReportTool]
-
-
-ROUND = Kind("solve_review", ReportTool)
 
 
 def journal_form(value: object) -> object:
@@ -151,16 +142,6 @@ def task_sources(submission: Submission) -> tuple[Source, ...]:
     )
 
 
-def recorded(rollout: GradedRollout | None) -> bool:
-    """Whether a trial recorded any message to read, an interrupted prefix included."""
-    return rollout is not None and any(c.messages for c in rollout.rollout.conversations)
-
-
-def transcribed(rollout: GradedRollout | None) -> bool:
-    """Whether a trial's recording is whole: it recorded messages and was not cut by an interruption."""
-    return recorded(rollout) and rollout is not None and rollout.rollout.failure is None
-
-
 def evidence(
     submission: Submission,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]],
@@ -194,8 +175,8 @@ async def solve_review(
     proposal: TaskProposal,
     submission: Submission,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]],
-    kind: Kind = ROUND,
-    visit: str = "solve_review",
+    prompts: str = "solve_review",
+    report: type[ReportTool] = ReportTool,
 ) -> SolveReview:
     """Review ``trials`` of ``submission``; emits only the reviewer's inference effects.
 
@@ -204,15 +185,16 @@ async def solve_review(
     """
     policy = config.policy
     index = evidence(submission, trials, policy.setting("tools.output_chars", int))
-    cut = [trial.trial for trial, rollout in trials if not transcribed(rollout)]
+    read = {trial.trial: len(index.sources[f"{TRIAL}{trial.trial}"].parts) > 1 for trial, _ in trials}  # a message
+    cut = [trial.trial for trial, rollout in trials if not read[trial.trial] or (rollout and rollout.rollout.failure)]
     missing = (MissingEvidence(EvidenceKind.TRANSCRIPTS, f"solver trials {cut} have no complete transcript"),) * bool(
         cut
     )
-    if not any(recorded(rollout) for _, rollout in trials):  # owner's ruling: named on acceptance, never a hold
+    if not any(read.values()):  # owner's ruling: missing evidence is named on acceptance, never a hold
         return SolveReview(index.version, ReviewEnd.SKIPPED, missing=missing)
     opening = Fresh(
-        policy.prompt(f"{kind.prompts}.system").template,
-        policy.prompt(f"{kind.prompts}.user").render(
+        policy.prompt(f"{prompts}.system").template,
+        policy.prompt(f"{prompts}.user").render(
             task=task_manifest(submission.task),
             proposal=render(proposal),
             evidence=source_listing(index),
@@ -222,7 +204,7 @@ async def solve_review(
     async with sitting(
         ctx,
         config.solve_review,
-        Visit(visit, visit, None, tools=evidence_tools(index, kind.report)),
+        Visit(prompts, prompts, None, tools=evidence_tools(index, report)),
         resources,
     ) as session:
         outcome = await session(opening)
@@ -231,4 +213,4 @@ async def solve_review(
     reason = outcome.summary if isinstance(outcome, Stopped) else f"expected report, got {type(outcome).__name__}"
     reason = f"solve-review ended without a report: {reason}"
     missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, reason), *missing)
-    return SolveReview(index.version, ReviewEnd.NO_REPORT, reasons=(reason,), missing=missing)
+    return SolveReview(index.version, ReviewEnd.NO_REPORT, missing=missing)

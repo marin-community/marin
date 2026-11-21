@@ -76,7 +76,7 @@ from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.env import Env, EnvFactory, WriteFile
 from taskforge.resources.inference import InferenceRequest
-from taskforge.resources.rollouts import Engine, SolverRollout, solver_rollout
+from taskforge.resources.rollouts import Engine, SolverRollout
 from taskforge.stages.rules import default_review
 from taskforge.stages.solve_review import evidence, solve_review
 from taskforge.wiring import build_config, install
@@ -388,13 +388,6 @@ async def test_a_decline_must_name_a_finding_once() -> None:
         assert text(outcome) == "declined names each finding at most once, by its number 0..0"
 
 
-def test_the_recorded_solver_rollouts_are_one_projection_of_the_journal() -> None:
-    policy = load_policy(DEFAULTS_DIR)
-    request = SolverRollout(lower_with_settings(arithmetic_task(), lowering_settings(policy), {}), 3, 0)
-    recorded = Resolved(request, (), TRIALS[0][1])
-    assert solver_rollout(recorded) == (request, TRIALS[0][1]) and solver_rollout(Resolved(request, (), None)) is None
-
-
 async def test_a_format_6_root_is_refused_before_claim_and_left_untouched(
     driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -436,7 +429,9 @@ async def test_a_cold_reload_of_the_journal_replays_the_review_with_zero_calls(t
     )
     await log.persist()
     records = local_records(sink)
-    reloaded = next(pair[1] for record in records if (pair := solver_rollout(record.event)) is not None)
+    reloaded = next(
+        r.event.value for r in records if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)
+    )
     cold = FakeInference(())
     again = await reviewed(cold, (TRIALS[0], (TrialResult(1, reloaded.grade), reloaded)), EventLog(replay_from=records))
     assert again == first and not cold.requests

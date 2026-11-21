@@ -23,7 +23,7 @@ from shellbox.machine import (
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Resolved
+from taskforge.effects.events import Event, Fingerprint, ReplayPolicy
 from taskforge.effects.issues import (
     DecisionModelUnavailable,
     Hold,
@@ -42,13 +42,6 @@ class SolverRollout(Event[GradedRollout]):
     spec: TaskRolloutSpec
     trial: int
     attempt: int
-
-
-def solver_rollout(event: Event[object]) -> tuple[SolverRollout, GradedRollout] | None:
-    """A recorded solver trial: the one projection of the journal that usage reports and the solve-review read."""
-    if isinstance(event, Resolved) and isinstance(event.request, SolverRollout):
-        return (event.request, event.value) if isinstance(event.value, GradedRollout) else None
-    return None
 
 
 class RequestRejected(Hold):
