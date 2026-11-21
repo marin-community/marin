@@ -268,10 +268,18 @@ async def test_a_read_ends_within_the_wait_including_its_wait_for_a_read_slot(
     assert [read if isinstance(read, float) else str(read) for read in ended] == outcomes
 
 
+HUGE = 10**5000  # 5,001 digits: no repr within the default limit
+
+
 # Review 2026-11-21 (n10 finding 4): an override returning "4" was graded INFRA_ERROR, then replayed from the journal as
 # the level 4.0 and passed with no new read; an unconvertible string made the journal unreadable. A level is checked
-# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume.
-@pytest.mark.parametrize("level, shown", [(7, "7"), ("4", "a value of type str"), ("four", "a value of type str")])
+# before it is recorded, so nothing off-scale is ever persisted and a repaired reader reads it on resume. Follow-up 1
+# (finding 4): a 5,001-digit integer was formatted before X2 saw it, raising a rollout restart; X2 bounds the diagnostic.
+@pytest.mark.parametrize(
+    "level, shown",
+    [(7, "7"), ("4", "a value of type str"), ("four", "a value of type str"), (HUGE, "a value of type int")],
+    ids=["7", "str", "word", "huge"],
+)
 async def test_an_off_scale_level_is_an_infrastructure_error_recorded_nowhere_and_read_again(
     level: object, shown: str, tmp_path: Path
 ) -> None:

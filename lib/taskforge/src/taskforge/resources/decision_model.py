@@ -49,12 +49,8 @@ class DecisionModelDown(Exception):
 
 
 class OffScale(Exception):
-    """A reader returned ``level``, which is no level of its request: it is never recorded, so a resumed run reads
-    again, and TaskCompendium grades it ``INFRA_ERROR``."""
-
-    def __init__(self, level: object) -> None:
-        super().__init__(f"Decision model returned {level!r}, not a level")
-        self.level = level
+    """A reader returned the argument, no level of its request: it is never recorded, so a resumed run reads again,
+    and TaskCompendium grades it ``INFRA_ERROR`` with its own bounded diagnostic."""
 
 
 class DecisionModelReader(Protocol):
@@ -227,7 +223,7 @@ class DecisionModelEngine:
                 try:
                     return await self.ctx.emit(DecisionModelRead(request))
                 except OffScale as error:
-                    return cast(float, error.level)  # graded INFRA_ERROR; the level was never recorded
+                    return cast(float, error.args[0])  # graded INFRA_ERROR; the level was never recorded
 
             spec = spec.model_copy(update={"decision_model": replace(connection, read=read)})
         return await self.engine.run_task(spec, model, run_id=run_id)
