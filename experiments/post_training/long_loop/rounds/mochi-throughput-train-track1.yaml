@@ -211,6 +211,7 @@ rl:
         temperature: 0.7
         top_p: 1.0
         logprobs: 0
+        min_tokens: 0
         stop_token_ids:
         - 128001
         - 128009
@@ -218,6 +219,8 @@ rl:
       eval_sampling_params:
         temperature: 0.7
         top_p: 1.0
+        logprobs: 0
+        min_tokens: 0
         stop_token_ids:
         - 128001
         - 128009
@@ -301,9 +304,9 @@ rl:
             thinking_format: chat-template
             http_idle_timeout: 1800
             model_info:
-              max_input_tokens: 65536
-              max_output_tokens: 16384
-            compaction_reserve_tokens: 16384
+              max_input_tokens: 131072
+              max_output_tokens: 98304
+            compaction_reserve_tokens: 98304
         setup_timeout: 360
         run_timeout: 1800
         cleanup_timeout: 120
@@ -312,8 +315,8 @@ rl:
         trial_reward_key: reward
     entrypoint: taskcompendium
     context_budget:
-      request_window_tokens: 65536
-      max_new_tokens_per_turn: 16384
+      request_window_tokens: 131072
+      max_new_tokens_per_turn: 98304
       max_turns: 128
     extra_env:
       DAYTONA_TARGET: us
