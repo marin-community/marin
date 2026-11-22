@@ -239,26 +239,28 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
 
 @pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window", [None, 2048])
-@pytest.mark.parametrize("width,active", [(4, 1), (16, 3), (32, 5)])
-def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, active):
+@pytest.mark.parametrize("width,queries", [(4, (1,)), (16, (1, 1, 1)), (32, (1,) * 5), (512, (361, 82))])
+def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, queries):
     rng = np.random.default_rng(25)
     q = jnp.asarray(rng.normal(size=(width, 5, 4, 128)), jnp.bfloat16)
     k = jnp.asarray(rng.normal(size=(width, 5, 128)), jnp.bfloat16)
     v = jnp.asarray(rng.normal(size=(width, 5, 128)), jnp.bfloat16)
     page_size, pages_per_seq = 128, 32
+    active = len(queries)
     num_pages = active * pages_per_seq
     pages = jnp.asarray(rng.normal(size=(num_pages, page_size, 10, 128)), jnp.bfloat16)
     indices = jnp.asarray(rng.permutation(num_pages).reshape(active, pages_per_seq), jnp.int32)
     lengths = 2208 + 31 * jnp.arange(active, dtype=jnp.int32)
-    offsets = jnp.arange(active + 1, dtype=jnp.int32)
+    offsets = jnp.asarray(np.cumsum((0, *queries)), jnp.int32)
     num_seqs = jnp.array(active, jnp.int32)
     scale = 128**-0.5
     attention = jax.jit(partial(ragged_paged_attention_append, sm_scale=scale, sliding_window=window))
     actual, updated = attention(q, k, v, pages, lengths, indices, offsets, num_seqs)
-    logical_pages, slots = jnp.divmod(lengths - 1, page_size)
-    physical_pages = indices[jnp.arange(active), logical_pages]
-    expected_pages = pages.at[physical_pages, slots, 0::2].set(k[:active])
-    expected_pages = expected_pages.at[physical_pages, slots, 1::2].set(v[:active])
+    positions = jnp.concatenate([jnp.arange(lengths[i] - count, lengths[i]) for i, count in enumerate(queries)])
+    logical_pages, slots = jnp.divmod(positions, page_size)
+    physical_pages = indices[np.repeat(np.arange(active), queries), logical_pages]
+    expected_pages = pages.at[physical_pages, slots, 0::2].set(k[: positions.size])
+    expected_pages = expected_pages.at[physical_pages, slots, 1::2].set(v[: positions.size])
     np.testing.assert_array_equal(updated, expected_pages)
     args = _PagedCase(q, expected_pages, lengths, indices, offsets, num_seqs)
     expected = _dense_reference(args, window, None, scale)

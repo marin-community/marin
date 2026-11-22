@@ -9,7 +9,7 @@ integration remain open.
 
 The full BF16 67B checkpoint completed the matched 64K AgentX replay at
 128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
-reached 80% and 96% of compiled vLLM's aggregate output throughput on
+reached 82% and 96% of compiled vLLM's aggregate output throughput on
 v5p-8 and v6e-8. On eight H100s, two native replicas with singleton decode
 reached 616.68–621.18 output tok/s versus 590.24–593.09 for compiled vLLM.
 Native p90 time to first token was 0.96–1.01 s versus 1.43–1.44 s. At
@@ -665,6 +665,9 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v5p-8, native EP4 with 32 KV contexts and bounded prefill scratch](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v10-bounded-32-contexts) | 325 | 84,402 | 401.91 | 1,548 | 3,932 |
 | [v5p-8, 48 logical contexts and a FIFO window pool](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v11-hybrid-48-contexts) | 151 | 25,648 | 122.13 | 21,675 | 33,494 |
 | [v5p-8, 60 logical contexts with retained window tails](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v12-hybrid-pinned-60-contexts) | 336 | 90,975 | 433.21 | 1,445 | 2,632 |
+| [v5p-8, 60 logical contexts and 8,192 window pages](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v13-hybrid-wide-window-pool) | 331 | 90,546 | 431.17 | 1,407 | 2,757 |
+| [v5p-8, 256-, 1,024-, and 4,096-token prefill buckets](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v14-short-prefill-buckets) | 337 | 91,497 | 435.70 | 1,264 | 3,126 |
+| [v5p-8, fused short prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v15-fused-short-prefill) | 340 | 92,225 | 439.16 | 1,382 | 2,832 |
 | [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
 | [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
 | [v6e-8, native EP8 with shared reservations and 16 decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v5-shared-pages) | 111 | 19,864 | 94.59 | 36,227 | 53,402 |
@@ -672,6 +675,7 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v6e-8, native EP8 with eight KV contexts and separate append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v7-eight-contexts) | 173 | 35,534 | 169.21 | 20,156 | 28,726 |
 | [v6e-8, native EP8 with fused append through 16 rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v8-fused-decode) | 171 | 37,727 | 179.65 | 25,885 | 38,854 |
 | [v6e-8, native EP8 with eight KV contexts and fused append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v9-fused-live-prefix) | 180 | 37,969 | 180.80 | 24,634 | 35,626 |
+| [v6e-8, 24 logical contexts and a FIFO window pool](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v14-hybrid-regional-control) | 198 | 43,975 | 209.40 | 17,520 | 25,980 |
 | [v6e-8, 24 logical contexts with retained window tails](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v13-hybrid-terminal-pins) | 359 | 102,751 | 509.62 | 1,379 | 3,375 |
 
 The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
@@ -759,6 +763,21 @@ uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_prob
   --prefill-buckets 512 2048 8192 16384 32768 49152 --measure-prefill
 ```
 
+Doubling the v5p window pool to 8,192 pages changed throughput from
+433.21 to 431.17 output tok/s. Adding smaller prefill buckets with the
+4,096-page pool reached 435.70 output tok/s. Fusing KV writes with
+attention for short prefill raised that to 439.16 and matched all 340
+paired output lengths with zero profiling errors. Paired active decode
+was 24.04 tok/s versus vLLM's 33.35.
+
+With a primed prefix and 256 new tokens, median v5p TTFT improved from
+79–153 ms to 44–122 ms across five context lengths. Compiled vLLM measured
+43–115 ms on the same grid. Fresh prefill medians remained within 2 ms
+of the unfused run on all five lengths. A v6e-4 regression test checked
+both attention outputs and exact KV writes for eight cases, including
+two sequences with unequal, non-page-aligned suffixes.
+[Short-prefill correctness](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-fused-short-prefill-tests-v6e4-20261122-v2)
+
 On one v6e chip, fusing KV append at 16 padded rows cut full-context
 attention plus cache update from 0.727 to 0.520 ms and sliding-window
 attention plus cache update from 0.567 to 0.416 ms. The 32-row case
@@ -791,6 +810,10 @@ errors. All 359 paired output lengths matched, and paired active decode
 was 30.61 tok/s versus 32.91. The raw 64,512-token fresh prefill took
 1.343 s versus 1.522 s, or 48.0k versus 42.4k prompt tok/s. With a primed
 prefix and a 256-token suffix, native took 103 ms versus 84 ms.
+
+The same 24-context v6e-8 configuration with FIFO eviction reached
+209.40 output tok/s and p90 TTFT of 25.98 s. All 198 paired lengths
+matched the retained-tail run.
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly

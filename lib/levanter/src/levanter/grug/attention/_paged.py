@@ -22,6 +22,7 @@ from levanter.kernels.pallas.ragged_paged_attention_v3 import ragged_paged_atten
 
 TPU_HEAD_ALIGNMENT = 128
 FUSED_KV_APPEND_MAX_TOKENS = 32
+FUSED_KV_PREFILL_MAX_TOKENS = 512
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3", "gpu"]
 _TPU_KV_HEAD_GROUP = 8
 _FP32_QUERIES_PER_BLOCK = 128
@@ -172,11 +173,15 @@ def ragged_paged_attention_append(
     sm_scale: float,
     sliding_window: int | None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Append BF16 keys and values during a small RPA v3 decode batch."""
+    """Append BF16 keys and values during RPA v3 attention on a small batch.
+
+    In sliding-window mode, every sequence's new keys must fit in the last
+    query's window so the kernel can write them back from its final query tile.
+    """
     if jax.default_backend() != "tpu" or pltpu.get_tpu_info().chip_version not in _RPA_V3_VMEM_LIMIT_BYTES:
         raise ValueError("Fused paged KV append requires TPU v5p or v6e")
-    if q.shape[0] > FUSED_KV_APPEND_MAX_TOKENS:
-        raise ValueError("Fused paged KV append is only supported for small decode batches")
+    if q.shape[0] > FUSED_KV_PREFILL_MAX_TOKENS:
+        raise ValueError("Fused paged KV append is only supported for batches of up to 512 tokens")
     if q.dtype != k.dtype or q.dtype != v.dtype or q.dtype != kv_pages.dtype or q.dtype != jnp.bfloat16:
         raise ValueError("Fused paged KV append requires BF16 queries, keys, values, and cache pages")
     if q.shape[-1] != TPU_HEAD_ALIGNMENT or kv_pages.shape[1] != TPU_HEAD_ALIGNMENT:

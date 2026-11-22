@@ -17,6 +17,7 @@ from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention as gp
 from levanter.grug.attention._xla_flash import xla_flash_attention as xla_flash_attention
 from levanter.grug.attention._paged import (
     FUSED_KV_APPEND_MAX_TOKENS as FUSED_KV_APPEND_MAX_TOKENS,
+    FUSED_KV_PREFILL_MAX_TOKENS as FUSED_KV_PREFILL_MAX_TOKENS,
     PagedAttentionImplementation as PagedAttentionImplementation,
     ragged_paged_attention_append as ragged_paged_attention_append,
     ragged_paged_attention as ragged_paged_attention,

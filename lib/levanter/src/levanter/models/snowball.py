@@ -45,6 +45,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.grug._moe.selected_gpu import replicated_decode_matvec
 from levanter.grug.attention import (
     FUSED_KV_APPEND_MAX_TOKENS,
+    FUSED_KV_PREFILL_MAX_TOKENS,
     AttentionMask,
     GrugAttentionImplementation,
     PagedAttentionImplementation,
@@ -2122,9 +2123,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 expert_implementation = "separate"
             elif sample_indices is None and (replicated_token or tokens.shape[0] == expert_size):
                 expert_implementation = self.config.inference_expert_implementation
+        fused_append_limit = FUSED_KV_APPEND_MAX_TOKENS
+        if sample_indices is not None:
+            fused_append_limit = min(FUSED_KV_PREFILL_MAX_TOKENS, self.config.sliding_window)
         kv_append = (
             self.config.inference_kv_append
-            if sample_indices is None and not capture_routes and tokens.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS
+            if not capture_routes and tokens.shape[0] <= fused_append_limit
             else "separate"
         )
         if kv_append == "fused" and (
