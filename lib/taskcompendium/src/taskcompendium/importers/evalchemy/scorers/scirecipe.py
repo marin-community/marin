@@ -152,7 +152,7 @@ def structured_metrics(prediction: str, reference: str) -> dict[str, float]:
 
 
 def prediction_blocks(response: str) -> tuple[str, str]:
-    """Return key and orc blocks, falling back to the whole response and an empty orc."""
+    """Extract a complete block sequence, else return the whole response and an empty orc."""
     # Serving APIs can separate <think> into a reasoning channel. Only the final artifact is graded.
     pattern = FULL_PATTERN if REASONING_TAG.search(response) else TAG_PATTERN
     match = pattern.search(response)

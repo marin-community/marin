@@ -25,6 +25,7 @@ SYSTEM_PROMPT = (
 )
 
 
+# Raw dataset rows have heterogeneous JSON fields; this boundary filters action values.
 def scirecipe_prompt(document: Mapping[str, Any]) -> str:
     actions_new = document.get("action_new")
     actions = actions_new if isinstance(actions_new, list) else document["action"]

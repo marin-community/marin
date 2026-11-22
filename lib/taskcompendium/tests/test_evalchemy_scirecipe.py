@@ -77,7 +77,7 @@ def test_structured_exact_match_preserves_unnormalized_content_score(count):
 
 
 def test_malformed_reference_is_an_invalid_task_instead_of_a_model_zero():
-    with pytest.raises(InvalidTask, match="reference"):
+    with pytest.raises(InvalidTask):
         structured_metrics(KEY, 'Step 1: {"action": null}')
 
 

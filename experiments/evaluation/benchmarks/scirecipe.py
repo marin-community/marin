@@ -32,13 +32,14 @@ from experiments.evaluation.benchmarks.environments import SCIRECIPE_GRADER
 from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import HfSource
 
+BENCHMARK = "scirecipe-eval"
 DATA_REVISION = "2aad80a53a2288963b24c504ddcccd58d6b8bfec"
 VERSION = "2026.11.20"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
     protocol = EvaluationProtocol(
-        benchmark="scirecipe-eval",
+        benchmark=BENCHMARK,
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
         sampling=Sampling(
@@ -63,7 +64,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         expected_population=600,
     )
     source = evaluation_source(
-        name="scirecipe-eval",
+        name=BENCHMARK,
         source=HfSource("manglu3935/SciRecipe", DATA_REVISION, ("SciRecipe-Eval.parquet",), SourceFormat.PARQUET),
         convert=convert_scirecipe,
         version=VERSION + "-" + scorer_revision("scirecipe"),

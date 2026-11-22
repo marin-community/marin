@@ -79,6 +79,14 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
                 raise ValueError(f"Duplicate protocol builder: {declaration.name}/{variant.protocol}")
             grouped[declaration.name][variant] = declaration
     return {
-        name: EvaluationBenchmark(name, tuple(builders), partial(_build_protocol, builders))
+        name: EvaluationBenchmark(
+            name,
+            tuple(builders),
+            partial(_build_protocol, builders),
+            max_concurrency=min(
+                (builder.max_concurrency for builder in builders.values() if builder.max_concurrency is not None),
+                default=None,
+            ),
+        )
         for name, builders in grouped.items()
     }
