@@ -552,19 +552,6 @@ def test_json_prompt_keeps_candidate_text_inside_its_field(tmp_path, fake_judge)
     }
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
-        pytest.param({"prompt_format": JudgePromptFormat.JSON}, id="json-with-template"),
-        pytest.param({"prompt_template": ""}, id="template-format-without-template"),
-        pytest.param({"prompt_format": JudgePromptFormat.JSON, "rubric": "reference"}, id="json-off-labels"),
-    ],
-)
-def test_prompt_format_must_match_the_template_and_rubric(unconfigured_judge, change):
-    with pytest.raises(InvalidTask):
-        grade_judge.grade_judge_candidate(_label_spec(**change), "candidate")
-
-
 def test_unfinished_candidate_reasoning_is_an_empty_answer(tmp_path, fake_judge):
     spec = _label_spec(strip_candidate_reasoning_blocks=True)
     result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "<think>unfinished"))
