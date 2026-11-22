@@ -217,15 +217,12 @@ def test_harness_repeat_prompt_without_request_fails_closed():
         ("de", "Das ist ein deutscher Satz mit mehreren Wörtern.", "de", 1.0),
     ],
 )
-def test_harness_response_language_uses_detector(language, response, detected, expected, monkeypatch):
-    detector = ModuleType("langdetect")
-    factory = SimpleNamespace(seed=None)
+def test_harness_response_language_uses_detector(language, response, detected, expected):
+    pytest.importorskip("langdetect")
+    from langdetect import DetectorFactory, detect  # noqa: PLC0415
 
-    def detect(text):
-        return detected if factory.seed == 0 else "unknown"
-
-    detector.__dict__.update({"DetectorFactory": factory, "LangDetectException": ValueError, "detect": detect})
-    monkeypatch.setitem(sys.modules, "langdetect", detector)
+    DetectorFactory.seed = 0
+    assert detect(response) == detected
     spec = InstructionSpec(
         (Constraint("language:response_language", {"language": language}),), InstructionProfile.HARNESS, ""
     )
