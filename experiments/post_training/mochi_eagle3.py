@@ -21,6 +21,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
 from skyrl_gym.task_records import episode_prompt
+from skyrl_train.io import io as skyrl_io
 from skyrl_train.io.remote_safetensors import RemoteSafetensorsTensorStore
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
@@ -57,6 +58,13 @@ class DraftPrompt:
     prompt_token_ids: list[int]
 
 
+@dataclass(frozen=True)
+class PromptPreparation:
+    prompts: list[DraftPrompt]
+    frequencies: Counter[int]
+    receipt: dict
+
+
 def bootstrap_records() -> list[dict]:
     filesystem, prefix = filesystem_for(BOOTSTRAP_ARCHIVES)
     records = []
@@ -77,7 +85,7 @@ def bootstrap_records() -> list[dict]:
     return records
 
 
-def prepare_prompts(nonagentic_count: int, seed: int) -> tuple[list[DraftPrompt], Counter[int], dict]:
+def prepare_prompts(nonagentic_count: int, seed: int) -> PromptPreparation:
     records = bootstrap_records()
     grouped_records: dict[str, list[dict]] = {}
     for record in records:
@@ -156,7 +164,7 @@ def prepare_prompts(nonagentic_count: int, seed: int) -> tuple[list[DraftPrompt]
         "nonagentic_pool": TRAIN_POOL,
         "seed": seed,
     }
-    return rows, frequencies, receipt
+    return PromptPreparation(rows, frequencies, receipt)
 
 
 def initialize_draft(directory: Path, frequencies: Counter[int], seed: int) -> dict:
@@ -247,15 +255,16 @@ def main() -> None:
     output = StoragePath(args.output)
     if (output / "prepared.json").exists():
         raise FileExistsError(f"Prepared output already exists: {output}")
-    prompts, frequencies, receipt = prepare_prompts(args.nonagentic_count, args.seed)
+    preparation = prepare_prompts(args.nonagentic_count, args.seed)
+    receipt = preparation.receipt
     receipt["source_revision"] = args.source_revision
     with tempfile.TemporaryDirectory(prefix="mochi-eagle3-prepare-") as scratch:
         directory = Path(scratch)
-        receipt.update(initialize_draft(directory, frequencies, args.seed))
-        (output / "prompts.jsonl").write_text("".join(json.dumps(asdict(prompt)) + "\n" for prompt in prompts))
-        filesystem, prefix = filesystem_for(args.output)
-        for file in (directory / "seed-draft").iterdir():
-            filesystem.put_file(str(file), f"{prefix}/seed-draft/{file.name}")
+        receipt.update(initialize_draft(directory, preparation.frequencies, args.seed))
+        (output / "prompts.jsonl").write_text(
+            "".join(json.dumps(asdict(prompt)) + "\n" for prompt in preparation.prompts)
+        )
+        skyrl_io.upload_directory(str(directory / "seed-draft"), str(output / "seed-draft"))
         (output / "prepared.json").write_text(json.dumps(receipt, indent=2))
     logger.info("Prepared %s", json.dumps(receipt, sort_keys=True))
 

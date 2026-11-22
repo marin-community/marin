@@ -7,6 +7,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.inference_engines.base import request_group_from_id
 from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     capture_rank_directory,
@@ -40,7 +41,7 @@ class MochiCaptureWorker:
     def seal_mochi_capture(self, destination: str) -> dict:
         """Publish one immutable rank capture directly to regional object storage."""
         rank = self.model_runner.parallel_config.data_parallel_rank
-        rank_destination = f"{destination}/{capture_rank_name(rank)}"
+        rank_destination = prefix_join(destination, capture_rank_name(rank))
         with tempfile.TemporaryDirectory(prefix="mochi-eagle3-capture-") as scratch:
             directory = capture_rank_directory(Path(scratch), rank)
             result = self.model_runner.seal_online_eagle_capture(str(directory))

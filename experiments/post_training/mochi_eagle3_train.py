@@ -13,7 +13,7 @@ from collections import Counter
 from pathlib import Path
 
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorTrainingConfig
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
@@ -88,7 +88,7 @@ def train(spec: dict, directory: Path) -> None:
         "source": spec,
     }
     (merged / "mochi-training-fold.json").write_text(json.dumps(split, indent=2))
-    io.upload_directory(str(merged), f"{spec['output']}/training-capture")
+    io.upload_directory(str(merged), prefix_join(spec["output"], "training-capture"))
     job = OnlineEagleTrainingJob(
         step=1,
         capture_dir=str(merged),
@@ -107,7 +107,7 @@ def train(spec: dict, directory: Path) -> None:
     if not result.accepted:
         raise ValueError(f"Draft failed same-holdout improvement gate: {result.to_mapping()}")
     candidate = Path(job.output_dir)
-    io.upload_directory(str(candidate), f"{spec['output']}/trainer-checkpoint")
+    io.upload_directory(str(candidate), prefix_join(spec["output"], "trainer-checkpoint"))
     bundle = directory / "serving-draft"
     bundle.mkdir()
     shutil.copyfile(candidate / "config.json", bundle / "config.json")
@@ -118,7 +118,7 @@ def train(spec: dict, directory: Path) -> None:
         raise ValueError("Standalone draft is missing its vocabulary maps or projected target head")
     save_file(weights, bundle / "model.safetensors", metadata={"format": "pt"})
     (bundle / "lineage.json").write_text(json.dumps(receipt, indent=2))
-    io.upload_directory(str(bundle), f"{spec['output']}/serving-draft")
+    io.upload_directory(str(bundle), prefix_join(spec["output"], "serving-draft"))
     logger.info("Published trained draft: %s", json.dumps(result.to_mapping()))
 
 

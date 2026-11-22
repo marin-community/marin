@@ -21,7 +21,7 @@ from marin.inference.iris_vllm import (
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.vllm_backend import VllmBackend
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrl_train.inference_engines.base import request_id_for_session
 from skyrl_train.io import io
 
@@ -91,10 +91,10 @@ async def generate(base_url: str, spec: dict) -> None:
         results = await asyncio.gather(*(continuation(i, row) for i, row in enumerate(rows)))
         sealed = await client.post(
             f"{base_url.removesuffix('/v1')}/collective_rpc",
-            json={"method": "seal_mochi_capture", "args": [f"{spec['output']}/captures"], "timeout": 1800},
+            json={"method": "seal_mochi_capture", "args": [prefix_join(spec["output"], "captures")], "timeout": 1800},
         )
         sealed.raise_for_status()
-        filesystem = StoragePath(spec["output"] + "/captures")
+        filesystem = StoragePath(spec["output"]) / "captures"
         for rank in range(spec["geometry"]["data_parallel_size"]):
             manifest = json.loads((filesystem / f"rank-{rank:05d}/manifest.json").read_text())
             if manifest["target_revision"] != TARGET_IDENTITY:
@@ -163,7 +163,12 @@ def run(spec: dict) -> None:
             ),
         )
         with iris_vllm_launch(geometry) as launch:
-            environment_variables = {**launch.subprocess_env, "VLLM_SERVER_DEV_MODE": "1"}
+            # Bounded verifier-feature capture is implemented in the V1 runner.
+            environment_variables = {
+                **launch.subprocess_env,
+                "VLLM_SERVER_DEV_MODE": "1",
+                "VLLM_USE_V2_MODEL_RUNNER": "0",
+            }
             with VllmBackend(engine).start(
                 model, extra_args=launch.extra_cli_args, subprocess_env=environment_variables
             ) as environment:
