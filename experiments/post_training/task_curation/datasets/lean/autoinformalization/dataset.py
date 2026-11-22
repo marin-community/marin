@@ -18,7 +18,7 @@ from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
-from verifyit.spec import RUBRIC_LABELS, JudgeSpec
+from verifyit.spec import RUBRIC_LABELS, JudgePromptFormat, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import (
@@ -68,8 +68,6 @@ Multiple-choice options and option letters are not required. Return the mathemat
 ```lean4
 {formal}
 ```"""
-
-JUDGE_PROMPT = "{fields_json}"
 
 JUDGE_SYSTEM_PROMPT = """Decide whether the candidate faithfully states the Lean theorem in natural language.
 
@@ -142,7 +140,7 @@ def judge_spec(formal: str, problem: str) -> JudgeSpec:
         references=(problem.strip(),),
         question=formal,
         rubric=RUBRIC_LABELS,
-        prompt_template=JUDGE_PROMPT,
+        prompt_format=JudgePromptFormat.JSON,
         system_prompt=JUDGE_SYSTEM_PROMPT,
         label_scores={"PASS": 1.0, "FAIL": 0.0},
         label_scan="lines",
