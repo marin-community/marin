@@ -16,6 +16,7 @@ use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
 use finelog::read_executor::ReadExecutor;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
+use finelog::server::segment_history::spawn_table_segment_history;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
@@ -137,6 +138,12 @@ struct Args {
         default_value_t = TelemetryMigrationMode::Normal
     )]
     telemetry_migration_mode: TelemetryMigrationMode,
+
+    /// Write each table's segment counts to `finelog.table_segments` once a
+    /// minute. Enable it on a hub only: a forwarding server would ship the rows
+    /// to its hub as well.
+    #[arg(long, env = "FINELOG_TABLE_SEGMENT_HISTORY", default_value_t = false)]
+    table_segment_history: bool,
 }
 
 /// Abort the standalone server after reporting any Rust panic.
@@ -265,6 +272,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&diag_stop),
         Arc::clone(&diag_shutdown),
     );
+    // A shadow boot rehearses with a deployment's environment and must not add
+    // rows of its own.
+    let segment_history = (args.table_segment_history && mode == ServeMode::Live).then(|| {
+        spawn_table_segment_history(
+            Arc::clone(&store),
+            Arc::clone(&diag_stop),
+            Arc::clone(&diag_shutdown),
+        )
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     tracing::info!(%addr, log_dir = ?args.log_dir, "finelog-server listening");
@@ -295,6 +311,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     diag_stop.store(true, Ordering::SeqCst);
     diag_shutdown.notify_waiters();
     let _ = tokio::time::timeout(Duration::from_secs(2), diag).await;
+    if let Some(task) = segment_history {
+        let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+    }
     let _ = tokio::time::timeout(
         Duration::from_secs(10),
         store.shutdown(Duration::from_secs(5)),

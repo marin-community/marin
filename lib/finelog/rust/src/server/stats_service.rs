@@ -479,6 +479,7 @@ impl StatsService for StatsServiceImpl {
                     .with_max_seq(stats.max_seq)
                     .with_segment_count(stats.segment_count);
                 NamespaceInfo {
+                    segment_count_by_level: stats.segment_count_by_level,
                     schema: MessageField::some(schema_to_proto_owned(&schema)),
                     storage_policy: MessageField::some(policy.to_proto_owned()),
                     ..info

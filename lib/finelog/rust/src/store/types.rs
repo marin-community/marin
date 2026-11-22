@@ -101,13 +101,28 @@ pub fn segment_to_row(namespace: &str, segment: &LocalSegment) -> SegmentRow {
 }
 
 /// Aggregate counters for one namespace's persisted segments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NamespaceStats {
     pub row_count: i64,
     pub byte_size: i64,
     pub min_seq: i64,
     pub max_seq: i64,
     pub segment_count: i32,
+    /// Segments at each compaction level; index 0 is L0. Sums to `segment_count`.
+    pub segment_count_by_level: Vec<i32>,
+}
+
+/// Count segments per compaction level, indexed by level.
+pub fn count_by_level(levels: impl IntoIterator<Item = i32>) -> Vec<i32> {
+    let mut counts = Vec::new();
+    for level in levels {
+        let index = usize::try_from(level).expect("segment levels are nonnegative");
+        if counts.len() <= index {
+            counts.resize(index + 1, 0);
+        }
+        counts[index] += 1;
+    }
+    counts
 }
 
 /// Aggregate in-RAM accounting across live namespaces for the diagnostics line:

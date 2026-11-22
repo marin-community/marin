@@ -18,6 +18,7 @@ use crate::store::column_bounds::ColumnBounds;
 use crate::store::object_store::{ObjectId, ObjectStore};
 use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts};
+use crate::store::types::count_by_level;
 use crate::store::types::{segment_to_row, LocalSegment, SegmentRow};
 
 /// A table's readable segments as one consistent observation: the files a scan
@@ -54,6 +55,8 @@ pub struct SegmentSnapshot {
 /// Aggregate accounting over the live segments, read under one lock.
 pub struct SegmentTotals {
     pub count: usize,
+    /// Segments at each compaction level, indexed by level.
+    pub count_by_level: Vec<i32>,
     pub rows: i64,
     pub bytes: i64,
     /// Bounds over segments that actually hold rows.
@@ -179,6 +182,7 @@ impl SegmentView {
         let segments = self.segments.lock().unwrap();
         SegmentTotals {
             count: segments.len(),
+            count_by_level: count_by_level(segments.iter().map(|segment| segment.level)),
             rows: segments.iter().map(|segment| segment.row_count).sum(),
             bytes: segments.iter().map(|segment| segment.size_bytes).sum(),
             min_seq: segments

@@ -7,6 +7,7 @@
 //! The line is a diagnostic aid, not a contract, so no test asserts on its
 //! text. The task selects against a shutdown signal and exits when it fires.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -77,6 +78,23 @@ pub fn spawn_pool_diagnostics(
     stop: Arc<AtomicBool>,
     shutdown: Arc<tokio::sync::Notify>,
 ) -> JoinHandle<()> {
+    spawn_periodic(POOL_DIAGNOSTICS_INTERVAL, stop, shutdown, move || {
+        emit(&store);
+        std::future::ready(())
+    })
+}
+
+/// Run `tick` once per `interval` until `stop` is latched.
+pub(crate) fn spawn_periodic<F, Fut>(
+    interval: Duration,
+    stop: Arc<AtomicBool>,
+    shutdown: Arc<tokio::sync::Notify>,
+    tick: F,
+) -> JoinHandle<()>
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send,
+{
     tokio::spawn(async move {
         loop {
             if stop.load(Ordering::SeqCst) {
@@ -84,13 +102,13 @@ pub fn spawn_pool_diagnostics(
             }
             let stopped = shutdown.notified();
             tokio::select! {
-                _ = tokio::time::sleep(POOL_DIAGNOSTICS_INTERVAL) => {}
+                _ = tokio::time::sleep(interval) => {}
                 _ = stopped => return,
             }
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            emit(&store);
+            tick().await;
         }
     })
 }

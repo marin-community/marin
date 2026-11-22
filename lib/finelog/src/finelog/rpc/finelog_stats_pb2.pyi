@@ -525,7 +525,7 @@ class DropTableResponse(_message.Message):
     def __init__(self) -> None: ...
 
 class NamespaceInfo(_message.Message):
-    __slots__ = ("namespace", "schema", "row_count", "byte_size", "min_seq", "max_seq", "segment_count", "storage_policy")
+    __slots__ = ("namespace", "schema", "row_count", "byte_size", "min_seq", "max_seq", "segment_count", "storage_policy", "segment_count_by_level")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_FIELD_NUMBER: _ClassVar[int]
     ROW_COUNT_FIELD_NUMBER: _ClassVar[int]
@@ -534,6 +534,7 @@ class NamespaceInfo(_message.Message):
     MAX_SEQ_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_COUNT_FIELD_NUMBER: _ClassVar[int]
     STORAGE_POLICY_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_COUNT_BY_LEVEL_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     schema: Schema
     row_count: int
@@ -542,7 +543,8 @@ class NamespaceInfo(_message.Message):
     max_seq: int
     segment_count: int
     storage_policy: StoragePolicy
-    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ..., row_count: _Optional[int] = ..., byte_size: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., segment_count: _Optional[int] = ..., storage_policy: _Optional[_Union[StoragePolicy, _Mapping]] = ...) -> None: ...
+    segment_count_by_level: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ..., row_count: _Optional[int] = ..., byte_size: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., segment_count: _Optional[int] = ..., storage_policy: _Optional[_Union[StoragePolicy, _Mapping]] = ..., segment_count_by_level: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class ListNamespacesRequest(_message.Message):
     __slots__ = ()

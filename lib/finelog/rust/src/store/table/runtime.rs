@@ -569,6 +569,7 @@ impl TableRuntime {
             min_seq,
             max_seq,
             segment_count: segments.count as i32,
+            segment_count_by_level: segments.count_by_level,
         }
     }
 

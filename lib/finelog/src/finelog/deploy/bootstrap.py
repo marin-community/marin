@@ -160,6 +160,7 @@ def render_bootstrap(
     query_index_cache_mb: int | None,
     object_cache_gb: int | None = None,
     telemetry_migration_mode: str = "normal",
+    table_segment_history: bool = False,  # write per-table segment counts once a minute
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -186,6 +187,8 @@ def render_bootstrap(
     if object_cache_gb is not None:
         query_env += f"-e FINELOG_OBJECT_CACHE_GB={object_cache_gb} "
     migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
+    if table_segment_history:
+        migration_env += "-e FINELOG_TABLE_SEGMENT_HISTORY=true "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
