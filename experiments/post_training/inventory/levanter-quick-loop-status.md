@@ -5,10 +5,12 @@ November 21, 2026 (PST).
 The learner-only integration and CPU proofs are ready. BATCH smoke
 `2026.11.21.7`, from `8f19c196456e2f600c0e4edb21f4339c0a8d5129`, has
 initialized all four native Snowball learner hosts on the 32-H100 data4/expert8
-mesh. The four initialization receipts were emitted at 15:43:23 PST; at the
-15:45 heartbeat all five GPU tasks were still running. This clears the import
-failure seen in the previous smoke. Real updates, verified publication,
-generation after publication, and checkpoint continuation remain unverified.
+mesh, byte-verified initial publication to all eight vLLM receivers, and completed
+the fixed 100-task baseline evaluation. It then failed at 15:55:55 PST in the
+first `ppo_train` call: three hosts reached a cross-entropy selection barrier,
+but rank 3 did not arrive before its deadline. Why that rank did not arrive is
+under investigation. All five GPU pods are gone. Real updates, publication and
+generation after an update, and checkpoint continuation remain unverified.
 The matched comparison is gated on full smoke acceptance.
 
 ## Scope and fixed recipe
@@ -64,7 +66,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
 | Actual H100 | Earlier smokes exposed device selection, mesh validation, response framing, timeout, and import-memory failures. Smoke `2026.11.21.7` initialized all four native hosts on the expected 32-device mesh, from the frozen checkpoint and model config. | Full runtime identity/installed parameter-count receipts, scoring, and two real parameter updates with the pinned CUDA kernels. |
-| Publication and resume | CPU Gloo replay and fresh-process native checkpoint transactions passed, including exact model, Adam, RNG, step, and model-averaging fingerprints. Four native child/host restart cases passed. | H100 NCCL/vLLM receiver replay with zero byte mismatches, subsequent nonempty generation stamped with the updated policy, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
+| Publication and resume | Initial H100 publication at model version zero passed all eight receiver byte comparisons, followed by generation stamped 1 and the 100-task baseline evaluation. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
@@ -219,13 +221,29 @@ Both coordinator and child have actual BATCH priority, and their accepted
 source archives match all 4,582 frozen entries, including 42 required runtime
 files. The child suffix is `users-dlwh-checkpoints-snowball-inventory-2026.11.21.7-aaaf10b4951f`.
 After one coordinator preemption and a wait for gang admission, all five GPU
-tasks are running. Four native initialization receipts cover process IDs 0–3,
+tasks ran. Four native initialization receipts cover process IDs 0–3,
 32 global/eight local devices, data4/expert8, the expected model geometry and
 immutable checkpoint identity, step zero, and 16 microbatches. Import completed
 at `2026-11-21T23:43:23Z`. This establishes initialization; update, publication,
 generation, checkpoint continuation, and successful terminal receipts remain
 required. Installed parameter counts and detailed runtime identity are emitted
 by the later checkpoint acceptance receipts.
+
+Initial publication completed at `2026-11-21T23:46:23.646Z`, with model version
+zero and receiver participants 32–39 each comparing 19,687,358,464 bytes with
+zero mismatches. Returned generation receipts contain real tokens stamped 1.
+The fixed 100-task evaluation completed before training. These establish the
+initial integration path, not publication of updated weights.
+
+The run failed at `2026-11-21T23:55:55.101Z` during its first `ppo_train` call.
+The preserved exception reaches `fused_cross_entropy_loss/api.py`'s selection-plan
+exchange, then `multihost_allgather_sync4::0`: three of four tasks arrived,
+with task 3 missing. This exchange also runs for the recipe's fixed XLA path
+with BF16 projection logits; it is not evidence that a tuning sweep or optimized
+GPU CE kernel ran. The reason task 3 did not reach the barrier is unresolved.
+Both jobs are failed, all five GPU pods are gone, and no uploaded task archives
+were available. No successful optimizer update or checkpoint continuation is
+established.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
