@@ -10,12 +10,12 @@ integration remain open.
 The full BF16 67B checkpoint completed matched 64K AgentX replays at 128
 offered clients on v5p-8, v6e-8, and eight H100s. The table shows the best
 completed throughput on each backend and p90 HTTP time to first token
-from the same runs. The v5p-8 native row uses a prepacked expert
-prototype.
+from the same runs. The v5p-8 row includes the experimental wide
+expert contraction tile.
 
 | Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM p90 TTFT |
 | --- | ---: | ---: | ---: |
-| v5p-8 | 526.85 | 549.46 | 3.66 / 1.34 s |
+| v5p-8 | 533.77 | 549.46 | 3.19 / 1.34 s |
 | v6e-8 | 600.63 | 554.00 | 2.03 / 1.31 s |
 | 8× H100 | 621.18 | 593.09 | 1.01 / 1.44 s |
 
@@ -934,12 +934,41 @@ Across 361 common turns, active decode rose from 31.93 to
 output lengths matched with zero errors.
 [Weighted attention trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v32-balanced-full-attention)
 
+Using spare sliding-window space for a second span of retained prompt
+pages reached 526.97 output tok/s with 60 logical contexts. On the
+363 shared turns, median TTFT fell from 1.28 to 1.03 s and active
+decode rose from 32.13 to 33.49 tok/s compared with the original
+retention policy on another worker. Admission logs recorded 11.75
+million reused prompt tokens during the sending window, up from
+11.49 million. The longest primed serial median rose from 119 to
+206 ms in that run.
+[Second retained span trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v33-two-window-prefix-tails)
+
+The combination of 80 logical contexts and 32-row expert tiles
+reached 527.28 output tok/s, 4.0% behind compiled vLLM. Across 366
+shared turns with the 80-context 64-row control, active decode rose
+from 32.66 to 33.87 tok/s and p90 TTFT rose from 3.10 to 3.48 s.
+All 369 output lengths paired with compiled vLLM matched. Both
+runs had zero errors and their five primed serial medians were
+within 5 ms.
+[80-context 32-row expert trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v34-80-contexts-32-row-experts)
+
 On a v5p-8 expert microbenchmark, a 2,560-element contraction tile
 lowered median time from 0.601 to 0.567 ms at 16 padded rows and
 from 1.826 to 1.504 ms at 2,048 rows. The largest absolute output
 difference from the default 1,024-element tile was 0.000004 with
 BF16 inputs and outputs. There were zero dropped assignments.
 [Contraction tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-expert-contraction-20261122-v1)
+
+The wide contraction tile with 80 contexts reached 533.77 output
+tok/s, 2.9% behind the strongest compiled vLLM result. All 374 output
+lengths paired with vLLM matched and both runs had zero errors. On
+those turns active decode was 35.15 versus 35.52 tok/s. The five
+primed serial medians were within 4 ms. In a separate two-layer
+Snowball generation check at the production projection dimensions,
+the wide contraction tile diverged at the sixth greedy token.
+The original contraction order remains in the branch.
+[Wide contraction replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v35-80-contexts-expert-contraction) · [Generation check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-expert-output-check-20261122-v1)
 
 One packed v5p trace ran 16 concurrent sequences at 51,870 input tokens.
 Its 260 ms device round spent about 98 ms in the seven full-attention
@@ -1076,6 +1105,18 @@ active decode moved from 44.24 to 44.72 tok/s and p90 TTFT rose from
 2.15 to 2.79 s. All paired output lengths matched and both runs had
 zero profiling errors.
 [Prefill batch budget trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v26-prefill-batch-budget)
+
+The v6e-8 retry with 32 logical contexts, 2,880 sliding-window pages,
+and eight-step decode rounds reached 593.74 output tok/s on the same
+worker as compiled vLLM. On 396 shared turns with the 24-context
+eight-step control, active decode rose from 40.26 to 41.86 tok/s and
+p90 TTFT fell from 2.02 to 1.82 s. All 392 output lengths paired with
+vLLM matched, with zero errors. Paired active decode was 41.42 versus
+36.35 tok/s and aggregate p90 TTFT was 1.82 versus 1.31 s. The longest
+primed serial median was 110 versus 85 ms. The first attempt ended in
+worker preemption. The earlier 3,072-window-page allocation exceeded
+device memory by about 40 MiB.
+[32-context retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v25-32-contexts-2880-window-pages)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
