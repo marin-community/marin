@@ -8,7 +8,8 @@ the grader packages pin, in ``GENERATOR_PARTS`` parts that workers generate in p
 generates only its sampled rows. Its grader
 (``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
 Python values, and rows whose entry a fresh dataset does not reproduce are rejected. So are rows whose
-scorer gave the recorded wrong answer the full reward, and the rows of ``CONSTANT_REPLY_TASKS``.
+scorer gave the recorded wrong answer the full reward, and the rows of
+``CONSTANT_REPLY_VULNERABILITIES``.
 ``tasktrove-reasoning-gym`` uses ``ReasoningGymSpec`` to preserve upstream fractional reward. Both
 run with the grader packages (``GRADER_PACKAGES``). TaskTrove and Nemotron Ultra rows from known
 constant-reward task families are rejected at conversion too.
@@ -57,7 +58,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import DEFAULT_OUTPUT, ReasoningGymSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.reasoning_gym.scorer_defects import CONSTANT_REPLY_TASKS
+from experiments.post_training.task_curation.datasets.reasoning_gym.scorer_defects import CONSTANT_REPLY_VULNERABILITIES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
     TaskTroveConverter,
@@ -267,7 +268,7 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
             "wrong_answer_scores_full",
             f"The {task_name} scorer gave the wrong answer {recorded.negative.candidate!r} the full reward",
         )
-    constant_reply_defect = CONSTANT_REPLY_TASKS.get(task_name)
+    constant_reply_defect = CONSTANT_REPLY_VULNERABILITIES.get(task_name)
     if constant_reply_defect is not None:
         return source_defect("constant_reply_scores_full", constant_reply_defect)
     contract = {
@@ -323,7 +324,7 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
     if not isinstance(dataset, str) or not dataset:
         return unsupported("missing_scorer", "metadata.source_dataset is required")
-    if defect := CONSTANT_REPLY_TASKS.get(dataset):
+    if defect := CONSTANT_REPLY_VULNERABILITIES.get(dataset):
         return source_defect("constant_reply_scores_full", defect)
     if not isinstance(data.get("answer"), str) or not data["answer"].strip():
         return source_defect("invalid_entry", "Entry answer must be a string")

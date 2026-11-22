@@ -74,7 +74,7 @@ from verifyit.spec import (
 )
 
 from experiments.post_training.glm import GLM_MODEL
-from experiments.post_training.task_curation.datasets.reasoning_gym.scorer_defects import CONSTANT_REPLY_TASKS
+from experiments.post_training.task_curation.datasets.reasoning_gym.scorer_defects import CONSTANT_REPLY_VULNERABILITIES
 
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 """The NeMo Gym revision whose agents grade the pinned Ultra blends."""
@@ -396,7 +396,7 @@ def convert_reasoning_gym(row: RawRow, context: ConversionContext) -> Normalized
     """Score the reply with the Reasoning Gym task its metadata names."""
     metadata = row.data.get("metadata")
     task_name = metadata.get("source_dataset") if isinstance(metadata, dict) else None
-    if isinstance(task_name, str) and (defect := CONSTANT_REPLY_TASKS.get(task_name)):
+    if isinstance(task_name, str) and (defect := CONSTANT_REPLY_VULNERABILITIES.get(task_name)):
         return source_defect("constant_reply_scores_full", defect)
     if defect := INVALID_REASONING_GYM_ROWS.get(str(row.data.get("uuid"))):
         return source_defect("invalid_reasoning_gym_ground_truth", defect)

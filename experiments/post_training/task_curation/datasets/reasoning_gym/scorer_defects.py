@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reasoning Gym 0.1.25 tasks whose scorer gives full reward to a constant reply.
+"""Reasoning Gym 0.1.25 scorers that pay a fixed reply on many entries.
 
 Reject these rows at conversion so generated source indexes stay stable and each rejection is recorded.
 """
 
-CONSTANT_REPLY_TASKS = {
+CONSTANT_REPLY_VULNERABILITIES = {
     "coin_flip": "The reply 0 earns the full reward on every entry whose answer is below 1",
     "complex_arithmetic": "The reply NaN earns the full reward on every entry",
     "game_of_life_halting": "Every nonempty reply earns the full reward",
