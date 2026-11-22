@@ -2,7 +2,13 @@
 
 November 21, 2026 (PST).
 
-The learner-only integration and CPU proofs are ready. BATCH smoke
+Fresh BATCH smoke `2026.11.21.8` is running from
+`233030789c6afd6aa61d315a001ce65ac7436007`, with the fixed XLA coordination
+repair and unchanged recipe. At 17:23 PST its CPU coordinator was running,
+with no GPU child yet discovered. Current-source accelerator acceptance is
+pending.
+
+The preceding BATCH smoke
 `2026.11.21.7`, from `8f19c196456e2f600c0e4edb21f4339c0a8d5129`, has
 initialized all four native Snowball learner hosts on the 32-H100 data4/expert8
 mesh, byte-verified initial publication to all eight vLLM receivers, and completed
@@ -273,6 +279,12 @@ package-build stall is unresolved. This
 broader run is not green. The focused fixed-plan and native checks use the
 runtime's pinned JAX/JAXLIB `0.11.0` and pass independently.
 
+Smoke `2026.11.21.8` uses coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.8-coordinator-31727573`.
+Its actual priority is BATCH, and its accepted source archive matches all 4,582
+frozen entries, including 42 required runtime files. No accelerator gate for
+this new source has passed yet.
+
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch
@@ -295,7 +307,7 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.7 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.21.8 \
   --learner levanter --steps 2 --verify-publication \
   --validate-native-checkpoint --coordinator-route regional --run
 ```
