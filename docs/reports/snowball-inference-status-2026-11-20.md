@@ -678,6 +678,8 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v5p-8, fused prefill through 8,192 tokens](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v22-fused-8k-prefill) | 342 | 94,359 | 449.33 | 1,511 | 3,446 |
 | [v5p-8, dual-core full-attention decode and 8K fused prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v23-megacore-full-decode) | 357 | 102,688 | 491.20 | 1,423 | 3,414 |
 | [v5p-8, dual-core full attention and tuned expert tiles](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v25-smaller-expert-tiles) | 362 | 104,391 | 511.94 | 1,068 | 3,726 |
+| [v5p-8, live window pin budget](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v26-live-window-pins) | 357 | 102,569 | 493.72 | 1,046 | 3,303 |
+| [v5p-8, tuned expert tiles with live window budgeting](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v27-expert-tiles-live-pins) | 362 | 104,410 | 509.12 | 1,322 | 3,270 |
 | [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
 | [v6e-8, vLLM TP4 × EP2, same-worker repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat) | 392 | 109,857 | 554.00 | 230 | 1,307 |
 | [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
@@ -692,6 +694,8 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v6e-8, wider decode tiles and fused prefill through 8,192 tokens](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v16-parity-prefill-8k) | 373 | 106,159 | 537.08 | 1,191 | 2,869 |
 | [v6e-8, window tail pin budget based on live sequences](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v18-live-window-pins) | 401 | 112,762 | 592.58 | 815 | 2,201 |
 | [v6e-8, live window pin budget, same-worker repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v19-live-window-pins-repeat) | 404 | 113,218 | 595.38 | 747 | 2,211 |
+| [v6e-8, live pins with 28 logical contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v20-live-pins-28-contexts) | 409 | 113,816 | 600.63 | 687 | 2,031 |
+| [v6e-8, live pins with eight-step decode rounds](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v21-live-pins-eight-rounds) | 396 | 111,972 | 581.66 | 572 | 2,022 |
 
 The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
 v6e-8 baseline ran in `us-east1` with one disconnected request. Native
@@ -865,6 +869,20 @@ rose from 3.41 to 3.83 s. Fresh 2,048-token prefill took 74 versus
 76 ms for vLLM and the five primed medians were within 4 ms.
 [Expert tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-ring-expert-tiles-20261122-v1)
 
+Using the live window budget by itself on v5p-8 reached 493.72
+output tok/s. On 356 shared turns with the dual-core control on the
+same worker, median TTFT fell from 1.42 to 1.04 s and p90 fell from
+3.41 to 3.30 s. Active decode was within 0.3% of the control,
+and all 357 output lengths paired with vLLM matched.
+
+Combining the expert tiles and live window budget on the same worker
+reached 509.12 versus 511.94 output tok/s with expert tiles alone.
+On 361 shared turns, p90 TTFT fell from 3.73 to 3.28 s and active
+decode fell from 32.10 to 30.79 tok/s. All 362 output lengths paired
+with vLLM matched, with zero errors. The longest primed median was
+227 versus 117 ms in this repeat.
+[Combined v5p trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v27-expert-tiles-live-pins)
+
 One packed v5p trace ran 16 concurrent sequences at 51,870 input tokens.
 Its 260 ms device round spent about 98 ms in the seven full-attention
 kernels. The 512-token trace took 157 ms. Limiting internal slots to
@@ -968,6 +986,20 @@ had zero profiling errors and all 391 paired output lengths matched.
 Active decode reached 44.47 versus 36.33 tok/s. Native AgentX p90 TTFT
 was 2.21 s versus 1.31 s. Fresh serial 8,192-token TTFT was 149 versus
 177 ms. The five primed medians were 3–8 ms slower.
+
+On the `us-east1` worker, increasing the cache from 24 to 28 logical
+contexts raised throughput from 592.58 to 600.63 output tok/s. On 401
+shared turns, p90 TTFT fell from 2.20 to 2.03 s and active decode was
+44.15 versus 44.64 tok/s. All 392 lengths paired with vLLM matched,
+with zero profiling errors. Paired active decode against compiled
+vLLM was 44.30 versus 36.35 tok/s.
+
+On the `us-east5` comparison worker with 24 contexts, eight-step
+decode rounds lowered paired p90 TTFT from 2.21 to 2.02 s and paired
+median from 739 to 572 ms over 396 common turns. Active decode fell
+from 44.94 to 40.26 tok/s. Aggregate throughput was 581.66 versus the
+compiled vLLM run's 554.00 tok/s. All 391 lengths paired with vLLM
+matched, with zero errors.
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
