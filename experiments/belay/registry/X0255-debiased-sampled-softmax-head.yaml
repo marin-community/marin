@@ -1,0 +1,12 @@
+id: X0255
+slug: debiased-sampled-softmax-head
+name: Debiased sampled softmax head
+category: Output head and loss
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7083603637
+  author: WhenWen
+  approved_by: WhenWen (trusted)
