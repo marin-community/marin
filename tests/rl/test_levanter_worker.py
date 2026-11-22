@@ -24,6 +24,59 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_stall_diagnostics_capture_only_active_main_thread(enabled):
+    script = """
+import json, os, threading, time
+from marin.rl import levanter_worker_runtime as worker
+worker._DIAGNOSTIC_STALL_SECONDS = 0.15
+runtime = worker.NativePolicyRuntime()
+runtime.settings = {"runtime": {"validate_checkpoint_roundtrip": ENABLED}}
+def wait_for_input():
+    read_fd, write_fd = os.pipe()
+    def release():
+        os.write(write_fd, b"x")
+    writer = threading.Timer(0.35, release)
+    writer.start()
+    try:
+        os.read(read_fd, 1)
+    finally:
+        writer.join()
+        os.close(read_fd)
+        os.close(write_fd)
+with runtime.request_diagnostics("train"):
+    wait_for_input()
+with runtime.request_diagnostics("model_fingerprint"):
+    pass
+time.sleep(0.25)  # A cancelled watchdog must not report the subsequent idle frame.
+""".replace(
+        "ENABLED", repr(enabled)
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "JAX_PLATFORMS": "cpu"},
+    )
+    assert result.returncode == 0, result.stderr
+    rows = [
+        json.loads(line.split(" ", 1)[1])
+        for line in result.stderr.splitlines()
+        if line.startswith("native_phase_receipt ")
+    ]
+    if enabled:
+        stalled = [row for row in rows if row["event"] == "request_stalled"]
+        assert len(stalled) == 1
+        assert stalled[0]["method"] == "train"
+        assert stalled[0]["thread_id"] != stalled[0]["main_thread_id"]
+        assert len(stalled[0]["main_thread_stack"]) <= 40
+        assert any("wait_for_input" in frame for frame in stalled[0]["main_thread_stack"])
+        assert rows[-1]["event"] == "request_end" and rows[-1]["method"] == "model_fingerprint"
+    else:
+        assert rows == []
+
+
 def test_native_child_import_time_stdout_does_not_corrupt_response(tmp_path, capfd):
     # sitecustomize runs before the runtime's imports or Python stdout redirect.
     (tmp_path / "sitecustomize.py").write_text("import os\nos.write(1, b'native startup stdout\\n')\n")
@@ -176,6 +229,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
     batch_size = count * 2
     config = {
         "runtime": {
+            "validate_checkpoint_roundtrip": host_restart,
             "mesh_axes": {"replica_dcn": 1, "replica": 1, "data": count, "expert": 1, "model": 1, "context": 1},
             "checkpoint_dir": str(tmp_path),
             "projection_block_size": 16,
@@ -224,6 +278,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
     checkpoint = {"ckpt_dir": str(tmp_path / "checkpoint"), "include_fingerprints": True}
     with _learner_processes(config, process_count) as (children, receipts, configs):
         assert all(row["global_devices"] == count and row["microbatches"] == 2 for row in receipts)
+        assert all(row["backend"] == "cpu" and row["pid"] > 0 and row["global_model_parameters"] > 0 for row in receipts)
         scores = _same_request(children, "forward", payload)[0]["output"]
         arrays.update(
             {

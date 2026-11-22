@@ -245,6 +245,17 @@ Both jobs are failed, all five GPU pods are gone, and no uploaded task archives
 were available. No successful optimizer update or checkpoint continuation is
 established.
 
+A separate four-process CPU test reproduces a structural tracing hazard with
+the actual CE API. All ranks agree on fixed XLA/BF16 settings and warm the same
+JIT. Clearing only ranks 0–2's trace caches makes those ranks enter the Python
+selection barrier again, while cached rank 3 returns the same loss without
+entering it; the other three time out. This proves the cache-dependent barrier
+is unsafe, but does not establish why rank 3 missed the hardware run's barrier.
+A follow-up keeps the existing timeouts and kernels and adds opt-in phase,
+coordination, and main-thread stack receipts for checkpoint-validation smokes.
+The next repair must check cross-rank agreement at a deterministic host command
+boundary and keep the fixed XLA computation independent of trace-cache state.
+
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch

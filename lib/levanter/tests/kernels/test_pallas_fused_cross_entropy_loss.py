@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import json
 import threading
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -1667,6 +1668,42 @@ def test_pallas_tpu_non_vmem_runtime_error_still_raises(
         )
 
     assert called["xla"] == 0
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_fixed_xla_bf16_selection_diagnostics(monkeypatch, capsys, enabled):
+    monkeypatch.setenv("LEVANTER_CE_DIAGNOSTICS", "1" if enabled else "0")
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    # External coordinator transport: both participants report the same plan.
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", lambda value: [value, value])
+    x = jnp.arange(32, dtype=jnp.bfloat16).reshape(4, 8) / 32
+    w = jnp.arange(128, dtype=jnp.bfloat16).reshape(8, 16) / 128
+    labels = jnp.arange(4, dtype=jnp.int32)
+    actual = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        labels,
+        w,
+        reduction=None,
+        implementation="xla",
+        block_size=8,
+        logits_dtype=jnp.bfloat16,
+    )
+    logits = (x @ w).astype(jnp.bfloat16).astype(jnp.float32)
+    expected = jax.nn.logsumexp(logits, axis=-1) - jnp.take_along_axis(logits, labels[:, None], axis=-1)[:, 0]
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    rows = [
+        json.loads(line.split(" ", 1)[1])
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("fused_ce_coordination_receipt ")
+    ]
+    if enabled:
+        assert [row["event"] for row in rows] == ["enter", "exit"]
+        assert rows[0]["implementations"] == ["xla"]
+        assert rows[0]["shape"] == [[4, 8], [4], [8, 16]]
+        assert rows[0]["plan_sha256"] == rows[1]["plan_sha256"]
+        assert rows[0]["thread_id"] == rows[1]["thread_id"]
+    else:
+        assert rows == []
 
 
 def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):

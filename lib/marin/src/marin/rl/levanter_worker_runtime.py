@@ -15,6 +15,8 @@ import os
 import signal
 import sys
 import tempfile
+import threading
+import time
 import traceback
 from functools import partial
 
@@ -41,6 +43,28 @@ from levanter.utils.mesh import MeshConfig
 
 from marin.rl.levanter_publication import SnowballPublication
 from marin.rl.levanter_worker_protocol import read_frame, write_frame
+
+_DIAGNOSTIC_STALL_SECONDS = 120.0
+
+
+def _diagnostic_receipt(event: str, **fields) -> None:
+    print(
+        "native_phase_receipt "
+        + json.dumps(
+            {
+                "event": event,
+                "pid": os.getpid(),
+                "process_id": jax.process_index(),
+                "thread_id": threading.get_ident(),
+                "main_thread_id": threading.main_thread().ident,
+                "time_ns": time.time_ns(),
+                "monotonic_ns": time.monotonic_ns(),
+                **fields,
+            }
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _trainable_filter(model):
@@ -245,6 +269,7 @@ class NativePolicyRuntime:
     """Own the native model, Adam state, RNG and publication snapshot."""
 
     def __init__(self):
+        self.settings: dict = {}
         self.trainer = None
         self.state = None
         self.learner = None
@@ -256,6 +281,10 @@ class NativePolicyRuntime:
         if self.trainer is not None:
             raise RuntimeError("Learner is already initialized")
         self.settings = config
+        if config["runtime"].get("validate_checkpoint_roundtrip", False):
+            os.environ["LEVANTER_CE_DIAGNOSTICS"] = "1"
+        else:
+            os.environ.pop("LEVANTER_CE_DIAGNOSTICS", None)
         _initialize_distributed(config)
         self.trainer = _create_trainer(config)
         self.trainer.__enter__()
@@ -292,6 +321,7 @@ class NativePolicyRuntime:
         microbatch = self.trainer.config.microbatch_size
         assert microbatch is not None
         return {
+            **self.runtime_identity(),
             "process_id": jax.process_index(),
             "global_devices": jax.device_count(),
             "local_devices": jax.local_device_count(),
@@ -316,6 +346,13 @@ class NativePolicyRuntime:
         assert self.trainer is not None
         source = payload["arrays"]
         batch_size, sequence_length = source["tokens"].shape
+        diagnostics = self.settings["runtime"].get("validate_checkpoint_roundtrip", False)
+        if diagnostics:
+            _diagnostic_receipt(
+                "batch_prepare_begin",
+                tokens_shape=[batch_size, sequence_length],
+                response_length=payload["response_length"],
+            )
         axes = (hax.Axis("batch", batch_size), hax.Axis("position", sequence_length))
         response_axes = (axes[0], hax.Axis("response", payload["response_length"]))
         sharding = NamedSharding(self.trainer.device_mesh, PartitionSpec(("replica_dcn", "data", "expert"), None))
@@ -328,7 +365,7 @@ class NativePolicyRuntime:
             array = jax.make_array_from_callback(values.shape, sharding, lambda index: values[index])
             return hax.named(array, response_axes if response else axes)
 
-        return PolicyBatch(
+        batch = PolicyBatch(
             tokens=named("tokens", response=False),
             attention_mask=named("attention_mask", response=False),
             position_ids=named("position_ids", response=False),
@@ -339,6 +376,52 @@ class NativePolicyRuntime:
             old_logprobs=named("old_logprobs", response=True),
             reference_logprobs=None,
         )
+        if diagnostics:
+            _diagnostic_receipt("batch_prepare_end", tokens_shape=[batch_size, sequence_length])
+        return batch
+
+    @contextlib.contextmanager
+    def request_diagnostics(self, method: str):
+        enabled = method in ("model_fingerprint", "train") and self.settings.get("runtime", {}).get(
+            "validate_checkpoint_roundtrip", False
+        )
+        if not enabled:
+            yield
+            return
+        main_ident = threading.main_thread().ident
+        finished = threading.Event()
+        guard = threading.Lock()
+        request_id = f"{os.getpid()}:{time.monotonic_ns()}"
+
+        def stalled():
+            with guard:
+                frame = sys._current_frames().get(main_ident) if main_ident is not None else None
+                if finished.is_set() or frame is None:
+                    return
+                stack = traceback.format_stack(frame, limit=40)
+                captured_wall, captured_monotonic = time.time_ns(), time.monotonic_ns()
+            # Logging may finish after request_end; the request ID and capture time
+            # identify this snapshot without making the main thread wait on stderr.
+            _diagnostic_receipt(
+                "request_stalled",
+                method=method,
+                request_id=request_id,
+                main_thread_stack=stack,
+                time_ns=captured_wall,
+                monotonic_ns=captured_monotonic,
+            )
+
+        timer = threading.Timer(_DIAGNOSTIC_STALL_SECONDS, stalled)
+        timer.daemon = True
+        _diagnostic_receipt("request_begin", method=method, request_id=request_id)
+        timer.start()
+        try:
+            yield
+        finally:
+            with guard:
+                finished.set()
+            timer.cancel()
+            _diagnostic_receipt("request_end", method=method, request_id=request_id)
 
     def forward(self, payload: dict) -> dict:
         batch = self._batch(payload)
@@ -350,7 +433,20 @@ class NativePolicyRuntime:
         if payload["arrays"]["tokens"].shape[0] != self.settings["mini_batch_size"]:
             raise ValueError("Every native update requires a complete optimizer minibatch")
         frozen_fingerprint = _payload_fingerprint(payload)
-        result = self.learner.update(self.state, self._batch(payload))
+        diagnostics = self.settings["runtime"].get("validate_checkpoint_roundtrip", False)
+        if diagnostics:
+            _diagnostic_receipt(
+                "train_received",
+                tokens_shape=list(payload["arrays"]["tokens"].shape),
+                frozen_batch_sha256=frozen_fingerprint,
+                global_step=payload["global_step"],
+            )
+        batch = self._batch(payload)
+        if diagnostics:
+            _diagnostic_receipt("update_begin")
+        result = self.learner.update(self.state, batch)
+        if diagnostics:
+            _diagnostic_receipt("update_end")
         self.state = result.state
         if not np.isfinite(result.loss):
             raise FloatingPointError("Native policy loss is nonfinite")
@@ -505,7 +601,8 @@ def main() -> None:
                 runtime.close()
                 return
             try:
-                result = runtime.dispatch(request["method"], request["payload"])
+                with runtime.request_diagnostics(request["method"]):
+                    result = runtime.dispatch(request["method"], request["payload"])
             except Exception:
                 write_frame(outgoing, {"result": None, "error": traceback.format_exc()})
                 raise

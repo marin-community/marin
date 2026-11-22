@@ -5,9 +5,13 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache, partial
 import hashlib
 import json
+import itertools
 import logging
 import math
+import os
 import pathlib
+import sys
+import threading
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
@@ -246,10 +250,46 @@ def _autotune_process_ids(*values: jax.Array) -> tuple[int, ...]:
     return tuple(range(jax.process_count()))
 
 
+_AUTOTUNE_DIAGNOSTIC_SEQUENCE = itertools.count()
+
+
 def _autotune_allgather(value, process_ids: tuple[int, ...]):
-    if process_ids == tuple(range(jax.process_count())):
-        return multihost_allgather_sync(value)
-    return multihost_allgather_sync(value, process_ids=process_ids)
+    diagnostics = os.environ.get("LEVANTER_CE_DIAGNOSTICS") == "1"
+    if diagnostics:
+        fields = {
+            "sequence": next(_AUTOTUNE_DIAGNOSTIC_SEQUENCE),
+            "process_id": jax.process_index(),
+            "pid": os.getpid(),
+            "thread_id": threading.get_ident(),
+            "participants": process_ids,
+            "plan_sha256": hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(),
+        }
+        if isinstance(value, dict):
+            fields.update({name: value.get(name) for name in ("shape", "implementations", "logits_dtype")})
+
+        def receipt(event: str, **extra):
+            print(
+                "fused_ce_coordination_receipt "
+                + json.dumps(
+                    {**fields, "event": event, "time_ns": time.time_ns(), "monotonic_ns": time.monotonic_ns(), **extra}
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+
+        receipt("enter")
+    try:
+        if process_ids == tuple(range(jax.process_count())):
+            result = multihost_allgather_sync(value)
+        else:
+            result = multihost_allgather_sync(value, process_ids=process_ids)
+    except BaseException as error:
+        if diagnostics:
+            receipt("error", error_type=type(error).__name__)
+        raise
+    if diagnostics:
+        receipt("exit")
+    return result
 
 
 _AUTOTUNE_CACHE = AutotuneBlockSizeCache(
