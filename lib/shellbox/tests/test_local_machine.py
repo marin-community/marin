@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
+from shellbox.backends.local import machine as local
 from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import (
     NPROC_HEADROOM,
@@ -1489,6 +1490,10 @@ def executable_oci_image(oci_image):
         entry = tarfile.TarInfo("etc")
         entry.type, entry.mode = tarfile.DIRTYPE, 0o755
         output.addfile(entry)
+        for name, mode in (("app", 0o755), ("root", 0o700), ("root/app", 0o700)):
+            entry = tarfile.TarInfo(name)
+            entry.type, entry.mode = tarfile.DIRTYPE, mode
+            output.addfile(entry)
     return oci_image(
         (archive.getvalue(),),
         {
@@ -1571,3 +1576,60 @@ def test_prepared_local_task_applies_startup_overrides_with_private_writable_roo
     assert {
         path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()
     } == original
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap keeper to uid 65534")
+def test_bubblewrap_prepared_image_workdir_upload_and_companion(executable_oci_image, tmp_path, monkeypatch):
+    umoci = shutil.which("umoci")
+    if umoci is None:
+        pytest.skip("OCI preparation requires umoci")
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_BUBBLEWRAP_PROFILE)
+    monkeypatch.setattr(
+        local,
+        "LAUNCH_SOURCE",
+        'import os\nos.setns = lambda *_: (_ for _ in ()).throw(PermissionError(1, "setns denied"))\n'
+        + local.LAUNCH_SOURCE,
+    )
+    host_probe_passed = False
+    control = local.LocalMachine._control
+
+    async def observed_control(self, *args, **kwargs):
+        nonlocal host_probe_passed
+        host_probe_passed = True
+        return await control(self, *args, **kwargs)
+
+    monkeypatch.setattr(local.LocalMachine, "_control", observed_control)
+    try:
+        factory = local.LocalMachineFactory(umoci=Path(umoci))
+    except SandboxUnavailable as error:
+        if host_probe_passed:
+            raise
+        pytest.skip(str(error))
+    spec = MachineSpec(executable_oci_image, workdir="/root/app", network=NetworkPolicy.DENY)
+    task = TaskSpec(
+        (
+            ContainerSpec("actor", spec),
+            ContainerSpec("service", spec, entrypoint=("/bin/sh", "-c", "sleep 30")),
+        ),
+        primary="actor",
+    )
+
+    async def scenario():
+        group = await factory.create_task(task)
+        try:
+            primary = cast(LocalMachine, group.primary)
+            companion = cast(LocalMachine, group.containers["service"])
+            assert os.readlink(f"/proc/{primary._init_pid}/ns/net") == os.readlink(f"/proc/{companion._init_pid}/ns/net")
+            for machine in (primary, companion):
+                result = await machine.run(Command(("/bin/sh", "-c", "id -u; pwd; echo written > state; cat state")))
+                assert result.exit_code == 0, result.stderr.decode()
+                assert result.stdout == b"0\n/root/app\nwritten\n"
+                await machine.upload(tmp_path / "payload", "/root/app/payload")
+                uploaded = await machine.run(Command(("cat", "/root/app/payload")))
+                assert (uploaded.exit_code, uploaded.stdout) == (0, b"uploaded")
+        finally:
+            await group.close()
+
+    (tmp_path / "payload").write_bytes(b"uploaded")
+    asyncio.run(scenario())

@@ -190,6 +190,82 @@ def test_keeper_broker_launches_command_from_inside_its_namespace(cgroup):
             broker.wait(timeout=5)
 
 
+def test_keeper_broker_launches_companion_with_pinned_source_fd():
+    with tempfile.TemporaryDirectory(prefix="shellbox-broker-") as directory:
+        socket_path = Path(directory) / "broker.sock"
+        source = Path(directory) / "source"
+        source.write_text("companion")
+        broker = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--broker", str(socket_path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            assert broker.stdout is not None
+            assert select.select([broker.stdout], [], [], 5)[0]
+            assert broker.stdout.read(1) == b"R"
+            assert broker.stdin is not None
+            broker.stdin.write(b"shellbox-ready\n")
+            broker.stdin.flush()
+            with tempfile.TemporaryFile() as configuration, tempfile.TemporaryFile() as information:
+                with source.open("rb") as pinned:
+                    host_pid_read, host_pid_write = os.pipe()
+                    configuration.write(
+                        json.dumps(
+                            {
+                                "broker": str(socket_path),
+                                "broker_pid": broker.pid,
+                                "cgroup": None,
+                                "program": [
+                                    sys.executable,
+                                    "-c",
+                                    "import json,os,sys; from pathlib import Path; "
+                                    "os.write(int(sys.argv[2]), json.dumps({"
+                                    "'child-pid': os.getpid(), 'pid-namespace': os.stat('/proc/self/ns/pid').st_ino"
+                                    "}).encode()); sys.stdin.read(1); print(Path(sys.argv[1]).read_text())",
+                                    "unused",
+                                    "unused",
+                                ],
+                                "program_fds": [(3, 6, True), (4, 4, False)],
+                                "environment": local.CONTROL_ENVIRONMENT,
+                            }
+                        ).encode()
+                    )
+                    configuration.seek(0)
+                    try:
+                        relay = subprocess.Popen(
+                            [
+                                sys.executable,
+                                "-I",
+                                "-S",
+                                "-c",
+                                local.LAUNCH_SOURCE,
+                                "--relay",
+                                str(configuration.fileno()),
+                                str(host_pid_write),
+                                str(information.fileno()),
+                                str(pinned.fileno()),
+                                str(pinned.fileno()),
+                            ],
+                            pass_fds=(configuration.fileno(), host_pid_write, information.fileno(), pinned.fileno()),
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                        )
+                        os.close(host_pid_write)
+                        assert select.select([host_pid_read], [], [], 5)[0]
+                        assert int(os.read(host_pid_read, 20)) > 0
+                        stdout, stderr = relay.communicate(input=b"x", timeout=5)
+                        assert relay.returncode == 0, stderr.decode()
+                    finally:
+                        os.close(host_pid_read)
+            assert stdout == b"companion\n"
+        finally:
+            broker.kill()
+            broker.wait(timeout=5)
+
+
 def test_factory_rejects_namespace_entry_failure_and_removes_probe_files(factory, monkeypatch, tmp_path):
     original_mkdtemp = tempfile.mkdtemp
 

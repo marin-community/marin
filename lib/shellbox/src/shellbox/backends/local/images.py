@@ -4,6 +4,9 @@
 """Prepare private writable OCI root filesystems before local guest execution."""
 
 import json
+import os
+import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -21,6 +24,53 @@ class PreparedLocalImage:
     entrypoint: tuple[str, ...]
     arguments: tuple[str, ...]
     user: str | None
+
+
+def prepare_broker_runtime(directory: Path, *, python: Path, bwrap: Path, identity: tuple[int, int]) -> None:
+    """Stage Python, bubblewrap and their ELF dependencies at guest-private paths."""
+    stdlib = Path(
+        subprocess.run(
+            [str(python), "-I", "-S", "-c", "import sysconfig; print(sysconfig.get_path('stdlib'))"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    if not stdlib.is_dir():
+        raise FileNotFoundError(f"Python standard library is missing: {stdlib}")
+    (directory / "bin").mkdir(parents=True)
+    (directory / "libdeps").mkdir()
+    shutil.copy2(python.resolve(), directory / "bin/python3")
+    shutil.copy2(bwrap.resolve(), directory / "bin/bwrap")
+    shutil.copytree(
+        stdlib,
+        directory / "lib" / stdlib.name,
+        symlinks=True,
+        ignore=shutil.ignore_patterns("__pycache__", "site-packages", "dist-packages", "test", "tests"),
+    )
+    loader = None
+    sources = (python.resolve(), bwrap.resolve(), *stdlib.glob("lib-dynload/*.so"))
+    for source in sources:
+        dependencies = subprocess.run(["ldd", str(source)], check=True, capture_output=True, text=True).stdout
+        if "not found" in dependencies:
+            raise FileNotFoundError(f"Missing shared library for {source}: {dependencies}")
+        for name in re.findall(r"(?<!\S)/[^\s()]+", dependencies):
+            library = Path(name)
+            if not library.is_file():
+                continue
+            if library.name.startswith("ld-linux"):
+                loader = library
+                continue
+            target = directory / "libdeps" / library.name
+            if not target.exists():
+                shutil.copy2(library, target)
+    if loader is None:
+        raise RuntimeError("Cannot locate the Python ELF loader")
+    shutil.copy2(loader, directory / "ld-linux")
+    for current, children, files in os.walk(directory):
+        os.chown(current, *identity)
+        for name in (*children, *files):
+            os.lchown(os.path.join(current, name), *identity)
 
 
 def prepare_local_image(

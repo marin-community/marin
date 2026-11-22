@@ -32,6 +32,7 @@ LINUX_CAPABILITY_VERSION_3 = 0x20080522
 SETUP_ERROR_LIMIT_BYTES = 512
 """At most POSIX's minimum PIPE_BUF, so reporting cannot block before the host reads."""
 BROKER_FD_COUNT = 5
+BROKER_PROGRAM_MAX_FDS = 253
 BROKER_CONNECT_TIMEOUT = 30
 BROKER_CONNECT_RETRY_INTERVAL = 0.01
 
@@ -135,7 +136,7 @@ def _apply_command_limits(config: dict) -> None:
 
 
 def execute_via_broker(configuration_fd: int) -> None:
-    """Relay a command to the keeper without entering its user namespace."""
+    """Relay a command or companion startup without entering the keeper's user namespace."""
     with os.fdopen(os.dup(configuration_fd)) as configuration:
         config = json.load(configuration)
     os.lseek(configuration_fd, 0, os.SEEK_SET)
@@ -155,9 +156,17 @@ def execute_via_broker(configuration_fd: int) -> None:
         if peer_pid != config["broker_pid"]:
             raise RuntimeError("Bubblewrap command broker identity changed")
         descriptors = [configuration_fd, 0, 1, 2]
-        if config.get("status") is not None:
-            descriptors.append(config["status"])
-        connection.sendmsg([b"L"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", descriptors))])
+        if config.get("program") is not None:
+            host_pid_fd = int(sys.argv[3])
+            descriptors.extend(int(descriptor) for descriptor in sys.argv[4:])
+            kind = b"K"
+        else:
+            if config.get("status") is not None:
+                descriptors.append(config["status"])
+            kind = b"L"
+        if len(descriptors) > BROKER_PROGRAM_MAX_FDS:
+            raise ValueError("Too many mount sources for bubblewrap companion")
+        connection.sendmsg([kind], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", descriptors))])
         data, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(array("i").itemsize))
         if data != b"P":
             raise RuntimeError("Bubblewrap command broker did not start the launcher")
@@ -165,12 +174,18 @@ def execute_via_broker(configuration_fd: int) -> None:
         if len(pidfds) != 1:
             raise RuntimeError("Bubblewrap command broker did not return a pidfd")
         with os.fdopen(pidfds[0], "rb", closefd=True) as pidfd:
-            with open(f"/proc/self/fdinfo/{pidfd.fileno()}") as information:
-                pid = int(next(line.split()[1] for line in information if line.startswith("Pid:")))
+            pid = _pidfd_pid(pidfd.fileno())
             if config.get("cgroup") is not None:
                 with open(config["cgroup"], "w") as membership:
                     membership.write(str(pid))
             connection.send(b"G")
+            if config.get("program") is not None:
+                data, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(array("i").itemsize))
+                init_pidfds = _received_fds(ancillary)
+                if data != b"I" or len(init_pidfds) != 1:
+                    raise RuntimeError("Bubblewrap command broker did not pin the companion init")
+                with os.fdopen(init_pidfds[0], "rb", closefd=True) as init_pidfd:
+                    os.write(host_pid_fd, str(_pidfd_pid(init_pidfd.fileno())).encode())
             result = connection.recv(5)
         if len(result) != 5 or result[:1] != b"E":
             raise RuntimeError("Bubblewrap command broker lost the launcher")
@@ -183,6 +198,11 @@ def _received_fds(ancillary: list[tuple[int, int, bytes]]) -> list[int]:
         if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
             descriptors.frombytes(data[: len(data) - len(data) % descriptors.itemsize])
     return descriptors.tolist()
+
+
+def _pidfd_pid(descriptor: int) -> int:
+    with open(f"/proc/self/fdinfo/{descriptor}") as information:
+        return int(next(line.split()[1] for line in information if line.startswith("Pid:")))
 
 
 def _broker_command(config: dict, descriptors: list[int], barrier: int) -> None:
@@ -220,6 +240,25 @@ def _broker_command(config: dict, descriptors: list[int], barrier: int) -> None:
         os._exit(127)
 
 
+def _broker_program(config: dict, descriptors: list[int], barrier: int) -> None:
+    """Start a companion bwrap with host mount sources passed as pinned descriptors."""
+    try:
+        os.setpgid(0, 0)
+        if os.read(barrier, 1) != b"G":
+            os._exit(127)
+        for target, descriptor in enumerate(descriptors[1:4]):
+            os.dup2(descriptor, target)
+        program = list(config["program"])
+        for argument, source, path in config["program_fds"]:
+            descriptor = descriptors[source]
+            os.set_inheritable(descriptor, True)
+            program[argument] = f"/proc/self/fd/{descriptor}" if path else str(descriptor)
+        os.execvpe(program[0], program, config["environment"])
+    except BaseException:
+        traceback.print_exc()
+        os._exit(127)
+
+
 def _supervise_broker_command(connection: socket.socket, descriptors: list[int]) -> None:
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     with os.fdopen(descriptors[0]) as configuration:
@@ -228,11 +267,17 @@ def _supervise_broker_command(connection: socket.socket, descriptors: list[int])
     child = os.fork()
     if child == 0:
         os.close(barrier_write)
-        _broker_command(config, descriptors, barrier_read)
+        if config.get("program") is None:
+            _broker_command(config, descriptors, barrier_read)
+        else:
+            _broker_program(config, descriptors, barrier_read)
         os._exit(127)
     os.close(barrier_read)
-    for descriptor in descriptors[1:]:
-        os.close(descriptor)
+    program = config.get("program") is not None
+    information_fd = descriptors[4] if program else None
+    for index, descriptor in enumerate(descriptors[1:], 1):
+        if not program or index != 4:
+            os.close(descriptor)
     reaped = False
     try:
         with os.fdopen(os.pidfd_open(child), "rb") as pidfd:
@@ -240,7 +285,24 @@ def _supervise_broker_command(connection: socket.socket, descriptors: list[int])
             if connection.recv(1) != b"G":
                 return
         os.write(barrier_write, b"G")
+        init_sent = False
         while True:
+            if information_fd is not None and not init_sent:
+                payload = os.pread(information_fd, os.fstat(information_fd).st_size, 0)
+                if payload:
+                    try:
+                        status = json.loads(payload)
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        init = status["child-pid"]
+                        with os.fdopen(os.pidfd_open(init), "rb", closefd=True) as init_pidfd:
+                            if os.stat(f"/proc/{init}/ns/pid").st_ino != status["pid-namespace"]:
+                                raise RuntimeError("Bubblewrap companion init namespace changed")
+                            connection.sendmsg(
+                                [b"I"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [init_pidfd.fileno()]))]
+                            )
+                        init_sent = True
             pid, status = os.waitpid(child, os.WNOHANG)
             if pid:
                 reaped = True
@@ -251,6 +313,8 @@ def _supervise_broker_command(connection: socket.socket, descriptors: list[int])
                 return
     finally:
         os.close(barrier_write)
+        if information_fd is not None:
+            os.close(information_fd)
         if not reaped:
             try:
                 os.killpg(child, signal.SIGKILL)
@@ -283,9 +347,13 @@ def run_broker(path: str) -> None:
         while True:
             connection, _ = listener.accept()
             with connection:
-                data, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(BROKER_FD_COUNT * array("i").itemsize))
+                data, ancillary, _, _ = connection.recvmsg(
+                    1, socket.CMSG_SPACE(BROKER_PROGRAM_MAX_FDS * array("i").itemsize)
+                )
                 descriptors = _received_fds(ancillary)
-                if data != b"L" or len(descriptors) not in (4, BROKER_FD_COUNT):
+                command = data == b"L" and len(descriptors) in (4, BROKER_FD_COUNT)
+                program = data == b"K" and 6 <= len(descriptors) <= BROKER_PROGRAM_MAX_FDS
+                if not (command or program):
                     for descriptor in descriptors:
                         os.close(descriptor)
                     continue
