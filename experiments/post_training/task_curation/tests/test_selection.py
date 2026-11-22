@@ -418,7 +418,7 @@ def released_recipe(release: ReleasedSource, **options) -> SelectionRecipe:
         pytest.param("", (), None, id="published"),
         pytest.param(None, (), "no declared Harbor bootstrap command", id="missing-bootstrap"),
         pytest.param("", ("echo configured",), "already declares setup_commands", id="existing-setup"),
-        pytest.param('user="root"\n', (), "unsupported Harbor setup keys: user", id="unknown-key"),
+        pytest.param('user="root"\n', (), r"unsupported Harbor setup keys: environment\.setup\.user", id="unknown-key"),
     ],
 )
 def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, setup_suffix, existing_commands, error):

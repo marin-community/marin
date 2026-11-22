@@ -45,7 +45,7 @@ from verifyit.spec import DEFAULT_OUTPUT, ExactSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import harbor_setup_rejection, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
@@ -152,6 +152,8 @@ def _tasktrove_task(
     row: RawRow, context: ConversionContext, mode: ArcMode, output_paths: tuple[str, ...]
 ) -> TaskSpec | ImportRejection:
     """A file task graded on the workspace files at ``output_paths``."""
+    if (rejection := harbor_setup_rejection(row)) is not None:
+        return rejection
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and verifier_data are required")

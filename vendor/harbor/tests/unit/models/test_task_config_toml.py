@@ -1,10 +1,34 @@
+import json
 import tomllib
 from typing import Any
 
 import pytest
+from benchmarks import tasktrove_compare
 from pydantic import Field, ValidationError
 
 from harbor.models.task.config import TaskConfig
+
+
+def test_rejects_declared_environment_setup():
+    with pytest.raises(ValueError, match=r"\[environment\.setup\]"):
+        TaskConfig.model_validate_toml('[environment.setup]\ncommand = "true"\n')
+
+
+async def test_comparison_refuses_declared_setup_before_starting_either_backend(tmp_path, monkeypatch):
+    package = tmp_path / "tasks/00000"
+    package.mkdir(parents=True)
+    (package / "task.toml").write_text('[environment.setup]\ncommand = "true"\n')
+    (tmp_path / "sample.json").write_text(
+        json.dumps({"tasks": [{"row_index": 0, "has_solution": False, "dockerfile_id": "fixture", "mode": "fixture"}]})
+    )
+
+    async def unexpected_backend(*args, **kwargs):
+        pytest.fail("The comparison started a backend for an unsupported setup declaration")
+
+    monkeypatch.setattr(tasktrove_compare, "docker_check", unexpected_backend)
+    monkeypatch.setattr(tasktrove_compare, "qemu_check", unexpected_backend)
+    with pytest.raises(ValueError, match=r"\[environment\.setup\]"):
+        await tasktrove_compare.compare(tmp_path, limit=1, concurrency=1)
 
 
 def test_rejects_unsupported_step_agent_environment():

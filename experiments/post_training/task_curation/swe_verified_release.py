@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from taskcompendium.harbor import read_harbor_setup
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -33,14 +34,11 @@ def _bind_bootstrap(serialized: str) -> tuple[str, str]:
     if len(configs) != 1:
         raise ValueError(f"{task.id} must contain exactly one archived task.toml")
     config = tomllib.loads(resource_bytes(configs[0]).decode())
-    setup = config.get("environment", {}).get("setup", {})
-    if unknown := setup.keys() - {"command", "timeout_sec"}:
-        raise ValueError(f"{task.id} has unsupported Harbor setup keys: {', '.join(sorted(unknown))}")
-    command = setup.get("command")
-    if not isinstance(command, str) or not command.strip():
+    setup = read_harbor_setup(config, source=task.id)
+    if setup is None:
         raise ValueError(f"{task.id} has no declared Harbor bootstrap command")
     row = json.loads(serialized)
-    row["environment_requirements"]["setup_commands"] = [command]
+    row["environment_requirements"]["setup_commands"] = [setup.command]
     TaskSpec.model_validate(row)
     return task.id, json.dumps(row, ensure_ascii=False, separators=(",", ":"))
 

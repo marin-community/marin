@@ -5,12 +5,15 @@
 
 import os
 import tomllib
+from collections.abc import MutableMapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import tomlkit
 from pydantic import BaseModel, Field
 
+from taskcompendium.harbor import read_harbor_setup
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -144,6 +147,9 @@ def _environment(config: EnvironmentConfig, *, capabilities: tuple[str, ...] = (
 
 def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
     """Keep an original package host-private for execution and grading by Harbor."""
+    config_path = directory / "task.toml"
+    setup = read_harbor_setup(tomllib.loads(config_path.read_text()), source=str(config_path))
+    requirements = EnvironmentRequirements(setup_commands=(setup.command,) if setup is not None else ())
     resources = tuple(
         resource.model_copy(update={"mtime_ns": (directory / resource.path).stat().st_mtime_ns})
         for resource in _directory_resources(directory)
@@ -153,7 +159,7 @@ def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
         context=ConversationInput(
             events=(TextMessage(role="user", content=(directory / "instruction.md").read_text()),)
         ),
-        environment_requirements=EnvironmentRequirements(),
+        environment_requirements=requirements,
         answer_type=AnswerType.WORKSPACE_STATE,
         answer_format=PlainText(),
         grader=NoGrader(reason="Harbor grades the completed trial"),
@@ -163,8 +169,8 @@ def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
     )
 
 
-def restore_harbor_trial_task(task: TaskSpec, directory: Path) -> None:
-    """Restore a package into a fresh host directory, never an agent workspace."""
+def restore_harbor_trial_task(task: TaskSpec, directory: Path, *, setup_budget: float) -> None:
+    """Restore a private trial copy and validate its setup against the typed binding."""
     directory.mkdir(parents=True, exist_ok=False)
     for resource in task.resources.verifier:
         path = directory / resource.path
@@ -175,6 +181,22 @@ def restore_harbor_trial_task(task: TaskSpec, directory: Path) -> None:
         if resource.mtime_ns is not None:
             os.utime(path, ns=(resource.mtime_ns, resource.mtime_ns))
 
+    config_path = directory / "task.toml"
+    contents = config_path.read_text()
+    setup = read_harbor_setup(tomllib.loads(contents), source=task.id)
+    if setup is None:
+        return
+    if task.environment_requirements.setup_commands != (setup.command,):
+        raise ValueError(f"{task.id}: environment.setup.command must match the trial's setup_commands")
+    if setup.timeout_sec is not None and setup.timeout_sec > setup_budget:
+        raise ValueError(f"{task.id}: environment.setup.timeout_sec exceeds launch setup budget of {setup_budget}s")
+    # Native Harbor receives its own configuration. The trial hook consumes the typed command.
+    config = tomlkit.parse(contents)
+    environment = config["environment"]
+    assert isinstance(environment, MutableMapping)
+    del environment["setup"]
+    config_path.write_text(tomlkit.dumps(config))
+
 
 def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     """Preserve task semantics and grade with the package's tests in a separate machine.
@@ -182,7 +204,11 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     Shared verifier mode, multi-stage packages, image builds, and healthchecks are unsupported.
     Machine limits, users, and deadlines belong to runtime lowering.
     """
-    config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
+    config_path = directory / "task.toml"
+    document = tomllib.loads(config_path.read_text())
+    if read_harbor_setup(document, source=str(config_path)) is not None:
+        raise ValueError(f"{config_path}: Shellbox does not support [environment.setup]")
+    config = TaskConfig.model_validate(document)
     if config.steps or config.multi_step_reward_strategy:
         raise NotImplementedError("Multi-stage Harbor tasks are unsupported")
     if config.verifier.environment_mode != VerifierEnvironmentMode.SEPARATE:

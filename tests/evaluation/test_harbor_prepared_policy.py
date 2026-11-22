@@ -132,6 +132,12 @@ def test_preflight_reports_rejected_legacy_environment_field(tmp_path, prepared_
     ("unsafe_configuration", "diagnostic"),
     [
         ('docker_image = "example.test/task:latest"\nallow_internet = false\n', "pinned with @sha256"),
+        pytest.param(
+            f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
+            '[environment.setup]\ncommand = "true"\n',
+            "[environment.setup]",
+            id="declared-setup",
+        ),
         (f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = true\n', "allow_internet=false"),
         (
             f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'

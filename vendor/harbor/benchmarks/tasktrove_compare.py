@@ -13,6 +13,7 @@ from pathlib import Path
 from harbor.environments.qemu import QemuEnvironment
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
+from harbor_config.models.task.config import reject_environment_setup
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.machine import Command, DockerImage, MachineSpec, NetworkPolicy
 
@@ -103,10 +104,8 @@ async def docker_check(task: Path, image: str, check: str, output: Path) -> dict
 
 
 async def qemu_check(
-    task: Path, bundle: Path, check: str, output: Path, guest_memory_mb: int = 512
+    task: Path, bundle: Path, check: str, output: Path, config: EnvironmentConfig, guest_memory_mb: int = 512
 ) -> dict:
-    with (task / "task.toml").open("rb") as source:
-        config = tomllib.load(source)
     paths = TrialPaths(output / "qemu-trials" / task.name / check)
     paths.mkdir()
     env = QemuEnvironment(
@@ -114,7 +113,7 @@ async def qemu_check(
         environment_name=task.name,
         session_id=f"{task.name}-{check}",
         trial_paths=paths,
-        task_env_config=EnvironmentConfig.model_validate(config.get("environment", {})),
+        task_env_config=config,
         guest_bundle=str(bundle),
         network_policy="deny",
         guest_memory_mb=guest_memory_mb,
@@ -188,10 +187,12 @@ async def compare(root: Path, limit: int | None, concurrency: int) -> None:
     async def run_check(row: dict, check: str) -> None:
         async with semaphore:
             task = root / "tasks" / f"{row['row_index']:05d}"
+            config = tomllib.loads((task / "task.toml").read_text())
+            reject_environment_setup(config)
             image = f"tasktrove-clean-qemu:{row['dockerfile_id']}"
             bundle = root / "bundles" / row["dockerfile_id"]
             docker = await docker_check(task, image, check, root)
-            qemu = await qemu_check(task, bundle, check, root)
+            qemu = await qemu_check(task, bundle, check, root, EnvironmentConfig.model_validate(config.get("environment", {})))
             result = {
                 "row_index": row["row_index"],
                 "mode": row["mode"],

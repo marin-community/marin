@@ -30,7 +30,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
-from experiments.post_training.task_curation.datasets.tasktrove.nl2bash import convert_nl2bash_task
+from experiments.post_training.task_curation.datasets.tasktrove.nl2bash import convert_nl2bash_task, sources
+from experiments.post_training.task_curation.tests.conversion import convert_row, tasktrove_row
 
 DOCKERFILE = b"FROM python:3.12-slim\n"
 SUM_PROMPT = b"Read two integers and print their sum to stdout in /app/solution.py."
@@ -209,3 +210,18 @@ def test_a_conversion_lowers_the_archive_environment():
     # The fixture installs nothing; a recipe's RUN steps become setup commands, covered
     # by the lowering tests in test_environment_fidelity.
     assert requirements.setup_commands == ()
+
+
+def test_tasktrove_converter_refuses_declared_environment_setup():
+    row = tasktrove_row(
+        {
+            INSTRUCTION: SUM_PROMPT,
+            "environment/Dockerfile": DOCKERFILE,
+            "task.toml": b'[environment.setup]\ncommand = "true"\n',
+            **verifier_data({"expected_output": "7\n"}),
+        }
+    )
+    result = convert_row(sources()[0].config, row)
+    assert isinstance(result, ImportRejection)
+    assert result.kind == ImportFailureKind.UNSUPPORTED
+    assert "[environment.setup]" in result.detail

@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
+from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
@@ -15,8 +16,9 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.dataset.tasks import SourceTaskDataset
+from skyrl_train.dataset.harbor import materialize_harbor_tasks
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
+from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, SourceTaskDataset
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
@@ -29,8 +31,8 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.models import RawRow
-from taskcompendium.runtime.resources import inline_resource
-from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, session_spec, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
@@ -115,6 +117,41 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
     assert loaded[0].harness == HARBOR_TRIAL_SESSION
     assert is_shell_harness(loaded[1].harness)
     assert loaded[2].harness == ASSISTANT_PREFIX_HARNESS
+
+
+@pytest.mark.parametrize(
+    "harness, extra, error",
+    [
+        (HARBOR_TRIAL_SESSION, "", None),
+        (HARBOR_TRIAL_SESSION, 'user = "root"\n', "environment.setup.user"),
+        ("shellbox", "", "[environment.setup]"),
+    ],
+    ids=["full-trial", "unknown-setup-key", "shellbox"],
+)
+def test_raw_harbor_package_setup(tmp_path: Path, harness: str, extra: str, error: str | None):
+    package = tmp_path / "task"
+    (package / "tests").mkdir(parents=True)
+    (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
+    (package / "instruction.md").write_text("Write an answer.")
+    document = (
+        '[verifier]\nenvironment_mode = "separate"\n'
+        f'[environment]\ndocker_image = "example.test/task@sha256:{"a" * 64}"\n'
+        '[environment.setup]\ncommand = "true"\ntimeout_sec = 1\n' + extra
+    )
+    (package / "task.toml").write_text(document)
+    kwargs = {"cache_dir": tmp_path / "cache", "session": session_spec(harness)}
+    if error is not None:
+        with pytest.raises(ValueError) as raised:
+            materialize_harbor_tasks([str(package)], **kwargs)
+        assert error in str(raised.value)
+        return
+
+    path = materialize_harbor_tasks([str(package)], **kwargs)
+    [serialized] = pq.read_table(path).column(TASK_ROLLOUT_COLUMN).to_pylist()
+    task = TaskRolloutSpec.model_validate_json(serialized).task
+    assert task.environment_requirements.setup_commands == ("true",)
+    [config] = [resource for resource in task.resources.verifier if resource.path == "task.toml"]
+    assert resource_bytes(config) == document.encode()
 
 
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):

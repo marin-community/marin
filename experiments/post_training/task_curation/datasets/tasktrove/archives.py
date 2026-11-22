@@ -3,14 +3,17 @@
 
 """TaskTrove sources: archived Harbor tasks from the original ``open-thoughts/TaskTrove`` release."""
 
+import tomllib
 from dataclasses import dataclass, replace
 
+from taskcompendium.harbor import read_harbor_setup
 from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
+    TASK_TOML,
     TASKS_FILE,
     TASKTROVE_REPO,
     archive_file,
@@ -30,6 +33,26 @@ ANSWER_FILE_DELIVERY = (
 """The answer-file wording of the Nemotron Gym puzzle archives, and its reply-based replacement."""
 
 
+def harbor_setup_rejection(row: RawRow) -> ImportRejection | None:
+    """Refuse setup declarations in TaskTrove conversions without a Harbor trial."""
+    contents = archive_file(row.data, TASK_TOML)
+    if contents is None:
+        return None
+    try:
+        document = tomllib.loads(contents.decode())
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="invalid_task_toml", detail=str(error))
+    try:
+        setup = read_harbor_setup(document, source=row.id)
+    except ValueError as error:
+        detail = str(error)
+    else:
+        if setup is None:
+            return None
+        detail = "TaskTrove conversion does not support [environment.setup]"
+    return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="harbor_setup", detail=detail)
+
+
 @dataclass(frozen=True)
 class TaskTroveConverter:
     """Retain reviewed source defects as explicit conversion outcomes."""
@@ -41,6 +64,8 @@ class TaskTroveConverter:
         reason = SOURCE_DEFECTS.get((self.config, row.data["path"]))
         if reason is not None:
             return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="reviewed_defect", detail=reason)
+        if (rejection := harbor_setup_rejection(row)) is not None:
+            return rejection
         try:
             converted = self.convert(row, context)
         except UnlowerableRecipe as error:

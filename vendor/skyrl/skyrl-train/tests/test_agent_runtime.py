@@ -80,11 +80,14 @@ def harbor_package(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["train", "eval"])
+@pytest.mark.parametrize(("phase", "timeout_sec"), [("train", None), ("eval", 5), ("eval", 6)])
 async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
-    tmp_path, monkeypatch, phase, harbor_package
+    tmp_path, monkeypatch, phase, timeout_sec, harbor_package
 ):
     package = harbor_package
+    if timeout_sec is not None:
+        with (package / "task.toml").open("a") as file:
+            file.write(f'[environment.setup]\ncommand = "exit 23"\ntimeout_sec = {timeout_sec}\n')
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     task = task.model_copy(
         update={
@@ -155,6 +158,14 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     monkeypatch.setattr(agent_runtime, "registered_agent_endpoint", registered_endpoint)
     await runtime.startup()
     try:
+        if timeout_sec == 6:
+            with pytest.raises(GradedRolloutInterrupted) as interrupted:
+                await RolloutEngine({}, harnesses).run_task(configured, unexpected_model_request)
+            cause = interrupted.value.__cause__
+            assert isinstance(cause, ValueError)
+            assert "environment.setup.timeout_sec exceeds launch setup budget" in str(cause)
+            assert attempted == []
+            return
         with pytest.raises(GradedRolloutInterrupted) as interrupted:
             await RolloutEngine({}, harnesses).run_task(configured, unexpected_model_request)
         assert interrupted.value.grade.reward is None
