@@ -71,7 +71,12 @@ def _normalize_ifeval(ground_truth: Any) -> str:
             raise ValueError("IFeval ground_truth must be valid JSON.") from exc
     if not isinstance(ground_truth, (Mapping, list)):
         raise ValueError("IFeval ground_truth must be a constraint mapping or list of constraint mappings.")
-    return normalize_open_instruct_ifeval(ground_truth)
+    normalized = normalize_open_instruct_ifeval(ground_truth)
+    descriptors = json.loads(normalized)
+    entries = descriptors if isinstance(descriptors, list) else [descriptors]
+    if any(entry["func_name"] == "validate_response_language" for entry in entries):
+        raise ValueError("IFeval response_language requires a detector and is unsupported in this environment.")
+    return normalized
 
 
 def _ifeval_is_correct(response: str, ground_truth: str) -> bool:

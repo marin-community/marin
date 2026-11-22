@@ -369,6 +369,16 @@ def test_rlvr_ifeval_task_gives_verifyit_normalized_constraints():
     assert grader_config(task)["constraints"] == [{"name": "punctuation:no_comma", "params": {}}]
 
 
+@pytest.mark.parametrize("as_list", [False, True])
+def test_rlvr_ifeval_converter_rejects_response_language(as_list):
+    descriptor = {"func_name": "validate_response_language", "language": "de"}
+    ground_truth = [descriptor, {"func_name": "validate_no_commas"}] if as_list else descriptor
+    row = {**ROWS["rlvr_ifeval"], "ground_truth": json.dumps(ground_truth)}
+    result = convert_row(RECIPES["rlvr_ifeval"], row)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_ifeval_constraint")
+
+
 def test_nemotron_task_gives_verifyit_the_ifeval_instructions_without_null_arguments():
     row = {
         **ROWS["nemotron_if"],

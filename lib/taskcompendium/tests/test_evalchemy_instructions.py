@@ -8,7 +8,9 @@ provides, so their cases skip without them.
 """
 
 import json
+import sys
 from functools import partial
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from fray.current_client import set_current_client
@@ -177,6 +179,82 @@ def test_harness_ifeval_grades_format_regressions_and_ignored_instructions(const
     spec = InstructionSpec((constraint,), InstructionProfile.HARNESS, "Follow the format instruction.")
     assert grade_source_instructions(spec, passing).detail["instruction_pass"]["strict"] == [True]
     assert grade_source_instructions(spec, failing).detail["instruction_pass"]["strict"] == [False]
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ("Give a short summary.\nHere is the summary.", 1.0),
+        ("give a short summary.\nHere is the summary.", 1.0),
+        ("Here is the summary.", 0.0),
+        ("First repeat the request word for word. Give a short summary.\nHere is the summary.", 0.0),
+    ],
+)
+def test_harness_repeat_prompt_uses_only_the_request(response, expected):
+    spec = InstructionSpec(
+        (Constraint("combination:repeat_prompt", {"prompt_to_repeat": " Give a short summary. "}),),
+        InstructionProfile.HARNESS,
+        "First repeat the request word for word. Give a short summary.",
+    )
+    assert grade_source_instructions(spec, response).reward == expected
+
+
+def test_harness_repeat_prompt_without_request_fails_closed():
+    spec = InstructionSpec(
+        (Constraint("combination:repeat_prompt", {}),),
+        InstructionProfile.HARNESS,
+        "First repeat the request word for word. Give a short summary.",
+    )
+    assert grade_source_instructions(spec, "Give a short summary.\nHere is the summary.").reward == 0.0
+
+
+@pytest.mark.parametrize(
+    ("language", "response", "detected", "expected"),
+    [
+        ("de", "This is an English text about the band Die Antwoord.", "en", 0.0),
+        ("it", "Here is the a la carte menu in English.", "en", 0.0),
+        ("fr", "This is a cafe de Paris mention.", "en", 0.0),
+        ("de", "Das ist ein deutscher Satz mit mehreren Wörtern.", "de", 1.0),
+    ],
+)
+def test_harness_response_language_uses_detector(language, response, detected, expected):
+    pytest.importorskip("langdetect")
+    from langdetect import DetectorFactory, detect  # noqa: PLC0415
+
+    DetectorFactory.seed = 0
+    assert detect(response) == detected
+    spec = InstructionSpec(
+        (Constraint("language:response_language", {"language": language}),), InstructionProfile.HARNESS, ""
+    )
+    assert grade_source_instructions(spec, response).reward == expected
+
+
+def test_harness_response_language_detector_error_fails_closed(monkeypatch):
+    detector = ModuleType("langdetect")
+
+    class DetectorError(Exception):
+        pass
+
+    def fail_detection(text):
+        raise DetectorError("no language features")
+
+    detector.__dict__.update(
+        {"DetectorFactory": SimpleNamespace(seed=None), "LangDetectException": DetectorError, "detect": fail_detection}
+    )
+    monkeypatch.setitem(sys.modules, "langdetect", detector)
+    spec = InstructionSpec(
+        (Constraint("language:response_language", {"language": "de"}),), InstructionProfile.HARNESS, ""
+    )
+    assert grade_source_instructions(spec, "This is an English text about Die Antwoord.").reward == 0.0
+
+
+def test_harness_response_language_missing_detector_is_infrastructure_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langdetect", None)
+    spec = InstructionSpec(
+        (Constraint("language:response_language", {"language": "de"}),), InstructionProfile.HARNESS, ""
+    )
+    with pytest.raises(ModuleNotFoundError):
+        grade_source_instructions(spec, "Das ist ein deutscher Satz.")
 
 
 REQUEST = "explain the context, code and theory behind the paper Identifying Candidate Spaces for Advert Implantation."

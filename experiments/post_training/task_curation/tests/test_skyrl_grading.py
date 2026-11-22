@@ -61,7 +61,6 @@ def test_declared_control_passes_in_the_grader_image(name, control, machines):
         ("apps", "apps_testing_util.py"),
         ("verifiable_code", "livecodebench.py"),
         ("gretel_text_to_sql", "text_to_sql_scoring.py"),
-        ("rlvr_ifeval", "nemotron_if_grade.py"),
     ],
 )
 def test_grade_script_fails_rather_than_scoring_when_its_scorer_cannot_import(name, scorer, machines):

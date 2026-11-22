@@ -4,8 +4,8 @@
 """The IFEval constraint checks, keyed by instruction id such as ``keywords:letter_frequency``.
 
 Each check takes the candidate text and the constraint's params and returns ``(passed, detail)``.
-The detail is a short human-readable string that lands in the reward's ``detail`` field. Checks are
-pure stdlib: this module has to run inside every task image without an extra.
+The detail is a short human-readable string that lands in the reward's ``detail`` field. The harness
+language check uses the optional langdetect package supplied by its grader image; other checks use stdlib.
 
 Several IFEval instruction ids describe an instruction the model was given rather than a property
 that can be measured exactly (``count:count_unique``, ``language:response_language``,
@@ -19,6 +19,7 @@ from collections.abc import Callable
 Check = Callable[[str, dict], tuple[bool, str]]
 
 CONSTRAINTS: dict[str, Check] = {}
+LANGUAGE_DETECTOR_SEED = 0
 
 PARAGRAPH_SEPARATOR = re.compile(r"\n\s*\n+")
 SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
@@ -605,6 +606,22 @@ def response_language(text: str, params: dict) -> tuple[bool, str]:
     return passed, f"lang={language} non_ascii={non_ascii}"
 
 
+@constraint("harness:response_language")
+def harness_response_language(text: str, params: dict) -> tuple[bool, str]:
+    """Grade harness language instructions with the grader image's seeded detector."""
+    language = params.get("language")
+    if not isinstance(language, str) or not language:
+        return False, "missing language"
+    from langdetect import DetectorFactory, LangDetectException, detect  # noqa: PLC0415
+
+    try:
+        DetectorFactory.seed = LANGUAGE_DETECTOR_SEED
+        detected = detect(text)
+    except LangDetectException:
+        return False, "language detection failed"
+    return detected == language.lower(), f"expected={language.lower()} detected={detected}"
+
+
 # === copy ===================================================================
 
 
@@ -707,8 +724,14 @@ def open_instruct_repeat_prompt(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("combination:repeat_prompt")
 def repeat_prompt(text: str, params: dict) -> tuple[bool, str]:
-    """The harness supplies the original user prompt as a private grader parameter."""
-    return open_instruct_repeat_prompt(text, {"original_prompt": params.get("prompt")})
+    """The source request excludes the instruction sentence that precedes it."""
+    prompt = params.get("prompt_to_repeat")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return False, "missing prompt_to_repeat"
+    candidate = text.strip().lower()
+    expected = prompt.strip().lower()
+    passed = candidate.startswith(expected) and len(candidate) > len(expected)
+    return passed, f"repeats_prompt={passed}"
 
 
 @constraint("open_instruct:capital_words")

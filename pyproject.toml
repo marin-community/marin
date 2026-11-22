@@ -539,6 +539,9 @@ ignore-missing-imports = [
     "jaxlib.*",
     "kubernetes",
     "kubernetes.*",
+    # The harness grader image installs langdetect; the lint workspace does not.
+    "langdetect",
+    "langdetect.*",
     "librosa",
     "librosa.*",
     "lm_eval",

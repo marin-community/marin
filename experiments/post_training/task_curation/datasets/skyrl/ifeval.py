@@ -140,6 +140,8 @@ def ifeval_task(
         converted = constraints_from_descriptors(normalized)
     except (InvalidTask, ValueError, TypeError) as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
+    if any(constraint.name == "language:response_language" for constraint in converted):
+        return unsupported("unsupported_ifeval_constraint", "Response language requires a detector")
     return scripted_task(row, context, events, IFEVAL_GRADE, [asdict(constraint) for constraint in converted], evidence)
 
 
@@ -229,7 +231,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_rlvr_ifeval,
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,

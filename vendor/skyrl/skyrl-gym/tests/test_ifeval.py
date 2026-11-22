@@ -54,3 +54,16 @@ def test_ifeval_rollout_reports_invalid_constraints_as_verifier_errors():
     assert result.reward == 0.0
     assert result.grade is not None
     assert result.grade.status is Outcome.INFRA_ERROR
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+def test_ifeval_preflight_rejects_response_language(as_list):
+    contract = get_data_contract("ifeval")
+    descriptor = {"func_name": "validate_response_language", "language": "de"}
+    ground_truth = [descriptor, {"func_name": "validate_no_commas"}] if as_list else descriptor
+    with pytest.raises(ValueError, match="response_language"):
+        contract.validate_example(
+            ground_truth,
+            "Dies ist ein deutscher Satz.",
+            "This is an English sentence about Die Antwoord.",
+        )

@@ -3,7 +3,7 @@
 
 """Full-population IFEval and IFBench instruction evaluations.
 
-IFEval protocol 2026.11.22 grades through verifyit; scores can differ from the earlier harness checkers.
+IFEval protocol 2026.11.22.1 grades through verifyit with corrected repeat and language checks.
 IFBench keeps its source checkers and protocol.
 """
 
@@ -84,7 +84,7 @@ def instruction_following_evaluation(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.22" if profile is InstructionProfile.HARNESS else "2026.11.02",
+                version="2026.11.22.1" if profile is InstructionProfile.HARNESS else "2026.11.02",
                 operation=(
                     OperationKind.TEXT_GENERATION
                     if profile is InstructionProfile.HARNESS
