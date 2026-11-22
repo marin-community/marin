@@ -1201,6 +1201,47 @@ def test_table_halves_a_request_above_the_encoded_bound_and_drops_a_row_that_can
     assert table.flush() is FlushResult.DROPPED
 
 
+@pytest.mark.parametrize("failing_row", [0, 2], ids=["first-half", "second-half"])
+def test_table_sends_each_row_once_when_one_half_of_a_split_request_fails(monkeypatch, failing_row):
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+    # The four rows are one request by their estimated size; two rows encode below the bound and four do not.
+    monkeypatch.setattr(log_client_mod, "MAX_REQUEST_BYTES", 150)
+    sent = []
+    failures = [ConnectError(Code.UNAVAILABLE, "server restarting")]
+
+    def flusher(_namespace, batch):
+        rows = [value[0] for value in batch.column("payload").to_pylist()]
+        if failing_row in rows and failures:
+            raise failures.pop()
+        sent.append(rows)
+
+    schema = Schema(columns=(Column(name="payload", type=stats_pb2.COLUMN_TYPE_BYTES, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.blob", schema=schema, flusher=flusher)
+    table.write([SimpleNamespace(payload=bytes([row]) * 60) for row in range(4)])
+
+    assert table.flush(timeout=10) is FlushResult.SUCCEEDED
+    assert sent == [[0, 1], [2, 3]]
+    table.close()
+
+
+def test_get_table_keeps_the_buffer_bounds_that_a_caller_set_whatever_the_order():
+    client = LogClient.connect("http://h:1")
+    try:
+        raised_first = client.get_table("iris.worker", WorkerStat, max_buffer_rows=50_000)
+        assert client.get_table("iris.worker", WorkerStat) is raised_first
+        default_first = client.get_table("iris.task", WorkerStat)
+        assert client.get_table("iris.task", WorkerStat, max_buffer_rows=50_000) is default_first
+        for table in (raised_first, default_first):
+            assert (table._max_buffer_rows, table._max_buffer_bytes) == (50_000, log_client_mod.DEFAULT_MAX_BUFFER_BYTES)
+
+        with pytest.raises(ValueError, match="max_buffer_rows=50000, not 4"):
+            client.get_table("iris.worker", WorkerStat, max_buffer_rows=4)
+        assert raised_first._max_buffer_rows == 50_000
+    finally:
+        client.close()
+
+
 def test_schema_from_proto_consistency():
     s = schema_from_dataclass(WorkerStat)
     proto = schema_to_proto(s)

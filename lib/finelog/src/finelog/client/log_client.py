@@ -272,8 +272,8 @@ class Table:
         registration_key: RegistrationKey | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
-        max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
-        max_buffer_rows: int = DEFAULT_BATCH_ROWS,
+        max_buffer_bytes: int | None = None,
+        max_buffer_rows: int | None = None,
         thread_name: str | None = None,
     ) -> None:
         self._namespace = namespace
@@ -292,8 +292,11 @@ class Table:
         self._registered_generation = 0 if registrar is None else -1
         self._flush_interval = flush_interval
         self._batch_rows = batch_rows
-        self._max_buffer_bytes = max_buffer_bytes
-        self._max_buffer_rows = max_buffer_rows
+        # ``None`` is a bound that no caller set; it uses the default until a later ``get_table`` call sets it.
+        self._requested_buffer_rows = max_buffer_rows
+        self._requested_buffer_bytes = max_buffer_bytes
+        self._max_buffer_rows = DEFAULT_BATCH_ROWS if max_buffer_rows is None else max_buffer_rows
+        self._max_buffer_bytes = DEFAULT_MAX_BUFFER_BYTES if max_buffer_bytes is None else max_buffer_bytes
 
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
@@ -556,6 +559,17 @@ class Table:
         later_seq, unsent, later_dropped = self._send(items[middle:])
         return max(sent_seq, later_seq), unsent, dropped + later_dropped
 
+    def _update_buffer_bounds(self, max_buffer_rows: int | None, max_buffer_bytes: int | None) -> None:
+        """Apply the bounds of another ``get_table`` call: ``None`` keeps a bound, and a bound set twice must agree."""
+        with self._cond:
+            rows = _agreed_bound(self._namespace, "max_buffer_rows", self._requested_buffer_rows, max_buffer_rows)
+            size = _agreed_bound(self._namespace, "max_buffer_bytes", self._requested_buffer_bytes, max_buffer_bytes)
+            self._requested_buffer_rows = rows
+            self._requested_buffer_bytes = size
+            self._max_buffer_rows = DEFAULT_BATCH_ROWS if rows is None else rows
+            self._max_buffer_bytes = DEFAULT_MAX_BUFFER_BYTES if size is None else size
+            self._trim_oldest_locked()
+
     def _update_registration(self, registration_key: RegistrationKey, registrar: Callable[[], Schema]) -> None:
         """Schedule a changed registration before this handle's next send."""
         with self._cond:
@@ -777,8 +791,8 @@ class LogClient:
         *,
         storage_policy: StoragePolicy = StoragePolicy(),
         table_spec: TableSpec | None = None,
-        max_buffer_rows: int = DEFAULT_BATCH_ROWS,
-        max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
+        max_buffer_rows: int | None = None,
+        max_buffer_bytes: int | None = None,
     ) -> Table:
         """Return a Table handle for ``namespace``, registering it lazily.
 
@@ -805,8 +819,9 @@ class LogClient:
         than the defaults raises them. A queue larger than one request goes out
         in several requests. ``Table.close`` waits about 10 seconds for the
         queue, so such a producer calls ``Table.flush`` with its own timeout
-        before it closes. Every handle of a namespace must ask for the same
-        bounds.
+        before it closes. ``None`` keeps the bound that an earlier call set for
+        the namespace, or the default; a call that sets another value than an
+        earlier call raises ``ValueError``.
         """
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
@@ -823,8 +838,7 @@ class LogClient:
             existing = self._tables.get(namespace)
             registration_key = (requested, storage_policy, table_spec)
             if existing is not None:
-                if (existing._max_buffer_rows, existing._max_buffer_bytes) != (max_buffer_rows, max_buffer_bytes):
-                    raise ValueError(f"Table({namespace}) already has other buffer bounds")
+                existing._update_buffer_bounds(max_buffer_rows, max_buffer_bytes)
                 existing._update_registration(
                     registration_key,
                     lambda: self._register_table(namespace, requested, storage_policy, table_spec),
@@ -1076,6 +1090,15 @@ def _estimate_row_size(row: Any, columns: tuple[Column, ...]) -> int:
         else:
             total += 8
     return total
+
+
+def _agreed_bound(namespace: str, name: str, current: int | None, requested: int | None) -> int | None:
+    """Return the buffer bound after a ``get_table`` call asks for ``requested``; ``None`` sets no value."""
+    if requested is None:
+        return current
+    if current is not None and current != requested:
+        raise ValueError(f"Table({namespace}) already has {name}={current}, not {requested}")
+    return requested
 
 
 def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:
