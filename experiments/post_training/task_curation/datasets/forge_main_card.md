@@ -195,3 +195,9 @@ The immutable SAMPLE receipt is
 The audit is
 `s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/selected-qc-audit-v1/arithmetic.json`
 ([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Fingest-b%2Fforge-main%2F2026.11.21.2%2Fselected-qc-audit-v1%2Farithmetic.json)).
+
+
+The admission receipt binds the complete 4,000-row source ledger and the qualified 3,577-row
+private release:
+`s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/selected-admission-v1/receipt/part-000.json`
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Fingest-b%2Fforge-main%2F2026.11.21.2%2Fselected-admission-v1%2Freceipt%2Fpart-000.json)).
