@@ -375,9 +375,16 @@ policy-worker startup from 209.9 s to 75.3 s versus per-tensor requests.
 Prototype that range planning for the Levanter mesh. Start with HF tensors
 whose addressable slices map to contiguous ranges, and retain coalesced
 whole-tensor reads where the mesh would otherwise generate many tiny
-requests. Compare object bytes and GET counts per host, cold time to
-learner readiness, and bitwise equality of the loaded model against the
-smoke loader. Use the same pinned BF16 export for both readers.
+requests. On the smoke mesh, the four-way data split gives each host a
+contiguous span per routed down-projection expert. Reading those spans
+alone would reduce logical weight bytes from about 125 to 94.5 GiB per
+host. The gate and up projections split the innermost HF axis, which
+would produce about 17 million 1,280-byte spans per host if requested
+individually. These estimates use the pinned tensor shapes and mesh and
+exclude request coalescing and read amplification. Compare actual object
+bytes and GET counts per host, cold time to learner readiness, and bitwise
+equality of the loaded model against the smoke loader. Use the same pinned
+BF16 export for both readers.
 [SkyRL range prefetch][skyrl-hf-prefetch] · [Pinned export record][pinned-hf-export]
 
 A regional native checkpoint is also an option for repeated cold starts.
