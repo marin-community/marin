@@ -293,9 +293,11 @@ tasks, including their diagnostic details. The command must exit successfully.
 This format retains named metrics and reduction inputs in `detail`.
 
 A scripted judge receives its declared specification at `/tests/judge.toml`.
-The caller supplies `JudgeConnection` separately; the runtime puts credentials
-only in the verifier machine's environment. Task serialization and staged
-archives exclude those credentials. The machine must permit network access.
+The caller supplies `JudgeConnection` separately. A native script receives a
+machine-local HTTP endpoint; the runtime relays its original judge request
+through the host HTTP client. The provider credential stays on the host.
+Task serialization and staged archives exclude that credential. The runtime
+closes the relay before releasing the verifier machine.
 
 TaskSpec validation ties the grader to the answer:
 

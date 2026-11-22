@@ -15,6 +15,7 @@ import math
 import os
 import tarfile
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -58,6 +59,11 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
+from taskcompendium.runtime.script_judge_service import (
+    SCRIPT_JUDGE_BASE_URL,
+    SCRIPT_JUDGE_GUEST_KEY,
+    script_judge_service,
+)
 from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
 from taskcompendium.runtime.verifyit_runtime import ENTRY_PATH, RUNTIME_ROOT, verifyit_runtime_files
 from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
@@ -625,27 +631,39 @@ async def _grade_staged(
                         prepared,
                         env={
                             **prepared.env,
-                            BASE_URL_ENV: judge_connection.base_url,
-                            API_KEY_ENV: judge_connection.api_key,
+                            BASE_URL_ENV: (
+                                SCRIPT_JUDGE_BASE_URL
+                                if isinstance(grading.grader, ScriptGrader)
+                                else judge_connection.base_url
+                            ),
+                            API_KEY_ENV: (
+                                SCRIPT_JUDGE_GUEST_KEY
+                                if isinstance(grading.grader, ScriptGrader)
+                                else judge_connection.api_key
+                            ),
                             MODEL_ENV: model,
                         },
                     )
                 machine = await factory.create(prepared)
             try:
-                return await _grade_on(
-                    machine,
-                    archive_path,
-                    submission_archive,
-                    grading.workspace,
-                    grading.environment,
-                    grading.spec,
-                    grading.grader,
-                    grading.limit,
-                    runtime_sha256=runtime_sha256,
-                    reply_status_archive=reply_status_archive,
-                    preparation_timeout=machine_spec.startup_timeout,
-                    user=setup_user(factory.backend),
-                )
+                async with AsyncExitStack() as services:
+                    if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
+                        assert judge_connection is not None
+                        await services.enter_async_context(script_judge_service(machine, judge_connection))
+                    return await _grade_on(
+                        machine,
+                        archive_path,
+                        submission_archive,
+                        grading.workspace,
+                        grading.environment,
+                        grading.spec,
+                        grading.grader,
+                        grading.limit,
+                        runtime_sha256=runtime_sha256,
+                        reply_status_archive=reply_status_archive,
+                        preparation_timeout=machine_spec.startup_timeout,
+                        user=setup_user(factory.backend),
+                    )
             finally:
                 await machine.close()
     except _StepFailed as failure:

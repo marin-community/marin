@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+import signal
 import sys
 import tarfile
 import tomllib
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import Backend, Command, ExitReason, Result
+from shellbox.process_session import SubprocessSession
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE
@@ -47,6 +49,25 @@ class LocalGradingMachine:
 
     async def close(self):
         self.closed = True
+
+    async def open_process(self, command: Command) -> SubprocessSession:
+        process = await asyncio.create_subprocess_exec(
+            self.python or sys.executable,
+            *command.argv[1:],
+            cwd=self.local(command.cwd or self.workdir),
+            env={**os.environ, **self.env, **command.env},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+
+        async def stop():
+            if process.returncode is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            await process.wait()
+
+        return SubprocessSession(process, stop=stop)
 
     async def run(self, command: Command):
         program = command.argv[0]

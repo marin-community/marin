@@ -3135,6 +3135,7 @@ name = "marin-taskcompendium"
 version = "0.1.0"
 source = { editable = "../../lib/taskcompendium" }
 dependencies = [
+    { name = "httpx" },
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
@@ -3146,6 +3147,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=5.0.1,<6" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "ijson", marker = "extra == 'pipeline'", specifier = ">=3.3" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../../lib/finestore" },
     { name = "marin-rigging", editable = "../../lib/rigging" },

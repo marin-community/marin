@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Semantic task contracts, submission extraction, and shared grading"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "httpx>=0.28",
     "marin-rigging>=0.2.139.dev37117265303",
     "pydantic>=2.0",
     "marin-verifyit[judge,math,reasoning-gym,schema]",

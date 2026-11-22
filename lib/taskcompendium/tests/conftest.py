@@ -31,6 +31,8 @@ class JudgeServer(ThreadingHTTPServer):
     requests: list[dict]
     reply: str
     status_code: int
+    request_headers: list[dict[str, str]]
+    rejected_user_agent_prefix: str
 
 
 class JudgeHandler(BaseHTTPRequestHandler):
@@ -38,6 +40,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
         server: JudgeServer = self.server  # pyrefly: ignore[bad-assignment]
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         server.requests.append(request)
+        server.request_headers.append(dict(self.headers))
         body = json.dumps(
             {
                 "id": "chatcmpl-fixture",
@@ -53,7 +56,10 @@ class JudgeHandler(BaseHTTPRequestHandler):
                 ],
             }
         ).encode()
-        self.send_response(server.status_code)
+        blocked = server.rejected_user_agent_prefix and self.headers.get("User-Agent", "").startswith(
+            server.rejected_user_agent_prefix
+        )
+        self.send_response(403 if blocked else server.status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -69,6 +75,8 @@ def judge_server():
     server.requests = []
     server.reply = "PASS"
     server.status_code = 200
+    server.request_headers = []
+    server.rejected_user_agent_prefix = ""
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
