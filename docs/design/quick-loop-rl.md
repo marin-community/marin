@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 2:28 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 2:38 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.17` applied both updates and exactly restored update 1. Version 2 failed replay with 1,035 mismatched bytes at receiver 32. In `2026.11.20.18`, the instrumented transport passed the first two byte checks and all four fresh learners restored update 1 exactly. | Verify update 2, the version-2 release and final generation, and the terminal checkpoint before the matched arms. |
+| 40-H100 learner smoke | Run `2026.11.20.18` applied both updates, restored update 1 exactly on four fresh learners, and verified serving versions 0 and 1. Version 2 failed with 929 mismatched bytes at each of the eight receivers. Seven BF16 K/V projection payloads already differed at the sender. | Freeze one binary export per version and rerun both updates, all three byte checks, final generation, and the terminal checkpoint before the matched arms. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -502,8 +502,31 @@ learners committed step 1 at 10:10:08 UTC and verified exact state in fresh
 processes at 10:24:45 UTC. Each learner observed changed model bytes.
 All eight receivers verified version 1 with zero mismatches. vLLM published
 that version at 10:28:30 UTC and produced nonempty generation with stamp 2.
-The second rollout is in progress.
-[Fingerprint retry attempt][iris-smoke-fingerprint] · [Frozen source and checks][h100-fingerprint-handoff]
+The original logs contain 21 verified generation receipts with that stamp.
+The second rollout admitted 128 groups and 512 trajectories. The restored
+learners applied update 2 at 10:32:53 UTC.
+
+Version 2 failed verification at 10:36:33 UTC. Each of the eight vLLM
+receivers reported the same 929 mismatched bytes out of 19,687,358,464.
+Every mismatch belonged to one of seven BF16 attention K/V projections.
+The 32 sender participants reported all 13,798 unique payloads. The same
+seven immutable CPU payloads differed between exports. These are the input
+bytes to the GPU copy and NCCL broadcast. The cause of the differing
+export bytes remains open. The driver rejected the publication and kept generation
+paused. Iris marked the attempt failed, before stamp-3 generation or a
+terminal checkpoint.
+[Verified diagnostic failure][h100-replay-diagnostic-failure]
+
+The next smoke will give each version one immutable export. With byte
+verification enabled, the sender writes the first export's raw payloads
+to temporary storage on the learner hosts. It then replays those bytes
+over NCCL so every vLLM receiver can independently compare them with the
+live weights before admitting generation. The current schedule contains
+134,191,857,664 unique payload bytes across the four learner hosts. Measure
+the added local I/O and the publication time with the second distributed
+export removed. This check establishes equality between the exported
+bytes and installed weights. The numerical investigation of the K/V
+exports remains open.
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -586,12 +609,12 @@ the original artifact roots with a repository-local Git tree abbreviation.
 Both 25-update recipes passed the artifact main's no-run preflight with
 the regional task selection pinned. The Megatron control retains source
 `9e8664df3b` and fingerprint `ef11bf85`. The prospective Levanter arm
-uses current smoke source `96f3d6ea0f` and fingerprint `10242ebf`. It enables
+uses diagnostic smoke source `96f3d6ea0f` and fingerprint `10242ebf`. It enables
 preallocation and keeps the 80% learner cap and pinned-host optimizer
 state. A clean restore reproduced the authored and composed configuration
 checks. Repin the Levanter arm to the accepted smoke source before submission.
-The Levanter candidate's publication timing includes source SHA-256 checks.
-Report publication and optimizer timing separately.
+Report publication, including any temporary staging and SHA-256 checks,
+separately from optimizer time.
 After the smoke passes its receipt and weight-change audits, submit the
 Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
 Use the same regional route and publication verification for both. The
@@ -1317,6 +1340,7 @@ arms. [Prior timing comparison][timing]
 [h100-fingerprint-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.17%2Fh100-fingerprint-retry.tar.zst
 [h100-version-two-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.17%2Fobserved-failure.json
 [h100-replay-diagnostic-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.18%2Fh100-publication-diagnostics-retry.tar.zst
+[h100-replay-diagnostic-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.18%2Fobserved-failure.json
 [h100-matched-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fquick-loop-matched-2026.11.20.15.tar.gz
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
