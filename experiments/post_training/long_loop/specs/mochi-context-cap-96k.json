@@ -46,7 +46,7 @@
     "pipeline_parallel_size": 1,
     "gpus_per_task": 4
   },
-  "output_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/96k-20261122a",
+  "output_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/96k-20261122b",
   "seeds": [
     17
   ],
