@@ -426,6 +426,28 @@ def test_identical_formal_inputs_with_different_references_share_a_split():
     assert not manifest["clusters"][0]["removed"]
 
 
+def test_long_near_matches_with_separated_edits_share_a_split():
+    # Each edit creates n-grams that no other row has; they must not use up the rare-n-gram candidate seeds.
+    words = [f"term{index}" for index in range(400)]
+    edited = [*words]
+    edited[100], edited[300] = "first", "second"
+    hypotheses = [f"(h{index} : n + {index} = {index} + n)" for index in range(80)]
+    changed = [*hypotheses]
+    changed[20], changed[60] = "(h20 : n + 2000 = 2000 + n)", "(h60 : n + 6000 = 6000 + n)"
+
+    def formal(parts):
+        return "import Mathlib\ntheorem t (n : Nat) " + " ".join(parts) + " : n = n := by"
+
+    manifest = build_manifest(
+        [
+            numina_row(uuid="first", problem=" ".join(words), formal_statement=formal(hypotheses)),
+            numina_row(uuid="second", problem=" ".join(edited), formal_statement=formal(changed)),
+        ]
+    )
+    assert len(manifest["clusters"]) == 1
+    assert [match["rule"] for match in manifest["clusters"][0]["matches"]] == ["joint_near_match"]
+
+
 def test_proof_training_overlap_moves_the_whole_cluster_to_train(monkeypatch):
     monkeypatch.setattr(numina_autoinformalization_manifest, "PROOF_TRAIN_UUIDS", frozenset({"proof", "singleton"}))
     monkeypatch.setattr(numina_autoinformalization_manifest, "split_for", lambda key: "eval")

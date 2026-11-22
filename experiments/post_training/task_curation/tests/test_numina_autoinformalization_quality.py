@@ -5,13 +5,18 @@
 
 import copy
 import csv
+import gzip
 import hashlib
 import json
 import sys
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+from experiments.post_training.task_curation.datasets.lean import numina
 from experiments.post_training.task_curation.datasets.lean.autoinformalization import build_task_selection as quality
+from experiments.post_training.task_curation.tests.lean_rows import numina_row, with_passing_proof
 
 REPORT = "numina_autoinformalization_row_quality_report.csv"
 
@@ -154,3 +159,62 @@ def test_bucket_inputs_must_match_their_pinned_digest(tmp_path, monkeypatch):
     monkeypatch.setattr(quality, "INPUTS", {"labels": ("labels.csv", hashlib.sha256(b"other").hexdigest())})
     with pytest.raises(ValueError, match="pinned SHA-256"):
         quality.read_input("labels")
+
+
+def staged_source_rows(tmp_path, monkeypatch, rows):
+    """Run the source filters over ``rows``; rows whose uuid starts with ``eval`` hash to the eval split."""
+    parquet = tmp_path / "numina.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), parquet)
+    prime = tmp_path / "prime"
+    prime.mkdir()
+    digests = {}
+    for name in numina.PRIME_LISTS:
+        path = prime / f"{name}.json.gz"
+        path.write_bytes(gzip.compress(b"[]"))
+        digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setattr(numina, "PRIME_LISTS", digests)
+    monkeypatch.setattr(quality, "SOURCE_SHA256", hashlib.sha256(parquet.read_bytes()).hexdigest())
+    monkeypatch.setattr(quality.dedup, "split_for", lambda key: "eval" if ":eval" in key else "train")
+    labels = {quality.dedup.row_key({**row, "_numina_index": index}): "no" for index, row in enumerate(rows)}
+    return quality.source_rows(parquet, prime, labels)
+
+
+def test_multiple_choice_and_word_problems_are_excluded_before_the_golden_controls(tmp_path, monkeypatch):
+    rows = [
+        numina_row(uuid="proof", problem="Show the identity."),
+        numina_row(uuid="choice", problem="Pick the identity.", question_type="MCQ"),
+        numina_row(uuid="word", problem="Find the count.", question_type="math-word-problem"),
+    ]
+    result = staged_source_rows(tmp_path, monkeypatch, rows)
+    assert [row["cause"] for row in result] == ["", "excluded_question_type", "excluded_question_type"]
+
+
+def test_eval_rows_restating_a_training_statement_are_excluded(tmp_path, monkeypatch):
+    shared = "import Mathlib\ntheorem shared (n : Nat) : n + 0 = n := by"
+    proof_only = "import Mathlib\ntheorem proved (n : Nat) : 0 + n = n := by"
+    # A proof-training row filtered out of this source still claims its statement for training.
+    proof_row = numina_row(uuid="proof-task", formal_statement=proof_only, question_type="MCQ")
+    with_passing_proof(monkeypatch, proof_row)
+    monkeypatch.setattr(quality.dedup, "PROOF_TRAIN_UUIDS", frozenset({"proof-task"}))
+    rows = [
+        numina_row(uuid="train-row", problem="Adding zero changes nothing.", formal_statement=shared),
+        numina_row(uuid="eval-same", problem="Prove that n plus zero is n.", formal_statement=shared),
+        numina_row(uuid="eval-proof", problem="Prove that zero plus n is n.", formal_statement=proof_only),
+        numina_row(
+            uuid="eval-new",
+            problem="Prove that n times one is n.",
+            formal_statement="import Mathlib\ntheorem fresh (n : Nat) : n * 1 = n := by",
+        ),
+        proof_row,
+    ]
+    result = {row["uuid"]: row for row in staged_source_rows(tmp_path, monkeypatch, rows)}
+    assert [result[uuid]["split"] for uuid in ("train-row", "eval-same", "eval-proof", "eval-new")] == [
+        "train",
+        "eval",
+        "eval",
+        "eval",
+    ]
+    assert result["eval-same"]["cause"] == "final_statement_train_overlap"
+    assert result["eval-proof"]["cause"] == "final_statement_train_overlap"
+    assert result["train-row"]["cause"] == ""
+    assert result["eval-new"]["cause"] == ""
