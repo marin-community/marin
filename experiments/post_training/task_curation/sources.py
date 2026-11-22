@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.datasets.ifbench import tasks as if
 from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.datasets.mimo import tasks as mimo
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.openresearcher import recipe as openresearcher
 from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
@@ -153,6 +154,7 @@ def configured_sources() -> list[RlDataSource]:
         *polaris.sources(),
         *facet.sources(),
         *fineenvs.sources(fineenvs.PUBLISHED_IMAGES),
+        *mimo.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),

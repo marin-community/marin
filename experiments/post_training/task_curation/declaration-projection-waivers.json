@@ -14,6 +14,7 @@
     "FWeindel:validated-tasks/facet_v3",
     "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
     "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
-    "Marin:forge-main-20261117"
+    "Marin:forge-main-20261117",
+    "FWeindel:validated-tasks/mimo_v1"
   ]
 }
