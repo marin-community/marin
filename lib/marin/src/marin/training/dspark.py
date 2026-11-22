@@ -1,46 +1,50 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run offline DSpark distillation on one allocated GPU host."""
+"""Run a teacher and Speculators trainer together on one Iris GPU worker."""
 
 import json
 import logging
 import math
 import os
-import shutil
 import signal
 import subprocess
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
-from inspect import getfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 import numpy as np
+from levanter.compat.hf_export import write_export_json
+from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
 
 from marin.external_dependencies import VLLM_GPU_RELEASE
-from marin.inference import vllm_wheel_entrypoint
-from marin.inference.vllm_release import current_vllm_gpu_wheel, vllm_gpu_wheel_provenance
+from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
 from marin.training.dspark_data import (
     DRAFT_CONFIG_FILE,
     LM_HEAD,
+    SPLITS_FILE,
     DraftRecipe,
     file_sha256,
     inspect_teacher,
+    stage_teacher,
     tensor_files,
     verify_sha256,
 )
 
 logger = logging.getLogger(__name__)
 
+SPECULATORS_REPOSITORY = "https://github.com/atutej/speculators.git"
 SPECULATORS_REVISION = "77eaa2390cab54ff7e5315345137394ee44b7a98"
 VLLM_SOURCE_COMMIT = "47a8e415bff17b9376f02d9b92edcc67e962eaee"
 _LOOPBACK_HOST = "127.0.0.1"
+_TEACHER_PORT = 18000
+_EXPORT_RECEIPT = "dspark-export.json"
 _MARKOV_HEAD = "vanilla"
 _D2T_FILE = "d2t.npy"
 _T2D_FILE = "t2d.npy"
@@ -74,31 +78,54 @@ class TrainingProvenance:
     mix_manifest_sha256: str
 
 
-@dataclass(frozen=True)
-class LocalGpuRuntime:
-    """Executables and devices on a single already allocated host."""
+def gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
+    """Partition the Iris task's visible GPU IDs into teacher and trainer masks."""
 
-    speculators_checkout: str
-    trainer_python: str
-    vllm_python: str
-    teacher_devices: str
-    trainer_devices: str
-    port: int
-    scratch_dir: str
+    devices = [device.strip() for device in visible_devices.split(",")]
+    total = recipe.teacher_replicas + recipe.trainer_ranks
+    if not all(devices) or len(set(devices)) != total or len(devices) != total:
+        raise ValueError(f"DSpark needs exactly {total} distinct visible GPUs, got {visible_devices!r}")
+    return ",".join(devices[: recipe.teacher_replicas]), ",".join(devices[recipe.teacher_replicas :])
 
-    def validate(self, recipe: DraftRecipe) -> None:
-        teacher = self.teacher_devices.split(",")
-        trainer = self.trainer_devices.split(",")
-        if (
-            len(teacher) != recipe.teacher_replicas
-            or len(trainer) != recipe.trainer_ranks
-            or len(set(teacher + trainer)) != len(teacher) + len(trainer)
-            or not all(device and device.strip() == device for device in teacher + trainer)
-        ):
-            raise ValueError("CUDA device lists must be disjoint and match the recipe's GPU counts")
-        for path in (self.speculators_checkout, self.trainer_python, self.vllm_python, self.scratch_dir):
-            if not Path(path).is_absolute():
-                raise ValueError(f"Runtime paths must be absolute: {path}")
+
+def _worker_gpu_devices() -> str:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is not None:
+        return visible
+    output = subprocess.check_output(["nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"], text=True)
+    return ",".join(output.splitlines())
+
+
+def _install_speculators(scratch: Path, env: dict[str, str]) -> str:
+    source = scratch / "speculators"
+    trainer_env = scratch / "trainer-env"
+    subprocess.run(["git", "init", "--quiet", str(source)], env=env, check=True)
+    git = ["git", "-C", str(source)]
+    subprocess.run([*git, "fetch", "--depth", "1", SPECULATORS_REPOSITORY, SPECULATORS_REVISION], env=env, check=True)
+    subprocess.run([*git, "checkout", "--detach", SPECULATORS_REVISION], env=env, check=True)
+    subprocess.run(["uv", "venv", "--python", "3.12", str(trainer_env)], env=env, check=True)
+    python = str(trainer_env / "bin" / "python")
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            python,
+            "--torch-backend",
+            "cu130",
+            "-e",
+            str(source),
+            "torch==2.11.0+cu130",
+            "torchaudio==2.11.0+cu130",
+            "torchvision==0.26.0+cu130",
+            "transformers==5.12.1",
+            "datasets==5.0.1",
+        ],
+        env=env,
+        check=True,
+    )
+    return python
 
 
 @contextmanager
@@ -206,7 +233,7 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
 
 def _publish_checkpoint(
     *,
-    output: Path,
+    output: StoragePath,
     training: Path,
     provenance: TrainingProvenance,
     recipe: DraftRecipe,
@@ -230,34 +257,34 @@ def _publish_checkpoint(
     if index.is_file():
         names.append(index.name)
 
-    with TemporaryDirectory(dir=output, prefix=".export-") as directory:
-        export = Path(directory) / "hf"
-        export.mkdir()
-        (export / "config.json").write_text(json.dumps(config, indent=2) + "\n")
-        for name in names:
-            shutil.copyfile(checkpoint / name, export / name)
-        receipt = {
-            **asdict(provenance),
-            "speculators_revision": SPECULATORS_REVISION,
-            "vllm_source_commit": VLLM_SOURCE_COMMIT,
-            "trainer_packages": packages,
-            "steps": state["global_step"],
-            "validation": metrics,
-            "files": {name: file_sha256(export / name) for name in ["config.json", *names]},
-        }
-        (export / "dspark-export.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        export.rename(output / "hf")
+    output.mkdirs()
+    for name in names:
+        (output / name).upload_from(str(checkpoint / name))
+    config_path = output / "config.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    receipt = {
+        **asdict(provenance),
+        "speculators_revision": SPECULATORS_REVISION,
+        "vllm_source_commit": VLLM_SOURCE_COMMIT,
+        "trainer_packages": packages,
+        "steps": state["global_step"],
+        "validation": metrics,
+        "files": {
+            "config.json": file_sha256(config_path),
+            **{name: file_sha256(checkpoint / name) for name in names},
+        },
+    }
+    # Readers use the receipt to distinguish partial uploads from a completed export.
+    write_export_json(output / _EXPORT_RECEIPT, receipt)
 
 
-def _teacher_command(teacher: str, recipe: DraftRecipe, runtime: LocalGpuRuntime, hidden_states: Path) -> list[str]:
+def _teacher_command(teacher: Path, recipe: DraftRecipe, hidden_states: Path) -> list[str]:
     if VLLM_GPU_RELEASE.source_commit != VLLM_SOURCE_COMMIT:
         raise ValueError("Requalify DSpark against the newly promoted vLLM wheel before changing the pin")
-    wheel = current_vllm_gpu_wheel(VLLM_GPU_RELEASE)
-    wheel_provenance = vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel)
     speculative, transfer = extraction_config(recipe, hidden_states)
     server_options = {
         "host": _LOOPBACK_HOST,
-        "port": str(runtime.port),
+        "port": str(_TEACHER_PORT),
         "dtype": "bfloat16",
         "tensor-parallel-size": "1",
         "data-parallel-size": str(recipe.teacher_replicas),
@@ -278,30 +305,28 @@ def _teacher_command(teacher: str, recipe: DraftRecipe, runtime: LocalGpuRuntime
             }
         )
     return [
-        runtime.vllm_python,
-        getfile(vllm_wheel_entrypoint),
-        json.dumps(asdict(wheel_provenance)),
+        *IsolatedCudaVllm(source=VllmType.MARIN_FORK).command(),
         "serve",
-        teacher,
+        str(teacher),
         "--enable-expert-parallel",
         *(f"--{key}={value}" for key, value in server_options.items()),
     ]
 
 
 def _trainer_command(
-    teacher: str,
+    teacher: Path,
     recipe: DraftRecipe,
-    runtime: LocalGpuRuntime,
+    python: str,
     data: Path,
     scratch: Path,
     training: Path,
     hidden_states: Path,
 ) -> list[str]:
-    split = json.loads((data / "splits.json").read_text())
+    split = json.loads((data / SPLITS_FILE).read_text())
     train_config = {
         "speculator_type": "dspark",
         "seed": recipe.seed,
-        "verifier": {"verifier_name_or_path": teacher},
+        "verifier": {"verifier_name_or_path": str(teacher)},
         "draft": {
             "draft_config": str(data / DRAFT_CONFIG_FILE),
             "draft_vocab_size": recipe.draft_vocab_size,
@@ -321,7 +346,7 @@ def _trainer_command(
         },
         "backend": {"hidden_states_path": str(hidden_states)},
         "generation": {
-            "vllm_endpoint": f"http://{_LOOPBACK_HOST}:{runtime.port}/v1",
+            "vllm_endpoint": f"http://{_LOOPBACK_HOST}:{_TEACHER_PORT}/v1",
             "on_missing": "generate",
             "on_generate": "delete",
         },
@@ -349,7 +374,7 @@ def _trainer_command(
     }
     config_path = scratch / "train.json"
     config_path.write_text(json.dumps(train_config))
-    train = [runtime.trainer_python]
+    train = [python]
     if recipe.trainer_ranks > 1:
         train += ["-m", "torch.distributed.run", "--standalone", f"--nproc-per-node={recipe.trainer_ranks}"]
     train += ["-m", "speculators.train", "--config", str(config_path)]
@@ -360,53 +385,51 @@ def train_and_export(
     *,
     output: str,
     teacher: str,
+    teacher_manifest: str,
     provenance: TrainingProvenance,
     prepared: str,
     recipe: DraftRecipe,
-    runtime: LocalGpuRuntime | None,
 ) -> None:
-    """Train on fixed assistant responses and publish the validated draft atomically."""
+    """Stage the pinned inputs, train on an Iris worker, and publish the draft receipt last."""
 
-    if runtime is None:
-        raise ValueError("An allocated local GPU runtime is required for DSpark training")
-    destination = Path(output)
-    if (export := destination / "hf").exists():
-        # The atomic rename can succeed before the artifact runner records success.
-        receipt = json.loads((export / "dspark-export.json").read_text())
+    export = StoragePath(output) / "hf"
+    receipt_path = export / _EXPORT_RECEIPT
+    if receipt_path.isfile():
+        receipt = json.loads(receipt_path.read_text())
         if any(receipt[name] != value for name, value in asdict(provenance).items()):
             raise ValueError(f"Existing DSpark export at {export} has different inputs")
         for name, digest in receipt["files"].items():
             verify_sha256(export / name, digest)
         return
 
-    runtime.validate(recipe)
-    source = Path(runtime.speculators_checkout)
-    head = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    dirty = subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True)
-    if head != SPECULATORS_REVISION or dirty:
-        raise ValueError(f"Use a clean Speculators checkout at {SPECULATORS_REVISION}")
-    decoder = inspect_teacher(Path(teacher), provenance.teacher_manifest_sha256, recipe)
-    data = Path(prepared) / "prepared"
-    if json.loads((data / DRAFT_CONFIG_FILE).read_text()) != decoder:
+    teacher_devices, trainer_devices = gpu_device_split(_worker_gpu_devices(), recipe)
+    source = StoragePath(teacher)
+    manifest = StoragePath(teacher_manifest)
+    decoder = inspect_teacher(source, manifest, provenance.teacher_manifest_sha256, recipe)
+    prepared_source = StoragePath(prepared) / "prepared"
+    if json.loads((prepared_source / DRAFT_CONFIG_FILE).read_text()) != decoder:
         raise ValueError("Prepared draft config disagrees with the teacher")
 
     env = {**os.environ, "HF_HUB_OFFLINE": "1"}
     env.pop("PYTHONPATH", None)
-    vllm_env = {**env, "CUDA_VISIBLE_DEVICES": runtime.teacher_devices}
-    trainer_env = {
-        **env,
-        "CUDA_VISIBLE_DEVICES": runtime.trainer_devices,
-        "PYTHONPATH": os.pathsep.join(map(str, (source / "src", source / "hs_connectors" / "src"))),
-    }
-    with TemporaryDirectory(dir=runtime.scratch_dir, prefix="marin-dspark-") as directory:
+    vllm_env = {**env, "CUDA_VISIBLE_DEVICES": teacher_devices}
+    trainer_env = {**env, "CUDA_VISIBLE_DEVICES": trainer_devices}
+    with TemporaryDirectory(prefix="marin-dspark-") as directory:
         scratch = Path(directory)
         training = scratch / "checkpoints"
         hidden_states = scratch / "hidden_states"
         hidden_states.mkdir()
+        teacher_path = scratch / "teacher"
+        data = scratch / "data"
+        python = _install_speculators(scratch, trainer_env)
+
+        logger.info("Staging verified DSpark inputs for %s", provenance.teacher_identity)
+        stage_teacher(source, manifest, provenance.teacher_manifest_sha256, teacher_path)
+        prepared_source.download_to(str(data), recursive=True, batch_size=8)
         packages = json.loads(
             subprocess.check_output(
                 [
-                    runtime.trainer_python,
+                    python,
                     "-c",
                     _BUILD_VOCAB_MAPPINGS,
                     str(data / "token_frequencies.json"),
@@ -420,14 +443,13 @@ def train_and_export(
                 text=True,
             )
         )
-        inspect_teacher(Path(teacher), provenance.teacher_manifest_sha256, recipe, verify_weights=True)
-        server = _teacher_command(teacher, recipe, runtime, hidden_states)
-        train = _trainer_command(teacher, recipe, runtime, data, scratch, training, hidden_states)
+        server = _teacher_command(teacher_path, recipe, hidden_states)
+        train = _trainer_command(teacher_path, recipe, python, data, scratch, training, hidden_states)
         logger.info("Training DSpark for %s at %s", provenance.teacher_identity, output)
-        with _teacher_server(server, vllm_env, runtime.port):
+        with _teacher_server(server, vllm_env, _TEACHER_PORT):
             subprocess.run(train, env=trainer_env, check=True)
         _publish_checkpoint(
-            output=destination,
+            output=export,
             training=training,
             provenance=provenance,
             recipe=recipe,

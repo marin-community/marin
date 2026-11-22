@@ -19,10 +19,11 @@ def test_dspark_plan_accepts_pinned_mochi_without_resolving_nominal_export(tmp_p
                 "teacher": {
                     "family": "mochi",
                     "identity": "grug/hero-finished-hf@2026.11.22.1",
-                    "directory": str(tmp_path / "weights"),
+                    "directory": "s3://region/models/mochi",
+                    "manifest_uri": "s3://region/manifests/mochi.json",
                     "manifest_sha256": "1" * 64,
                 },
-                "data": {"directory": str(tmp_path / "mix"), "manifest_sha256": "2" * 64},
+                "data": {"directory": "s3://region/chat-mix", "manifest_sha256": "2" * 64},
                 "max_steps": 1,
                 "teacher_replicas": 4,
                 "trainer_ranks": 2,
@@ -36,7 +37,13 @@ def test_dspark_plan_accepts_pinned_mochi_without_resolving_nominal_export(tmp_p
 
 def test_draft_artifact_binds_exact_teacher_and_mix(tmp_path):
     config = OfflineDSpark(
-        CompletedSFT(TeacherFamily.SNOWBALL, "checkpoints/snowball-hf@1", str(tmp_path / "model"), "1" * 64),
+        CompletedSFT(
+            TeacherFamily.SNOWBALL,
+            "checkpoints/snowball-hf@1",
+            str(tmp_path / "model"),
+            str(tmp_path / "teacher.json"),
+            "1" * 64,
+        ),
         TrainingMix(str(tmp_path / "mix"), "2" * 64),
         max_steps=1,
         teacher_replicas=2,
@@ -50,3 +57,9 @@ def test_draft_artifact_binds_exact_teacher_and_mix(tmp_path):
     assert bound["teacher"] == config.teacher.directory
     assert bound["recipe"].extraction_taps == (2, 12, 22, 26)
     assert bound["prepared"] == prepared.path(str(tmp_path))
+
+
+def test_train_stage_requires_iris_worker(monkeypatch):
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    result = CliRunner().invoke(main, ["--config", "s3://region/recipe.json", "--stage", "train"])
+    assert result.exit_code == 2

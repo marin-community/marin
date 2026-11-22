@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from datasets.exceptions import DatasetGenerationError
-from marin.training.dspark import extraction_config, validate_draft
+from marin.training.dspark import extraction_config, gpu_device_split, validate_draft
 from marin.training.dspark_data import (
     EMBEDDING,
     FINAL_NORM,
@@ -24,7 +24,9 @@ from marin.training.dspark_data import (
     file_sha256,
     inspect_teacher,
     prepare_data,
+    stage_teacher,
 )
+from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save_file
 from tokenizers import AddedToken, Tokenizer
 from tokenizers.models import WordLevel
@@ -128,14 +130,19 @@ def _mix(tmp_path: Path, *, overlapping: bool) -> Path:
 def test_prepare_data_masks_and_holds_out_rendered_rows(
     tmp_path: Path, teacher: Path, recipe: DraftRecipe, overlapping: bool
 ) -> None:
-    output = tmp_path / "output"
-    output.mkdir()
+    storage = StoragePath(f"memory://{tmp_path.name}")
+    output = storage / "output"
     mix = _mix(tmp_path, overlapping=overlapping)
+    for file in teacher.iterdir():
+        (storage / f"teacher/{file.name}").upload_from(str(file))
+    for name in ("train.parquet", "val.parquet", "dspark-mix.json"):
+        (storage / f"mix/{name}").upload_from(str(mix / name))
     kwargs = dict(
         output=str(output),
-        teacher=str(teacher),
+        teacher=str(storage / "teacher"),
+        teacher_manifest=str(storage / "teacher/dspark-teacher.json"),
         teacher_sha256=file_sha256(teacher / "dspark-teacher.json"),
-        mix=str(mix),
+        mix=str(storage / "mix"),
         mix_sha256=file_sha256(mix / "dspark-mix.json"),
         recipe=recipe,
     )
@@ -147,7 +154,8 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
         return
 
     prepare_data(**kwargs)
-    prepared = output / "prepared"
+    prepared = tmp_path / "staged-data"
+    (output / "prepared").download_to(str(prepared), recursive=True)
     rows = datasets.load_from_disk(str(prepared / "dataset"))
     split = json.loads((prepared / "splits.json").read_text())
     assert int(len(rows) * split["train_ratio"]) == 1
@@ -156,17 +164,20 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     assert json.loads((prepared / "token_frequencies.json").read_text()) == {"3": 1, "5": 1}
 
 
-def test_completed_teacher_rejects_stale_weight_pin(teacher: Path, recipe: DraftRecipe) -> None:
+def test_completed_teacher_rejects_stale_weight_pin(teacher: Path, tmp_path: Path) -> None:
     pin = file_sha256(teacher / "dspark-teacher.json")
     weights = teacher / "model.safetensors"
     payload = weights.read_bytes()
     weights.write_bytes(payload[:-1] + bytes([payload[-1] ^ 1]))
     with pytest.raises(ValueError, match="SHA-256"):
-        inspect_teacher(teacher, pin, recipe, verify_weights=True)
+        stage_teacher(
+            StoragePath(str(teacher)), StoragePath(str(teacher / "dspark-teacher.json")), pin, tmp_path / "staged"
+        )
 
 
 def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teacher: Path, recipe: DraftRecipe) -> None:
-    decoder = inspect_teacher(teacher, file_sha256(teacher / "dspark-teacher.json"), recipe)
+    manifest = teacher / "dspark-teacher.json"
+    decoder = inspect_teacher(StoragePath(str(teacher)), StoragePath(str(manifest)), file_sha256(manifest), recipe)
     speculative, _ = extraction_config(recipe, tmp_path / "hidden_states")
     assert speculative["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [1, 3, 4]
     ckpt = tmp_path / "draft"
@@ -201,3 +212,9 @@ def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teach
     save_file({**weights, "d2t": np.array([0, 3, 7])}, weight_file)
     with pytest.raises(ValueError, match="vocabulary mapping"):
         validate_draft(ckpt, recipe, np.array([0, 2, 5]))
+
+
+def test_gpu_device_split_respects_iris_device_order(recipe: DraftRecipe) -> None:
+    assert gpu_device_split("GPU-c62a,GPU-955b", recipe) == ("GPU-c62a", "GPU-955b")
+    with pytest.raises(ValueError, match="distinct"):
+        gpu_device_split("GPU-c62a,GPU-c62a", recipe)

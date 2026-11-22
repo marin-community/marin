@@ -5,25 +5,27 @@
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 import click
 import draccus
-from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower
+from marin.execution.lazy import OUT, ArtifactStep, apply, lower
 from marin.execution.step_runner import StepRunner
 from marin.training.dspark import (
     SPECULATORS_REVISION,
     VLLM_SOURCE_COMMIT,
-    LocalGpuRuntime,
     TrainingProvenance,
     train_and_export,
 )
 from marin.training.dspark_data import DraftRecipe, GrugShape, inspect_mix, inspect_teacher, prepare_data, require_sha256
 from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.cross_region import is_cross_region_url
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 
 class TeacherFamily(StrEnum):
@@ -39,22 +41,23 @@ _FEATURE_TAPS = {
     TeacherFamily.SNOWBALL: (2, 12, 22),
     TeacherFamily.MOCHI: (2, 24, 45),
 }
-_RECIPE_VERSION = "2026.11.22"
+_RECIPE_VERSION = "2026.11.22.1"
 
 
 @dataclass(frozen=True)
 class CompletedSFT:
-    """Identity of a completed HF SFT export staged on the execution host."""
+    """Identity and storage directory of a completed HF SFT export."""
 
     family: TeacherFamily
     identity: str
     directory: str
+    manifest_uri: str
     manifest_sha256: str
 
 
 @dataclass(frozen=True)
 class TrainingMix:
-    """Local copy of a versioned set of normalized Marin chat parquet files."""
+    """Versioned normalized Marin chat Parquet files in storage."""
 
     directory: str
     manifest_sha256: str
@@ -87,7 +90,7 @@ class OfflineDSpark:
         )
 
 
-def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> tuple[ArtifactStep, ArtifactStep]:
+def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep]:
     """Bind the CPU dataset and the terminal vLLM checkpoint artifact."""
 
     if not config.teacher.identity.strip():
@@ -96,8 +99,8 @@ def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> 
         ("teacher", config.teacher.directory, config.teacher.manifest_sha256),
         ("mix", config.data.directory, config.data.manifest_sha256),
     ):
-        if not Path(path).is_absolute():
-            raise ValueError(f"The staged {name} directory must be an absolute POSIX path")
+        if StoragePath(path).scheme not in ("gs", "s3") and not Path(path).is_absolute():
+            raise ValueError(f"The {name} directory must be a gs:// or s3:// URI or an absolute local path")
         require_sha256(digest)
 
     family = config.teacher.family.value
@@ -118,52 +121,52 @@ def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> 
         version=_RECIPE_VERSION,
         output=OUT,
         teacher=teacher,
+        teacher_manifest=config.teacher.manifest_uri,
         teacher_sha256=config.teacher.manifest_sha256,
         mix=mix,
         mix_sha256=config.data.manifest_sha256,
         recipe=recipe,
     )
 
-    def build_config(ctx: StepContext) -> dict:
-        return {
-            "output": ctx.output_path,
-            "teacher": ctx.artifact_path(teacher),
-            "provenance": provenance,
-            "prepared": ctx.artifact_path(prepared),
-            "recipe": recipe,
-            "runtime": ctx.runtime_arg("runtime"),
-        }
-
-    draft = ArtifactStep(
-        name=f"checkpoints/dspark/{family}/{draft_key}",
+    draft = apply(
+        f"checkpoints/dspark/{family}/{draft_key}",
+        train_and_export,
         version=_RECIPE_VERSION,
-        artifact_type=Artifact,
-        run=lambda kwargs: train_and_export(**kwargs),
-        build_config=build_config,
-        deps=(teacher, prepared),
-        runtime_args={"runtime": runtime},
+        output=OUT,
+        teacher=teacher,
+        teacher_manifest=config.teacher.manifest_uri,
+        provenance=provenance,
+        prepared=prepared,
+        recipe=recipe,
     )
     return prepared, draft
 
 
 @click.command()
-@click.option("--config", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--config", required=True, help="Path or object storage URI of the DSpark JSON recipe.")
 @click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
-@click.option("--runtime", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def main(config: Path, stage: str, runtime: Path | None) -> None:
-    """Plan, inspect, prepare, or train offline DSpark from a JSON recipe."""
+def main(config: str, stage: str) -> None:
+    """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
 
-    if not Path(marin_prefix()).is_absolute():
-        raise click.UsageError("Set MARIN_PREFIX to an absolute artifact directory on the execution host")
-    recipe = draccus.decode(OfflineDSpark, json.loads(config.read_text()))
-    allocation = draccus.decode(LocalGpuRuntime, json.loads(runtime.read_text())) if runtime is not None else None
-    if stage == "train" and allocation is None:
-        raise click.UsageError("--stage train requires --runtime for an already allocated GPU host")
-    prepared, draft = artifacts(recipe, allocation)
+    if stage == "train" and "IRIS_TASK_ID" not in os.environ:
+        raise click.UsageError("Run the train stage with iris job run on one GPU worker")
+    configure_coreweave_s3()
+    recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
+    prepared, draft = artifacts(recipe)
+    prefix = marin_prefix()
+    teacher_root = StoragePath(recipe.teacher.directory)
+    manifest = StoragePath(recipe.teacher.manifest_uri)
+    mix_root = StoragePath(recipe.data.directory)
+    if stage == "train":
+        for location in (teacher_root, manifest, mix_root, StoragePath(prefix)):
+            if location.scheme not in ("gs", "s3"):
+                raise click.UsageError(f"Iris training requires a shared gs:// or s3:// location, got {location}")
+            if is_cross_region_url(str(location)):
+                raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
     if stage == "preflight":
         settings = recipe.training_recipe()
-        decoder = inspect_teacher(Path(recipe.teacher.directory), recipe.teacher.manifest_sha256, settings)
-        train, validation = inspect_mix(Path(recipe.data.directory), recipe.data.manifest_sha256)
+        decoder = inspect_teacher(teacher_root, manifest, recipe.teacher.manifest_sha256, settings)
+        train, validation = inspect_mix(mix_root, recipe.data.manifest_sha256)
         click.echo(
             json.dumps(
                 {
@@ -171,6 +174,7 @@ def main(config: Path, stage: str, runtime: Path | None) -> None:
                     "extraction_taps": settings.extraction_taps,
                     "train_shards": len(train),
                     "validation_shards": len(validation),
+                    "gpus": settings.teacher_replicas + settings.trainer_ranks,
                 },
                 indent=2,
             )
@@ -179,7 +183,7 @@ def main(config: Path, stage: str, runtime: Path | None) -> None:
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")
     if stage == "train":
-        click.echo(str(Path(draft.path()) / "hf"))
+        click.echo(str(StoragePath(draft.path(prefix)) / "hf"))
 
 
 if __name__ == "__main__":

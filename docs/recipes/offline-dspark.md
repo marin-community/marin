@@ -20,144 +20,100 @@ frozen teacher head rows. The schedule is one epoch capped at the requested
 step count, with Muon, linear decay and 0.1 CE plus 0.9 total variation loss.
 [Reference training recipe](https://github.com/atutej/spec-experiments/tree/85d1dd3d1f793153d3e6c2aeab3f3c940987fd9d/pipelines/speculator_training)
 
-## Stage the frozen inputs
+## Bind the regional inputs
 
-Use the HF directory of an already completed SFT export, including its matching
-tokenizer and chat template. Record the producer artifact's exact identity
-(for example `<name>@<version>:<fingerprint>` with the exact HF subdirectory)
-or a Hub repo and full commit SHA. Both families use the same typed
-`CompletedSFT` input. Mochi requires a completed export supplied by the
-caller. The Mochi training preset is a recipe for producing an export.
+Use the exact HF directory of a completed Snowball or Mochi SFT artifact,
+including its tokenizer and chat template. Record the producer's
+`name@version:fingerprint` and HF subdirectory as the teacher identity. For a
+staged Hub snapshot, record the repo and full commit SHA. Mochi requires the
+identity of an actual completed export.
 
-Stage the selected, versioned SFT mixture as normalized Marin chat Parquet
-shards in separate `train/` and `validation/` directories. Each row carries
-`messages` and may carry `chat_template_kwargs`. Freeze the intended mixture
-proportions and holdout membership before creating manifests. Use shards from
-the same storage region as the execution host.
+Store a JSON object mapping the teacher's relative HF filenames to lowercase
+SHA-256 digests at a separate manifest URI. Include all safetensors shards,
+the weight index if sharded, the config, and every tokenizer and chat-template
+file. Generate the manifest from the completed export in its storage region.
 
-Set `TEACHER_DIR`, `TEACHER_IDENTITY`, `FAMILY` (`snowball` or `mochi`),
-`MIX_DIR`, and `MARIN_PREFIX` to the selected identities and absolute local
-paths. Set `TEACHER_REPLICAS`, `TRAINER_RANKS`, and `MAX_STEPS` to the intended
-single-host allocation and training budget. Reserve enough shared disk for
-the prepared Arrow dataset and its temporary build files.
+Use a versioned normalized Marin chat mixture with `messages` and optional
+`chat_template_kwargs` columns. At the mixture root, publish `dspark-mix.json`
+with two keys, `train` and `validation`. Each key maps relative Parquet
+filenames to their SHA-256 digests. Set the mixture proportions and holdout
+membership when selecting the shards.
 
-```bash
-uv run python - "$TEACHER_DIR" "$MIX_DIR" "$TEACHER_IDENTITY" "$FAMILY" \
-  "$TEACHER_REPLICAS" "$TRAINER_RANKS" "$MAX_STEPS" > recipe.json <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-teacher, mix = map(Path, sys.argv[1:3])
-identity, family = sys.argv[3:5]
-teacher_replicas, trainer_ranks, max_steps = map(int, sys.argv[5:])
-
-def digest(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-teacher_manifest = teacher / "dspark-teacher.json"
-teacher_files = sorted(p for p in teacher.iterdir() if p.is_file() and p != teacher_manifest)
-teacher_files += sorted(p for p in (teacher / "chat_templates").rglob("*") if p.is_file())
-teacher_manifest.write_text(json.dumps({str(p.relative_to(teacher)): digest(p) for p in teacher_files}))
-mix_manifest = mix / "dspark-mix.json"
-mix_manifest.write_text(json.dumps({
-    split: {str(p.relative_to(mix)): digest(p) for p in sorted((mix / split).rglob("*.parquet"))}
-    for split in ("train", "validation")
-}))
-print(json.dumps({
-    "teacher": {
-        "family": family,
-        "identity": identity,
-        "directory": str(teacher),
-        "manifest_sha256": digest(teacher_manifest),
-    },
-    "data": {"directory": str(mix), "manifest_sha256": digest(mix_manifest)},
-    "max_steps": max_steps,
-    "teacher_replicas": teacher_replicas,
-    "trainer_ranks": trainer_ranks,
-}, indent=2))
-PY
-
-uv run python -m experiments.post_training.dspark_sft --config recipe.json
-uv run python -m experiments.post_training.dspark_sft --config recipe.json --stage preflight
-uv run python -m experiments.post_training.dspark_sft --config recipe.json --stage prepare
-```
-
-The default command prints the artifact graph. Preflight checks the teacher's
-shape, required tensors and tokenizer, plus the mix manifest, on CPU. Preparation verifies
-the data shard digests, renders with Levanter's SFT chat processor, clips at
-32,768 tokens by default, and writes assistant masks. It rejects exact
-rendered sequences shared by train and validation. The CLI config accepts
-`max_sequence_length`, `max_anchors` (default 12,288) and `seed` (default 42).
-Keep the manifests and recipe JSON to reproduce the inputs and training budget.
-
-## Train on an allocated host
-
-Use separate Python environments for Speculators and vLLM. Configure the
-Speculators trainer with a compatible CUDA PyTorch release and install from a
-clean checkout of the pinned contributor revision.
-
-```bash
-git clone https://github.com/atutej/speculators.git "$SPECULATORS_DIR"
-git -C "$SPECULATORS_DIR" checkout --detach 77eaa2390cab54ff7e5315345137394ee44b7a98
-uv venv --python 3.12 "$TRAINER_ENV"
-uv pip install --python "$TRAINER_ENV/bin/python" --torch-backend cu130 \
-  -e "$SPECULATORS_DIR" 'torch==2.11.0' 'torchaudio==2.11.0' 'torchvision==0.26.0' \
-  'transformers==5.12.1' 'datasets==5.0.1'
-```
-
-Install the published Marin GPU vLLM wheel for the host architecture using
-the release descriptor. Preserve the direct wheel URL on install for Marin's
-startup verifier.
-
-```bash
-VLLM_WHEEL=$(uv run python -c 'from marin.external_dependencies import VLLM_GPU_RELEASE; from marin.inference.vllm_release import current_vllm_gpu_wheel, vllm_gpu_wheel_requirement; print(vllm_gpu_wheel_requirement(current_vllm_gpu_wheel(VLLM_GPU_RELEASE)))')
-uv venv --python 3.12 "$VLLM_ENV"
-uv pip install --python "$VLLM_ENV/bin/python" \
-  --index https://download.pytorch.org/whl/cu132 \
-  --index https://download.pytorch.org/whl/cpu \
-  --index-strategy unsafe-best-match "$VLLM_WHEEL"
-```
-
-Save a `runtime.json` with the absolute paths and devices on the allocated host.
-For example, a Snowball allocation with two teacher GPUs and one trainer GPU
-has this layout. Size the allocation for the specific teacher and context
-before running it.
+Save the recipe as JSON and put it in the same region as the inputs and
+Iris worker. For example, a recipe for four GPUs assigns two to the teacher
+and two to Speculators. Replace each URI, identity and digest with the
+corresponding value for the selected export or mixture.
 
 ```json
 {
-  "speculators_checkout": "/shared/speculators",
-  "trainer_python": "/shared/trainer-env/bin/python",
-  "vllm_python": "/shared/vllm-env/bin/python",
-  "teacher_devices": "0,1",
-  "trainer_devices": "2",
-  "port": 18000,
-  "scratch_dir": "/local/nvme/dspark"
+  "teacher": {
+    "family": "snowball",
+    "identity": "checkpoints/snowball-sft@<version>:<fingerprint>/hf/step-<N>",
+    "directory": "s3://<regional-bucket>/<snowball-sft>/hf/step-<N>",
+    "manifest_uri": "s3://<regional-bucket>/<recipe-inputs>/teacher.json",
+    "manifest_sha256": "<teacher-manifest-sha256>"
+  },
+  "data": {
+    "directory": "s3://<regional-bucket>/<versioned-chat-mix>",
+    "manifest_sha256": "<mix-manifest-sha256>"
+  },
+  "max_steps": 100,
+  "teacher_replicas": 2,
+  "trainer_ranks": 2
 }
 ```
 
+The recipe accepts `max_sequence_length` (default 32,768 tokens),
+`max_anchors` (default 12,288) and `seed` (default 42). Set `MARIN_PREFIX` to a
+durable regional output prefix and `RECIPE_URI` to the stored recipe.
+
 ```bash
-uv run python -m experiments.post_training.dspark_sft \
-  --config recipe.json --stage train --runtime runtime.json
+uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI"
+uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage preflight
 ```
 
-The training stage rechecks the teacher weight digests. It runs one teacher
-with TP1 and expert parallelism across its assigned GPUs. A loopback vLLM
-server captures the four taps through the file connector. Speculators deletes
-each temporary activation after use. Choose fast local scratch with room for
-concurrent activation files and one training checkpoint. The step publishes
-the terminal draft after the full step budget and held-out validation complete.
-A failed training attempt can be retried from the same prepared data.
+The default command prints the artifact graph. CPU preflight checks the
+teacher config, tensor headers, tokenizer and chat template, plus the
+pinned mix manifests. It prints the requested GPU count.
+
+## Submit one Iris job
+
+Set `IRIS_TARGET_CLUSTER`, `IRIS_REGION`, `GPU_TYPE`, `GPU_COUNT` and
+`DSPARK_DISK` for the worker. Request the GPU count printed by preflight on
+one worker. Allow scratch space for the full teacher export, prepared Arrow
+data and temporary build files, activations, and the training checkpoint.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name offline-dspark --target-cluster "$IRIS_TARGET_CLUSTER" --region "$IRIS_REGION" \
+  --enable-extra-resources --replicas 1 --gpu "${GPU_TYPE}x${GPU_COUNT}" \
+  --cpu 32 --memory 256GB --disk "$DSPARK_DISK" --sync-package marin-core --extra cpu \
+  -e MARIN_PREFIX "$MARIN_PREFIX" -e TMPDIR /cache \
+  -- python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage train
+```
+
+The worker runs the artifact graph and provisions the trainer from pinned
+Speculators revision `77eaa2390cab54ff7e5315345137394ee44b7a98`. Marin's isolated
+CUDA launcher provisions the promoted vLLM wheel and its CUDA toolchain.
+The recipe partitions the worker's assigned GPUs between TP1 expert-parallel
+teacher prefill and Speculators training. The two processes exchange hidden
+states over the worker's local filesystem.
+
+Preparation verifies the data shard digests, renders assistant masks with
+Levanter's SFT chat processor, and rejects exact rendered sequences shared
+across splits. For a large mix, `--stage prepare` can build that same
+artifact on CPU in the storage region ahead of training. The GPU worker
+stages and verifies the teacher files before starting prefill. A failed
+training attempt can reuse the prepared dataset.
 
 ## Serve the draft
 
-The training command prints the versioned `hf/` directory. It contains the
+The Iris job prints the versioned `hf/` directory in object storage. It contains the
 Speculators config, serving weights, vocabulary offsets and
 `dspark-export.json` with input identities, package versions, validation
-metrics and file digests. Use the same teacher and tokenizer. For Snowball,
-pass the following speculative configuration to the promoted Marin wheel.
+metrics and file digests. A complete export has this receipt. Stage the draft
+for vLLM and use the same teacher and tokenizer. Pass this speculative
+configuration to the promoted Marin wheel for Snowball.
 
 ```json
 {
@@ -169,6 +125,7 @@ pass the following speculative configuration to the promoted Marin wheel.
 }
 ```
 
-Mochi shares the checkpoint format. Its ShortConv target still needs a GPU
-qualification of hidden-state extraction and speculative decoding, including
-acceptance and rejection cases, before using the draft for served requests.
+Mochi shares the checkpoint format. It requires an Iris worker that can fit
+the teacher and trainer together. Mochi still needs GPU qualification of
+ShortConv hidden-state extraction and speculative decoding, including
+acceptance and rejection cases.
