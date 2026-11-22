@@ -45,6 +45,7 @@ from skyrl_train.trajectory_runners.types import (
     TaskRequestBatch,
 )
 from skyrl_train.utils.harbor_errors import (
+    AGENT_TIMEOUT_ERROR,
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
     classify_exception_type,
@@ -111,6 +112,13 @@ def _failure_policy(
         if error_handling.enable_error_classification
         else ErrorTreatment.MASK
     )
+    if rollout.failure.exception_type == AGENT_TIMEOUT_ERROR:
+        # Agent execution budgets end generation, not the verifier's verdict.
+        treatment = (
+            ErrorTreatment.PASSTHROUGH
+            if rollout.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+            else ErrorTreatment.MASK
+        )
     return (
         treatment,
         passthrough_logprob_error_type(

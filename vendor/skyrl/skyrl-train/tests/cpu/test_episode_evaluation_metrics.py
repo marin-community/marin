@@ -43,18 +43,24 @@ def test_masked_verifier_pass_is_raw_only_and_episode_tokens_survive_concatenati
     assert joined["rollout_metrics"]["generate/avg_num_tokens"] == 3569
     assert joined["rollout_metrics"]["generate/optimized_avg_num_tokens"] == 24
     metrics = _calculate_eval_metrics(joined, ["failed", "healthy"], ["SWE", "SWE"], 1)
-    assert metrics["eval/all/pass_at_1"] == 0.5
+    assert metrics["eval/all/pass_at_1"] == 1.0
     assert metrics["eval/all/raw_verifier_pass_at_1"] == 1.0
     assert metrics["eval/all/num_scored"] == 1
     assert metrics["eval/all/verifier_score_coverage"] == 0.5
     assert metrics["eval/all/response_tokens"] == 7138
     assert metrics["eval/all/optimized_response_tokens"] == 48
     assert metrics["eval/all/assistant_turns"] == 256
-    assert metrics["eval/SWE/pass_at_1"] == 0.5
+    assert metrics["eval/SWE/pass_at_1"] == 1.0
+    assert metrics["eval/SWE/avg_score"] == 1.0
+    assert metrics["eval/SWE/avg_verifier_score"] == 1.0
+    assert metrics["eval/SWE/num_scored"] == 1
     assert metrics["eval/SWE/raw_verifier_pass_at_1"] == 1.0
 
     failed = calculate_per_dataset_metrics(batch(True, 3138), ["failed"], ["SWE"], 1)
-    assert failed["eval/SWE/pass_at_1"] == 0.0
+    assert "eval/SWE/pass_at_1" not in failed
+    assert "eval/SWE/avg_score" not in failed
+    assert "eval/SWE/avg_verifier_score" not in failed
+    assert failed["eval/SWE/num_scored"] == 0
     assert failed["eval/SWE/raw_verifier_pass_at_1"] == 1.0
 
 

@@ -315,6 +315,7 @@ class RayPPOTrainer:
         self._last_evaluated_step: int | None = None
         self._inference_policy_step: int | None = None
         self._pending_checkpoint_upload: tuple[asyncio.Task[tuple[float, float]], TrainerState] | None = None
+        self._pending_checkpoint_save: asyncio.Task[None] | None = None
         raw_speculative_decoding = cfg.generator.get("speculative_decoding")
         if raw_speculative_decoding is not None:
             raw_speculative_decoding = OmegaConf.to_container(raw_speculative_decoding, resolve=True)
@@ -778,18 +779,29 @@ class RayPPOTrainer:
         self._control.reset()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
+        evaluate = self._control.should_evaluate and self.eval_dataset is not None
         if self._control.should_save:
             if step_wall is not None:
                 step_wall.start("checkpoint_work")
-            await self._save_intermediate_checkpoint(state)
+            if evaluate and not self.colocate_all:
+                # Evaluation uses the already synced rollout engines. Policy
+                # workers can save those frozen weights until the next step.
+                self._pending_checkpoint_save = asyncio.create_task(self._save_intermediate_checkpoint(state))
+            else:
+                await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_evaluate and self.eval_dataset is not None:
-            if step_wall is not None:
-                step_wall.start("evaluation")
-            with Timer("eval", self.all_timings):
-                await self._evaluate_and_log(state, commit=False)
-            self._control.should_evaluate = False
+        try:
+            if evaluate:
+                if step_wall is not None:
+                    step_wall.start("evaluation")
+                with Timer("eval", self.all_timings):
+                    await self._evaluate_and_log(state, commit=False)
+                self._control.should_evaluate = False
+        finally:
+            # Also join on evaluation failure/cancellation: a policy mutation
+            # or shutdown must not race the worker-side checkpoint snapshot.
+            await self._join_checkpoint_save()
 
         if self._control.should_save_hf_model:
             if step_wall is not None:
@@ -805,6 +817,18 @@ class RayPPOTrainer:
 
         if step_wall is not None:
             step_wall.start("step_end_bookkeeping")
+
+    async def _join_checkpoint_save(self) -> None:
+        task = self._pending_checkpoint_save
+        if task is None:
+            return
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+        finally:
+            self._pending_checkpoint_save = None
 
     async def _start_draft_trainer(self) -> None:
         """Start the independent one-GPU draft trainer when online updates are enabled."""
@@ -1498,6 +1522,9 @@ class RayPPOTrainer:
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
             self.all_metrics.update(metadata.metrics)
+        self._control = await self.callback_handler.call_event_async(
+            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
+        )
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
             if self._expert_block_sync is not None:
@@ -1541,6 +1568,9 @@ class RayPPOTrainer:
             metadata = await context.next_batch_metadata(stall_timeout=stall_timeout)
             reader = context.reader(metadata, stall_timeout=stall_timeout)
             self.all_metrics.update(metadata.metrics)
+        self._control = await self.callback_handler.call_event_async(
+            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
+        )
         step_wall.start("batch_assembly")
         plan, metrics = plan_worker_batch(
             self.cfg,
@@ -2832,6 +2862,7 @@ class RayPPOTrainer:
 
     async def save_checkpoints(self) -> None:
         """Commit this step's checkpoint, reusing an already completed save."""
+        await self._join_checkpoint_save()
         await self._drain_checkpoint_upload()
         # Evaluation's best-checkpoint callback can follow a cadence save whose
         # commit marker was still uploading when evaluation began.

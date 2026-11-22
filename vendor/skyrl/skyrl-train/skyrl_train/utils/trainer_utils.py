@@ -10,6 +10,8 @@ import json
 import torch
 from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
+    normalized_verifier_scores,
+    verifier_score_summary,
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
     get_trajectory_passes,
@@ -300,11 +302,23 @@ def calculate_per_dataset_metrics(
 
         # Add to eval metrics with proper naming
         sanitized_data_source = sanitize_data_source(data_source)
-        eval_metrics[f"eval/{sanitized_data_source}/avg_score"] = avg_score
-        eval_metrics[f"eval/{sanitized_data_source}/pass_at_{n_samples_per_prompt}"] = pass_at_n
+        if avg_score is not None:
+            eval_metrics[f"eval/{sanitized_data_source}/avg_score"] = avg_score
+        if pass_at_n is not None:
+            eval_metrics[f"eval/{sanitized_data_source}/pass_at_{n_samples_per_prompt}"] = pass_at_n
         raw_batch = {key: value for key, value in subset_trajectory_batch.items() if key != "exclude_from_baseline"}
-        _, raw_pass = get_metrics_from_trajectory_batch(raw_batch, subset_uids)
-        eval_metrics[f"eval/{sanitized_data_source}/raw_verifier_pass_at_{n_samples_per_prompt}"] = raw_pass
+        _, raw_pass = get_metrics_from_trajectory_batch(raw_batch, subset_uids, scored_only=False)
+        if raw_pass is not None:
+            eval_metrics[f"eval/{sanitized_data_source}/raw_verifier_pass_at_{n_samples_per_prompt}"] = raw_pass
+        verifier_scores = normalized_verifier_scores(subset_trajectory_batch)
+        if verifier_scores is not None:
+            coverage, average = verifier_score_summary(verifier_scores)
+            eval_metrics[f"eval/{sanitized_data_source}/num_scored"] = float(
+                sum(score is not None for score in verifier_scores)
+            )
+            eval_metrics[f"eval/{sanitized_data_source}/verifier_score_coverage"] = coverage
+            if average is not None:
+                eval_metrics[f"eval/{sanitized_data_source}/avg_verifier_score"] = average
         eval_metrics.update(
             {
                 f"eval/{sanitized_data_source}/{key}": value

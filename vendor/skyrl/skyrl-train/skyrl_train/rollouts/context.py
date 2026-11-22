@@ -251,9 +251,13 @@ class TrainingContext:
         await asyncio.gather(*tasks, return_exceptions=True)
         ray.kill(self._buffer)
 
+    def pause(self) -> None:
+        """Stop new generation admissions while submitted groups finish."""
+        self._submission_allowed.clear()
+
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
-        self._submission_allowed.clear()
+        self.pause()
         if self._running:
             await self.wait(asyncio.gather(*self._running))
 
@@ -410,11 +414,11 @@ class TrainingContext:
                     async with self._uids_released:
                         prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids, lease.route))
                         self._live_uids[prompt["uid"]] += 1
-                # A lease or prompt wait may span an evaluation boundary. Keep the
-                # single acquired lease, but do not submit its generation yet.
-                await self._submission_allowed.wait()
                 task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
                 self._in_flight[lease.lease_id] = task
+                # A lease or prompt wait may span an evaluation boundary. Keep
+                # the held prompt in checkpoint state without submitting it yet.
+                await self._submission_allowed.wait()
                 running = asyncio.create_task(self._run(task))
                 self._running.add(running)
                 running.add_done_callback(self._running.discard)

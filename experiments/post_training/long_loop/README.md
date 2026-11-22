@@ -458,6 +458,10 @@ and runs its console entrypoint through the unchanged root verifier.
 Model-owned turn, token and agent-time limits retain the task verifier's actual
 reward and training eligibility. Pi's generic nonzero exit needs the engine's
 matching model-limit stop reason; a network or cleanup error does not qualify.
+Workspace-state agent timeouts run the final-state verifier. A completed
+verdict, including zero, keeps its reward and model-token evidence. Verification
+errors and masked rows are absent from `avg_score` and `pass_at_1` denominators;
+`num_scored` and `avg_verifier_score` expose coverage for each domain.
 Missing or failed verification remains masked. The turn limit stays at128 and
 best-checkpoint selection requires at least 90% of the expected validation
 tasks scored (108 of 120 for this shape). An ineligible validation warns
@@ -1068,3 +1072,20 @@ rejection of the native Python `urllib` client without changing grading rules.
 This source path does not require main runtime adoption or a consumer-gate
 profile. Message-trace source qualification and exact-token RL training are
 separate checks; a source rollout does not establish an optimizer update.
+
+### Mochi Track 1 preparation
+
+`rounds/mochi-throughput-train-track1.yaml` aligns checkpoint, evaluation and
+best selection every three steps and evaluates the initial policy through the
+evaluation callback. Generation and agent budgets match the 30-minute recipe.
+The trainer pauses new rollout admission after acquiring an evaluation step's
+batch, before learner work, so pending training groups drain during optimization.
+Pausing before batch acquisition could prevent rejected groups from being replaced.
+
+For separate policy and rollout GPUs, the cadence snapshot overlaps frozen-policy
+evaluation after weight sync. Best selection joins and reuses that snapshot before
+publishing its pointer; step exit also joins on evaluation error or cancellation.
+The next optimizer cannot mutate weights while their snapshot is running.
+Colocated configurations retain sequential saving because checkpoint residency
+management can sleep their rollout engines. Storage failures retain the existing
+checkpoint failure metric and the last complete checkpoint.

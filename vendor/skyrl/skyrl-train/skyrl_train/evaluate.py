@@ -229,15 +229,18 @@ def _calculate_eval_metrics(
     metrics = calculate_per_dataset_metrics(batch, uids, data_sources, samples_per_prompt)
     overall_avg_score, overall_pass_at_n = get_metrics_from_trajectory_batch(batch, uids)
     raw_batch = {key: value for key, value in batch.items() if key != "exclude_from_baseline"}
-    _, raw_pass_at_n = get_metrics_from_trajectory_batch(raw_batch, uids)
+    _, raw_pass_at_n = get_metrics_from_trajectory_batch(raw_batch, uids, scored_only=False)
     metrics.update(
         {
             "eval/all/num_attempted": float(len(batch["response_ids"])),
-            "eval/all/avg_score": overall_avg_score,
-            f"eval/all/pass_at_{samples_per_prompt}": overall_pass_at_n,
-            f"eval/all/raw_verifier_pass_at_{samples_per_prompt}": raw_pass_at_n,
         }
     )
+    if overall_avg_score is not None:
+        metrics["eval/all/avg_score"] = overall_avg_score
+    if overall_pass_at_n is not None:
+        metrics[f"eval/all/pass_at_{samples_per_prompt}"] = overall_pass_at_n
+    if raw_pass_at_n is not None:
+        metrics[f"eval/all/raw_verifier_pass_at_{samples_per_prompt}"] = raw_pass_at_n
     verifier_scores = normalized_verifier_scores(batch)
     if verifier_scores is not None:
         coverage, average = verifier_score_summary(verifier_scores)

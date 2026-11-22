@@ -1352,6 +1352,33 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
 
 
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+@pytest.mark.parametrize("failure", [TimeoutError, ConnectionError])
+async def test_workspace_verifier_scores_agent_timeout_but_not_transport_failure(answer, reward, failure):
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([{"role": "assistant", "content": "Inspecting the workspace."}])
+
+    async def agent(context, complete):
+        await complete(Prompt(({"role": "user", "content": "Solve the task."},), {}))
+        assert context.machine is not None
+        await context.machine.run(Command(("sh", "-c", f"echo {answer} > /workspace/answer")))
+        raise failure("Agent interrupted while using the workspace")
+
+    task = file_task(answer_type=AnswerType.WORKSPACE_STATE, answer_format=AnswerCall())
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(model, {"local": factory}, harnesses={"agent": AgentHarness(agent)}).run_task(
+            rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent")
+        )
+    result = caught.value
+    assert result.operation == RolloutOperation.ADVANCE
+    assert isinstance(result.__cause__, failure)
+    if failure is TimeoutError:
+        assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
+    else:
+        assert result.grade.status == Outcome.UNAVAILABLE
+        assert result.grade.reward is None
+
+
 @pytest.mark.parametrize(
     "grader,verifier_machine",
     [

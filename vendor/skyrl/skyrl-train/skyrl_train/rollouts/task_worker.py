@@ -86,7 +86,7 @@ from skyrl_train.rollouts.training_record import (
     reject_malformed_reasoning,
     training_rollout,
 )
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.utils.harbor_errors import AGENT_TIMEOUT_ERROR, ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -309,6 +309,10 @@ def _failed_rollout(
     if (
         interruption.operation == RolloutOperation.ADVANCE
         and not is_shell_harness(lowered.harness)
+        and not (
+            exception_type == AGENT_TIMEOUT_ERROR
+            and rollout.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+        )
         and rollout.steps
         and rollout.steps[-1].transition.metrics.get("advance_incomplete")
     ):
