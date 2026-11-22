@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 3:51 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 4:00 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.19` applied both updates, restored step 1 exactly on four fresh learners, and verified all three policy versions on all eight receivers. It generated under both updated policies, committed step 2 and finished the final panel. The job failed in checkpoint cleanup. | Add the missing Ray worker method and require a clean terminal result with the same update, restore, byte, generation, and checkpoint checks before the matched arms. |
+| 40-H100 learner smoke | Run `2026.11.20.19` applied both updates, restored step 1 exactly on four fresh learners, and verified all three policy versions on all eight receivers. It generated under both updated policies, committed step 2 and finished the final panel. The job failed in checkpoint cleanup. The cleanup-only retry `2026.11.20.20` is running. | Require a clean terminal result with the same update, restore, byte, generation, and checkpoint checks before the matched arms. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -560,16 +560,27 @@ took 165.194 seconds. All three versions passed with 157,498,867,712
 bytes compared per version. The step-2 native checkpoint committed at
 11:48:23 UTC, and final evaluation generated with stamp 3 and completed
 all 100 tasks. The mean verifier score was 0.26, compared with 0.24
-at initialization.
+at initialization. An independent regional read matched the committed
+step-2 marker and both native manifests. The same 256-byte FP32 router
+slice changed between checkpoints, within a 5 MiB chunk-read budget.
 
 The job failed after evaluation while draining the completed checkpoint
 upload. Trainer-state writes and the latest-checkpoint marker precede
 the cleanup call. SkyRL asks the learner actor group for the Ray node
 IDs it needs to locate each checkpoint cache. The Levanter host actor
-lacked the `get_ray_node_id` RPC. Add that method using the existing
-SkyRL worker contract and rerun the same frozen workload with fresh
-output roots. The matched arms wait for successful finalization.
+lacked the `get_ray_node_id` RPC. The coordinator wrote no successful
+terminal manifest.
 [Immutable replay smoke][iris-smoke-canonical-replay] · [Frozen source and checks][h100-canonical-replay-handoff]
+
+Run `2026.11.20.20` adds that RPC on source `82fd5cbeac`. A local Ray
+probe reproduced the failure on the previous source. With the fix, the
+same checkpoint commit and cleanup path finished using two real
+Levanter actor handles, retained step 2, and pruned the older fixture
+checkpoint. The native terminal-manifest test also passed. The live
+retry's launch matches the previous workload after normalizing run
+identities. Iris placed it on the same five H100 hosts with fresh
+checkpoint roots. The matched arms wait for the terminal result.
+[Checkpoint cleanup retry][iris-smoke-terminal-cleanup]
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -652,7 +663,7 @@ the original artifact roots with a repository-local Git tree abbreviation.
 Both 25-update recipes passed the artifact main's no-run preflight with
 the regional task selection pinned. The Megatron control retains source
 `9e8664df3b` and fingerprint `ef11bf85`. The prospective Levanter arm
-uses immutable replay smoke source `3e4c59c33c` and fingerprint `10242ebf`. It enables
+uses cleanup retry source `82fd5cbeac` and fingerprint `10242ebf`. It enables
 preallocation and keeps the 80% learner cap and pinned-host optimizer
 state. A clean restore reproduced the authored and composed configuration
 checks. Repin the Levanter arm to the accepted smoke source before submission.
@@ -1384,6 +1395,7 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-fingerprint]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-coordinator-88b26859%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-a9c7f68045d0
 [iris-smoke-replay-diagnostic]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.18-coordinator-631ad9f7%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.18-a4e74365b4d3
 [iris-smoke-canonical-replay]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.19-coordinator-b37693ff%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.19-abe09138e0b3
+[iris-smoke-terminal-cleanup]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.20-coordinator-8633ad51%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.20-a747a82c7558
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
