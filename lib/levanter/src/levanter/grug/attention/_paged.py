@@ -9,6 +9,7 @@ from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.pallas import tpu as pltpu
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention as tpu_ragged_paged_attention
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import get_min_heads_per_blk
 from jax.sharding import NamedSharding
@@ -24,7 +25,10 @@ PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3"]
 _TPU_KV_HEAD_GROUP = 8
 _FP32_QUERIES_PER_BLOCK = 128
 _FP32_KV_PAGES_PER_BLOCK = 8
-_V5P_VMEM_LIMIT_BYTES = 50_000 * 1024
+_RPA_V3_VMEM_LIMIT_BYTES = {
+    pltpu.ChipVersion.TPU_V5P: 50_000 * 1024,
+    pltpu.ChipVersion.TPU_V6E: 98_304 * 1024,
+}
 
 
 def ragged_paged_attention(
@@ -54,7 +58,7 @@ def ragged_paged_attention(
         soft_cap: Optional tanh logit cap, applied before masking.
         implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
             `tpu_fp32` uses FP32 operands in the kernel and preserves the query dtype on output.
-            `tpu_v3` uses BF16 KV DMA and FP32 value accumulation on v5p. Small sliding-window
+            `tpu_v3` uses BF16 KV DMA and FP32 value accumulation on v5p and v6e. Small sliding-window
             batches use the compact FP32 kernel.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
@@ -82,8 +86,8 @@ def ragged_paged_attention(
         num_kv_pages_per_block=min(_FP32_KV_PAGES_PER_BLOCK, page_indices.shape[-1]),
     )
     if implementation == "tpu_v3":
-        if jax.devices()[0].device_kind != "TPU v5":
-            raise ValueError("tpu_v3 paged attention currently requires a TPU v5p")
+        if pltpu.get_tpu_info().chip_version not in _RPA_V3_VMEM_LIMIT_BYTES:
+            raise ValueError("tpu_v3 paged attention requires TPU v5p or v6e")
         short_window = sliding_window is not None and q.shape[0] <= _FP32_QUERIES_PER_BLOCK
         supports_v3 = (
             not short_window
@@ -154,9 +158,9 @@ def ragged_paged_attention_append(
     sm_scale: float,
     sliding_window: int | None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Append BF16 keys and values during a small RPA v3 decode batch on v5p."""
-    if jax.devices()[0].device_kind != "TPU v5":
-        raise ValueError("Fused paged KV append requires TPU v5p")
+    """Append BF16 keys and values during a small RPA v3 decode batch."""
+    if jax.default_backend() != "tpu" or pltpu.get_tpu_info().chip_version not in _RPA_V3_VMEM_LIMIT_BYTES:
+        raise ValueError("Fused paged KV append requires TPU v5p or v6e")
     if q.shape[0] > FUSED_KV_APPEND_MAX_TOKENS:
         raise ValueError("Fused paged KV append is only supported for small decode batches")
     if q.dtype != k.dtype or q.dtype != v.dtype or q.dtype != kv_pages.dtype or q.dtype != jnp.bfloat16:
@@ -219,7 +223,7 @@ def _tpu_v3(
         out_dtype=jnp.float32,
         d_block_sizes=(1, decode_block, 1, 512),
         m_block_sizes=(min(q.shape[0], 128), 1024, min(q.shape[0], 64), 512),
-        vmem_limit_bytes=_V5P_VMEM_LIMIT_BYTES,
+        vmem_limit_bytes=_RPA_V3_VMEM_LIMIT_BYTES[pltpu.get_tpu_info().chip_version],
     )
     valid = jnp.arange(q.shape[0]) < cu_q_lens[num_seqs]
     return jnp.where(valid[:, None, None, None], output.reshape(q.shape), 0), updated.reshape(kv_pages.shape)

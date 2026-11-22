@@ -3,6 +3,7 @@
 
 """Atomic records and checksum-addressed bundles for preparation and result delivery."""
 
+import hashlib
 import json
 import shutil
 import tarfile
@@ -16,6 +17,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 PROFILE_EXPORT_RELATIVE_PATH = Path("aiperf_artifacts/profile_export_aiperf.json")
+SERVER_METRICS_RELATIVE_PATH = Path("aiperf_artifacts/server_metrics_export.json")
 
 
 def read_record(uri: str) -> dict:
@@ -63,3 +65,27 @@ def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -
     uri = prefix_join(prefix, f"{name}-{digest}.tar.zst")
     copy_file(str(bundle), uri)
     return uri, digest
+
+
+def pack_server_metrics(point: Path) -> None:
+    """Keep lossless server metrics within Iris's uncompressed task-output limit."""
+    source = point / SERVER_METRICS_RELATIVE_PATH
+    if not source.is_file():
+        return
+    encoded = source.with_suffix(".json.zst")
+    expected = sha256_for_path(source)
+    with source.open("rb") as reader, encoded.open("wb") as writer:
+        with zstandard.ZstdCompressor().stream_writer(writer) as compressed:
+            shutil.copyfileobj(reader, compressed, length=8 * 1024**2)
+    with encoded.open("rb") as compressed, zstandard.ZstdDecompressor().stream_reader(compressed) as decoded:
+        if hashlib.file_digest(decoded, "sha256").hexdigest() != expected:
+            raise ValueError("Compressed server metrics differ from the original bytes")
+    receipt = {
+        "raw_sha256": expected,
+        "raw_bytes": source.stat().st_size,
+        "compressed_sha256": sha256_for_path(encoded),
+        "compressed_bytes": encoded.stat().st_size,
+        "codec": "zstandard",
+    }
+    encoded.with_suffix(".receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    source.unlink()

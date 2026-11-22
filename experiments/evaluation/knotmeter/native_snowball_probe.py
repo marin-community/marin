@@ -8,6 +8,7 @@ import dataclasses
 import json
 import logging
 import os
+import random
 import tempfile
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 
 from experiments.evaluation.knotmeter.artifacts import PROFILE_EXPORT_RELATIVE_PATH, read_record
+from experiments.evaluation.knotmeter.prefill_probe import SUFFIX_LENGTH, measure_prefill
 from experiments.evaluation.knotmeter.processes import run_logged
 from experiments.evaluation.knotmeter.recipe import benchmark_command, load_series, workload_environment
 from experiments.evaluation.knotmeter.workload import check_native_cache, restore_workload
@@ -34,6 +36,7 @@ from experiments.evaluation.knotmeter.workload import check_native_cache, restor
 logger = logging.getLogger(__name__)
 SERIES = Path(__file__).with_name("snowball-v01-tpu-64k.yaml")
 PROFILE_PROMPT_LENGTHS = (512, 51_870)
+PROFILE_PREFILL_LENGTH = 51_840
 
 
 def _request(prompt_tokens: list[int], max_output_tokens: int) -> Request:
@@ -73,10 +76,29 @@ def _profile_decode(engine: InferenceEngine, prompt_tokens: list[int], output: P
     logger.info("Profiled decode with %d prompt tokens and %d output tokens", len(prompt_tokens), result.total_generated)
 
 
+def _profile_prefill(engine: InferenceEngine, output: Path) -> None:
+    """Capture one warmed 64K-bucket prefill with and without a cached prefix."""
+    options = jax.profiler.ProfileOptions()
+    options.host_tracer_level = 1
+    options.python_tracer_level = 0
+    options.enable_hlo_proto = False
+    generator = random.Random(170)
+    for mode in ("fresh", "primed"):
+        prompt = [generator.randrange(256, 10_000) for _ in range(PROFILE_PREFILL_LENGTH)]
+        if mode == "primed":
+            engine.generate([_request(prompt[:-SUFFIX_LENGTH], 1)])
+        with jax.profiler.trace(str(output / f"prefill-profile-{mode}"), profiler_options=options):
+            engine.generate([_request(prompt, 1)])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
-    parser.add_argument("--workload", required=True)
+    benchmark = parser.add_mutually_exclusive_group(required=True)
+    benchmark.add_argument("--workload")
+    benchmark.add_argument("--prefill-only", action="store_true")
+    parser.add_argument("--measure-prefill", action="store_true", help="Also measure prefill after AgentX")
+    parser.add_argument("--chips", type=int, choices=(4, 8), default=4)
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
@@ -86,20 +108,23 @@ def main() -> None:
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt", "recent_prompts"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
+    parser.add_argument(
+        "--profile-prefill", action="store_true", help="Trace fresh and primed prefill after measurement"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
     series = load_series(SERIES)
     assert (series["max_context"], series["duration"]) == (65536, 180)
     devices = jax.devices()
-    if len(devices) != 4 or any(device.platform != "tpu" for device in devices):
-        raise RuntimeError(f"The v5p-8 probe requires four TPU devices, got {devices}")
+    if len(devices) != args.chips or any(device.platform != "tpu" for device in devices):
+        raise RuntimeError(f"Expected {args.chips} TPU devices, got {devices}")
 
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
-    workload = read_record(args.workload)
+    workload = read_record(args.workload) if args.workload else None
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bf16,c=bf16"),
-        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": 4, "context": 1}),
+        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": args.chips, "context": 1}),
         use_explicit_mesh_axes=True,
     )
     service = InferenceEngineConfig(
@@ -107,7 +132,7 @@ def main() -> None:
         max_seqs=1,
         max_seqs_in_prefill=1,
         max_queued_tokens=32,
-        max_tokens_per_round=4,  # Pad the one active decode token to the four-way expert mesh.
+        max_tokens_per_round=args.chips,  # Pad the one active decode token to the expert mesh.
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         prefix_cache=args.prefix_cache,
     )
@@ -116,8 +141,9 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="agentx-native-tpu-") as workdir:
         bundle = Path(workdir) / "bundle"
-        restore_workload(workload, bundle)
-        check_native_cache(bundle, SERIES, output / "workload-check.log")
+        if workload is not None:
+            restore_workload(workload, bundle)
+            check_native_cache(bundle, SERIES, output / "workload-check.log")
 
         started = time.monotonic()
         converter = HFCheckpointConverter.from_hf(args.weights)
@@ -156,9 +182,11 @@ def main() -> None:
             "series": series,
             "weights": args.weights,
             "workload_uri": args.workload,
-            "workload_sha256": workload["archive_sha256"],
+            "workload_sha256": workload["archive_sha256"] if workload is not None else None,
             "devices": [device.device_kind for device in devices],
-            "mesh": {"model": 1, "expert": 4},
+            "jax_version": jax.__version__,
+            "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS"),
+            "mesh": {"model": 1, "expert": args.chips},
             "max_pages": service.max_pages,
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,
@@ -208,18 +236,29 @@ def main() -> None:
                     evidence["bucket_warmup_seconds"] = time.monotonic() - started - evidence["cold_completion_seconds"]
                 probe_path.write_text(json.dumps(evidence, indent=2))
                 try:
-                    run_logged(
-                        command,
-                        workload_environment(bundle, series),
-                        output / "agentx.log",
-                        timeout=series["warmup_grace_period"] + series["duration"] + 600,
-                        sample=output / "client-load.jsonl",
-                    )
+                    if workload is not None:
+                        run_logged(
+                            command,
+                            workload_environment(bundle, series),
+                            output / "agentx.log",
+                            timeout=series["warmup_grace_period"] + series["duration"] + 600,
+                            sample=output / "client-load.jsonl",
+                        )
+                        profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
+                        if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
+                            raise RuntimeError("AgentX did not complete any measured requests")
+                    if args.prefill_only or args.measure_prefill:
+                        measure_prefill(f"{url}/v1", series["model"], output / "prefill.json")
                 finally:
                     server.pause_generation()
-                profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
-                if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
-                    raise RuntimeError("AgentX did not complete any measured requests")
+                if args.profile_prefill:
+                    context = server.inference_context
+                    with (
+                        context.model_lock,
+                        trainer.use_device_mesh(),
+                        hax.axis_mapping(trainer.compute_axis_mapping),
+                    ):
+                        _profile_prefill(context.engine, output)
                 if args.profile_decode:
                     token_ids = tokenizer.encode(
                         "Read this passage and continue it with a detailed technical explanation.\n",

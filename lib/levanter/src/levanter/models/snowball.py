@@ -111,6 +111,7 @@ SnowballQKRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantR
 SnowballSharedAttentionImplementation: TypeAlias = Literal["native", "fixed_schedule"]
 
 _FIXED_SCHEDULE_BLOCK_SIZE = 128
+_MAX_UNROLLED_PREFILL_TOKENS = 512
 
 
 class SnowballRouteCaptureBatch(NamedTuple):
@@ -2000,8 +2001,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         num_caches = len(kv_cache) if isinstance(kv_cache, ListCache) else kv_cache.kv_pages.axis_size("layer")
         if num_caches != num_layers:
             raise ValueError("Snowball decode requires one KV cache per transformer layer")
+        # Small prefill batches can reuse static layer operands. Large batches
+        # use scan to keep compilation bounded.
+        unroll_prefill = (
+            self.config.inference_decode_implementation == "unrolled_split_cache"
+            and input_ids.array.shape[0] <= _MAX_UNROLLED_PREFILL_TOKENS
+        )
         unroll = (
-            self.config.inference_decode_implementation != "scan" and sample_indices is None and not capture_routes
+            self.config.inference_decode_implementation != "scan"
+            and (sample_indices is None or unroll_prefill)
+            and not capture_routes
         )
         tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())

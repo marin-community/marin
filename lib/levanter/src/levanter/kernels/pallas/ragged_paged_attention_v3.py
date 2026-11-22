@@ -400,12 +400,21 @@ def _ragged_paged_attention_kernel_loop(
         assert v.shape == (bkv_csz, head_dim)
         assert exp_m_diff.shape == (actual_bq_csz * num_q_heads_per_kv_head, 128)
         assert o_ref.shape == (actual_bq_csz * num_q_heads_per_kv_head, head_dim)
-        pv = jnp.matmul(
-            p,
-            v.astype(jnp.float32),
-            precision=lax.Precision.HIGHEST,
-            preferred_element_type=jnp.float32,
-        )
+        if case != RpaCase.DECODE and v.dtype == jnp.bfloat16:
+            # The values have one BF16 term. Split only the FP32 probability, and
+            # keep both dot products and the running sum in FP32.
+            p_high = p.astype(jnp.bfloat16)
+            p_low = (p - p_high.astype(jnp.float32)).astype(jnp.bfloat16)
+            pv = jnp.matmul(p_high, v, preferred_element_type=jnp.float32) + jnp.matmul(
+                p_low, v, preferred_element_type=jnp.float32
+            )
+        else:
+            pv = jnp.matmul(
+                p,
+                v.astype(jnp.float32),
+                precision=lax.Precision.HIGHEST,
+                preferred_element_type=jnp.float32,
+            )
 
         if v_scale is not None:
             pv *= v_scale

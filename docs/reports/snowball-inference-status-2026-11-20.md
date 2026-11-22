@@ -183,6 +183,85 @@ expired workload receipt on a CPU worker, run
 local output directory, and a region-local `--cache-root`. It writes the
 receipt to `workload.json` in that directory.
 
+## Prefill performance on TPUv5p
+
+Native and vLLM ran the same BF16 Snowball v0.1 checkpoint on one v5p-8
+each, with a 65,536-token context limit and one client request at a time.
+The prefill probe sent identical raw token IDs to `/v1/completions` and
+requested one output token. It discarded one warmup per case and reported
+the median of five trials. Every fresh trial started with a different
+prefix. Every primed trial was preceded by a request for the same prompt
+without its final 256 tokens. The measurement includes HTTP and one token
+of generation. [Native baseline](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-native-v5p8-20261121-v1) · [vLLM baseline](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-vllm-v5p8-20261121-v1)
+
+| Input tokens | Native original, fresh / primed (s) | Native active expert rows, fresh / primed (s) | vLLM, fresh / primed (s) |
+| ---: | ---: | ---: | ---: |
+| 2,048 | 0.374 / 0.316 | 0.210 / 0.167 | 0.076 / 0.043 |
+| 8,192 | 0.563 / 0.329 | 0.369 / 0.173 | 0.209 / 0.052 |
+| 32,768 | 1.491 / 0.378 | 1.046 / 0.198 | 0.889 / 0.087 |
+| 51,840 | 2.778 / 0.395 | 1.883 / 0.215 | 1.560 / 0.112 |
+| 64,512 | 3.175 / 0.395 | 2.149 / 0.227 | 1.966 / 0.129 |
+
+The tuned run used two BF16 products with FP32 accumulation for the
+prefill attention value multiply, smaller buffers for cached suffixes,
+immediate admission when the single request slot filled, and a six-context
+KV cache. The value-multiply change alone brought the fresh 51,840-token
+measurement to 2.372 s. The active-expert run skipped unused matmul rows
+and returned to four KV contexts. Fresh throughput rose from the original
+18.7k to 27.5k input tokens/s. vLLM reached 33.2k. [Value-multiply trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-native-v5p8-20261121-v3) · [Six-context run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v4) · [Active-expert run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v5)
+
+On the 26 common AgentX turns, every run emitted 9,092 output tokens.
+Streamed p90 time to first token was 1.235 s for the earlier native
+four-context run, 1.127 s with the six-context cache, 0.922 s for the
+active-expert run, and 0.561 s for vLLM.
+The six-context cache reduced native active decode on those turns from
+160.34 to 154.67 tokens/s. The active-expert run recovered to 159.65
+tokens/s. vLLM measured 116.28 tokens/s. Active decode here divides tokens
+after the first output by the sum of per-request decode durations.
+The active-expert run completed two additional turns and measured 58.22
+output tokens/s overall. [Four-context run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v21) · [vLLM AgentX run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121)
+
+The fresh prefill trace spent most of its device time in routed expert
+matmuls and long attention. In the primed trace, async copies and packing
+expert weights were among the largest costs. A BF16 expert microbenchmark
+with 51,840 active tokens in a 65,536-token buffer cut median layer time
+from 57.74 to 37.11 ms by skipping unused matmul rows. Outputs were bitwise
+equal with zero dropped routes, including a separate concentrated-routing
+case. [Profile summary](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-profile-summary-v5p8-20261121-v1) · [Expert microbenchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-ep-active-prefill-v5p8-20261121-v1)
+
+### Reproduce the prefill comparison
+
+Use `--prefill-only` in either probe for the one-token grid, or pass
+`--workload "$workload" --measure-prefill` to run AgentX before the grid.
+The native probe also accepts `--profile-prefill` to capture two warmed
+requests after measurement.
+
+For the compiled vLLM run, use the Knotmeter experiment directory from the
+inference branch and Marin serving revision `2bf3f721c9`. That revision
+pins the TPU adapter used in the comparison. Submit with the same Iris
+hardware, region, resource, and timeout settings as the native command
+above. Use `JAX_PLATFORMS=tpu,cpu` and this entry point. [Serving revision](https://github.com/marin-community/marin/commit/2bf3f721c9946150a02c3417c4c93e14b273a5e8)
+
+```bash
+uv run --no-sync python -m experiments.evaluation.knotmeter.tpu_probe \
+  --series experiments/evaluation/knotmeter/snowball-v01-tpu-64k.yaml \
+  --weights "$weights" --chips 4 --tensor-parallel 4 --concurrency 1 \
+  --max-seqs 8 --prefill-only
+```
+
+## TPUv6e validation
+
+The native paged-attention suite passed all 17 tests on both one v5p-8 and
+one v6e-8, including the packed prefill and fused decode KV append checks.
+The v5p job used 50,000 KiB of scoped VMEM and the v6e job used 98,304 KiB.
+[v5p tests](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v3-v5p8-parity-20261121-v3) · [v6e tests](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rpa-v3-v6e8-parity-20261121-v4)
+
+The v6e full-model runs use one eight-chip host each in `us-east5`, a
+regional mirror of the pinned checkpoint, and the same 64K, C1,
+180-second AgentX replay and prefill grid. Native uses EP8. vLLM uses TP4
+and EP2 because its tensor-parallel size must divide the model's 20 query
+heads. [Native v6e run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v1) · [vLLM v6e run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-vllm-v6e8-20261121-v1)
+
 ## What works
 
 - **Paged generation.** The real `InferenceEngine` handles heterogeneous causal

@@ -8,9 +8,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.experimental.pallas import tpu as pltpu
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention, ragged_paged_attention_append
+
+_SUPPORTS_RPA_V3 = jax.default_backend() == "tpu" and pltpu.get_tpu_info().chip_version in (
+    pltpu.ChipVersion.TPU_V5P,
+    pltpu.ChipVersion.TPU_V6E,
+)
 
 
 class _PagedCase(NamedTuple):
@@ -134,8 +140,8 @@ def test_grug_tpu_paged_attention_compacts_distinct_packed_windows():
     np.testing.assert_array_equal(actual, attention(*untrimmed))
 
 
-@pytest.mark.skipif(jax.devices()[0].device_kind != "TPU v5", reason="v5p Pallas configuration")
-@pytest.mark.parametrize("window,offsets", [(None, [0, 1, 2, -1]), (96, [0, 129, 130, -1])])
+@pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
+@pytest.mark.parametrize("window,offsets", [(None, [0, 1, 2, -1]), (None, [0, 129, 130, -1]), (96, [0, 129, 130, -1])])
 def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
     rng = np.random.default_rng(21)
     args = _PagedCase(
@@ -157,7 +163,7 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
     np.testing.assert_array_equal(actual[offsets[2] :], jnp.zeros_like(actual[offsets[2] :]))
 
 
-@pytest.mark.skipif(jax.devices()[0].device_kind != "TPU v5", reason="v5p Pallas configuration")
+@pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window", [None, 2048])
 def test_grug_tpu_fused_append_updates_only_the_addressed_token(window):
     rng = np.random.default_rng(25)

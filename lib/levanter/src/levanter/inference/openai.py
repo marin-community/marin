@@ -146,13 +146,13 @@ class InferenceBatch(list):
 WeightSource = collections.abc.Callable[[LmHeadModel], LmHeadModel]
 
 
-def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
-    """Fetch all items from `q` which arrive within `timeout` seconds."""
-    deadline = time.time() + timeout
+def _fetch_from_queue(q: queue.Queue[InferenceRequest], timeout: float, max_requests: int) -> list[InferenceRequest]:
+    """Collect requests until the batch fills or the timeout expires."""
+    deadline = time.monotonic() + timeout
     items = []
-    while time.time() < deadline:
+    while len(items) < max_requests and (remaining := deadline - time.monotonic()) > 0:
         try:
-            item = q.get(timeout=max(0, deadline - time.time()))
+            item = q.get(timeout=remaining)
             items.append(item)
         except queue.Empty:
             break
@@ -305,7 +305,7 @@ class InferenceContext:
             on_tokens=on_tokens,
         )
 
-        logger.info("Enqueuing request %s", request)
+        logger.info("Enqueuing request %s with %d prompt tokens", request_id, len(prompt_tokens))
         with self.admission_lock:
             request.admission_epoch = self.admission_epoch
             if self.pause_event.is_set():
@@ -335,7 +335,7 @@ class InferenceContext:
         logger.info("Inference thread started")
 
         while not self.shutdown_event.is_set():
-            requests: list[InferenceRequest] = _fetch_all_from_queue(self.request_queue, self.config.batch_timeout)
+            requests = _fetch_from_queue(self.request_queue, self.config.batch_timeout, self.config.service.max_seqs)
             if not requests:
                 continue
 
