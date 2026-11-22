@@ -16,7 +16,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child completed the 100-task baseline and the ten-update prefix audit with 88 zero-mismatch receiver checks. | Verify all 25 updates on the third child and compare with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child completed the 100-task baseline and the 15-update prefix audit with 128 zero-mismatch receiver checks. | Verify all 25 updates on the third child and compare with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
@@ -1706,7 +1706,11 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   A second replay verified no expert assignments dropped at any
   learner layer. Switching the learner to blockwise BF16 XLA
   attention kept three crossings and changed which positions crossed.
-  Highest matmul precision with that attention path left two.
+  Changing blockwise attention contractions and state to FP32 improved
+  the p99 error and moved the tail. At highest matmul precision, BF16
+  and FP32 blockwise attention both had two crossings. The next test
+  needs the actual serving activations at the persistent outlier and
+  the corresponding learner activations.
   The serving-score parity gate compares scores from two runtimes.
   The held PPO objective uses its own learner-rescored old
   probabilities.
@@ -1715,7 +1719,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Replay-only scorer][iris-native-b-scorer] ·
   [Full ordered-gather qualification][iris-native-ordered-gather] ·
   [Saved-frame precision diagnostic][iris-native-score-profiles] ·
-  [Saved-frame attention diagnostic][iris-native-attention-profiles]
+  [Saved-frame BF16 attention diagnostic][iris-native-attention-profiles] ·
+  [Saved-frame FP32 attention diagnostic][iris-native-attention-fp32]
 
   The held comparison measures end-to-end rollout admission and optimizer
   timing with four learner hosts. Step 2 of the third frozen Levanter
@@ -1730,13 +1735,15 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   alongside the bounded end-to-end timing and report the cap when
   interpreting panel rewards.
 
-  The bounded vLLM control has been submitted at normal batch priority
-  with the maintained binary learner. Both arms resolve to a 24,576-token
+  The bounded vLLM control uses normal batch priority and the maintained
+  binary learner. Its first GPU child installed policy 0, then lost
+  its CPU coordinator before receiver verification completed. Iris
+  started a replacement under the same coordinator. Both arms resolve to a 24,576-token
   serving limit and a 16,896-token request limit. The native arm uses
   the same cache geometry as the 67B live-swap run. It still needs a
   regional accelerator allocation. Hold the learner, request limits,
   selection and panel fixed across the two runs.
-  [Held vLLM coordinator][iris-held-vllm-pilot]
+  [Held vLLM coordinator][iris-held-vllm-pilot] · [Replacement GPU child][iris-held-vllm-replacement]
 
   [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
@@ -1822,7 +1829,9 @@ arms. [Prior timing comparison][timing]
 [iris-native-ordered-gather]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122j
 [iris-native-score-profiles]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-saved-24k-score-profiles-20261122a
 [iris-native-attention-profiles]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-saved-24k-attention-20261122a
+[iris-native-attention-fp32]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-saved-24k-attention-fp32-20261122a
 [iris-held-vllm-pilot]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-coordinator-c033eabc
+[iris-held-vllm-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-coordinator-c033eabc%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-ae1c053f89fb
 [native-full-capture-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122i%2Fnative-native-fused-20261122i-tool-fused%2F0%2F2d4106a1e0593f89%2Foutputs.tar.zst
 [native-paged-moe]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/models/snowball.py#L1932-L1943
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
