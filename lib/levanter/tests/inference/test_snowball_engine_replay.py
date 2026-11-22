@@ -208,6 +208,40 @@ def test_retaining_packed_prompt_pages_preserves_generation_after_eviction(servi
     assert cached.generate(followups).tokens == fresh.generate(followups).tokens
 
 
+def test_shared_prompt_pages_admit_three_requests_with_eight_physical_pages(serving_model):
+    config = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=8,
+        max_seqs=3,
+        page_size=2,
+        max_queued_tokens=3,
+        max_seqs_in_prefill=3,
+        prefix_cache="recent_prompts",
+        compute_dtype=jnp.float32,
+    )
+    cached = InferenceEngine.from_model_with_config(serving_model, None, config)
+    fresh = InferenceEngine.from_model_with_config(
+        serving_model, None, dataclasses.replace(config, prefix_cache="disabled")
+    )
+    params = dataclasses.replace(
+        SeqDecodingParams.default(), temperature=jnp.asarray(0.0), max_num_tokens=jnp.asarray(7)
+    )
+    first = Request([1, 2, 3, 4, 5], 10, params, 1)
+    second = Request([1, 2, 3, 4, 6], 20, params, 1)
+    third = Request([1, 2, 3, 4, 7], 30, params, 1)
+    requests = [first, second, third]
+    cached.generate([first])
+    events = []
+    result = cached.generate(
+        requests,
+        on_tokens=lambda rid, _choice, _tokens: events.append(("token", rid)),
+        on_complete=lambda rid, _result: events.append(("finished", rid)),
+    )
+
+    assert set(events[:3]) == {("token", request.request_id) for request in requests}
+    assert result.tokens == fresh.generate(requests).tokens
+
+
 @pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
 @pytest.mark.parametrize(
     "expert_implementation,decode_layers",
@@ -255,6 +289,40 @@ def test_snowball_expert_sharded_cache_preserves_five_head_generation(
         sharding = cache.kv_pages.array.sharding
         assert isinstance(sharding, jax.sharding.NamedSharding)
         assert sharding.spec[3] == "expert"
+
+
+@pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
+def test_packed_sampling_matches_serial_requests_on_expert_mesh(serving_model):
+    config = dataclasses.replace(
+        serving_model.config,
+        hidden_dim=32,
+        num_heads=4,
+        num_kv_heads=2,
+        inference_kv_sharding="expert",
+        inference_decode_implementation="unrolled",
+    )
+    packed = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=8,
+        max_seqs=4,
+        page_size=4,
+        max_queued_tokens=4,
+        max_seqs_in_prefill=4,
+        max_tokens_per_round=4,
+        compute_dtype=jnp.float32,
+    )
+    with (
+        jax.set_mesh(compact_grug_mesh(expert_axis_size=4)),
+        hax.axis_mapping({"batch": ("replica_dcn", "data", "expert"), "vocab": "model"}),
+    ):
+        model = SnowballLMHeadModel.init(serving_model.Vocab, config, key=jax.random.key(41))
+        parallel = InferenceEngine.from_model_with_config(model, None, packed)
+        serial = InferenceEngine.from_model_with_config(
+            model, None, dataclasses.replace(packed, max_seqs=1, max_seqs_in_prefill=1)
+        )
+        requests = _requests()[:2]
+        expected = [serial.generate([request]).tokens[0] for request in requests]
+        assert parallel.generate(requests).tokens == expected
 
 
 @eqx.filter_jit

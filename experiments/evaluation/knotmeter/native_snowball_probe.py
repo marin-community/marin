@@ -133,6 +133,7 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--max-seqs-in-prefill", type=int, default=16)
     parser.add_argument("--max-rounds", type=int, default=32)
+    parser.add_argument("--max-tokens-per-round", type=int, help="Cap decode tokens independently of client concurrency")
     parser.add_argument("--accelerator", choices=("tpu", "h100x8"), default="tpu")
     parser.add_argument("--chips", type=int, choices=(4, 8))
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
@@ -188,13 +189,19 @@ def main() -> None:
     )
     packed_tokens = ((args.concurrency + expert_shards - 1) // expert_shards) * expert_shards
     decode_tokens = 1 if args.decode_token_layout == "replicated" else packed_tokens
+    if args.max_tokens_per_round is not None:
+        if args.decode_token_layout == "replicated":
+            parser.error("--max-tokens-per-round requires packed decode")
+        if not 0 < args.max_tokens_per_round <= packed_tokens or args.max_tokens_per_round % expert_shards:
+            parser.error("--max-tokens-per-round must be positive, mesh-aligned, and at most the packed concurrency")
+        decode_tokens = args.max_tokens_per_round
     if any(size % expert_shards for size in args.decode_buckets):
         parser.error("--decode-buckets must be divisible by the expert mesh size")
     service = InferenceEngineConfig(
         max_seq_len=series["max_context"],
         max_seqs=args.concurrency,
         max_seqs_in_prefill=min(args.concurrency, args.max_seqs_in_prefill),
-        max_queued_tokens=1 if args.decode_token_layout == "replicated" else max(32, decode_tokens),
+        max_queued_tokens=1 if args.decode_token_layout == "replicated" else max(32, packed_tokens),
         max_tokens_per_round=decode_tokens,
         max_rounds=args.max_rounds,
         prefill_bucket_sizes=tuple(args.prefill_buckets),
@@ -202,7 +209,7 @@ def main() -> None:
         prefix_cache=args.prefix_cache,
     )
     service = dataclasses.replace(service, max_pages=service.max_pages_per_seq * args.kv_cache_contexts)
-    config = InferenceServerConfig(trainer=trainer, model_name=series["model"], service=service)
+    config = InferenceServerConfig(trainer=trainer, model_name=series["model"], service=service, batch_timeout=0.001)
 
     with tempfile.TemporaryDirectory(prefix="agentx-native-") as workdir:
         bundle = Path(workdir) / "bundle"
@@ -291,6 +298,7 @@ def main() -> None:
             "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,
             "layerwise_load": args.layerwise_load,
+            "batch_timeout": config.batch_timeout,
             "command": command,
         }
         try:

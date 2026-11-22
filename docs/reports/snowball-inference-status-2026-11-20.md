@@ -446,6 +446,8 @@ mesh. Both engines enabled prefix caching.
 | [Native, continuous admission](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v3-continuous) | 190 | 34,494 | 164.26 | 10.91 | 21.81 |
 | [Native, per-layer KV and decode buckets](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v4-layer-kv) | 214 | 46,412 | 221.01 | 15.85 | 20.70 |
 | [Native, adaptive prefix retention](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v5-adaptive-prefix) | 260 | 58,491 | 278.53 | 9.09 | 12.42 |
+| [Native, separate expert projections](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v7-separate-moe) | 335 | 87,435 | 416.35 | 1.61 | 6.68 |
+| [Native, shard-local sampling and 32 KV contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v8-shard-sampling) | 378 | 100,674 | 479.40 | 0.94 | 2.02 |
 
 The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
 requests at the drain deadline. On 47 common turns, both engines emitted
@@ -489,6 +491,18 @@ the expert MLP time from 0.86 to 0.50 ms for 32 padded decode rows and
 from 2.34 to 1.96 ms for 8,192 prefill rows. Both configurations produced
 bitwise-equal results for those inputs. [Expert projection benchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-moe-h100-packed-20261122-v1)
 
+The full run combined separate expert projections with bulk KV page
+allocation and smaller prefill metadata. All 335 paired turns matched
+the replay output lengths. On those turns, native active decode was
+25.63 tok/s and vLLM was 52.51 tok/s. Native reported zero profiling
+errors.
+
+The shard-local sampler exchanges sampled tokens and scores while keeping
+vocabulary rows on their original expert shards. With 32 full KV contexts,
+native reached 80.8% of vLLM's aggregate throughput. All 378 paired turns
+matched output lengths. Active decode reached 34.52 tok/s on those turns,
+compared with 53.81 tok/s for vLLM. Both runs reported zero profiling errors.
+
 ## AgentX at concurrency 128 on TPU
 
 The first native v5p-8 attempt with 16 full KV contexts reached decode
@@ -498,13 +512,57 @@ KV buffers through both prefill and decode and sizes decode rounds to
 the live batch. It served its preflight completion with eight full KV
 contexts. Repeated vLLM worker losses interrupted compilation in
 `us-central1`. The retry uses four precompile workers and a persistent
-XLA cache in the worker's region. [Native v5p-8 failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v1) · [Native v5p-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v3-layer-kv) · [vLLM v5p-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v3-persistent)
+XLA cache in the worker's region. [Native v5p-8 failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v1) · [Native v5p-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v3-layer-kv)
 
 The first native v6e-8 attempt failed to allocate a 6.50 GiB device
 buffer at preflight. With six full KV contexts, stacked decode required
 38.55 GiB of temporaries per chip against 31.24 GiB available. The
 per-layer retry uses four full KV contexts and selects the checkpoint
-in the worker's region. [Stacked decode failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v2-continuous) · [Native v6e-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v3-layer-kv)
+in the worker's region. It completed the full prefill warmup and reached
+32.05 GiB of HBM temporaries during wider decode warmup. The follow-up
+keeps 128 offered clients and caps each device decode step at eight tokens.
+[Stacked decode failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v2-continuous) · [Per-layer decode failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v3-layer-kv) · [Capped decode trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap)
+
+Both compiled vLLM baselines enabled the prefix cache and configured
+128 scheduler sequences and 8,192 batched tokens.
+
+| Hardware and engine | Completed requests | Output tokens | Output tok/s | p50 TTFT (ms) | p90 TTFT (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| [v5p-8, vLLM TP4](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v3-persistent) | 385 | 107,895 | 538.33 | 286 | 1,539 |
+| [v5p-8, native EP4](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v3-layer-kv) | 90 | 16,526 | 78.69 | 34,453 | 65,072 |
+| [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
+| [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
+
+The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
+v6e-8 baseline ran in `us-east1` with one disconnected request. Native
+v6e-8 ran in `us-east5` using the same checkpoint and replay hash. All
+90 paired v5p turns and 102 paired v6e turns matched output lengths.
+Native active decode on the paired turns measured 9.95 tok/s against
+35.70 tok/s on v5p-8 and 25.24 tok/s against 33.56 tok/s on v6e-8.
+Both native runs reported zero profiling errors. Neither TPU run logged
+prefix reuse during profiling. The H100 32-context run logged 11.15 million
+reused prompt tokens across 252 requests.
+
+### Serial raw prefill with the concurrency-128 server configurations
+
+Each sample issued one raw request and generated one token. Primed requests
+reused a 256-token-shorter prefix. The table shows median HTTP TTFT in
+seconds over five recorded trials per case after warmup. Fresh prefill
+throughput at 64,512 tokens was 29.2k versus 33.1k tok/s on v5p-8 and
+41.4k versus 42.4k tok/s on v6e-8.
+
+| Prompt tokens | v5p native fresh / primed | v5p vLLM fresh / primed | v6e native fresh / primed | v6e vLLM fresh / primed |
+| ---: | ---: | ---: | ---: | ---: |
+| 2,048 | 0.5249 / 0.4986 | 0.0756 / 0.0432 | 0.0984 / 0.0764 | 0.0579 / 0.0325 |
+| 8,192 | 0.6481 / 0.4730 | 0.2066 / 0.0506 | 0.2971 / 0.0681 | 0.1820 / 0.0383 |
+| 32,768 | 1.1993 / 0.4616 | 0.8820 / 0.0796 | 0.7893 / 0.1308 | 0.7296 / 0.0619 |
+| 51,840 | 2.0434 / 0.5884 | 1.5416 / 0.1012 | 1.2665 / 0.0975 | 1.2104 / 0.0739 |
+| 64,512 | 2.2081 / 0.4628 | 1.9487 / 0.1153 | 1.5593 / 0.1554 | 1.5221 / 0.0838 |
+
+The v5p native runner entered prefill measurement after AgentX cancelled
+35 credits at the drain deadline and may still have been processing replay
+work. The v6e native runner paused and resumed serving before the raw grid
+to clear outstanding replay work. [v5p native grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v3-layer-kv) · [v5p vLLM grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v3-persistent) · [v6e native grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) · [v6e vLLM grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-vllm-v6e8-20261122-v2-packed-config)
 
 ## What works
 

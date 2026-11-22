@@ -447,6 +447,47 @@ def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
     return hax.named(values, (*indices.axes, *logits.axes[1:]))
 
 
+def _sample_expert_shards(
+    sampler: Sampler, logits: NamedArray, temperatures: NamedArray, top_ps: NamedArray, keys: jax.Array
+) -> tuple[NamedArray, NamedArray]:
+    sharding = named_sharding_of(logits.array)
+    if sharding is None or sharding.mesh.empty or not sharding.spec or sharding.spec[0] is None:
+        return sampler.sample_positions(logits, temperatures, top_ps=top_ps, key=keys)
+
+    row_spec = PartitionSpec(sharding.spec[0])
+    logits_spec = PartitionSpec(sharding.spec[0], None)
+
+    def sample(local_logits, local_temperatures, local_top_ps, local_keys):
+        rows = hax.Axis("position", local_logits.shape[0])
+        sampled, logprobs = sampler.sample_positions(
+            hax.named(local_logits, (rows, sampler.Vocab)),
+            hax.named(local_temperatures, rows),
+            top_ps=hax.named(local_top_ps, rows),
+            key=local_keys,
+        )
+        return sampled.array, logprobs.array
+
+    sample_rows = jax.shard_map(
+        sample,
+        mesh=sharding.mesh,
+        in_specs=(logits_spec, row_spec, row_spec, row_spec),
+        out_specs=(row_spec, row_spec),
+        check_vma=False,
+    )
+    row_sharding = sharding.update(spec=row_spec)
+    sampled, logprobs = sample_rows(
+        jax.reshard(logits.array, sharding.update(spec=logits_spec)),
+        jax.reshard(temperatures.array, row_sharding),
+        jax.reshard(top_ps.array, row_sharding),
+        jax.reshard(keys, row_sharding),
+    )
+    replicated = sharding.update(spec=PartitionSpec())
+    return (
+        hax.named(jax.reshard(sampled, replicated), "position"),
+        hax.named(jax.reshard(logprobs, replicated), "position"),
+    )
+
+
 def _capture_terminal_inputs(
     gen_state: GenState, model: SnowballLMHeadModel, routes: _SnowballRouteBuffer
 ) -> tuple[GenState, _SnowballRouteBuffer]:
@@ -840,10 +881,7 @@ def _run_generation_loop(
 
         decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
-        seq_lens = decode_state.seq_lens
-
         max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
-        sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
         if routes is not None:
@@ -862,17 +900,36 @@ def _run_generation_loop(
             logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, max_active_tokens=1)
         else:
             logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = _gather_logits(logits, sample_indices)
 
-        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
-        new_slot_ids = slot_ids["position", sample_indices]
-        new_pos_ids = pos_ids["position", sample_indices]
+        sample_packed_rows = (
+            isinstance(model, SnowballLMHeadModel)
+            and model.config.projection_implementation == "native"
+            and model.config.inference_kv_sharding == "expert"
+            and decode_state.max_seqs > 1
+            and max_sample_indices == max_tokens_per_round
+            and routes is None
+        )
+        if sample_packed_rows:
+            # Decode packs one token per sequence. Sample on the owning shard and
+            # exchange only sampled tokens and scores instead of vocabulary rows.
+            logits_at_samples = logits
+            num_new_tokens = binfo.num_new_tokens
+            new_slot_ids, new_pos_ids = slot_ids, pos_ids
+        else:
+            sample_indices = _compute_sample_indices(pos_ids, slot_ids, decode_state.seq_lens, max_sample_indices)
+            logits_at_samples = _gather_logits(logits, sample_indices)
+            num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
+            new_slot_ids = slot_ids["position", sample_indices]
+            new_pos_ids = pos_ids["position", sample_indices]
         prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
 
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = sampler.sample_positions(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        if sample_packed_rows:
+            new_tokens, log_probs = _sample_expert_shards(sampler, logits_at_samples, temps, top_ps, prng_keys)
+        else:
+            new_tokens, log_probs = sampler.sample_positions(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -1028,6 +1085,12 @@ class _CachedPrompt:
     pages: np.ndarray
 
 
+@dataclass(frozen=True)
+class _PageReservation:
+    private_pages: int
+    shared_pages: np.ndarray | None = None
+
+
 class InferenceEngine:
     """Encapsulates batch inference: prefill + decode + output extraction.
 
@@ -1077,7 +1140,7 @@ class InferenceEngine:
                 self._retained_prompt_limit = config.max_seqs
         self.config = config
         self._cached_prompts: list[_CachedPrompt] = []
-        self._reserved_pages: dict[int, int] = {}
+        self._page_reservations: dict[int, _PageReservation] = {}
         # Track free local sequence slots as explicit ids (smallest id first to match allocator expectations).
         # Respect any pre-populated allocations in the provided PageTable.
         sequences = decode_state.sequences
@@ -1160,7 +1223,7 @@ class InferenceEngine:
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
-        self._reserved_pages.clear()
+        self._page_reservations.clear()
 
     def _request_pages(self, request: Request) -> int:
         return kv_pages_for_request(
@@ -1224,6 +1287,15 @@ class InferenceEngine:
             np.add.at(refs, cached.pages, 1)
         return refs
 
+    def _reserved_page_usage(self, table: PageTable) -> tuple[int, np.ndarray]:
+        shared = np.zeros(table.num_pages, dtype=bool)
+        private = 0
+        for reservation in self._page_reservations.values():
+            private += reservation.private_pages
+            if reservation.shared_pages is not None:
+                shared[reservation.shared_pages] = True
+        return private + int(np.count_nonzero(shared)), shared
+
     def _retain_batch_prompts(self, requests: Sequence[Request]) -> None:
         completed_prompts = []
         for request in requests:
@@ -1231,15 +1303,18 @@ class InferenceEngine:
             if slots is None:
                 break
             if len(request.prompt_tokens) >= self.config.page_size:
-                completed_prompts.append((slots[0], request.prompt_tokens))
+                completed_prompts.append((request.request_id, slots[0], request.prompt_tokens))
         if not completed_prompts:
             return
         state = self.gen_state.decode_state
         before = self._retained_page_refs(state.page_table)
         page_indices = jax.device_get(state.sequences.page_indices.array)
-        for slot, prompt in completed_prompts:
+        for rid, slot, prompt in completed_prompts:
             tokens = np.asarray(prompt, dtype=np.int32)
             pages = page_indices[slot, : len(tokens) // self.config.page_size].copy()
+            reservation = self._page_reservations[rid]
+            num_reused = 0 if reservation.shared_pages is None else len(reservation.shared_pages)
+            self._page_reservations[rid] = _PageReservation(reservation.private_pages + num_reused - len(pages), pages)
             self._cached_prompts.append(_CachedPrompt(self.model, tokens, pages))
         self._trim_retained_prompts(before)
 
@@ -1248,12 +1323,13 @@ class InferenceEngine:
         table = state.page_table
         # Track ownership by entry so shared physical pages survive eviction of either prefix.
         after = self._retained_page_refs(table)
-        page_budget = table.num_pages - sum(self._reserved_pages.values())
-        pinned = np.count_nonzero(after)
+        reserved, shared = self._reserved_page_usage(table)
+        page_budget = table.num_pages - reserved
+        pinned = np.count_nonzero((after > 0) & ~shared)
         while pinned > page_budget or len(self._cached_prompts) > self._retained_prompt_limit:
             pages = self._cached_prompts.pop(0).pages
             np.add.at(after, pages, -1)
-            pinned -= np.count_nonzero(after[pages] == 0)
+            pinned -= np.count_nonzero((after[pages] == 0) & ~shared[pages])
         change = after - before
         if not np.any(change):
             return
@@ -1320,26 +1396,29 @@ class InferenceEngine:
         offset = 0
         num_primary = 0
         total_new = 0
-        pages_left = decode_state.page_table.num_pages - sum(self._reserved_pages.values())
+        reserved, shared = self._reserved_page_usage(decode_state.page_table)
+        pages_left = decode_state.page_table.num_pages - reserved
 
         for request in requests:
             seq_tokens = request.prompt_tokens
             seq_params = request.decode_params
             rid = request.request_id
 
-            pages_needed = self._request_pages(request) if max_slots > 1 else 0
-            if (
-                num_primary >= max_seqs_in_prefill
-                or len(self.free_slots) < request.n_generations
-                or pages_needed > pages_left
-            ):
+            if num_primary >= max_seqs_in_prefill or len(self.free_slots) < request.n_generations:
                 break
 
             this_tokens = np.asarray(seq_tokens, dtype=np.int32)
             pages = None
             if prefix_pages is not None and self._cached_prompts:
                 pages = self._matching_prompt_pages(this_tokens)
-            reused = 0 if pages is None else len(pages) * self.config.page_size
+            reused_pages = 0 if pages is None else len(pages)
+            private_pages = self._request_pages(request) - reused_pages if max_slots > 1 else 0
+            pages_needed = private_pages
+            if pages is not None:
+                pages_needed += int(np.count_nonzero(~shared[pages]))
+            if max_slots > 1 and pages_needed > pages_left:
+                break
+            reused = reused_pages * self.config.page_size
             end = offset + len(seq_tokens) - reused
             if end > max_prefill_size:
                 break
@@ -1351,7 +1430,9 @@ class InferenceEngine:
             offset = end
 
             if max_slots > 1:
-                self._reserved_pages[request.request_id] = pages_needed
+                self._page_reservations[rid] = _PageReservation(private_pages, pages)
+                if pages is not None:
+                    shared[pages] = True
                 pages_left -= pages_needed
             if prefix_pages is not None and pages is not None and reused:
                 prefix_pages[total_new, : len(pages)] = pages
@@ -1817,7 +1898,7 @@ class InferenceEngine:
             dr.finish_reason = FinishReason(int(pending_outputs.finish_reasons.array[local_slot]))
             choices = self.results[rid].values()
             if all(choice.done for choice in choices):
-                self._reserved_pages.pop(rid, None)
+                self._page_reservations.pop(rid, None)
                 if on_complete is not None:
                     on_complete(rid, _result_for_choices(list(choices)))
 
