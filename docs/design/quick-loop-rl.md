@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.14` completed update 1, restored it in fresh learners and published version 1 with zero mismatched vLLM bytes. NCCL ran out of memory during update 2. Iris accepted `2026.11.20.15` with a lower learner allocator cap. | Complete and publish both updates on the same attempt before the matched runs. |
+| 40-H100 learner smoke | Run `2026.11.20.14` completed update 1, restored it in fresh learners and published version 1 with zero mismatched vLLM bytes. NCCL ran out of memory during update 2. Run `2026.11.20.15` lowered the learner allocator cap and failed a 32.21 GiB allocation during the first gradient. | Test one preallocated learner pool at the same 80% cap. Complete and publish both updates on the same attempt before the matched runs. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -415,13 +415,27 @@ execution. The main XLA pool cap was 71.26 GiB, leaving roughly 8 GiB
 outside that cap. Physical free HBM at the failing split was unmeasured.
 [Shutdown retry attempt][iris-smoke-shutdown-child] · [Verified restart and NCCL failure][h100-nccl-failure]
 
-Iris accepted `2026.11.20.15` on `9e8664df3b`. The Levanter learner's main
-XLA allocator cap fell from 90% to 80%, or about 63.3 GiB per H100. The
-typed recipe and 40-H100 launch preview matched `.14` after accounting
-for the allocator cap and run identities. The compiled vLLM engine uses
-its existing allocation. The retry tests whether the additional space
-outside the main XLA pool lets the second update complete.
-[NCCL headroom retry coordinator][iris-smoke-nccl-headroom] · [Frozen source and checks][h100-nccl-handoff]
+Run `2026.11.20.15` on `9e8664df3b` reduced the main Levanter XLA allocator
+cap from 90% to 80%, or 63.35 GiB per H100. The typed recipe and launch
+preview matched `.14` after normalizing the cap and run identities. All
+four learners initialized from the pinned source. The eight vLLM receivers
+passed the initial byte check, evaluation covered all 100 tasks, and the
+driver admitted 512 trajectories. At 07:08:42 UTC on November 22, all eight
+device allocators on learner rank 2 failed the same 32.21 GiB allocation
+in the first gradient executable at sequence width 13,450. Iris marked the
+attempt failed before any update. The original Ray and Kubernetes logs
+lack failure-time bytes in use, bytes reserved and largest free block,
+so they cannot distinguish pool exhaustion from fragmentation.
+[NCCL headroom retry attempt][iris-smoke-nccl-headroom-child] · [Original failure evidence][h100-growing-pool-failure] · [Frozen source and checks][h100-nccl-handoff]
+
+The next retry keeps the 80% cap and preallocates the CUDA learner pool.
+The pinned XLA build uses one fixed address range for ordinary buffers
+and XLA collective buffers in this mode. They allocate from opposite
+ends and share the space between them. This tests whether providing one
+range from startup accommodates the first gradient while retaining device
+headroom for direct NCCL allocations after restore. Check both phases in
+the same attempt.
+[Pinned XLA allocator][xla-learner-allocator] · [Pinned XLA defaults][xla-learner-allocator-defaults]
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -492,8 +506,9 @@ the original artifact roots with a repository-local Git tree abbreviation.
 
 Both 25-update recipes passed offline preflight on `9e8664df3b` with the
 regional task selection pinned. The Megatron fingerprint is `ef11bf85`.
-The Levanter fingerprint is `07afabcc` and uses pinned-host optimizer state
-with the same 80% learner allocator cap as `.15`.
+The staged Levanter fingerprint is `07afabcc` and uses pinned-host optimizer
+state with the same 80% learner allocator cap as `.15`. Repin its source and
+allocator settings to the accepted smoke before submission.
 After the smoke passes its receipt and weight-change audits, submit the
 Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
 Use the same regional route and publication verification for both. The
@@ -1158,7 +1173,9 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-checkpoint-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.13-coordinator-22237d08%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.13-a6da35eb027d
 [iris-smoke-shutdown]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-coordinator-93324d26
 [iris-smoke-shutdown-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-coordinator-93324d26%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-ae0b645fbb4e
-[iris-smoke-nccl-headroom]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-coordinator-69a6cbbb
+[iris-smoke-nccl-headroom-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-coordinator-69a6cbbb%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-a453f4b331ee
+[xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
+[xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
 [h100-retry-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.9%2Fh100-learner-retry.tar.zst
@@ -1174,6 +1191,7 @@ arms. [Prior timing comparison][timing]
 [h100-shutdown-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.14%2Fh100-shutdown-retry.tar.zst
 [h100-nccl-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.14%2Fobserved-failure.json
 [h100-nccl-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fh100-nccl-headroom-retry.tar.zst
+[h100-growing-pool-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fobserved-failure.json
 [h100-matched-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fquick-loop-matched-2026.11.20.15.tar.gz
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
