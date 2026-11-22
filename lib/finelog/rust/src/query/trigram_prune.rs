@@ -634,7 +634,7 @@ fn rewrite_file_groups(
             .filename()
             .and_then(|basename| access_plans.get(basename))
         {
-            Some(access) => file.clone().with_extensions(Arc::new(access.clone())),
+            Some(access) => crate::query::file_scan::with_only_extension(file, access.clone()),
             None => file.clone(),
         }
     })

@@ -5470,9 +5470,8 @@ mod tests {
             let mut files = 0;
             plan.apply(|node| {
                 if let Some(config) = node
-                    .as_any()
                     .downcast_ref::<DataSourceExec>()
-                    .and_then(|exec| exec.data_source().as_any().downcast_ref::<FileScanConfig>())
+                    .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
                 {
                     files += config
                         .file_groups

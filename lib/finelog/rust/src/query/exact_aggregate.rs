@@ -9,7 +9,6 @@
 //! ordinary aggregate, preserving exact results without derived-index work on
 //! the write acknowledgement path.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -19,19 +18,21 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::common::tree_node::Transformed;
+use datafusion::catalog::Session;
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::DFSchemaRef;
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::functions_aggregate::expr_fn::{count, sum};
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{
     col, lit, Cast, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -274,16 +275,18 @@ impl ExtensionPlanner for ExactAggregatePlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DFResult<Option<Arc<dyn ExecutionPlan>>> {
         let Some(node) = node.as_any().downcast_ref::<ExactAggregateNode>() else {
             return Ok(None);
         };
+        let session_state = session_state(session)?;
         Ok(Some(Arc::new(AdaptiveAggregateExec::new(
             node.request.clone(),
             node.source.clone(),
             node.fallback.clone(),
-            session_state.clone(),
+            session_state,
         ))))
     }
 }
@@ -337,12 +340,17 @@ impl ExecutionPlan for AdaptiveAggregateExec {
         "AdaptiveAggregateExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    // The fallback is planned at execution time, so this node holds no
+    // physical expressions.
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DFResult<TreeNodeRecursion>,
+    ) -> DFResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -472,6 +480,16 @@ async fn adaptive_physical_plan(
     }
 }
 
+/// The `SessionState` behind `session`. The adaptive execs keep one to plan
+/// their fallback at execution time.
+pub(crate) fn session_state(session: &dyn Session) -> DFResult<SessionState> {
+    session
+        .as_any()
+        .downcast_ref::<SessionState>()
+        .cloned()
+        .ok_or_else(|| DataFusionError::Internal("Finelog plans only with a SessionState".into()))
+}
+
 /// Query planner that teaches DataFusion how to execute Finelog extension nodes.
 #[derive(Debug)]
 pub struct FinelogQueryPlanner;
@@ -481,13 +499,13 @@ impl QueryPlanner for FinelogQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         DefaultPhysicalPlanner::with_extension_planners(vec![
             Arc::new(ExactAggregatePlanner),
             Arc::new(crate::query::group_extrema::GroupExtremaPlanner),
         ])
-        .create_physical_plan(logical_plan, session_state)
+        .create_physical_plan(logical_plan, session)
         .await
     }
 }
