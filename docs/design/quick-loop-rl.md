@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 8:55 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 9:12 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first six updates and publications. | Verify the candidate's terminal receipts and compare it with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first eight updates, with 72 zero-mismatch receiver checks. | Verify the candidate's terminal receipts and compare it with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The pinned 67B model and fused scorer passed the fixed-checkpoint H100 gate with zero PPO clip crossings across 32,768 targets. The live handoff qualification is on its fourth regional launch after resolving placement and JAX launcher checks. | Verify the live gate, then run the held-learner serving comparison after the priority learner jobs. |
+| Native inventory backend | The pinned 67B model and fused scorer passed the fixed-checkpoint H100 gate with zero PPO clip crossings across 32,768 targets. Four H100 hosts converted both trained policies to typed snapshots and committed the receipt. | Verify the live tool turn, swap and fused replay on one serving host, then run the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -799,6 +799,13 @@ gap. These values describe one update in each run.
 | Verified weight publication | 3.053 | 163.769 |
 | Full step | 151.893 | 408.420 |
 
+Across updates 2–8, median step time was 151.0 seconds for Megatron and
+419.6 seconds for Levanter. Both admitted groups in about 0.98 seconds per
+group. Averaged over the seven steps, Levanter spent 159.5 additional
+seconds on publication, 81.8 on policy training and 27.0 on learner
+preparation. All 72 candidate receiver checks passed through version 8.
+These timings cover the original attempts and the same update numbers.
+
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
 nested GPU job from a hub-resident parent. A regional coordinator can use
@@ -1479,9 +1486,20 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   on the third attempt. All four failed a launcher check for a preassigned
   JAX port before reading weights. The fourth attempt uses Iris's normal
   rank-zero port registration and discovery, which passed three focused
-  tests. The priority learner was already running, and Kubernetes reported
-  20 unallocated eight-H100 hosts at submission. The conversion and live
-  swap remain accelerator gates. [Native 67B qualification][iris-native-fused-gate]
+  tests. Four ranks restored step 1 with exact FP32 weight fingerprints
+  and layout hashes from the accepted smoke. Each rank restored 67,240,597,504
+  addressable bytes at each step. The step-2 fingerprints differed on every
+  rank and the layouts matched. The region-local typed receipt names two
+  distinct immutable policy IDs under the same model binding. All four
+  conversion tasks succeeded. [Conversion job][iris-native-conversion] ·
+  [Typed conversion receipt][native-typed-conversion-receipt]
+
+  The one-host serving job saw all eight H100s and stopped when Iris's
+  workspace extraction removed the telemetry wrapper's execute bit. The
+  tested fix restores execute permission on the hash-checked scratch copy.
+  The serving retry binds the successful conversion receipt by SHA-256 and
+  reserves one eight-H100 host. The live swap, tool replay and post-swap
+  fused score remain accelerator gates. [Serving retry][iris-native-fused-gate]
 
   The typed install keeps the old model and KV pool live until it verifies
   the replacement weights and allocates the new pool. A CPU probe found
@@ -1572,7 +1590,9 @@ arms. [Prior timing comparison][timing]
 [iris-matched-megatron-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-a361bc746b85
 [iris-matched-megatron-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-ab4ae1aae5e9
 [iris-matched-levanter]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af8929ab8ff2
-[iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122d
+[iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122e
+[iris-native-conversion]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122d%2Fnative-native-fused-20261122d-convert
+[native-typed-conversion-receipt]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-tool-67b%2F2026.11.22.1%2Fnative-fused-20261122d%2Fevidence%2Ftyped-snapshot-receipts.json
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
