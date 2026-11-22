@@ -404,7 +404,7 @@ restored model, Adam, RNG, step and averaging state byte-for-byte. At
 03:56:01 vLLM published version 1. All eight receivers compared
 157,498,867,712 bytes in total with zero mismatches for each of versions
 0 and 1. The second rollout admitted 128 groups and 512 trajectories
-with zero staleness, all stamped with publication version 1.
+with zero staleness. All 512 used policy version 1 and carried stamp 2.
 
 All four restored ranks entered the second gradient phase. NCCL reported
 CUDA out of memory on a 10 MiB allocation while splitting a communicator
@@ -535,7 +535,7 @@ policy configuration.
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
 ID and the trainer can resume from an existing checkpoint.
-[Archived preallocation-off baseline and audits][h100-matched-handoff]
+[Earlier matched launch and audit package][h100-matched-handoff]
 
 For each arm, collect Finelog rows for the successful child and its task attempts.
 Match the `WANDB_MIRROR` metrics by optimizer step with rollout and update
@@ -1143,9 +1143,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   ported learner with vLLM. The archived preset uses one turn per episode.
   Use a separate 67B tool-turn fixture to test continuation and a live
   weight install. The current native path resets paged KV on each generation.
-  On CPU, a two-turn fixture rejected a future policy before installation,
-  rejected the old policy and its replay frame after installation, and
-  matched an independently started new-policy process byte for byte.
+  On CPU, a two-turn fixture with a simulated tool observation rejected a
+  future policy before installation and rejected the old policy and its
+  replay frame after installation. The new-policy replay frame matched an
+  independently started process byte for byte.
   Porting cross-request prefix reuse also requires preserving expert IDs
   and router thresholds alongside cached pages for training replay.
   Measure a same-policy hit and a miss on first use of the next policy
