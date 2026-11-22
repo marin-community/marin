@@ -45,7 +45,14 @@ def write_frame(stream: BinaryIO, payload) -> None:
 class LearnerProcess:
     """Own a learner subprocess and bound the complete request/response exchange."""
 
-    def __init__(self, python_executable: str, *, environment: Mapping[str, str], timeout_seconds: float):
+    def __init__(
+        self,
+        python_executable: str,
+        *,
+        environment: Mapping[str, str],
+        timeout_seconds: float,
+        runtime_module: str = "marin.rl.levanter_worker_runtime",
+    ):
         self.timeout_seconds = timeout_seconds
         response_read, response_write = os.pipe()
         try:
@@ -60,7 +67,7 @@ class LearnerProcess:
                     python_executable,
                     "-u",
                     "-m",
-                    "marin.rl.levanter_worker_runtime",
+                    runtime_module,
                     "--response-fd",
                     str(response_write),
                 ],

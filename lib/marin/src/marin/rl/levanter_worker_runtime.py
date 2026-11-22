@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from functools import partial
 
 import equinox as eqx
@@ -33,6 +34,7 @@ import jmp
 import numpy as np
 import optax
 from jax.experimental import multihost_utils
+from jax.extend.backend import clear_backends
 from jax.sharding import NamedSharding, PartitionSpec
 from jaxlib import xla_client
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
@@ -829,7 +831,10 @@ class NativePolicyRuntime:
     def runtime_identity(self) -> dict:
         return {
             "pid": os.getpid(),
+            "jax_version": jax.__version__,
+            "jaxlib_version": jaxlib.__version__,
             "process_id": jax.process_index(),
+            "process_count": jax.process_count(),
             "backend": jax.default_backend(),
             "device_kinds": sorted({device.device_kind for device in jax.devices()}),
             "global_devices": jax.device_count(),
@@ -899,6 +904,7 @@ class NativePolicyRuntime:
             ("release_owned_resources", self._release_owned_resources),
             ("clear_jax_caches", jax.clear_caches if had_device_state else lambda: None),
             ("collect_python_resources", gc.collect),
+            ("release_backend_clients", self._release_backend_clients if had_device_state else lambda: None),
             ("distributed_shutdown", self._shutdown_distributed),
         ):
             try:
@@ -930,6 +936,12 @@ class NativePolicyRuntime:
     def _shutdown_distributed(self) -> None:
         if jax.distributed.is_initialized():
             jax.distributed.shutdown()
+
+    def _release_backend_clients(self) -> None:
+        # Pinned JAX0.11 exports this extension API. Release PJRT ownership while
+        # distributed coordination is alive, rather than in late C finalization.
+        clear_backends()
+        gc.collect()
 
     def shutdown_receipt(self, event: str, **fields) -> None:
         if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False):
@@ -971,7 +983,7 @@ class NativePolicyRuntime:
             self.shutdown_receipt("cleanup_phase_end", phase=phase)
 
     def prepare_process_exit(self, reason: str) -> None:
-        """Arm a non-exiting native watchdog that survives Python atexit cleanup."""
+        """Trace Python atexit stalls; CPython cancels this before late C teardown."""
         if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False):
             return
         scope = "watched_debug_artifacts"
@@ -1047,7 +1059,7 @@ class NativePolicyRuntime:
         raise ValueError(f"Unknown learner operation {method}")
 
 
-def main() -> None:
+def main(runtime_factory: Callable[[], NativePolicyRuntime] = NativePolicyRuntime) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--response-fd", type=int, required=True)
     args = parser.parse_args()
@@ -1064,7 +1076,7 @@ def main() -> None:
                 raise OSError(ctypes.get_errno(), "Could not bind learner lifetime to its Ray worker")
             if os.getppid() != parent:
                 return
-        runtime = NativePolicyRuntime()
+        runtime = runtime_factory()
         while True:
             try:
                 request = read_frame(incoming)

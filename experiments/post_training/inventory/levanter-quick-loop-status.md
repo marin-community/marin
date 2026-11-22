@@ -64,6 +64,21 @@ exit-zero requirement and the existing five-second grace period. The `.22.1`
 GPU run completed these cleanup phases but still failed natural process exit;
 local restart success does not establish GPU restart acceptance.
 
+The next lifecycle candidate uses the documented
+[`jax.extend.backend.clear_backends`](https://docs.jax.dev/en/latest/_autosummary/jax.extend.backend.clear_backends.html)
+extension API from pinned JAX 0.11.0 to release backend clients while distributed
+coordination is still alive. A local CPU weak-reference check shows that cache
+cleanup alone retains a backend client and that this extension call releases
+it. The GPU finalizer that blocked `.22.1` remains unidentified. The five-second
+natural-exit requirement remains unchanged.
+
+A separate tiny-model lifecycle driver compares the prior cleanup operations
+with this candidate, using real checkpoint restoration, new process IDs and
+continuation against an uninterrupted control. Local CPU validation passed both
+arms. An eight-H100 job will qualify GPU lifecycle behavior before another
+40-H100 full-model smoke; neither that smaller job nor CPU success establishes
+full-model fit, cross-host exit or end-to-end quick-loop acceptance.
+
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
 are identical to `e9fa30e8a2230a4015d8488280d2b375b81ea07d`; only this

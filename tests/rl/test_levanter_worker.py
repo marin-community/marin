@@ -284,6 +284,7 @@ import json
 import sys
 import weakref
 import jax
+from jax.extend import backend
 import numpy as np
 from marin.rl.levanter_worker_runtime import NativePolicyRuntime
 
@@ -291,6 +292,7 @@ runtime = NativePolicyRuntime()
 runtime.settings = {'runtime': {'validate_checkpoint_roundtrip': True}}
 runtime.state = {'owned_buffer': jax.device_put(np.ones((2, 2), dtype=np.float32))}
 buffer = weakref.ref(runtime.state['owned_buffer'])
+client = weakref.ref(backend.get_backend('cpu'))
 if DELETED_BUFFER:
     runtime.state['owned_buffer'].delete()
 original_stderr = sys.stderr
@@ -308,7 +310,7 @@ try:
 finally:
     sys.stderr = original_stderr
 gc.collect()
-print(json.dumps({'status': status, 'owned_buffer_released': buffer() is None}))
+print(json.dumps({'status': status, 'owned_buffer_released': buffer() is None, 'backend_released': client() is None}))
 """.replace(
         "DELETED_BUFFER", repr(deleted_buffer)
     ).replace(
@@ -322,7 +324,11 @@ print(json.dumps({'status': status, 'owned_buffer_released': buffer() is None}))
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
+    observed = json.loads(result.stdout)
+    backend_released = observed.pop("backend_released")
+    if not deleted_buffer:
+        assert backend_released
+    assert observed == {
         "status": "cleanup_error" if deleted_buffer else "success",
         "owned_buffer_released": True,
     }
