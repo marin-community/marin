@@ -23,7 +23,7 @@ from typing import Any
 from uuid import uuid4
 
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
-from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
+from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection, JudgeEndpointLocation
 from verifyit.spec import Spec, render_spec
 
 from taskcompendium.grading import answer_submission, gradeable_empty_text, parse_grade_result, terminal_grade
@@ -620,6 +620,7 @@ async def _grade_staged(
                     prepared = replace(prepared, workdir=grading.workspace)
                 if attempt.stop_reason is not None:
                     prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
+                script_relay_connection = None
                 judge = judge_spec(grading.grader)
                 if judge is not None:
                     if judge_connection is None:
@@ -627,18 +628,23 @@ async def _grade_staged(
                     model = judge.model.strip() or (judge_connection.default_model or "").strip()
                     if not model:
                         raise ValueError("A sandbox judge requires an explicit model")
+                    if (
+                        isinstance(grading.grader, ScriptGrader)
+                        and judge_connection.location == JudgeEndpointLocation.HOST
+                    ):
+                        script_relay_connection = judge_connection
                     prepared = replace(
                         prepared,
                         env={
                             **prepared.env,
                             BASE_URL_ENV: (
                                 SCRIPT_JUDGE_BASE_URL
-                                if isinstance(grading.grader, ScriptGrader)
+                                if script_relay_connection is not None
                                 else judge_connection.base_url
                             ),
                             API_KEY_ENV: (
                                 SCRIPT_JUDGE_GUEST_KEY
-                                if isinstance(grading.grader, ScriptGrader)
+                                if script_relay_connection is not None
                                 else judge_connection.api_key
                             ),
                             MODEL_ENV: model,
@@ -647,9 +653,8 @@ async def _grade_staged(
                 machine = await factory.create(prepared)
             try:
                 async with AsyncExitStack() as services:
-                    if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
-                        assert judge_connection is not None
-                        await services.enter_async_context(script_judge_service(machine, judge_connection))
+                    if script_relay_connection is not None:
+                        await services.enter_async_context(script_judge_service(machine, script_relay_connection))
                     return await _grade_on(
                         machine,
                         archive_path,

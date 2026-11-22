@@ -59,6 +59,7 @@ from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.models import (
     DockerBuildExecution,
     ExecutionRequirements,
+    ScriptGrader,
     TaskSpec,
     VerifyitGrader,
     judge_spec,
@@ -76,6 +77,7 @@ from verifyit.modes.grade_judge import (
     BASE_URL_ENV,
     MODEL_ENV,
     JudgeConnection,
+    JudgeEndpointLocation,
 )
 
 from harbor.agents.taskcompendium import (
@@ -443,11 +445,18 @@ class TaskSpecTrial(Trial):
             for name, value in self.source_runtime.resource_limits("verifier_machine").items()
         ):
             raise ValueError("Verifier allocation overrides an original source declaration")
+        grader = self.specification.grader
+        grader_environment = grader.environment if isinstance(grader, (ScriptGrader, VerifyitGrader)) else None
+        implicit_verifier_network = (
+            NetworkPolicy.ALLOW
+            if grader_environment is not None and "network" in grader_environment.capabilities
+            else NetworkPolicy.DENY
+        )
         self.verifier_runtime = runtime.model_copy(update={
             "cpus": verifier_shape.cpus,
             "memory_mb": verifier_shape.memory_mb,
             "storage_mb": verifier_shape.storage_mb,
-            "network": verifier_network if verifier_network is not None else NetworkPolicy.DENY,
+            "network": verifier_network if verifier_network is not None else implicit_verifier_network,
         })
         self.verifier_shape = verifier_shape
         self.config = self.config.model_copy(update={"task": self.config.task.model_copy(update={
@@ -707,7 +716,8 @@ class TaskSpecTrial(Trial):
                 authentication=self.host_capabilities.model_authentication,
             )
             connection = JudgeConnection(
-                f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1", "EMPTY", default_model=self.judge_model
+                f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1", "EMPTY", default_model=self.judge_model,
+                location=JudgeEndpointLocation.GRADING_MACHINE,
             )
         if isinstance(grader, VerifyitGrader) and (grader.environment is None or judge is not None):
             return await self._grade_in_process(relay, connection)

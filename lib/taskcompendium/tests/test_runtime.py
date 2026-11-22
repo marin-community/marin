@@ -31,7 +31,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.modes.grade_judge import JudgeConnection, JudgeEndpointLocation
 from verifyit.spec import (
     RUBRIC_LABELS,
     EmptyOutputPolicy,
@@ -1002,19 +1002,25 @@ async def test_oracle_preserves_an_images_default_working_directory(shell_task, 
 
 
 @pytest.mark.asyncio
-async def test_native_script_judge_uses_host_transport(tmp_path, script_grading_task, judge_server):
-    judge_server.rejected_user_agent_prefix = "Python-urllib"
+@pytest.mark.parametrize("location", list(JudgeEndpointLocation))
+async def test_native_script_judge_transport(tmp_path, script_grading_task, judge_server, location):
+    host_endpoint = location == JudgeEndpointLocation.HOST
+    judge_server.rejected_user_agent_prefix = "Python-urllib" if host_endpoint else "reject-no-clients"
+    connection_key = "host-only-key" if host_endpoint else "guest-relay-key"
+    guest_key = "machine-local-judge-relay" if host_endpoint else connection_key
     body = {"model": "pinned-judge", "messages": [{"role": "user", "content": "frozen native prompt"}], "top_k": 20}
     base_url = f"http://127.0.0.1:{judge_server.server_port}/v1"
     request = urllib.request.Request(base_url + "/chat/completions", data=json.dumps(body).encode())
-    with pytest.raises(urllib.error.HTTPError, match="403"):
-        await asyncio.to_thread(urllib.request.urlopen, request)
+    if host_endpoint:
+        with pytest.raises(urllib.error.HTTPError, match="403"):
+            await asyncio.to_thread(urllib.request.urlopen, request)
     script = (
         "import json,os,sys,urllib.request\nfrom pathlib import Path\n"
-        "assert os.environ['VERIFYIT_JUDGE_API_KEY']=='machine-local-judge-relay'\n"
+        f"assert os.environ['VERIFYIT_JUDGE_API_KEY']=={guest_key!r}\n"
         f"body={body!r}\n"
         "request=urllib.request.Request(os.environ['VERIFYIT_JUDGE_BASE_URL']+'/chat/completions',"
-        "data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})\n"
+        "data=json.dumps(body).encode(),headers={'Content-Type':'application/json',"
+        "'Authorization':'Bearer '+os.environ['VERIFYIT_JUDGE_API_KEY']})\n"
         "with urllib.request.urlopen(request) as response: answer=json.load(response)\n"
         "Path(sys.argv[1]).write_text(json.dumps({'status':'scored',"
         "'reward':float(answer['choices'][0]['message']['content']=='PASS'),'detail':{}}))\n"
@@ -1039,10 +1045,11 @@ async def test_native_script_judge_uses_host_transport(tmp_path, script_grading_
         GradingAttempt(finished(task)),
         factories,
         GRADER_MACHINE,
-        judge_connection=JudgeConnection(base_url, "host-only-key", default_model="pinned-judge"),
+        judge_connection=JudgeConnection(base_url, connection_key, default_model="pinned-judge", location=location),
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
-    assert judge_server.requests == [body, body]
-    assert judge_server.request_headers[-1]["Authorization"] == "Bearer host-only-key"
-    assert judge_server.request_headers[-1]["User-Agent"].startswith("python-httpx/")
+    assert judge_server.requests == ([body, body] if host_endpoint else [body])
+    assert judge_server.request_headers[-1]["Authorization"] == f"Bearer {connection_key}"
+    expected_client = "python-httpx/" if host_endpoint else "Python-urllib"
+    assert judge_server.request_headers[-1]["User-Agent"].startswith(expected_client)
     assert all("host-only-key" not in machine.env.values() and machine.closed for machine in factories.machines)

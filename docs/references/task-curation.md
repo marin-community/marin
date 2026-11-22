@@ -3666,8 +3666,13 @@ verifier dimensions. Non-integer or contradictory source budgets are rejected
 before allocation. Trial honors the declared actor and verifier network policies
 independently; an actor-less oracle uses the verifier policy of its original
 grader environment. `network-policy.json` records the declared and effective
-policies with the source runtime hash. Missing roles remain undeclared. The
-optional `--controls module:attribute` selects the source's declared `Controls`
+policies with the source runtime hash. Missing roles remain undeclared. An
+undeclared actor policy defaults to DENY. An undeclared verifier policy allows
+network access only when the grader environment declares the `network` capability;
+otherwise it defaults to DENY. An explicit verifier DENY remains enforced and
+rejects a grader that requires network access. Harbor judge credentials remain on
+the host; native graders use its existing machine-local model relay.
+The optional `--controls module:attribute` selects the source's declared `Controls`
 object; a conversation `OracleCommand` writes its bound packet before checksums
 are measured. `--source-revision` pins that control's code. For an explicitly
 repaired runtime, `--runtime-expectations` accepts a JSON mapping from source

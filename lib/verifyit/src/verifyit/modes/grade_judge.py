@@ -30,6 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -113,17 +114,24 @@ SCORE_PATTERN = re.compile(r"score\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 logger = logging.getLogger(__name__)
 
 
+class JudgeEndpointLocation(StrEnum):
+    HOST = "host"
+    GRADING_MACHINE = "grading_machine"
+
+
 @dataclass(frozen=True)
 class JudgeConnection:
     """Per-call endpoint credentials, kept outside serialized task specifications.
 
     ``default_model=None`` permits the environment fallback for generic callers.
     An explicit string supplies that fallback; an empty string disables it.
+    ``location`` identifies where the endpoint is reachable, before guest relays are installed.
     """
 
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
+    location: JudgeEndpointLocation = field(default=JudgeEndpointLocation.HOST, kw_only=True)
 
 
 @dataclass(frozen=True)

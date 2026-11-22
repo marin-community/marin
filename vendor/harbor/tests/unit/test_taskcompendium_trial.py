@@ -22,7 +22,7 @@ from rolloutengine.models import RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
+from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec, check_execution_requirements
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.oracle import ORACLE_COMMAND_FILE, write_oracle_command
 from taskcompendium.harbor.negative_control import NegativeControlSource, public_task_preparation
@@ -68,6 +68,7 @@ from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import BASE_URL_ENV
+from verifyit.spec import JudgeSpec
 
 from harbor.agents import taskcompendium as agents
 from harbor.environments import local as local_environments
@@ -1259,16 +1260,20 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize("packaging", ["lock", "image"])
 @pytest.mark.parametrize(
-    "actor_network,verifier_network,cleanup_failure",
-    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY, None),
-     (NetworkPolicy.DENY, NetworkPolicy.ALLOW, None),
-     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "verifier"),
-     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "startup"),
-     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "factory")],
+    "actor_network,verifier_network,cleanup_failure,grader_network",
+    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY, None, False),
+     (NetworkPolicy.DENY, NetworkPolicy.ALLOW, None, False),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "verifier", False),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "startup", False),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "factory", False),
+     (None, None, None, False),
+     (None, None, None, True),
+     (NetworkPolicy.DENY, None, None, True),
+     (NetworkPolicy.DENY, NetworkPolicy.DENY, None, True)],
 )
 @pytest.mark.asyncio
 async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
-    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network, cleanup_failure
+    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network, cleanup_failure, grader_network
 ):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -1301,7 +1306,7 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
         grader=ScriptGrader(
             argv=("python3", "/tests/check.py", "/app/value.txt", "/app/answer.txt", "/logs/verifier/verdict.json"),
             cwd="/app",
-            environment=environment,
+            environment=environment.model_copy(update={"capabilities": ("network",) if grader_network else ()}),
             answer_path="/app/answer.txt",
             reward=FileReward(
                 files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
@@ -1310,11 +1315,24 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     )
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
-    runtime = {"task_machine": {"network": actor_network.value}, "verifier_machine": {"network": verifier_network.value}}
+    runtime = {
+        role: {"network": policy.value}
+        for role, policy in (("task_machine", actor_network), ("verifier_machine", verifier_network))
+        if policy is not None
+    }
     write_source_runtime(task, runtime, directory)
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
-    machines = Machines(tmp_path / "sandboxes")
+    class NetworkCheckingMachines(Machines):
+        def check_environment(self, requirements, spec):
+            check_execution_requirements(
+                requirements, spec, semantics=CommandSemantics.LINUX_PROCESS,
+                capabilities=frozenset({"network"}),
+                image_reference=spec.source.reference if isinstance(spec.source, RegistryImage) else None,
+            )
+            super().check_environment(requirements, spec)
+
+    machines = NetworkCheckingMachines(tmp_path / "sandboxes")
     bind_factory(monkeypatch, machines, tmp_path / "disks")
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
     monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
@@ -1357,6 +1375,12 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
         else:
             assert not machines.machines
         return
+    if grader_network and verifier_network == NetworkPolicy.DENY:
+        assert result.exception_info.exception_type == "UnsupportedMachineSpec"
+        assert result.verifier_result is None
+        assert all(machine.closed for machine in machines.machines)
+        assert len(machines.machines) == 1
+        return
     assert result.completion is not None
     if exit_code:
         assert result.exception_info.exception_type == "VerifierRuntimeError"
@@ -1369,10 +1393,75 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     assert not actor.local("/tests/check.py").exists()
     assert verifier.local("/tests/check.py").read_bytes() == script
     assert actor.closed and verifier.closed
-    assert [spec.network for spec in machines.specifications] == [actor_network, verifier_network]
+    effective_actor = actor_network if actor_network is not None else NetworkPolicy.DENY
+    effective_verifier = (
+        verifier_network if verifier_network is not None
+        else NetworkPolicy.ALLOW if grader_network else NetworkPolicy.DENY
+    )
+    assert [spec.network for spec in machines.specifications] == [effective_actor, effective_verifier]
     network = TaskNetworkPolicyReceipt.model_validate_json(
         (Path(trial.paths.trial_dir) / "network-policy.json").read_text()
     )
-    assert (network.actor_declared, network.actor_effective) == (actor_network, actor_network)
-    assert (network.verifier_declared, network.verifier_effective) == (verifier_network, verifier_network)
+    assert (network.actor_declared, network.actor_effective) == (actor_network, effective_actor)
+    assert (network.verifier_declared, network.verifier_effective) == (verifier_network, effective_verifier)
     assert all((spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048) for spec in machines.specifications)
+
+
+@pytest.mark.asyncio
+async def test_native_script_judge_uses_the_trial_guest_relay(tmp_path, monkeypatch):
+    task = exact_answer_task(
+        RawRow("text", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Return PASS.", answers=("PASS",), ignore_case=False,
+    )
+    script = (
+        "import json,os,sys,urllib.request\nfrom pathlib import Path\n"
+        "assert os.environ['VERIFYIT_JUDGE_API_KEY']=='EMPTY'\n"
+        "body={'model':'untrusted-selection','messages':[{'role':'user','content':'frozen prompt'}]}\n"
+        "request=urllib.request.Request(os.environ['VERIFYIT_JUDGE_BASE_URL']+'/chat/completions',"
+        "data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})\n"
+        "with urllib.request.urlopen(request) as response: answer=json.load(response)\n"
+        "Path(sys.argv[1]).write_text(json.dumps({'status':'scored',"
+        "'reward':float(answer['choices'][0]['message']['content']=='PASS'),'detail':{}}))\n"
+    ).encode()
+    task = task.model_copy(update={
+        "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+        "grader": ScriptGrader(
+            argv=("python3", "/tests/grade.py", "/logs/verifier/verdict.json"),
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image="offline.test/grader@sha256:" + "a" * 64,
+                capabilities=("network",),
+            ),
+            judge=JudgeSpec(model="pinned-judge", references=("PASS",), exact_gate=False),
+            reward=FileReward(files=(RewardFile(
+                path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON,
+            ),)),
+        ),
+    })
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    write_source_runtime(task, {}, directory)
+    original = (directory / "task-spec.json").read_bytes()
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps([{"role": "assistant", "content": "PASS"}]))
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    with running_review_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/v1"
+        server.judge_replies.append(JudgeReply("PASS"))
+        trial = await Trial.create(TrialConfig(
+            task=TaskConfig(path=directory), trial_name="native-judge", trials_dir=tmp_path / "trials",
+            agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
+            environment=EnvironmentConfig(kwargs={
+                "model_endpoint": endpoint, "model_name": "pinned-judge", "disk_root": str(tmp_path / "disks"),
+            }),
+        ), host_capabilities=HostCapabilities(model_authentication={endpoint: "host-only-key"}))
+        result = await trial.run()
+        assert result.exception_info is None, result.exception_info
+        assert result.verifier_result.rewards == {"reward": 1.0}
+        assert server.requests == [{
+            "model": "pinned-judge", "messages": [{"role": "user", "content": "frozen prompt"}], "stream": False,
+        }]
+    assert [spec.network for spec in machines.specifications] == [NetworkPolicy.ALLOW]
+    assert all(machine.closed and "host-only-key" not in machine.env.values() for machine in machines.machines)
+    assert (directory / "task-spec.json").read_bytes() == original
