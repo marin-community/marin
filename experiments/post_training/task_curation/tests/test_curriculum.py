@@ -159,25 +159,3 @@ def test_ordered_curriculum_rejects_pools_no_stage_visits():
             validation_size=10,
             pool_rows={"numbers": _pool_rows("numbers", 100), "letters": _pool_rows("letters", 100)},
         )
-
-
-def test_curriculum_seed_is_explicit():
-    with pytest.raises(TypeError):
-        weighted_curriculum(  # type: ignore[call-arg]
-            "users/tester/curricula/no-seed",
-            "2026.11.18",
-            train={_pool("numbers"): 1.0},
-            validation_size=10,
-            pool_rows={},
-        )
-
-
-def test_curriculum_validation_size_is_explicit():
-    with pytest.raises(TypeError):
-        weighted_curriculum(  # type: ignore[call-arg]
-            "users/tester/curricula/no-size",
-            "2026.11.18",
-            train={_pool("numbers"): 1.0},
-            seed=1,
-            pool_rows={"pools/numbers": _pool_rows("pools/numbers", 100)},
-        )

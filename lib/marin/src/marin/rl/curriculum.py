@@ -116,9 +116,8 @@ class ValidationSplit:
     """The partition a fixed curriculum's holdout induces on its pools.
 
     ``validation`` is the recorded holdout; ``training`` maps each label to the rows that remain
-    trainable. The two are disjoint by construction. The pool builder that materializes the
-    training pools consumes ``training``, and the extraction that materializes the validation
-    data consumes ``validation``, so the trainer never sees a held-out row."""
+    trainable. The two are disjoint by construction: a data layer that writes the training pools
+    from ``training`` and extracts the validation data from ``validation`` makes the holdout true."""
 
     validation: CurriculumValidation
     training: Mapping[str, tuple[PoolRow, ...]]

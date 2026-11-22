@@ -1117,9 +1117,9 @@ def _launch_curriculum(curriculum: RlCurriculum) -> dict:
     """The launch document's curriculum section: identity, projection, per-source provenance, holdout.
 
     ``validation`` records the drawn holdout — size, seed, and the held-out rows — as the fixed
-    curriculum's metadata. The launch paths bind the run's validation data to those recorded rows
-    and train on pools that exclude them; this section makes the split recoverable from the
-    launch document and the run record."""
+    curriculum's metadata, so a launch can bind its validation data to the recorded rows and train
+    on pools that exclude them; this section makes the split recoverable from the launch document
+    and the run record."""
     return {
         "identity": curriculum.identity,
         "mode": curriculum.mode.value,
