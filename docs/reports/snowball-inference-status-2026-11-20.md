@@ -25,10 +25,13 @@ at that length was 116 versus 115 ms on v5p-8 and 86 versus 85 ms on
 v6e-8. Paired active decode was higher on native on all three hardware
 types.
 
-Loaded TTFT remains higher on both TPUs. The four-step v6e-8 run
-reached 583.52 output tok/s and 1.50 s p90 TTFT. The 537.39 tok/s
-v5p-8 native rate was 2.2% below the strongest compiled repeat from
-a different slice.
+The four-step v6e-8 run reached 583.52 output tok/s and 1.50 s p90
+TTFT, 14.6% above compiled vLLM p90 on the same platform. The H100
+repeat also met the 20% p90 target. The eight-step v5p-8 run reached
+536.07 output tok/s with 2.44 s p90 TTFT. The same-slice compiled
+v5p-8 result sets a 1.85 s target. The 537.39 tok/s paired native
+rate was 2.2% below the strongest compiled repeat from a different
+slice.
 
 The initial publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -1105,6 +1108,16 @@ out of 15.19 million prompt tokens, for a similar recomputed share of
 19.4%.
 [Same-slice pair and server counters](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix) · [Four retained spans](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v46-four-retained-window-spans)
 
+A second v5p-8 run traced the longest page-aligned prefix seen since
+server startup, the longest match still in the prompt index, and the
+length actually reused. Across 375 profiling turns, native reused 12.32
+million of 15.29 million prompt tokens. Evicted entries accounted for
+1.63 million tokens, or 10.6% of input. Another 1.35 million tokens had
+no matching prior page. All the matching pages of the retained entries
+could be reused with the resident sliding-window KV. The run reached
+536.41 output tok/s with zero profiling errors.
+[Per-request cache attribution](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v49-prefix-attribution)
+
 An experimental FIFO policy emitted the first tokens for a leading
 group of requests with at most 2,048 uncached tokens before prefilling
 the next longer suffix. It split 20 profiling batches and reached
@@ -1126,6 +1139,13 @@ the compiled leg’s 376 shared turns, active decode was 33.41 versus
 matched and there were zero profiling errors. Fresh and primed
 64,512-token medians were 1.863 s and 112 ms.
 [Eight-step v5p-8 replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v47-clean-two-spans-eight-rounds)
+
+Four steps on a replacement v5p-8 reached 526.95 output tok/s. Across
+369 turns shared with the eight-step run, median TTFT fell from 544 to
+487 ms, p90 rose from 2.47 to 2.52 s, and active decode fell from 33.33
+to 31.35 tok/s. Output lengths matched on every shared turn. The
+four-step run reported zero profiling errors.
+[Four-step v5p-8 replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v50-clean-two-spans-four-rounds)
 
 In a local CPU microbenchmark with 80 cached 48,000-token prompts,
 finding only the first mismatching token reduced median comparison time
