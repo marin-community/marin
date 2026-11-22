@@ -417,6 +417,7 @@ def _source_config(
             mode=mode,
             lexical_contamination=decontamination,
             no_oracle_source_context=source_context,
+            backfill=settings.backfill,
             oracle_filter=(
                 load_oracle_filter(receipt_path, source_context=source_context, expected_sha256=receipt_sha256)
                 if receipt_path
@@ -443,6 +444,7 @@ def _source_config(
         config,
         lexical_contamination=decontamination,
         no_oracle_source_context=source_context,
+        backfill=settings.backfill,
         oracle_filter=(
             load_oracle_filter(receipt_path, source_context=source_context, expected_sha256=receipt_sha256)
             if receipt_path

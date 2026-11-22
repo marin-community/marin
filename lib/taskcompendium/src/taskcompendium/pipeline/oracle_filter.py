@@ -1762,6 +1762,8 @@ class OracleFilterReceipt(BaseModel):
     )
     no_oracle_source: NoOracleSourceContext | None = Field(default=None, exclude_if=lambda value: value is None)
     recollection: RecollectionWaiver | None = Field(default=None, exclude_if=lambda value: value is None)
+    backfill_policy_revision: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """The requirement-backfill policy revision every recorded task hash was qualified under."""
     recipe_identity: str | None
     input_cohort_sha256: str
     input_rows: int = Field(ge=0)

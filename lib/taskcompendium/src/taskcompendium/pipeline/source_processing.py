@@ -76,6 +76,11 @@ from taskcompendium.pipeline.oracle_filter import (
     oracle_recipe_identity,
     require_oracle_filter,
 )
+from taskcompendium.pipeline.requirements import (
+    REQUIREMENTS_MANIFEST_PATH,
+    BackfillPolicy,
+    backfill_population,
+)
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
@@ -127,7 +132,7 @@ from taskcompendium.pipeline.task_format import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "20"
+SOURCE_PIPELINE_REVISION = "21"
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
@@ -168,6 +173,8 @@ class SourcePipelineConfig:
     oracle_filter: OracleFilterReceipt | None = None
     no_oracle_source_context: NoOracleSourceContext | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
+    backfill: BackfillPolicy | None = None
+    """The requirement-backfill policy; ``None`` runs no requirements stage."""
 
 
 @dataclass(frozen=True)
@@ -496,6 +503,8 @@ class _SourceRun:
     parquet_shard_bytes: int
     declared_task_format: TaskFormat
     population: DeduplicatedPopulation | None = None
+    requirements: dict[str, Any] | None = None
+    """The requirement backfill's receipt, when the run carries a backfill policy."""
 
     def scratch(self, phase: str) -> StoragePath:
         """The working directory of one of ``SCRATCH_PHASES``."""
@@ -857,6 +866,7 @@ def _write_manifest(
         "implementation_revision": SOURCE_PIPELINE_REVISION,
         "quality_revision": SOURCE_QUALITY_REVISION,
         "verification_revision": SOURCE_VERIFICATION_REVISION,
+        "requirements_revision": config.backfill.rules_revision if config.backfill else None,
         "normalized_shards": _population_shard_count(panel.sample.population_count, config.normalized_shards),
         "normalized_shard_limit": config.normalized_shards,
         "source_input": run.source_input,
@@ -884,6 +894,15 @@ def _write_manifest(
         "unavailable_reviews": unavailable_reviews,
         "quality": decision.model_dump(mode="json"),
         "verification": report,
+        "requirements": (
+            {
+                "manifest": str(output / REQUIREMENTS_MANIFEST_PATH),
+                "receipt_sha256": run.requirements["receipt_sha256"],
+                "ambiguous_tasks": run.requirements["ambiguous"]["tasks"],
+            }
+            if run.requirements
+            else None
+        ),
         "admission": source_admission(admissions),
         "admission_counts": admissions,
         "grading_environment": grading_environment,
@@ -912,6 +931,8 @@ def _write_manifest(
             "policy": asdict(config.verification_policy),
         },
     )
+    if run.requirements is not None:
+        _write_json(output / REQUIREMENTS_MANIFEST_PATH, run.requirements)
     _write_json(output / "manifest.json", manifest)
 
 
@@ -959,6 +980,22 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         or oracle_filter.input_rows != population.input_rows - population.within_source_duplicates
     ):
         raise ValueError("Oracle filter receipt belongs to a different recipe or input population")
+    policy_revision = config.backfill.rules_revision if config.backfill else None
+    if oracle_filter.backfill_policy_revision != policy_revision:
+        raise ValueError(
+            "Oracle filter receipt was qualified under backfill policy "
+            f"{oracle_filter.backfill_policy_revision!r}, not {policy_revision!r}"
+        )
+    if config.backfill is not None:
+        with run.telemetry.phase("requirements") as phase:
+            population, receipt = backfill_population(
+                run.context,
+                population,
+                str(run.output / "requirements"),
+                config.backfill,
+                telemetry=phase,
+            )
+        run = replace(run, population=population, requirements=receipt)
     panel = _sample_panel(run)
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)

@@ -46,6 +46,7 @@ from taskcompendium.pipeline.models import (
     SourceRecipe,
 )
 from taskcompendium.pipeline.oracle_filter import oracle_recipe_identity
+from taskcompendium.pipeline.requirements import LABEL_KEY, BackfillPolicy, backfill_task
 from taskcompendium.pipeline.review import BatchReviewer, completion_body
 from taskcompendium.pipeline.source_processing import (
     ConversionResult,
@@ -635,7 +636,6 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode
 
 
 def test_completed_source_preserves_phase_payloads_and_reuses_inference_cache(tmp_path):
-
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(2)[1:])
     recipe = fixture_recipe(convert_svamp)
@@ -1222,3 +1222,250 @@ def test_transport_outage_cannot_qualify_tasks_with_passing_controls(tmp_path):
     assert report["quality"]["result"]["issue_count"] == 0
     assert report["quality"]["result"]["unavailable_count"] == 2
     assert {row["admission"] for row in parquet_rows(pending.verify_path)} == {"deferred"}
+
+
+def convert_scripted(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    """The arithmetic task with a machine, an oracle solve script from the row, and the fixture script grader."""
+    task = svamp_row_task(row)
+    if isinstance(task, ImportRejection):
+        return task
+    script = row.data["solve_script"]
+    assert isinstance(script, str)
+    answer = str(row.data["Answer"])
+    task = task.model_copy(
+        update={
+            "environment_requirements": GRADER_ENVIRONMENT,
+            "resources": ResourceGroups(
+                oracle=(
+                    inline_resource("solution/answer.txt", answer.encode()),
+                    inline_resource("solution/solve.sh", script.encode()),
+                )
+            ),
+        }
+    )
+    return script_graded(task, f'test "$(cat answer.txt)" = {answer}\n'.encode())
+
+
+def convert_predeclared(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
+    """The scripted task whose machine environment already declares ``network``."""
+    task = convert_scripted(row, context)
+    if isinstance(task, ImportRejection):
+        return task
+    environment = task.environment_requirements.model_copy(update={"capabilities": ("network",)})
+    return task.model_copy(update={"environment_requirements": environment})
+
+
+def backfill_rows(rows: list[dict], tmp_path: Path, convert, *, policy: BackfillPolicy | None):
+    """Run the FULL pipeline over one scripted source whose receipt was qualified under ``policy``."""
+    source = tmp_path / "source"
+    write_jsonl(source, rows)
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
+    recipe = fixture_recipe(convert, rubric=None, controls=ORACLE_CONTROLS)
+    tasks = []
+    for index, data in enumerate(rows):
+        task = convert_source_row({"locator": f"source.jsonl:{index}", "data": data}, recipe).result.task
+        tasks.append(backfill_task(task, policy).task if policy is not None else task)
+    receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe))
+    if policy is not None:
+        receipt = receipt.model_copy(update={"backfill_policy_revision": policy.rules_revision})
+    config = replace(
+        pipeline_config(SourceProcessingMode.FULL, reviewer, machines=FixtureGradingMachines()),
+        oracle_filter=receipt,
+        backfill=policy,
+    )
+    return run_pipeline(recipe, source, tmp_path / "output", config), tmp_path / "output"
+
+
+def scripted_rows(script: str, count: int = 2) -> list[dict]:
+    return [{**row, "solve_script": script} for row in apple_rows(count)]
+
+
+def test_backfill_declares_capability_with_evidence_before_review(tmp_path):
+    script = "curl https://example.com/data.tar.gz -o data.tar\npip install -r requirements.txt\n"
+    result, output = backfill_rows(
+        scripted_rows(script), tmp_path, convert_scripted, policy=BackfillPolicy("backfill-rules-1", 0.2)
+    )
+    manifest = read_json(result.manifest_path)
+    receipt = read_json(output / "requirements/manifest.json")
+    exported = [TaskSpec.model_validate_json(row["task_json"]) for row in parquet_rows(result.normalize_path)]
+    assert len(exported) == 2
+    for task in exported:
+        assert task.environment_requirements.capabilities == ("network",)
+        evidence = json.loads(task.labels[LABEL_KEY])
+        assert evidence["revision"] == "1" and evidence["policy_revision"] == "backfill-rules-1"
+        entries = {entry["rule"]: entry for items in evidence["capabilities"].values() for entry in items}
+        assert set(entries) == {"network_fetch_command", "package_install_command"}
+        assert {entry["path"] for entry in entries.values()} == {"solution/solve.sh"}
+        assert all(entry["sha256"] == hashlib.sha256(script.encode()).hexdigest() for entry in entries.values())
+    assert receipt["policy"] == {"rules_revision": "backfill-rules-1", "residual_threshold": 0.2}
+    assert receipt["counts"]["tasks"] == {"normalized": 2, "machine_less": 0, "rejections": 0}
+    assert receipt["counts"]["outcomes"]["declared"] == 2 and receipt["counts"]["outcomes"]["ambiguous"] == 0
+    assert receipt["counts"]["capabilities"]["network"]["declared"] == 2
+    assert receipt["counts"]["capabilities"]["git_repository"] == {
+        "declared": 0,
+        "unchanged": 0,
+        "ambiguous": 0,
+        "not_stated": 2,
+    }
+    assert receipt["counts"]["rules"]["network_fetch_command"] == 2
+    assert receipt["counts"]["rules"]["package_install_command"] == 2
+    assert receipt["ambiguous"]["count"] == 0
+    assert receipt["residual"] == {"ambiguous_share": 0.0, "over_threshold": False}
+    assert manifest["requirements_revision"] == "backfill-rules-1"
+    assert manifest["requirements"]["manifest"] == str(output / "requirements/manifest.json")
+    assert manifest["requirements"]["receipt_sha256"] == receipt["receipt_sha256"]
+    assert (
+        canonical_sha256({key: value for key, value in receipt.items() if key != "receipt_sha256"})
+        == receipt["receipt_sha256"]
+    )
+    phases = [phase["phase"] for phase in read_json(manifest["telemetry"])["phases"]]
+    assert phases.index("within_source_dedup") < phases.index("requirements") < phases.index("audit_review")
+
+
+def test_backfill_task_declares_git_repository_and_network_from_remote_git(tmp_path):
+    task = convert_source_row(
+        {"locator": "source.jsonl:0", "data": scripted_rows("git clone https://example.com/repo.git\n")[0]},
+        fixture_recipe(convert_scripted, rubric=None, controls=ORACLE_CONTROLS),
+    ).result.task
+    backfill = backfill_task(task, BackfillPolicy("backfill-rules-1"))
+    assert backfill.task.environment_requirements.capabilities == ("git_repository", "network")
+    evidence = json.loads(backfill.task.labels[LABEL_KEY])
+    assert set(evidence["capabilities"]) == {"network", "git_repository"}
+    assert all(
+        entry["rule"] == "git_remote_command" and entry["path"] == "solution/solve.sh"
+        for entries in evidence["capabilities"].values()
+        for entry in entries
+    )
+    assert backfill.outcome == "declared" and not backfill.ambiguous
+    assert backfill.rule_hits == {"rule:git_remote_command": 1, "rule:git_mention": 1}
+
+
+def test_backfill_task_skips_tasks_without_a_declared_machine():
+    task = svamp_row_task(
+        RawRow(
+            "fixture-plain", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), apple_rows(1)[0]
+        )
+    )
+    assert isinstance(task, TaskSpec)
+    scripted = task.model_copy(
+        update={
+            "resources": ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"curl https://example.com\n"),))
+        }
+    )
+    backfill = backfill_task(scripted, BackfillPolicy("backfill-rules-1"))
+    assert backfill.machine_less and backfill.task is scripted
+    assert backfill.task.environment_requirements.capabilities == ()
+    assert backfill.rule_hits == {}
+
+
+def test_backfill_keeps_declared_capabilities_and_records_nothing_to_do(tmp_path):
+    result, _ = backfill_rows(
+        scripted_rows("curl https://example.com/data.tar.gz -o data\n"),
+        tmp_path,
+        convert_predeclared,
+        policy=BackfillPolicy("backfill-rules-1"),
+    )
+    exported = [TaskSpec.model_validate_json(row["task_json"]) for row in parquet_rows(result.normalize_path)]
+    for task in exported:
+        assert task.environment_requirements.capabilities == ("network",)
+        assert LABEL_KEY not in task.labels
+    receipt = read_json(Path(result.manifest_path).parent / "requirements/manifest.json")
+    assert receipt["counts"]["outcomes"]["unchanged"] == 2
+    assert receipt["counts"]["capabilities"]["network"] == {
+        "declared": 0,
+        "unchanged": 2,
+        "ambiguous": 0,
+        "not_stated": 0,
+    }
+
+
+def test_backfill_leaves_unresolved_capabilities_not_stated(tmp_path):
+    result, _ = backfill_rows(
+        scripted_rows("echo done\n"), tmp_path, convert_scripted, policy=BackfillPolicy("backfill-rules-1")
+    )
+    exported = [TaskSpec.model_validate_json(row["task_json"]) for row in parquet_rows(result.normalize_path)]
+    for task in exported:
+        assert task.environment_requirements.capabilities == ()
+        assert task.labels == {}
+    receipt = read_json(Path(result.manifest_path).parent / "requirements/manifest.json")
+    assert receipt["counts"]["outcomes"]["not_stated"] == 2
+    assert all(
+        counts["not_stated"] == 2 and counts["declared"] == 0 for counts in receipt["counts"]["capabilities"].values()
+    )
+
+
+def test_backfill_records_ambiguous_residual_without_declaring(tmp_path):
+    result, output = backfill_rows(
+        scripted_rows("# download the model weights before grading\n"),
+        tmp_path,
+        convert_scripted,
+        policy=BackfillPolicy("backfill-rules-1", 0.2),
+    )
+    exported = [TaskSpec.model_validate_json(row["task_json"]) for row in parquet_rows(result.normalize_path)]
+    for task in exported:
+        assert task.environment_requirements.capabilities == ()
+        assert LABEL_KEY not in task.labels
+    receipt = read_json(output / "requirements/manifest.json")
+    assert receipt["counts"]["outcomes"]["ambiguous"] == 2
+    assert receipt["counts"]["capabilities"]["network"]["ambiguous"] == 2
+    assert receipt["counts"]["capabilities"]["network"]["declared"] == 0
+    assert receipt["residual"] == {"ambiguous_share": 1.0, "over_threshold": True}
+    ambiguous = parquet_rows(output / "requirements/ambiguous")
+    assert {row["task_id"] for row in ambiguous} == {task.id for task in exported}
+    assert manifest_requirements(receipt, output) == read_json(result.manifest_path)["requirements"]
+
+
+def test_backfill_policy_revision_changes_the_receipt_identity(tmp_path):
+    script = "wget https://example.com/dataset.tar\n"
+    first, first_output = backfill_rows(
+        scripted_rows(script), tmp_path / "first", convert_scripted, policy=BackfillPolicy("rules-1")
+    )
+    second, _ = backfill_rows(
+        scripted_rows(script), tmp_path / "second", convert_scripted, policy=BackfillPolicy("rules-2")
+    )
+    first_receipt = read_json(first_output / "requirements/manifest.json")
+    second_receipt = read_json(Path(second.manifest_path).parent / "requirements/manifest.json")
+    assert first_receipt["policy"]["rules_revision"] == "rules-1"
+    assert second_receipt["policy"]["rules_revision"] == "rules-2"
+    assert first_receipt["receipt_sha256"] != second_receipt["receipt_sha256"]
+    assert read_json(first.manifest_path)["requirements_revision"] == "rules-1"
+    assert read_json(second.manifest_path)["requirements_revision"] == "rules-2"
+
+
+def test_backfill_requires_a_receipt_qualified_under_the_same_policy(tmp_path):
+    source = tmp_path / "source"
+    rows = scripted_rows("curl https://example.com/data.tar.gz -o data\n")
+    write_jsonl(source, rows)
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
+    recipe = fixture_recipe(convert_scripted, rubric=None, controls=ORACLE_CONTROLS)
+    tasks = [
+        convert_source_row({"locator": f"source.jsonl:{index}", "data": data}, recipe).result.task
+        for index, data in enumerate(rows)
+    ]
+    config = replace(
+        pipeline_config(SourceProcessingMode.FULL, reviewer, machines=FixtureGradingMachines()),
+        oracle_filter=oracle_receipt(tasks, oracle_recipe_identity(recipe)),
+        backfill=BackfillPolicy("backfill-rules-1"),
+    )
+    with pytest.raises(ValueError, match="backfill policy"):
+        run_pipeline(recipe, source, tmp_path / "output", config)
+
+
+def test_no_backfill_policy_skips_the_requirements_stage(tmp_path):
+    result, output = backfill_rows(
+        scripted_rows("curl https://example.com/data.tar.gz -o data\n"), tmp_path, convert_scripted, policy=None
+    )
+    manifest = read_json(result.manifest_path)
+    assert manifest["requirements_revision"] is None and manifest["requirements"] is None
+    assert not (output / "requirements").exists()
+    assert "requirements" not in [phase["phase"] for phase in read_json(manifest["telemetry"])["phases"]]
+    exported = [TaskSpec.model_validate_json(row["task_json"]) for row in parquet_rows(result.normalize_path)]
+    assert all(task.environment_requirements.capabilities == () and task.labels == {} for task in exported)
+
+
+def manifest_requirements(receipt: dict, output: Path) -> dict:
+    return {
+        "manifest": str(output / "requirements/manifest.json"),
+        "receipt_sha256": receipt["receipt_sha256"],
+        "ambiguous_tasks": receipt["ambiguous"]["tasks"],
+    }

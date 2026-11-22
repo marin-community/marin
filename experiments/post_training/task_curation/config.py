@@ -11,6 +11,7 @@ from finestore.rl.curation import TaskFormat
 from finestore.rl.licenses import LicenseReceipt
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
+from taskcompendium.pipeline.requirements import BackfillPolicy
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
@@ -34,6 +35,7 @@ class RecipeSettings:
     verification_sample_size: int = 20
     oracle_filter_receipt: str | None = None
     decontamination_receipt: str | None = None
+    backfill: BackfillPolicy | None = None
     curation_attempt: int = 0
     execution: AuditExecution = field(default_factory=AuditExecution)
 

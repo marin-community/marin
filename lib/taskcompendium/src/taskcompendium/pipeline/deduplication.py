@@ -93,6 +93,12 @@ class DeduplicatedPopulation:
     raw_count: int
     unique_count: int
     within_source_duplicates: int
+    drops_path: str | None = None
+    """The population directory holding this population's drop manifest, when ``path`` does not.
+
+    A derived population, such as the requirement backfill's, reuses the deduplication's drops
+    instead of writing its own, because it changes declared fields and labels but drops nothing.
+    """
 
     def rows(self) -> Dataset[ConvertedRow]:
         return Dataset.from_list(
@@ -105,7 +111,7 @@ class DeduplicatedPopulation:
             "raw_count": self.raw_count,
             "unique_count": self.unique_count,
             "within_source_duplicates": self.within_source_duplicates,
-            "drop_manifest_uri": str(StoragePath(self.path) / "drops/*.parquet"),
+            "drop_manifest_uri": str(StoragePath(self.drops_path or self.path) / "drops/*.parquet"),
         }
 
 
