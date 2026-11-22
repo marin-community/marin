@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 9:12 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 9:27 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first eight updates, with 72 zero-mismatch receiver checks. | Verify the candidate's terminal receipts and compare it with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first ten updates, with 88 zero-mismatch receiver checks. | Verify the candidate's terminal receipts and compare it with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The pinned 67B model and fused scorer passed the fixed-checkpoint H100 gate with zero PPO clip crossings across 32,768 targets. Four H100 hosts converted both trained policies to typed snapshots and committed the receipt. | Verify the live tool turn, swap and fused replay on one serving host, then run the held-learner comparison. |
+| Native inventory backend | Four H100 hosts converted both trained 67B policies. One serving host installed the first and completed the real tool exchange. Shared token IDs and positions matched, and the learner binder preserved both turns' distinct expert routes. The fixed-checkpoint fused scorer passed across 32,768 targets. | Score both real tool turns through the fused learner, verify the live swap and post-swap replay, then run the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -82,6 +82,13 @@ causal prefix. Carry them through padding, packing and microbatch slicing.
 The learner fixes expert choices for scoring and update and recomputes combine
 weights under its current parameters. Preserve the same frozen old scores
 and objective weights through the update.
+
+A cold continuation can recompute different expert routes on shared tokens.
+Retain each turn's complete captured prefix, including its routes and router
+thresholds. Assign every sampled target to the turn that produced it. Tool
+observations remain visible to later turns and carry zero objective weight.
+Reuse a cached prefix only with the KV, routes and thresholds from that
+execution and the same acknowledged policy.
 
 A sampling logprob describes the transformed distribution used to draw a
 token. A raw policy logprob describes the model before temperature and
@@ -1497,9 +1504,22 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The one-host serving job saw all eight H100s and stopped when Iris's
   workspace extraction removed the telemetry wrapper's execute bit. The
   tested fix restores execute permission on the hash-checked scratch copy.
-  The serving retry binds the successful conversion receipt by SHA-256 and
-  reserves one eight-H100 host. The live swap, tool replay and post-swap
-  fused score remain accelerator gates. [Serving retry][iris-native-fused-gate]
+  The first serving retry verified policy 1 and completed the tool exchange.
+  Its two binary frames matched on all 471 shared tokens, positions and
+  validity masks. The defined cross-turn route-equality check found 3,647
+  differences across 48,984 ordered expert assignments. Some positions
+  changed expert membership, including positions in the original prompt on
+  deeper layers. Prefix caching was disabled for this fixture.
+  [Serving attempt and captured frames][iris-native-fused-gate]
+
+  The production binder independently verified both frames against the
+  same model and policy, preserved each turn's routes and QB thresholds
+  bit for bit, and assigned 247 and 104 sampled targets to their original
+  turns. All 46 tool observation and boundary tokens remained available
+  as context with no target owner. The next qualification replays both
+  original turns with the fused scorer and independently compares every
+  action against its sampled raw policy score. The live swap and post-swap
+  full-context fused score remain required.
 
   The typed install keeps the old model and KV pool live until it verifies
   the replacement weights and allocates the new pool. A CPU probe found
