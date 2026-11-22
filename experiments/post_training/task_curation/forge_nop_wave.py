@@ -18,6 +18,7 @@ the last calibrated attempt's package, and archives every control's output::
 
 import argparse
 import concurrent.futures
+import hashlib
 import io
 import json
 import subprocess
@@ -26,21 +27,23 @@ import tomllib
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements
 from taskcompendium.pipeline.oracle_filter import negative_control_applicability
 
+from experiments.post_training.task_curation.negative_controls import negative_control_from_archive
 from experiments.post_training.task_curation.oracle_filter import row_task
 
 HARBOR_PROJECT = Path("vendor/harbor").resolve()
 NOP_AGENT = "nop"
 
 
-def calibrated_packages(calibrated_root: Path) -> dict[str, tuple[Path, dict | None]]:
+def calibrated_packages(calibrated_root: Path) -> dict[str, tuple[Path, dict | None, dict | None]]:
     """Each task's last calibrated consumed package and the verifier allocation its trial ran."""
-    packages: dict[str, tuple[Path, dict | None]] = {}
+    packages: dict[str, tuple[Path, dict | None, dict | None]] = {}
     for task_dir in sorted(calibrated_root.iterdir()):
         if not task_dir.is_dir():
             continue
@@ -50,10 +53,13 @@ def calibrated_packages(calibrated_root: Path) -> dict[str, tuple[Path, dict | N
                 if package.is_dir() and (package / "task.toml").is_file():
                     result = attempt / "jobs" / "oracle" / "result.json"
                     measured = None
+                    runtime = None
                     if result.is_file():
                         document = json.loads(result.read_text())
-                        measured = (document.get("config") or {}).get("task", {}).get("verifier_execution_requirements")
-                    packages[task_dir.name] = (package, measured)
+                        config_task = (document.get("config") or {}).get("task") or {}
+                        measured = config_task.get("verifier_execution_requirements")
+                        runtime = config_task.get("source_runtime")
+                    packages[task_dir.name] = (package, measured, runtime)
     return packages
 
 
@@ -70,11 +76,19 @@ def measured_requirements(package: Path) -> ExecutionRequirements:
     )
 
 
-def control_request(task_id: str, entry: dict, package: Path, measured_verifier: dict | None, output_root: Path) -> dict:
+def control_request(
+    task_id: str,
+    entry: dict,
+    package: Path,
+    measured_verifier: dict | None,
+    source_runtime: dict | None,
+    output_root: Path,
+) -> dict:
     """One curation_control request: the frozen consumed package with no agent.
 
-    The verifier allocation must match what the oracle trial consumed, so the
-    measured allocation travels from that trial's own config into this control's.
+    The verifier allocation and the original runtime must match what the oracle
+    trial consumed, so both travel from that trial's own config into this
+    control's.
     """
     requirements = measured_requirements(package)
     return {
@@ -82,6 +96,7 @@ def control_request(task_id: str, entry: dict, package: Path, measured_verifier:
             "task": {
                 "path": str(package),
                 **({"verifier_execution_requirements": measured_verifier} if measured_verifier is not None else {}),
+                **({"source_runtime": source_runtime} if source_runtime is not None else {}),
             },
             "agent": {"name": NOP_AGENT},
             "environment": {"type": "daytona", "kwargs": {"provisioning": "declarative"}},
@@ -103,8 +118,8 @@ def control_request(task_id: str, entry: dict, package: Path, measured_verifier:
     }
 
 
-def run_control(request: dict, output_root: Path) -> dict:
-    """Drive one curation_control request and return its receipt record."""
+def run_control(request: dict, output_root: Path, archive_root: str) -> dict:
+    """Drive one curation_control request, archive its output, and bind its receipt."""
     result = subprocess.run(
         [
             "uv",
@@ -126,9 +141,26 @@ def run_control(request: dict, output_root: Path) -> dict:
     )
     if result.returncode != 0:
         raise RuntimeError(f"nop control failed for {request['source']['task_id']}: {result.stderr[-800:]}")
-    receipt = json.loads(result.stdout)
-    (output_root / "receipt.json").write_text(json.dumps(receipt, indent=1))
-    return {"task_id": request["source"]["task_id"], "receipt": receipt}
+    task_id = request["source"]["task_id"]
+    task_hash = canonical_sha256(task_id)
+    archive_uri = f"{archive_root.rstrip('/')}/{task_hash}.tar.gz"
+    buffer = io.BytesIO()
+    # The archive root must be the output directory's own name: the control manifest
+    # records its absolute trial result path, and the binding locates the trial by
+    # finding the root name inside it.
+    with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
+        bundle.add(output_root, arcname=output_root.name)
+    archive_bytes = buffer.getvalue()
+    StoragePath(archive_uri).write_bytes(archive_bytes)
+    bound = negative_control_from_archive(
+        ContentEvidenceReference(uri=archive_uri, sha256=hashlib.sha256(archive_bytes).hexdigest()),
+        f"{output_root.name}/negative-control.json",
+        source_task_sha256=request["source"]["source_task_sha256"],
+        source_task_checksum=request["source"]["source_task_checksum"],
+        execution_requirements=ExecutionRequirements.model_validate(request["source"]["execution_requirements"]),
+    )
+    (output_root / "receipt.json").write_text(json.dumps(bound.model_dump(mode="json"), indent=1))
+    return {"task_id": task_id, "receipt": bound.model_dump(mode="json")}
 
 
 def wave(
@@ -161,18 +193,13 @@ def wave(
     with controls_path.open("w") as controls:
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {}
-            for task_id, (entry, (package, measured_verifier)) in selected.items():
-                task_output = output_root / canonical_sha256(task_id)
-                request = control_request(task_id, entry, package, measured_verifier, task_output)
-                futures[pool.submit(run_control, request, task_output)] = task_id
+            for task_id, (entry, (package, measured_verifier, source_runtime)) in selected.items():
+                task_output = output_root / canonical_sha256(task_id) / "nop-control"
+                request = control_request(task_id, entry, package, measured_verifier, source_runtime, task_output)
+                futures[pool.submit(run_control, request, task_output, archive_root)] = task_id
             for future in concurrent.futures.as_completed(futures):
                 record = future.result()
                 controls.write(json.dumps(record) + "\n")
-                archive = StoragePath(f"{archive_root}/{canonical_sha256(record['task_id'])}.tar.gz")
-                buffer = io.BytesIO()
-                with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
-                    bundle.add(output_root / canonical_sha256(record["task_id"]), arcname=record["task_id"])
-                archive.write_bytes(buffer.getvalue())
     return {"selected": len(selected), "controls": str(controls_path)}
 
 
