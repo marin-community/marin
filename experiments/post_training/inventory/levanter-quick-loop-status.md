@@ -91,8 +91,19 @@ The complete 23.84-MiB task archive was downloaded and inspected. Actual
 receipts confirm eight H100s, the pinned packages and source bundle, VMM at
 0.90, and Linux NumPy advisories disabled. Both variants exited cleanly in this
 tiny case, so it does not identify or prove a remedy for the original full-model
-exit failure. The numerical failure is under investigation. No new 40-H100
-full-model smoke or matched 25-update comparison has been launched.
+exit failure. An eight-CPU/EP8 control using the archived initializer and the
+actual Trainer's gradient accumulation path produced finite raw gradients and
+a finite changed model/Adam state. Its CPU-reference scores differ from the GPU
+scores, so this establishes geometry/objective sanity rather than GPU parity.
+
+The next bounded GPU suite records raw gradients before clipping, checks three
+direct FA4 backward cases against the existing reference oracle/tolerances, and
+runs a D128/GQA4 tiny-model lifecycle control only if its raw gradients are
+finite. The failed tiny fixture uses an H64 MHA fallback backward path; the
+67B model uses D128/GQA4. That source-path difference is a diagnostic lead, not
+a proven numerical cause. Full-model sequence/window geometry and cross-host
+behavior remain separate gates. No new 40-H100 full-model smoke or matched
+25-update comparison has been launched.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files

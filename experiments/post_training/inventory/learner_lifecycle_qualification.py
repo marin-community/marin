@@ -38,7 +38,7 @@ class BaselineRuntime(NativePolicyRuntime):
         pass
 
 
-def _initializer(path: Path) -> None:
+def _initializer(path: Path, config: SnowballConfig | None = None) -> None:
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(
             models.WordLevel({"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
@@ -47,7 +47,7 @@ def _initializer(path: Path) -> None:
         eos_token="<eos>",
     )
     tokenizer.save_pretrained(path)
-    config = SnowballConfig(
+    config = config or SnowballConfig(
         vocab_size=64,
         hidden_dim=128,
         intermediate_dim=256,
@@ -145,13 +145,13 @@ def _environment(platform: str, python_executable: str) -> dict[str, str]:
     return environment
 
 
-def _frozen_batch(devices: int) -> dict:
+def _frozen_batch(devices: int, sequence_length: int = 8) -> dict:
     batch = devices * 2
     return {
         "arrays": {
-            "tokens": np.tile(np.arange(2, 10, dtype=np.int32), (batch, 1)),
-            "attention_mask": np.ones((batch, 8), dtype=np.bool_),
-            "position_ids": np.tile(np.arange(8, dtype=np.int32), (batch, 1)),
+            "tokens": np.tile(np.arange(sequence_length, dtype=np.int32) % 62 + 2, (batch, 1)),
+            "attention_mask": np.ones((batch, sequence_length), dtype=np.bool_),
+            "position_ids": np.tile(np.arange(sequence_length, dtype=np.int32), (batch, 1)),
             "response_mask": np.ones((batch, 2), dtype=np.bool_),
             "advantages": np.tile(np.array([0.5, -0.25], dtype=np.float32), (batch, 1)),
             "policy_weights": np.full((batch, 2), 1 / (batch * 2), dtype=np.float32),
@@ -210,7 +210,9 @@ def _persist_arm(directory: Path, row: dict, stage: str) -> None:
     (directory.parent / f"lifecycle-{directory.name}.json").write_text(json.dumps(row, indent=2) + "\n")
 
 
-def _arm(python: str, environment: dict, config: dict, directory: Path, baseline: bool) -> dict:
+def _arm(
+    python: str, environment: dict, config: dict, directory: Path, baseline: bool, sequence_length: int = 8
+) -> dict:
     directory.mkdir(parents=True)
     child = None
     exits = []
@@ -222,7 +224,7 @@ def _arm(python: str, environment: dict, config: dict, directory: Path, baseline
         _persist_arm(directory, row, "score_frozen_batch")
         if config["require_accelerator"] and any("H100" not in kind for kind in identity["device_kinds"]):
             raise ValueError("Lifecycle qualification requires actual H100 devices")
-        payload = _frozen_batch(config["distributed"]["local_device_count"])
+        payload = _frozen_batch(config["distributed"]["local_device_count"], sequence_length)
         payload["arrays"]["old_logprobs"] = child.request("forward", payload)["output"]
         row["frozen_batch_sha256"] = _payload_fingerprint(payload)
         _persist_arm(directory, row, "first_update")
