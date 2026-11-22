@@ -1,18 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reasoning Gym puzzles from two sources, each graded by the puzzle task's own scorer.
+"""Reasoning Gym puzzles from two sources, graded by pinned scorers with targeted repairs.
 
 ``reasoning_gym_generated`` generates entries with the pinned ``reasoning_gym`` wheel, the release
 the grader packages pin, in ``GENERATOR_PARTS`` parts that workers generate in parallel; a sample
 generates only its sampled rows. Its grader
 (``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
-Python values, and rows whose entry a fresh dataset does not reproduce are rejected. So are rows whose
-scorer gave the recorded wrong answer the full reward, and the rows of
-``CONSTANT_REPLY_VULNERABILITIES``.
-``tasktrove-reasoning-gym`` uses ``ReasoningGymSpec`` to preserve upstream fractional reward. Both
-run with the grader packages (``GRADER_PACKAGES``). TaskTrove and Nemotron Ultra rows from known
-constant-reward task families are rejected at conversion too.
+Python values, and rows whose entry a fresh dataset does not reproduce are rejected. A recorded
+wrong answer that earns full reward is also rejected.
+``tasktrove-reasoning-gym`` uses ``ReasoningGymSpec`` to preserve fractional reward where applicable.
+Both run with the grader packages (``GRADER_PACKAGES``), including Marin's repairs to five pinned scorers.
 """
 
 import json
@@ -58,7 +56,6 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import DEFAULT_OUTPUT, ReasoningGymSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.reasoning_gym.scorer_defects import CONSTANT_REPLY_VULNERABILITIES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
     TaskTroveConverter,
@@ -104,8 +101,7 @@ present.
 Independently check the hidden generated answer against the public problem where feasible; a passing score does not
 establish correctness.
 
-Preserve the task's own partial reward and answer parsing; a label or approximate substring match is not a substitute
-for that scorer.
+Check the reward against the task's answer; five scorer repairs use stricter acceptance than the pinned wheel.
 
 Judge default generated difficulty and unusual puzzle formats on their actual content, without assuming they are
 defects.
@@ -120,8 +116,8 @@ Procedural generation and unfamiliar puzzles are not defects by themselves.
 Independently work out the answer where feasible; check that the reference actually follows the public problem.
 Passing a reference through its scorer tests mechanics, not its truth.
 
-Compare the public answer format with the named upstream Reasoning Gym scorer. The grader preserves
-the named scorer's fractional reward and answer parsing without the source's substring fallback.
+Compare the public answer format with the named Reasoning Gym scorer. The grader preserves fractional
+reward where applicable, repairs five scorer defects, and omits the source's substring fallback.
 
 Flag multiple defensible answers when the named scorer rejects them, hidden assumptions, underspecified
 transformations, or a hidden question different from the public problem.
@@ -268,16 +264,13 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
             "wrong_answer_scores_full",
             f"The {task_name} scorer gave the wrong answer {recorded.negative.candidate!r} the full reward",
         )
-    constant_reply_defect = CONSTANT_REPLY_VULNERABILITIES.get(task_name)
-    if constant_reply_defect is not None:
-        return source_defect("constant_reply_scores_full", constant_reply_defect)
     contract = {
         "task": task_name,
         "entry": entry,
         "generation": generation,
         "generator_version": GENERATOR_VERSION,
         "answer_extraction": "Text after the last Answer: marker, stripped; otherwise stripped whole response",
-        "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
+        "reward": "float(verifyit scorer repair or pinned reasoning_gym scorer)",
         "recorded_pinned_generator_controls": recorded.model_dump(mode="json"),
     }
     package = script_package(
@@ -316,7 +309,7 @@ def reply_instruction(instruction: str) -> str:
 
 
 def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    """A reply task graded by the upstream scorer, preserving partial credit."""
+    """A reply task graded by the pinned scorer with targeted repairs."""
     instruction, data = row.data.get("instruction"), row.data.get("verifier_data")
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
         return source_defect("missing_input", "Instruction and entry data are required")
@@ -324,9 +317,9 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
     if not isinstance(dataset, str) or not dataset:
         return unsupported("missing_scorer", "metadata.source_dataset is required")
-    if defect := CONSTANT_REPLY_VULNERABILITIES.get(dataset):
-        return source_defect("constant_reply_scores_full", defect)
-    if not isinstance(data.get("answer"), str) or not data["answer"].strip():
+    if not (isinstance(data.get("answer"), str) and data["answer"].strip()) and not (
+        dataset == "propositional_logic" and data.get("answer") is None
+    ):
         return source_defect("invalid_entry", "Entry answer must be a string")
     package = verifyit_package(
         ReasoningGymSpec(dataset=dataset),
@@ -393,7 +386,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 family="reasoning-gym",
                 tags=("agentic", "multi-turn"),
                 count=14259,
-                notes="Preserve upstream fractional scoring while rejecting known constant-reward task families.",
+                notes="Preserve upstream fractional scoring with targeted repairs to five pinned scorers.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(

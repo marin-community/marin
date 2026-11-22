@@ -68,7 +68,7 @@ GENERATED_ROW = {
         "generator_version": declarations.GENERATOR_VERSION,
         "positive": {"candidate": "42", "reward": 1.0},
         "negative": {"candidate": "definitely wrong", "reward": 0.0},
-        "execution": "Pinned reasoning-gym scorer",
+        "execution": "Pinned reasoning-gym scorer with Marin repairs",
     },
 }
 ROWS: dict[str, dict] = {"reasoning_gym_generated": GENERATED_ROW, "tasktrove-reasoning-gym": tasktrove_archive()}
@@ -96,11 +96,10 @@ def test_tasktrove_rejects_rows_without_an_entry_or_grader(row, kind, reason):
     "task_name",
     ["coin_flip", "complex_arithmetic", "game_of_life_halting", "propositional_logic", "puzzle24"],
 )
-def test_tasktrove_rejects_tasks_with_constant_full_reward(task_name):
-    entry = {**TASKTROVE_ENTRY, "metadata": {"source_dataset": task_name}}
+def test_tasktrove_keeps_tasks_with_repaired_scorers(task_name):
+    entry = reasoning_gym.create_dataset(task_name, size=1, seed=42)[0]
     result = convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
-    assert isinstance(result, ImportRejection)
-    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "constant_reply_scores_full")
+    assert isinstance(result, TaskSpec | NormalizedTask)
 
 
 def test_generated_row_without_matching_provenance_is_a_converter_error():
@@ -124,32 +123,30 @@ def generated_row(task_name: str, index: int) -> dict:
 
 
 def test_generated_row_whose_scorer_pays_the_recorded_wrong_answer_is_rejected():
-    # game_of_life_halting compares the truth values of the reply and the answer, both nonempty strings.
     row = generated_row("game_of_life_halting", 0)
-    assert row["recorded_pinned_generator_controls"]["negative"] == {"candidate": "definitely wrong", "reward": 1.0}
+    assert row["recorded_pinned_generator_controls"]["negative"] == {"candidate": "definitely wrong", "reward": 0.0}
+    row["recorded_pinned_generator_controls"]["negative"]["reward"] = 1.0
     result = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "wrong_answer_scores_full")
 
 
 @pytest.mark.parametrize(
-    ("task_name", "constant_reply"),
+    "task_name",
     [
-        ("coin_flip", "0"),
-        ("complex_arithmetic", "NaN"),
-        ("propositional_logic", "P \u2228 Q"),
-        ("puzzle24", "1*2*3*4"),
+        "coin_flip",
+        "complex_arithmetic",
+        "propositional_logic",
+        "puzzle24",
     ],
 )
-def test_generated_row_of_a_task_that_pays_a_constant_reply_is_rejected(task_name, constant_reply):
-    row = generated_row(task_name, 0)
-    assert row["recorded_pinned_generator_controls"]["negative"]["reward"] != 1.0
-    assert constant_reply != row["entry"]["answer"]
-    score = cast(generate.Scorer, reasoning_gym.get_score_answer_fn(task_name))
-    assert score(constant_reply, row["entry"]) == 1.0
+def test_generated_row_with_repaired_scorer_is_kept(task_name):
+    row = generated_row(task_name, 1 if task_name == "propositional_logic" else 0)
+    controls = row["recorded_pinned_generator_controls"]
+    assert controls["positive"]["reward"] == 1.0
+    assert controls["negative"]["reward"] == 0.0
     result = convert_row(RECIPES["reasoning_gym_generated"], row)
-    assert isinstance(result, ImportRejection)
-    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "constant_reply_scores_full")
+    assert isinstance(result, TaskSpec)
 
 
 def test_generator_transport_keeps_symbolic_integers_exact():
