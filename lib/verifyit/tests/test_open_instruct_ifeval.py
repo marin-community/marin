@@ -4,7 +4,6 @@
 """Source descriptor grading at the verifyit boundary."""
 
 import pytest
-
 from verifyit.adapters.open_instruct_ifeval import compute_score, normalize_ground_truth
 
 CASES = [
@@ -44,6 +43,8 @@ def test_open_instruct_descriptors_keep_fractional_rewards_and_fail_closed():
     constraints = [{"func_name": "validate_lowercase"}, {"func_name": "validate_no_commas"}]
     assert compute_score("lowercase, with a comma", constraints)["score"] == 0.5
     assert compute_score("", constraints)["score"] == 0.0
-    assert compute_score("anything", {"func_name": "validate_choice", "options": []})["score"] == 0.0
-    assert compute_score("Plain text", {"func_name": "validate_highlighted_sections", "N": 0})["score"] == 0.0
+    invalid_choice = compute_score("anything", {"func_name": "validate_choice", "options": []})
+    invalid_minimum = compute_score("Plain text", {"func_name": "validate_highlighted_sections", "N": 0})
+    assert (invalid_choice["score"], invalid_choice["error_type"]) == (0.0, "schema_error")
+    assert (invalid_minimum["score"], invalid_minimum["error_type"]) == (0.0, "schema_error")
     assert compute_score("No z here", {"func_name": "verify_letter_frequency", "letter": "q", "N": 0})["score"] == 1.0

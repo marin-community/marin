@@ -2,6 +2,7 @@
 
 import pytest
 from rolloutengine.models import ModelTurn
+from taskcompendium.grading_result import Outcome
 from skyrl_gym.answer_tasks import grade_ifeval
 from skyrl_gym.envs.data_contracts import get_data_contract
 
@@ -44,3 +45,12 @@ def test_ifeval_preflight_and_rollout_agree_on_compliant_and_ignored_replies(
         turn = ModelTurn({}, (), (), None, "stop", text=reply)
         result = grade_ifeval(turn, {"verifyit_enabled": verifyit_enabled}, extras)
         assert result.reward == reward
+
+
+def test_ifeval_rollout_reports_invalid_constraints_as_verifier_errors():
+    turn = ModelTurn({}, (), (), None, "stop", text="Any response")
+    extras = {"reward_model": {"ground_truth": {"func_name": "validate_choice", "options": []}}}
+    result = grade_ifeval(turn, {}, extras)
+    assert result.reward == 0.0
+    assert result.grade is not None
+    assert result.grade.status is Outcome.INFRA_ERROR

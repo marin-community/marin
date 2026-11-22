@@ -7,7 +7,6 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import grade_ifeval_candidate, resolve_checks
 from verifyit.spec import Constraint, IfevalSpec
 
@@ -15,14 +14,16 @@ from verifyit.spec import Constraint, IfevalSpec
 # The source records also carry unrelated null fields; only the check's arguments are retained.
 OPEN_INSTRUCT_CHECKS: dict[str, tuple[str, dict[str, str], dict[str, Any]]] = {
     "verify_keywords": ("keywords:existence", {"keyword_list": "keywords"}, {"word_boundary": False}),
-    "verify_keyword_frequency": (
-        "keywords:frequency", {"word": "keyword", "N": "frequency"}, {"relation": "exactly"}
-    ),
+    "verify_keyword_frequency": ("keywords:frequency", {"word": "keyword", "N": "frequency"}, {"relation": "exactly"}),
     "verify_keyword_frequency_relation": (
-        "open_instruct:keyword_frequency_relation", {"keyword_list": "keyword_list", "N": "N", "quantifier": "quantifier"}, {}
+        "open_instruct:keyword_frequency_relation",
+        {"keyword_list": "keyword_list", "N": "N", "quantifier": "quantifier"},
+        {},
     ),
     "validate_forbidden_words": (
-        "keywords:forbidden_words", {"forbidden_words": "forbidden_words"}, {"word_boundary": False}
+        "keywords:forbidden_words",
+        {"forbidden_words": "forbidden_words"},
+        {"word_boundary": False},
     ),
     "verify_letter_frequency": ("open_instruct:letter_frequency", {"letter": "letter", "N": "N"}, {}),
     "validate_response_language": ("language:response_language", {"language": "language"}, {}),
@@ -41,16 +42,16 @@ OPEN_INSTRUCT_CHECKS: dict[str, tuple[str, dict[str, str], dict[str, Any]]] = {
     "validate_choice": ("open_instruct:choice", {"options": "options"}, {}),
     "validate_highlighted_sections": ("detectable_format:number_highlighted_sections", {"N": "num_highlights"}, {}),
     "validate_sections": (
-        "detectable_format:multiple_sections", {"N": "num_sections", "section_splitter": "section_splitter"}, {}
+        "detectable_format:multiple_sections",
+        {"N": "num_sections", "section_splitter": "section_splitter"},
+        {},
     ),
     "validate_json_format": ("detectable_format:json_format", {}, {}),
     "validate_repeat_prompt": ("open_instruct:repeat_prompt", {"original_prompt": "original_prompt"}, {}),
     "validate_two_responses": ("combination:two_responses", {}, {}),
     "validate_uppercase": ("change_case:english_capital", {}, {}),
     "validate_lowercase": ("change_case:english_lowercase", {}, {}),
-    "validate_frequency_capital_words": (
-        "open_instruct:capital_words", {"N": "N", "quantifier": "quantifier"}, {}
-    ),
+    "validate_frequency_capital_words": ("open_instruct:capital_words", {"N": "N", "quantifier": "quantifier"}, {}),
     "validate_end": ("startend:end_checker", {"end_phrase": "end_phrase"}, {}),
     "validate_quotation": ("startend:quotation", {}, {}),
     "validate_no_commas": ("punctuation:no_comma", {}, {}),
@@ -115,20 +116,30 @@ def constraints_from_descriptors(ground_truth: Any) -> tuple[Constraint, ...]:
 
 
 def compute_score(response: str, ground_truth: Any) -> dict[str, Any]:
-    """Score every source constraint through verifyit, retaining SkyRL reward fields."""
+    """Score source constraints through verifyit; report invalid source data separately."""
     try:
         descriptors = normalized_descriptors(ground_truth)
-        verdict = grade_ifeval_candidate(IfevalSpec(constraints_from_descriptors(descriptors)), response)
-    except (ValueError, TypeError, KeyError, InvalidTask):
-        return {"score": 0.0, "acc": False, "func_name": None, "constraints_satisfied": 0, "constraints_total": 0}
+    except (ValueError, TypeError):
+        return {
+            "score": 0.0,
+            "acc": False,
+            "func_name": None,
+            "constraints_satisfied": 0,
+            "constraints_total": 0,
+            "error_type": "schema_error",
+        }
+    verdict = grade_ifeval_candidate(IfevalSpec(constraints_from_descriptors(descriptors)), response)
     passed = sum(result["passed"] for result in verdict.detail.get("constraints", []))
     total = len(descriptors)
     return {
         "score": passed / total,
         "acc": passed == total,
-        "func_name": descriptors[0]["func_name"] if total == 1 and not isinstance(
-            json.loads(ground_truth) if isinstance(ground_truth, str) else ground_truth, list
-        ) else None,
+        "func_name": (
+            descriptors[0]["func_name"]
+            if total == 1
+            and not isinstance(json.loads(ground_truth) if isinstance(ground_truth, str) else ground_truth, list)
+            else None
+        ),
         "constraints_satisfied": passed,
         "constraints_total": total,
     }

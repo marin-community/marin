@@ -6,9 +6,14 @@ import inspect
 import json
 import math
 import random
+from importlib.metadata import distribution
 from typing import Any
 
+from verifyit.adapters.open_instruct_ifeval import compute_score, normalize_ground_truth
 from verifyit.execution.worker import call_bounded
+from verifyit.grade import InvalidTask, Status
+from verifyit.modes.grade_ifeval import grade_ifeval_candidate
+from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
 
 class ReferenceError(ValueError):
@@ -58,7 +63,6 @@ def _check(text: str, params: dict, predicate) -> tuple[bool, str]:
 
 
 def _json_format(text: str, fenced: bool = False) -> bool:
-    from verifyit.grade import Status
     from verifyit.modes.grade_json_schema import grade_json_schema_candidate
 
     if fenced:
@@ -92,8 +96,6 @@ def _references(kind: str, data: Any, *, runtime: bool = False):
         _ensure_nltk_data,
         build_instruction,
     )
-    from importlib.metadata import distribution
-
     provenance = json.loads(distribution("verifiable-instructions").read_text("direct_url.json") or "{}")
     if provenance.get("vcs_info", {}).get("commit_id") != "f46a5ac87b1400a4f8973039844b6be9b56e3faf":
         raise RuntimeError("Instruction registry does not match the pinned source dependency")
@@ -241,18 +243,12 @@ def _references(kind: str, data: Any, *, runtime: bool = False):
 
 def _evaluate(kind: str, text: str, data: Any, *, runtime: bool = False) -> dict:
     if kind == "standalone":
-        from verifyit.adapters.open_instruct_ifeval import compute_score, normalize_ground_truth
-
         try:
             normalized = normalize_ground_truth(data)
         except (ValueError, TypeError, KeyError):
             return {"status": "invalid_task", "reward": 0.0, "detail": {"error_type": "schema_error"}}
         feedback = compute_score(text, normalized)
         return {"status": "scored", "reward": feedback["score"], "detail": {"source_feedback": feedback}}
-
-    from verifyit.grade import InvalidTask
-    from verifyit.modes.grade_ifeval import grade_ifeval_candidate
-    from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
     try:
         references, mode = _references(kind, data, runtime=runtime)

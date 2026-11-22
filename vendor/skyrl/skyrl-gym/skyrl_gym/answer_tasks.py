@@ -124,7 +124,7 @@ def grade_ifeval(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     metrics = {key: value for key, value in result.items() if key != "score"}
     verification = (
         VerificationResult.error("Instruction verifier failed", diagnostics=metrics)
-        if use_verifyit and result.get("error_type")
+        if result.get("error_type")
         else VerificationResult.verified(reward, passed=result["acc"] if use_verifyit else None, diagnostics=metrics)
     )
     return TaskTransition(done=True, reward=reward, grade=grade_result(verification), metrics=metrics)
