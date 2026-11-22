@@ -85,11 +85,10 @@ class JudgmentStatus(StrEnum):
 
 # Assessments may publish with a small share of recorded unavailable judgments — reviewer
 # refusals or unparseable answers on adversarial tasks — instead of failing the campaign.
-# 2% matches the observed rate of pathological model answers on validation cohorts (1-2 of a
-# 105-task sample); a larger share signals systemic reviewer or transport failure, so the
-# campaign, publish, and load gates all fail closed above it. Defined once; every gate imports
-# this constant.
-MAX_UNAVAILABLE_JUDGMENT_SHARE: float = 0.02
+# 5% is the Atlas SAMPLE review tolerance (2026-11-22 ruling); a larger share signals
+# systemic reviewer or transport failure, so the campaign, publish, and load gates all fail
+# closed above it. Defined once; every gate imports this constant.
+MAX_UNAVAILABLE_JUDGMENT_SHARE: float = 0.05
 
 
 class AssessmentStatus(StrEnum):

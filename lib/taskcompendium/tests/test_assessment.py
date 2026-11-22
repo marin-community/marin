@@ -529,24 +529,25 @@ def test_assessment_repairs_stringified_evidence_ids_and_records_the_coercion(co
     assert row["evidence_ids"][-1] == "curation" and len(row["evidence_ids"]) == 2
 
 
-def test_assessment_publishes_below_the_unavailable_threshold(context, tmp_path):
-    """A single recorded unavailable verdict out of 51 stays under the 2% threshold; the raw
+def test_assessment_publishes_at_the_unavailable_threshold(context, tmp_path):
+    """Five recorded unavailable verdicts out of 100 sit exactly at the 5% threshold; the raw
     provider error survives in the grade instead of failing the campaign."""
     curated = curated_source(
         context,
         tmp_path,
-        [{"Body": f"Ada has {value} apples.", "Question": "How many?", "Answer": str(value)} for value in range(60)],
+        [{"Body": f"Ada has {value} apples.", "Question": "How many?", "Answer": str(value)} for value in range(110)],
     )
     inputs = tmp_path / "inputs"
     prepare_assessment(
         context,
         curated_root=str(curated),
-        sampling=AssessmentSampling(admitted=51),
+        sampling=AssessmentSampling(admitted=100),
         output_root=str(inputs),
     )
     sample = assessment_inputs(str(inputs)).sample
-    assert len(sample) == 51
-    (tmp_path / sample[0].task_id).touch()
+    assert len(sample) == 100
+    for task in sample[:5]:
+        (tmp_path / task.task_id).touch()
     judgments = tmp_path / "judgments"
     grade_assessment(
         context,
@@ -559,10 +560,43 @@ def test_assessment_publishes_below_the_unavailable_threshold(context, tmp_path)
         output_root=str(judgments),
     )
     rows = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
-    assert Counter(row["status"] for row in rows) == Counter({"reviewed": 50, "unavailable": 1})
+    assert Counter(row["status"] for row in rows) == Counter({"reviewed": 95, "unavailable": 5})
     unavailable = next(row for row in rows if row["status"] == "unavailable")
     assert "provider unavailable" in unavailable["explanation"]
     assert all(row["coercions"] == [] for row in rows)
+
+
+def test_assessment_fails_above_the_unavailable_threshold(context, tmp_path):
+    """Six recorded unavailable verdicts out of 100 exceed the 5% threshold; the grade fails
+    closed and retains the partial judgments at the output root."""
+    curated = curated_source(
+        context,
+        tmp_path,
+        [{"Body": f"Ada has {value} apples.", "Question": "How many?", "Answer": str(value)} for value in range(110)],
+    )
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=AssessmentSampling(admitted=100),
+        output_root=str(inputs),
+    )
+    sample = assessment_inputs(str(inputs)).sample
+    for task in sample[:6]:
+        (tmp_path / task.task_id).touch()
+    with pytest.raises(IncompleteAssessment):
+        grade_assessment(
+            context,
+            curated_root=str(curated),
+            inputs_root=str(inputs),
+            rubric=ASSESSMENT_RUBRIC,
+            model=reviewer_spec("fixture", "revision"),
+            submit=AssessmentTransport(str(tmp_path)),
+            cache_root=str(tmp_path / "cache"),
+            output_root=str(tmp_path / "judgments"),
+        )
+    rows = [row for path in assessment_judgments(str(tmp_path / "judgments")).grade_paths for row in load_parquet(path)]
+    assert Counter(row["status"] for row in rows) == Counter({"reviewed": 94, "unavailable": 6})
 
 
 @dataclass(frozen=True)
