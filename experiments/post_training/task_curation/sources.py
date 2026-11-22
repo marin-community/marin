@@ -12,6 +12,7 @@ from finestore.rl.curation import OversightLevel
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.content_identity import read_content_identity_receipts
 from experiments.post_training.task_curation.datasets import (
+    backfill_releases,
     campaign_releases,
     crosscode_python_repair,
     native_releases,
@@ -162,6 +163,7 @@ def configured_sources() -> list[RlDataSource]:
         *campaign_releases.sources(),
         *native_releases.sources(),
         *repair_releases.sources(),
+        *backfill_releases.sources(),
         *terminus_pivot.sources(),
         *prime_multiswe.sources(),
         *prime_swe.sources(),
