@@ -121,6 +121,7 @@ IRIS_BUBBLEWRAP_PROFILE = "CONTAINER_PROFILE_BUBBLEWRAP"
 IRIS_PRIVILEGED_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 BUBBLEWRAP_UID = 65534
 BUBBLEWRAP_GID = 65534
+BROKER_GUEST_SOCKET = "/.shellbox-broker"
 
 
 class SandboxUnavailable(RuntimeError):
@@ -486,7 +487,7 @@ class LocalProcessScope:
 
 
 class LocalMachine:
-    """A persistent bubblewrap member, with commands entering pinned namespaces."""
+    """A persistent bubblewrap member with commands launched in its namespaces."""
 
     def __init__(
         self,
@@ -525,6 +526,7 @@ class LocalMachine:
         self._keeper: asyncio.subprocess.Process | None = None
         self._keeper_pidfd: int | None = None
         self._init_pidfd: int | None = None
+        self._init_pid: int | None = None
         self._namespaces: tuple[int, ...] = ()
         self._owned_namespaces: tuple[int, ...] = ()
         self._network_namespaces: tuple[int, ...] = ()
@@ -624,6 +626,17 @@ class LocalMachine:
         self, arguments: list[str], peer: "LocalMachine | None", block_read: int, block_write: int
     ) -> None:
         with tempfile.TemporaryFile() as information:
+            if self._drop_bwrap_privileges:
+                interpreter = shutil.which("python3", path=DEFAULT_PATH)
+                if interpreter is None:
+                    raise SandboxUnavailable("The BUBBLEWRAP broker requires Python in the host system directories")
+                program = [interpreter, "-I", "-S", "-c", LAUNCH_SOURCE, "--broker", BROKER_GUEST_SOCKET]
+            else:
+                program = [
+                    "/bin/sh",
+                    "-c",
+                    'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
+                ]
             arguments += [
                 "--block-fd",
                 str(block_read),
@@ -633,9 +646,7 @@ class LocalMachine:
                 "--setenv",
                 "PATH",
                 self._environment["PATH"],
-                "/bin/sh",
-                "-c",
-                'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
+                *program,
             ]
             prefix = () if peer is None else peer._network_namespaces
             config = {
@@ -673,6 +684,7 @@ class LocalMachine:
                             pid = status["child-pid"]
                             if self._init_pidfd is None:
                                 self._init_pidfd = _pin_init(pid, status["pid-namespace"])
+                                self._init_pid = pid
                             # info-fd is written before bwrap finishes mounting
                             # and pivoting. Pinning root earlier would capture
                             # the host root rather than the guest root.
@@ -767,14 +779,20 @@ class LocalMachine:
                     configuration.write(json.dumps(config).encode())
                     configuration.seek(0)
                     assert self._root_fd is not None
+                    launcher = (
+                        ("--relay", str(configuration.fileno()))
+                        if self._drop_bwrap_privileges
+                        else (str(configuration.fileno()),)
+                    )
+                    private_fds = () if self._drop_bwrap_privileges else (self._root_fd, *self._namespaces)
                     process = await asyncio.create_subprocess_exec(
                         sys.executable,
                         "-I",
                         "-S",
                         "-c",
                         LAUNCH_SOURCE,
-                        str(configuration.fileno()),
-                        pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
+                        *launcher,
+                        pass_fds=(configuration.fileno(), *dict.fromkeys(private_fds)),
                         env=CONTROL_ENVIRONMENT,
                         stdin=asyncio.subprocess.PIPE,
                         stdout=asyncio.subprocess.PIPE,
@@ -848,8 +866,8 @@ class LocalMachine:
             selected = _command_account(command.user, self._sandbox_identity[0])
             account = None if selected is None else (selected.pw_uid, selected.pw_gid)
         config = {
-            "namespaces": self._namespaces,
-            "root": self._root_fd,
+            "namespaces": () if self._drop_bwrap_privileges else self._namespaces,
+            "root": None if self._drop_bwrap_privileges else self._root_fd,
             "limits": _resource_limits(),
             "account": account,
             "script": RUN_SCRIPT,
@@ -858,6 +876,10 @@ class LocalMachine:
             "environment": environment,
             "cgroup": None,
         }
+        if self._drop_bwrap_privileges:
+            assert self._init_pid is not None
+            config["broker"] = str(self.root / BROKER_GUEST_SOCKET.lstrip("/"))
+            config["broker_pid"] = self._init_pid
         if any("\0" in argument for argument in (*command.argv, *environment, *environment.values())):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
         return config
@@ -938,6 +960,12 @@ class LocalMachine:
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
+            launcher = (
+                ("--relay", str(configuration.fileno()))
+                if self._drop_bwrap_privileges
+                else (str(configuration.fileno()),)
+            )
+            private_fds = () if self._drop_bwrap_privileges else (self._root_fd, *self._namespaces)
             acquisition = asyncio.create_task(
                 asyncio.create_subprocess_exec(
                     sys.executable,
@@ -945,8 +973,8 @@ class LocalMachine:
                     "-S",
                     "-c",
                     LAUNCH_SOURCE,
-                    str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), status_write, self._root_fd, *dict.fromkeys(self._namespaces)),
+                    *launcher,
+                    pass_fds=(configuration.fileno(), status_write, *dict.fromkeys(private_fds)),
                     env=CONTROL_ENVIRONMENT,
                     stdin=stdin_file,
                     stdout=stdout_file,

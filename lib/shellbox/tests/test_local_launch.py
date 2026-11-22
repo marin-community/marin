@@ -11,14 +11,15 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 from shellbox.backends.local import machine as local
 from shellbox.machine import Command, HostImage, MachineSpec
 
-# Inject a failing kernel boundary in the separately executed launcher. Keeper
-# creation needs no setns; entering the already-created machine does.
+# Inject the EPERM a launcher sees without SYS_ADMIN. Brokered commands must
+# avoid setns; privileged external launchers still use it.
 DENIED_NAMESPACE_ENTRY = """
 import os
 def denied_setns(descriptor, flags):
@@ -51,10 +52,23 @@ def test_local_factory_in_iris_task_rejects_unsupported_profile(monkeypatch, pro
 def test_iris_bubblewrap_factory_writes_to_workdir_as_sandbox_user(monkeypatch, system_directories):
     monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
     monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_BUBBLEWRAP_PROFILE)
+    monkeypatch.setattr(local, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + local.LAUNCH_SOURCE)
+    probe_entered = False
+    control = local.LocalMachine._control
+
+    async def observed_control(self, *args, **kwargs):
+        nonlocal probe_entered
+        probe_entered = True
+        return await control(self, *args, **kwargs)
+
+    monkeypatch.setattr(local.LocalMachine, "_control", observed_control)
     try:
         factory = local.LocalMachineFactory(system_directories=system_directories)
     except local.SandboxUnavailable as error:
+        if probe_entered:
+            raise
         pytest.skip(str(error))
+    assert probe_entered
 
     async def check():
         machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
@@ -119,6 +133,63 @@ def test_keeper_launcher_drops_to_non_root_before_exec(tmp_path):
         )
     assert result.returncode == 0, result.stderr.decode()
     assert result.stdout.strip() == str(local.BUBBLEWRAP_UID).encode()
+
+
+@pytest.mark.parametrize("cgroup", [False, True])
+def test_keeper_broker_launches_command_from_inside_its_namespace(cgroup):
+    with tempfile.TemporaryDirectory(prefix="shellbox-broker-") as directory:
+        socket_path = Path(directory) / "broker.sock"
+        membership = Path(directory) / "cgroup.procs"
+        if cgroup:
+            membership.touch()
+        broker = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--broker", str(socket_path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not socket_path.exists() and broker.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert socket_path.exists(), broker.stderr.read().decode() if broker.poll() is not None else ""
+            assert broker.stdin is not None
+            broker.stdin.write(b"shellbox-ready\n")
+            broker.stdin.flush()
+            with tempfile.TemporaryFile() as configuration:
+                configuration.write(
+                    json.dumps(
+                        {
+                            "broker": str(socket_path),
+                            "broker_pid": broker.pid,
+                            "cgroup": str(membership) if cgroup else None,
+                            "limits": [],
+                            "script": local.RUN_SCRIPT,
+                            "cwd": "/",
+                            "argv": ["/bin/sh", "-c", "printf '%s' $$" if cgroup else "printf brokered"],
+                            "environment": local.CONTROL_ENVIRONMENT,
+                        }
+                    ).encode()
+                )
+                configuration.seek(0)
+                result = subprocess.run(
+                    [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--relay", str(configuration.fileno())],
+                    pass_fds=(configuration.fileno(),),
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            if result.returncode != 0:
+                broker.kill()
+                broker.wait(timeout=5)
+                pytest.fail(result.stderr.decode() + broker.stderr.read().decode())
+            if cgroup:
+                assert result.stdout == membership.read_bytes()
+            else:
+                assert result.stdout == b"brokered"
+        finally:
+            broker.kill()
+            broker.wait(timeout=5)
 
 
 def test_factory_rejects_namespace_entry_failure_and_removes_probe_files(factory, monkeypatch, tmp_path):
