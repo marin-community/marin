@@ -123,6 +123,9 @@ class InferenceEngineConfig:
     slots it evicts the oldest prefixes as live requests reserve pages.
     """
 
+    max_retained_prompts: int | None = None
+    """Packed prefix index capacity, independent of the KV page budget. Defaults to max_seqs."""
+
     # Decode loop knobs
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
@@ -152,6 +155,10 @@ class InferenceEngineConfig:
             raise ValueError("prefill_bucket_sizes must be below max_prefill_size")
         if self.prefix_cache == "last_prompt" and self.max_seqs != 1:
             raise ValueError("last_prompt requires max_seqs=1")
+        if self.max_retained_prompts is not None and (
+            self.max_retained_prompts < 1 or self.prefix_cache != "recent_prompts" or self.max_seqs <= 1
+        ):
+            raise ValueError("max_retained_prompts requires a positive count and packed recent_prompts caching")
         if self.window_cache_retained_spans < 1:
             raise ValueError("window_cache_retained_spans must be positive")
         if self.decode_bucket_sizes != tuple(sorted(set(self.decode_bucket_sizes))) or any(
@@ -1196,7 +1203,7 @@ class InferenceEngine:
             if self._retained_prompt_limit < 1:
                 raise ValueError("The recent-prompts cache requires max_pages for at least two full sequences")
             if self._retain_packed_prompts:
-                self._retained_prompt_limit = config.max_seqs
+                self._retained_prompt_limit = config.max_retained_prompts or config.max_seqs
         self.config = config
         self._cached_prompts: list[_CachedPrompt] = []
         self._page_reservations: dict[int, _PageReservation] = {}

@@ -161,6 +161,7 @@ def main() -> None:
     parser.add_argument("--decode-buckets", type=int, nargs="+", default=())
     parser.add_argument("--max-unrolled-prefill-tokens", type=int)
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt", "recent_prompts"), default="disabled")
+    parser.add_argument("--max-retained-prompts", type=int)
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
     parser.add_argument(
         "--profile-prefill", action="store_true", help="Trace fresh and primed prefill after measurement"
@@ -221,6 +222,7 @@ def main() -> None:
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         decode_bucket_sizes=tuple(args.decode_buckets),
         prefix_cache=args.prefix_cache,
+        max_retained_prompts=args.max_retained_prompts,
         window_cache_max_pages=args.window_cache_pages,
         window_cache_retained_spans=args.window_cache_retained_spans,
     )
@@ -303,6 +305,7 @@ def main() -> None:
             "max_queued_tokens": service.max_queued_tokens,
             "max_tokens_per_round": service.max_tokens_per_round,
             "max_rounds": service.max_rounds,
+            "max_retained_prompts": service.max_retained_prompts,
             "attention": args.attention,
             "decode_layers": args.decode_layers,
             "decode_experts": args.decode_experts,

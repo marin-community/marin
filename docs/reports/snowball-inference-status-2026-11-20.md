@@ -27,11 +27,12 @@ types.
 
 The four-step v6e-8 run reached 583.52 output tok/s and 1.50 s p90
 TTFT, 14.6% above compiled vLLM p90 on the same platform. The H100
-repeat also met the 20% p90 target. The eight-step v5p-8 run reached
-536.07 output tok/s with 2.44 s p90 TTFT. The same-slice compiled
-v5p-8 result sets a 1.85 s target. The 537.39 tok/s paired native
-rate was 2.2% below the strongest compiled repeat from a different
-slice.
+repeat also met the 20% p90 target. A larger native prompt index
+reached 555.12 output tok/s on v5p-8, above the strongest vLLM repeat
+at 549.46. Its p90 TTFT was 2.39 s. The 96-context native trial
+reached 550.25 output tok/s and 1.87 s p90, 16 ms above the 1.85 s
+target set by the earlier same-slice vLLM comparison.
+[80-context throughput trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v51-retain-512-prompts) · [96-context latency trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v52-96-contexts-retain-512-eight-rounds)
 
 The initial publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -1125,6 +1126,25 @@ warmup elapsed 223.77 versus 241.96 s. The larger index was trimmed because
 the allocated KV pages filled. The first attempt lost its worker during
 profiling, after the completed warmup.
 [Expanded prefix index trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v51-retain-512-prompts)
+
+The 80-context retry on another worker reached 555.12 output tok/s.
+It reused 13.71 million of 15.97 million prompt tokens, or 85.8%.
+Across 389 shared turns with the strongest compiled vLLM repeat, all
+output lengths matched, paired active decode was 41.07 versus 35.66
+tok/s, and paired p90 TTFT was 2.39 versus 1.35 s. Neither run reported
+profiling errors. Enable the larger packed prompt index using
+`--max-retained-prompts 512` with `--prefix-cache recent_prompts`.
+[Expanded prefix index retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v51-retain-512-prompts)
+
+With 96 logical contexts, a 512-entry index limit, and eight-step decode,
+native reached 550.25 output tok/s. Across 381 turns shared with the
+previous paired vLLM control, output lengths matched, active decode
+was 38.66 versus 34.24 tok/s, and p90 TTFT was 1.868 versus 1.546 s.
+Fresh and primed 64,512-token TTFT were 1.878 s and 117 ms. The trace
+attributed 0.8% of prompt tokens to evicted entries and 4.5% to missing
+sliding-window pages for retained entries. Both runs reported zero
+profiling errors.
+[96-context replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v52-96-contexts-retain-512-eight-rounds)
 
 An experimental FIFO policy emitted the first tokens for a leading
 group of requests with at most 2,048 uncached tokens before prefilling

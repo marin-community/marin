@@ -242,6 +242,33 @@ def test_shared_prompt_pages_admit_three_requests_with_eight_physical_pages(serv
     assert result.tokens == fresh.generate(requests).tokens
 
 
+def test_prompt_cache_retains_more_entries_than_live_slots(serving_model, caplog):
+    config = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=16,
+        max_seqs=2,
+        max_queued_tokens=2,
+        max_seqs_in_prefill=2,
+        page_size=2,
+        compute_dtype=jnp.float32,
+    )
+    fresh = InferenceEngine.from_model_with_config(serving_model, None, config)
+    cached = InferenceEngine.from_model_with_config(
+        serving_model, None, dataclasses.replace(config, prefix_cache="recent_prompts", max_retained_prompts=4)
+    )
+    params = dataclasses.replace(
+        SeqDecodingParams.default(), temperature=jnp.asarray(0.0), max_num_tokens=jnp.asarray(7)
+    )
+    for rid, tokens in enumerate(([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15])):
+        cached.generate([Request(tokens, rid, params, 1)])
+
+    followup = Request([1, 2, 3, 4, 16], 3, params, 1)
+    expected = fresh.generate([followup])
+    with caplog.at_level(logging.INFO, logger="levanter.inference.engine"):
+        assert cached.generate([followup]) == expected
+    assert "Reused 4 prompt tokens" in caplog.text
+
+
 def test_cache_pressure_preserves_reusable_pages_of_a_live_prompt(serving_model, caplog):
     config = InferenceEngineConfig(
         max_seq_len=8,
