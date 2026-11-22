@@ -144,12 +144,17 @@ batch reaching the clipped policy objective. This does not prove that the
 underlying raw gradient was exactly zero.
 
 Comparing those independently initialized paths confounds checkpoint
-continuation with their earlier differences. A separate opt-in test is being
-prepared: save A1 once, freeze a second batch using A1 scores, then compare a
-live update with an update restored from that same A1 checkpoint. It will
-require exact state, input, score and continuation agreement, unchanged natural
-exit checks, and finite nonzero gradients recorded from the actual optimizer
-step. It tests a newly scored fixed trajectory batch, not fresh rollout
+continuation with their earlier differences. A separate opt-in test now saves
+A1 once, freezes a second batch using A1 scores, then compares a live update
+with an update restored from that same A1 checkpoint. With pinned JAX/JAXLIB
+0.11.0 and NumPy 2.3.5, its eight-CPU run passed all 18 strict checks: complete
+input identity, exact restoration and continuation, unchanged scores across
+restore, finite checkpoint arrays, and both natural process exits zero. The
+actual second-step gradient was finite and nonzero in both paths; state,
+scores and loss metrics matched exactly. GPU execution remains a separate gate.
+
+The gradient callback changes compilation, so this is an instrumented resume
+test. It uses a newly scored fixed trajectory batch, not fresh rollout
 generation. Passing it would not clear the short-sequence NaNs, the independent
 first-update divergence or full-model acceptance.
 

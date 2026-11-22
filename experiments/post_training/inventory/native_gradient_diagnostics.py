@@ -40,13 +40,21 @@ from marin.rl.levanter_worker_runtime import (
     _validate_allocator,
 )
 
-from experiments.post_training.inventory.actual_attention_probe import capture_raw_case, replay_captures
+from experiments.post_training.inventory.actual_attention_probe import (
+    capture_backward_residuals,
+    capture_raw_case,
+    replay_backward_residuals,
+    replay_captures,
+)
 from experiments.post_training.inventory.learner_lifecycle_qualification import (
+    PairedOracleRuntime,
     _arm,
     _configuration,
     _environment,
     _frozen_batch,
     _initializer,
+    paired_resume_oracle,
+    worker_main,
 )
 
 _MODULE = "experiments.post_training.inventory.native_gradient_diagnostics"
@@ -271,6 +279,8 @@ def _run_child(args, case: str, initializer: Path, fa4_case: str | None = None) 
         command.extend(["--fa4-case", fa4_case])
     if args.capture_replay_states:
         command.append("--capture-replay-states")
+    if args.paired_resume_oracle:
+        command.append("--paired-resume-oracle")
     with (args.output_dir / (name + ".log")).open("wb") as log:
         try:
             process = subprocess.run(
@@ -398,6 +408,73 @@ def _suite(args) -> dict:
     return result
 
 
+def _paired_suite(args) -> dict:
+    """Keep same-A1 qualification separate from the existing stale-score control."""
+    jax.config.update("jax_platforms", "cpu")
+    old_identity = initializer_identity(args.old_initializer)
+    if old_identity["sha256"] != args.old_initializer_sha256:
+        raise ValueError("Archived initializer identity differs")
+    aligned = args.output_dir / "aligned-initializer"
+    _initializer(aligned, _aligned_config())
+    result = {
+        "status": "running",
+        "scope": "Instrumented tiny same-A1 active-gradient resume, not full67B qualification",
+        "platform": args.platform,
+        "source_hashes": _source_hashes(),
+        "old_initializer": old_identity,
+        "paired_resume_qualified": False,
+        "cases": {},
+        "prior_fresh_init_stale_score_diagnostic": (
+            "Unchanged separate --capture-replay-states mode; prior failure retained"
+        ),
+    }
+    target = args.output_dir / "paired-probe.json"
+    for case in ("backward-observed-raw", "backward-residual-replay"):
+        result["cases"][case] = _run_child(args, case, args.old_initializer)
+        _write(target, result)
+        print(json.dumps({"case": case, "status": result["cases"][case]["status"]}), flush=True)
+    config = _configuration(aligned, args.output_dir, args.platform, 8)
+    try:
+        result["paired_oracle"] = paired_resume_oracle(
+            args.python_executable,
+            _environment(args.platform, args.python_executable),
+            config,
+            args.output_dir / "paired-oracle",
+            {"source_hashes": result["source_hashes"], "initializer": initializer_identity(aligned)},
+        )
+    except Exception as error:
+        saved = args.output_dir / "paired-oracle" / "paired-resume.json"
+        partial = json.loads(saved.read_text()) if saved.exists() else {"exits": []}
+        partial.update(
+            status="error",
+            paired_resume_qualified=False,
+            comparison_error={"type": type(error).__name__, "message": str(error)[:4000]},
+        )
+        result["paired_oracle"] = partial
+        _write(saved, partial)
+    result["paired_resume_qualified"] = result["paired_oracle"]["paired_resume_qualified"]
+    paired = result["paired_oracle"]
+    result["paired_execution_complete"] = (
+        not any(key in paired for key in ("A_error", "B_error", "comparison_error"))
+        and all(key in paired for key in ("A2", "B2", "checks", "state_deviations"))
+        and len(paired["exits"]) == 2
+        and all(x["exit_code"] == 0 and "error" not in x and "error_type" not in x for x in paired["exits"])
+    )
+    result["all_requested_cases_completed"] = all(
+        row.get("diagnostic_child_exit_code") == 0
+        and row["status"] != "error"
+        and not row.get("execution_errors_present", False)
+        for row in result["cases"].values()
+    )
+    result["all_requested_cases_completed"] &= result["paired_execution_complete"]
+    result["status"] = "completed" if result["all_requested_cases_completed"] else "completed_with_errors"
+    result["numerical_findings_present"] = any(
+        row["status"] in ("nonfinite", "failed") for row in result["cases"].values()
+    ) or (result["paired_execution_complete"] and not result["paired_resume_qualified"])
+    _write(target, result)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path(os.environ.get("IRIS_OUTPUT_DIR", ".")))
@@ -415,6 +492,8 @@ def main() -> None:
             "observed-raw",
             "actual-replay",
             "aligned-actual-replay",
+            "backward-observed-raw",
+            "backward-residual-replay",
         ),
         default="suite",
     )
@@ -428,10 +507,29 @@ def main() -> None:
     parser.add_argument(
         "--raw-only", action="store_true", help="Explicit local diagnostic-only run, no lifecycle acceptance"
     )
+    parser.add_argument(
+        "--paired-resume-oracle", action="store_true", help="Separate same-A1 active-gradient resume gate"
+    )
     args = parser.parse_args()
+    if args.paired_resume_oracle and args.capture_replay_states:
+        parser.error("Paired oracle and historical fresh-init replay are separate modes")
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.case == "suite":
+        if args.paired_resume_oracle:
+            result = _paired_suite(args)
+            print(
+                json.dumps(
+                    {
+                        "receipt": str(args.output_dir / "paired-probe.json"),
+                        "status": result["status"],
+                        "paired_resume_qualified": result["paired_resume_qualified"],
+                    }
+                )
+            )
+            if not result["all_requested_cases_completed"]:
+                raise SystemExit(1)
+            return
         result = _suite(args)
         print(
             json.dumps(
@@ -448,7 +546,23 @@ def main() -> None:
     numpy_policy = _numpy_allocation_policy(False)
     _validate_allocator({"runtime": {"allocator": "vmm", "preallocate": False, "device_memory_fraction": 0.9}})
     identity = _device_identity(args.platform)
-    if args.case in ("actual-replay", "aligned-actual-replay"):
+    if args.case == "backward-observed-raw":
+        result = capture_backward_residuals(args.case_initializer, args.output_dir, args.platform)
+        _write(args.output_dir / "backward-observed-raw.json", result)
+    elif args.case == "backward-residual-replay":
+        result = replay_backward_residuals(
+            args.output_dir / "backward-captures",
+            args.output_dir / "backward-residual-replay.json",
+            implementation="gpu_fa4_cute" if args.platform == "gpu" else "reference",
+        )
+        result.update(
+            source_hashes=_source_hashes(),
+            native_device_identity=identity,
+            allocation_policy=_allocator_profile(),
+            numpy_allocation_policy=numpy_policy,
+        )
+        _write(args.output_dir / "backward-residual-replay.json", result)
+    elif args.case in ("actual-replay", "aligned-actual-replay"):
         source = args.output_dir / "aligned-observed" if args.case == "aligned-actual-replay" else args.output_dir
         target = args.output_dir / (args.case + ".json")
         result = replay_captures(
@@ -638,4 +752,7 @@ def run_fa4_probe(output_path: str | Path, only_case: str | None = None) -> dict
 
 
 if __name__ == "__main__":
-    main()
+    if "--response-fd" in sys.argv:
+        worker_main(runtime_factory=PairedOracleRuntime)
+    else:
+        main()
