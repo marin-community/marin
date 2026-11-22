@@ -433,7 +433,6 @@ EVALUATING_SCORERS = [
     ("intermediate_integration", 0.0),
     ("n_queens", 0.0),
     ("polynomial_multiplication", 0.0),
-    ("puzzle24", 0.01),
     ("simple_integration", 0.0),
     ("spiral_matrix", 0.0),
     ("string_insertion", 0.0),
