@@ -351,12 +351,22 @@ class HarborRef(BaseModel):
     )
 
 
+class JudgeCallBudget(BaseModel):
+    """Upper bounds for metered judge requests across one evaluation and its retries."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    max_calls: int = Field(gt=0)
+    max_microdollars: int = Field(gt=0)
+    microdollars_per_call: int = Field(gt=0)
+
+
 class JudgeIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     deployment: str = Field(min_length=1)
     models: dict[str, str]
     default_model: str | None = None
+    budget: JudgeCallBudget | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class TaskMachineBackend(StrEnum):
@@ -410,6 +420,7 @@ class EvaluationOverrides(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     limit: int | None = Field(default=None, gt=0)
+    max_attempts_per_trial: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     max_tokens: int | None = Field(default=None, gt=0)
     concurrency: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     """The most attempts that run at once; a model's ``evaluation_num_concurrent`` also bounds them.
@@ -488,6 +499,7 @@ class CuratedSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
+    max_attempts_per_trial: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     max_tokens: int | None = Field(default=None, gt=0)
     source_limit: int | None = Field(default=None, gt=0)
     seed: int | None = None

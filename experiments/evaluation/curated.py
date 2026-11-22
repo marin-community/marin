@@ -217,6 +217,7 @@ def settings_for(
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),
         max_tokens=run.max_tokens,
+        max_attempts_per_trial=run.max_attempts_per_trial,
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,

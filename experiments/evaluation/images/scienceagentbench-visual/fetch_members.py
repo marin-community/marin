@@ -1,0 +1,1 @@
+../../../../lib/taskcompendium/src/taskcompendium/importers/scienceagentbench_assets/release.py

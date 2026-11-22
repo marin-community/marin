@@ -10,7 +10,15 @@ from typing import Any
 
 from verifyit.spec import Spec, spec_to_table
 
-from taskcompendium.models import Grader, GraderPlacement, NoGrader, TaskResource, TaskSpec, VerifyitGrader
+from taskcompendium.models import (
+    Grader,
+    GraderPlacement,
+    NoGrader,
+    PrivateVerifierResource,
+    TaskResource,
+    TaskSpec,
+    VerifyitGrader,
+)
 from taskcompendium.runtime.resources import resource_bytes
 
 
@@ -19,7 +27,7 @@ class GraderPackage:
     """A grader and the verifier resources it reads, with paths relative to ``/tests``."""
 
     grader: Grader
-    resources: tuple[TaskResource, ...] = ()
+    resources: tuple[TaskResource | PrivateVerifierResource, ...] = ()
 
 
 def verifyit_package(

@@ -30,6 +30,7 @@ from experiments.evaluation.benchmarks import (
     nupa,
     question_answering,
     reasoning,
+    scienceagentbench,
     simpleqa,
     supergpqa,
 )
@@ -66,6 +67,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             reasoning,
             financebench,
             facts_grounding,
+            scienceagentbench,
             simpleqa,
             econevals,
             long_context,

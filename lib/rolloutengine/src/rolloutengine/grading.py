@@ -5,7 +5,7 @@
 
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import replace
 from typing import Any
@@ -68,6 +68,7 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    before_judge: Callable[[], Awaitable[None]] | None = None,
 ) -> GradeResult:
     """Grade in process, through the judge service, in the task machine, or in a fresh verifier machine.
 
@@ -80,6 +81,8 @@ async def _grade_rollout(
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     attempt = GradingAttempt(chat_conversation(list(messages)), outputs, stop_reason=stop_reason)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
+        if before_judge is not None:
+            await before_judge()
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     placement = grader.placement
     if placement is None:
@@ -87,6 +90,8 @@ async def _grade_rollout(
     judge = judge_connection(spec) if grades_with_judge(grader) else None
     if isinstance(placement, AgentMachine):
         assert machine is not None
+        if before_judge is not None and judge is not None:
+            await before_judge()
         return await grade_in_agent_machine(
             task, attempt, machine, timeout=spec.limits.verifier_timeout, judge_connection=judge
         )
@@ -102,4 +107,5 @@ async def _grade_rollout(
             task_machine=machine,
             timeout=spec.limits.verifier_timeout,
             judge_connection=judge,
+            before_judge=before_judge,
         )

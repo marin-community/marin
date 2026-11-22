@@ -6,13 +6,13 @@
 import asyncio
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import CONVERSATION_ANSWERS
+from taskcompendium.models import CONVERSATION_ANSWERS, ScriptGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.submission import conversation_messages
 
@@ -31,6 +31,7 @@ from rolloutengine.models import (
     GradedRolloutInterrupted,
     MachineReady,
     Model,
+    Rollout,
     RolloutObserver,
     RolloutOperation,
     TaskRolloutSpec,
@@ -90,9 +91,11 @@ class RolloutEngine:
         harnesses: Mapping[str, Harness],
         *,
         observer: RolloutObserver | None = None,
+        before_judge: Callable[[], Awaitable[None]] | None = None,
     ):
         self.machine_factories = machine_factories
         self.harnesses = harnesses
+        self.before_judge = before_judge
         self.observer = observer
 
     def check(self, spec: TaskRolloutSpec) -> None:
@@ -101,6 +104,34 @@ class RolloutEngine:
         if spec.harness not in self.harnesses:
             raise ValueError(f"Unknown harness: {spec.harness!r}")
         self.harnesses[spec.harness].check(spec.task, spec.limits)
+
+    async def grade_saved_outputs(self, spec: TaskRolloutSpec, rollout: Rollout) -> GradeResult:
+        """Replay an archived file submission in fresh machines after a grading infrastructure failure."""
+        grader = spec.task.grader
+        if not isinstance(grader, ScriptGrader) or grader.replay is None:
+            raise ValueError("File recovery requires a clean replay and a separate grader")
+        messages = next((r.messages for r in reversed(rollout.conversations) if r.steps), None)
+        if messages is None:
+            messages = (*conversation_messages(spec.task.context.events), {"role": "assistant", "content": ""})
+        cleanup = _Cleanup(spec.limits.cleanup_timeout)
+        async with AsyncExitStack() as resources:
+            async with asyncio.timeout(spec.limits.verifier_timeout):
+                grade = await _grade_rollout(
+                    spec,
+                    messages,
+                    rollout.outputs,
+                    None,
+                    self.machine_factories,
+                    cleanup,
+                    resources,
+                    before_judge=self.before_judge,
+                    stop_reason=rollout.stop_reason,
+                )
+        if cleanup.errors:
+            grade = replace(
+                grade, diagnostics={**grade.diagnostics, "cleanup_errors": [asdict(e) for e in cleanup.errors]}
+            )
+        return grade
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
         """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
@@ -237,6 +268,7 @@ class RolloutEngine:
                     self.machine_factories,
                     attempt.cleanup,
                     resources,
+                    before_judge=self.before_judge,
                     stop_reason=recorder.stop_reason,
                 )
         except TimeoutError as error:
