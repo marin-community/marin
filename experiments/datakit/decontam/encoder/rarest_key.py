@@ -260,9 +260,9 @@ def make_measure(output: str, width: int):
 
 
 def shard_lists(
-    sources_path: str, input_root: str, measure_seed: int, excluded: frozenset[str]
+    sources_path: str, input_root: str, measure_seed: int, excluded: frozenset[str], per_source: int = 1
 ) -> tuple[list[str], list[str]]:
-    """Measure shards (1 per source) and disjoint reference shards (2 per source), none of them in *excluded*.
+    """Measure shards (*per_source* per source) and disjoint reference shards (2 per source), none in *excluded*.
 
     The draws use one random stream each, in the order of the source list, so the list order fixes the sample.
     """
@@ -274,7 +274,7 @@ def shard_lists(
         shards = [
             shard for shard in parquet_files(prefix_join(input_root, f"{name}/outputs/main")) if shard not in excluded
         ]
-        picked = measure_rng.sample(shards, min(1, len(shards)))
+        picked = measure_rng.sample(shards, min(per_source, len(shards)))
         measure += picked
         rest = [shard for shard in shards if shard not in picked]
         reference += reference_rng.sample(rest, min(2, len(rest)))
@@ -298,8 +298,11 @@ def main() -> None:
     parser.add_argument("--measure-seed", type=int, default=MEASURE_SEED, help="seed of the measure-shard draw")
     parser.add_argument(
         "--exclude-shards",
-        help="shards.json of another stage-1 run whose shards are not drawn; copy its keys.parquet to --output first",
+        nargs="*",
+        default=[],
+        help="shards.json files of other stage-1 runs whose shards are not drawn; copy their keys.parquet to --output",
     )
+    parser.add_argument("--measure-per-source", type=int, default=1, help="measure shards drawn per source")
     args = parser.parse_args()
     if args.step == "prepare":
         prepare(args.items, args.output, args.width)
@@ -307,11 +310,13 @@ def main() -> None:
     if args.step == "choose":
         choose(args.output, args.width)
         return
-    excluded: frozenset[str] = frozenset()
-    if args.exclude_shards:
-        drawn = json.loads(StoragePath(args.exclude_shards).read_text())
-        excluded = frozenset(drawn["measure"] + drawn["reference"])
-    measure, reference = shard_lists(args.sources, args.input_root, args.measure_seed, excluded)
+    excluded = frozenset(
+        shard
+        for path in args.exclude_shards
+        for drawn in [json.loads(StoragePath(path).read_text())]
+        for shard in drawn["measure"] + drawn["reference"]
+    )
+    measure, reference = shard_lists(args.sources, args.input_root, args.measure_seed, excluded, args.measure_per_source)
     with StoragePath(prefix_join(args.output, "shards.json")).open("w") as sink:
         json.dump({"measure": measure, "reference": reference}, sink)
     files = reference if args.step == "count" else measure

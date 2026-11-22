@@ -186,6 +186,19 @@ the bound is an item-clustered stratified bootstrap 5th percentile:
 154 of the 160 copies have word overlap of at least 0.9 (the high band), and recall is reported
 there. The low band holds 1 copy in 99 labeled pairs.
 
+**Exact rules on the same pairs.** On the real test pairs (697 pairs, 152 copies) and on validation
+set 14 (338, 160), unweighted, the exact rules do worse than the classifier on both precision and recall:
+
+| Rule | Real test: precision / recall | Validation: precision / recall |
+|---|---|---|
+| Block rule (`marin.datakit.item_match` in PR #10836: question, then every choice) | 0.80 / 0.45 | 0.91 / 0.68 |
+| Exact question only | 0.65 / 0.52 | 0.81 / 0.69 |
+| Classifier at 0.9 | 0.89 / 0.76 | 0.96 / 0.85 |
+| Classifier at 0.99 | 0.95 / 0.53 | 0.97 / 0.62 |
+
+Outside DROP, most judged copies are edited or cut at the excerpt edge, and the block rule finds
+about 11% of them.
+
 **Planted copies (gate G2).** `planted.py` plants up to 50 items per eval (41,350 items over 827
 evals) into real record text in 14 forms and checks stage 1. Stage 1 finds every planted copy in
 the plain, parenthesized, extra-option, no-line-break and JSON-escaped (once and twice) forms.

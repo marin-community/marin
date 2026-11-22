@@ -20,7 +20,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame, write_frame
+from experiments.datakit.decontam.encoder.tables import item_passages, parquet_files, read_frame, write_frame
 from experiments.datakit.decontam.encoder.train import OUTPUTS, predict, with_pair_text
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ def main() -> None:
     parser.add_argument("--pairs", required=True, help="pairs output with pairs/*.parquet")
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet), for passages")
     args = parser.parse_args()
     torch.backends.cuda.enable_cudnn_sdp(False)
     pairs = pd.concat([read_frame(path) for path in parquet_files(prefix_join(args.pairs, "pairs"))], ignore_index=True)
@@ -47,7 +48,7 @@ def main() -> None:
         model = AutoModelForSequenceClassification.from_pretrained(directory).to("cuda")
     assert model.config.num_labels == len(OUTPUTS), "the model must have the trainer's outputs"
     started = time.time()
-    scores = predict(model, tokenizer, with_pair_text(pairs), args.max_length, "cuda")
+    scores = predict(model, tokenizer, with_pair_text(pairs, item_passages(args.items)), args.max_length, "cuda")
     seconds = time.time() - started
     logger.info("scored %d pairs in %.0f s: %.0f pairs/s", len(pairs), seconds, len(pairs) / seconds)
     for number, head in enumerate(OUTPUTS):

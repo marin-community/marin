@@ -30,7 +30,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.labels import SILVER_OVERLAP, word_overlap
-from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame, write_frame
+from experiments.datakit.decontam.encoder.tables import item_passages, parquet_files, read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 EVALS_PER_FAMILY = 6
@@ -82,7 +82,8 @@ def layout(item: dict[str, Any], rng: random.Random) -> Layout:
         text = question + "\n" + "\n".join(choices)
     if style == "upper":
         text = text.upper()
-    if item.get("passage") and rng.random() < 0.5:
+    if item.get("passage"):
+        # An item with a passage is the passage and the question together.
         text = item["passage"] + "\n\n" + text
     return Layout(text, shows_answer)
 
@@ -150,8 +151,11 @@ def _row(item: dict[str, Any], right: str, kind: str, label_q: int, label_qa: in
 
 def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Random) -> Iterator[dict[str, Any]]:
     by_question: dict[str, list[int]] = {}
+    by_passage: dict[str, list[int]] = {}
     for number, item in enumerate(items):
         by_question.setdefault(item["question"], []).append(number)
+        if item.get("passage"):
+            by_passage.setdefault(item["passage"], []).append(number)
 
     def placed(inserted: str) -> str:
         host = rng.choice(hosts)
@@ -163,9 +167,17 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
     for item in items:
         inserted = layout(item, rng)
         yield _row(item, placed(inserted.text), "copy", 1, int(inserted.shows_answer))
-        yield _row(item, placed(question_only(item, rng)), "question_only", 1, 0)
+        passage = item.get("passage") or ""
+        # Without its passage, the question of an item with a passage is not a copy of the item.
+        yield _row(item, placed(question_only(item, rng)), "question_only", 0 if passage else 1, 0)
         if len(item["question"].split()) >= 15 and rng.random() < 0.5:
-            yield _row(item, placed(truncated(item, rng)), "truncated", 1, 0)
+            yield _row(item, placed((passage + "\n\n" if passage else "") + truncated(item, rng)), "truncated", 1, 0)
+        if passage:
+            yield _row(item, placed(passage), "passage_only", 0, 0)
+            siblings = [items[i] for i in by_passage[passage] if items[i]["question"] != item["question"]]
+            if siblings:
+                # The same passage with another question of the test holds another item, not this one.
+                yield _row(item, placed(layout(rng.choice(siblings), rng).text), "passage_other_question", 0, 0)
         others = [items[rng.randrange(len(items))] for _ in range(3)]
         if found := variant(item, others, rng):
             yield _row(item, placed(layout({**item, "question": found[1]}, rng).text), f"variant_{found[0]}", 0, 0)
@@ -183,9 +195,9 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
             yield _row(item, placed(""), "none", 0, 0)
 
 
-def context_pairs(candidates: pd.DataFrame, rng: random.Random) -> Iterator[dict[str, Any]]:
+def context_pairs(candidates: pd.DataFrame, passages: dict[str, str], rng: random.Random) -> Iterator[dict[str, Any]]:
     items = [
-        {"id": i, "eval": e, "question": q, "choices": list(c), "answer": a or "", "passage": ""}
+        {"id": i, "eval": e, "question": q, "choices": list(c), "answer": a or "", "passage": passages.get(i, "")}
         for i, e, q, c, a in zip(
             candidates["item"],
             candidates["eval"],
@@ -217,7 +229,7 @@ def main() -> None:
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["generic", "context"])
-    parser.add_argument("--items", help="generic: item table directory (items/*.parquet)")
+    parser.add_argument("--items", required=True, help="item table directory (items/*.parquet)")
     parser.add_argument("--hosts", help="generic: glob of parquet files with a text column; the first 12 are used")
     parser.add_argument("--per-eval", type=int, default=60, help="generic: items sampled per eval")
     parser.add_argument("--candidates", help="context: scored stage-1 pairs (parquet)")
@@ -252,7 +264,8 @@ def main() -> None:
     else:
         candidates = read_frame(args.candidates)
         candidates = candidates[~candidates["item"].isin(excluded)]
-        rows = list(context_pairs(candidates.sample(min(args.size, len(candidates)), random_state=args.seed), rng))
+        sample = candidates.sample(min(args.size, len(candidates)), random_state=args.seed)
+        rows = list(context_pairs(sample, item_passages(args.items), rng))
     frame = pd.DataFrame(rows)
     evals = sorted(frame["eval"].unique())
     held_out = set(random.Random(args.seed).sample(evals, len(evals) // 5)) if args.mode == "generic" else set()

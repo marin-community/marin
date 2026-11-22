@@ -93,6 +93,7 @@ def write_batches(chosen: pd.DataFrame, directory: Path, batches: int) -> None:
                     "eval_text": row["question"],
                     "eval_choices": list(row["choices"]),
                     "eval_answer": row["answer"],
+                    "eval_passage": row.get("passage") or "",
                     "document_excerpt": row["right"][:EXCERPT],
                 }
                 sink.write(json.dumps(task, ensure_ascii=False) + "\n")
@@ -102,7 +103,7 @@ def judge_labels(directory: Path, judge: str) -> pd.DataFrame:
     rows = [
         json.loads(line)
         for path in sorted((directory / judge).glob("batch_*.jsonl"))
-        for line in path.read_text().splitlines()
+        for line in path.read_text().split("\n")
         if line.strip()
     ]
     return pd.DataFrame(rows).set_index("uid")[["label", "answer", "note"]].add_prefix(f"{judge}_")

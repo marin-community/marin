@@ -188,9 +188,9 @@ def test_synthetic_question_without_its_answer_counts_for_the_question_output_on
 def test_missing_answer_words_stay_out_of_the_question_hint():
     question = "def common(l1: list, l2: list):\n    Return sorted unique common elements."
     right = "```py\ndef common(l1: list, l2: list):\n    Return sorted unique common elements.```"
-    left = pair_left(question, [], "def check(candidate): assert candidate", right)
+    left = pair_left(question, [], "def check(candidate): assert candidate", "", right)
     assert left.endswith("\n[missing] none\n[answer missing] check candidate assert")
-    stem_only = pair_left("What is the GDP deflator?", ["A price index", "A tax"], "", "What is the GDP deflator?")
+    stem_only = pair_left("What is the GDP deflator?", ["A price index", "A tax"], "", "", "What is the GDP deflator?")
     assert "[choices] A price index | A tax" in stem_only and "[missing] a price index tax" in stem_only
 
 
@@ -230,7 +230,7 @@ def test_context_variants_skip_candidates_that_already_hold_the_item():
             {**items[1], "item": "i1", "right": "unrelated words " * 60, "question_in_record": False},
         ]
     )
-    rows = pd.DataFrame(list(context_pairs(candidates, random.Random(0))))
+    rows = pd.DataFrame(list(context_pairs(candidates, {}, random.Random(0))))
     variants = rows[rows["kind"].str.startswith("ctx_variant")]
     assert set(variants["item"]) == {"i1"}
     assert set(rows.loc[rows["kind"] == "ctx_copy", "item"]) == {"i0", "i1"}
@@ -264,3 +264,28 @@ def test_every_planted_form_of_an_item_holds_its_key():
         assert holds_key(f"{host}\n{text}\n{host}", key), form
     # Negatives share the key; stage 2, not stage 1, has to reject them.
     assert set(negative_forms(item, "Argon", host)) == {"changed_choice", "choices_far", "missing_choice"}
+
+
+def test_an_item_with_a_passage_shows_the_passage_and_its_missing_words_apart():
+    passage = "The Bears beat the Lions 24-10 in Chicago."
+    right = "Question: How many yards was the longest field goal? It was 52 yards in another game."
+    left = pair_left("How many yards was the longest field goal?", [], "52", passage, right)
+    assert left.startswith("[passage] The Bears beat the Lions")
+    assert "\n[question] How many yards" in left
+    # "the" and "in" occur in the record, so only the passage's own words are missing.
+    assert "\n[passage missing] bears beat lions 24 10 chicago\n[missing] none\n" in left
+
+
+def test_a_passage_or_its_question_alone_is_not_a_copy_of_an_item_with_a_passage():
+    passage = "Ann has three red apples and two green pears in her basket today."
+    items = [
+        {"id": f"p{n}", "eval": "e", "question": q, "choices": [], "answer": a, "passage": passage}
+        for n, (q, a) in enumerate(
+            [("How many apples does Ann have?", "three"), ("How many pears does Ann have?", "two")]
+        )
+    ]
+    rows = pd.DataFrame(list(generic_pairs(items, ["host text " * 80], random.Random(0))))
+    label = rows.groupby("kind")["label_q"].max()
+    assert label["copy"] == 1 and label["question_only"] == 0 and label["passage_only"] == 0
+    assert label["passage_other_question"] == 0
+    assert rows.loc[rows["kind"] == "copy", "right"].str.contains("Ann has three red apples").all()

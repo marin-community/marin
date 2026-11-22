@@ -25,7 +25,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from experiments.datakit.decontam.encoder.labels import TRAINING_COLUMNS
-from experiments.datakit.decontam.encoder.tables import read_frame, write_frame
+from experiments.datakit.decontam.encoder.tables import item_passages, read_frame, write_frame
 
 _SPACE = re.compile(r"\s+")
 TARGET_PRECISION = 0.95
@@ -47,6 +47,8 @@ _TOKEN = re.compile(r"\w+")
 MISSING_SHOWN = 32
 LEFT_CHARS = 1500
 RIGHT_CHARS = 6000
+# Characters of a passage that `left` shows; 9 in 10 passages of the required evals are shorter.
+PASSAGE_CHARS = 700
 
 
 def _missing(text: str, present: set[str]) -> str:
@@ -54,36 +56,49 @@ def _missing(text: str, present: set[str]) -> str:
     return " ".join(missing[:MISSING_SHOWN]) if missing else "none"
 
 
-def pair_left(question: str, choices: list[str], answer: str, right: str) -> str:
-    """The `left` text of a pair: the item, then the words of the item that *right* lacks.
+def pair_left(question: str, choices: list[str], answer: str, passage: str, right: str) -> str:
+    """The `left` text of a pair: the item in marked sections, then the words of each section that
+    *right* lacks.
 
-    The item is the question, a ``[choices]`` line and an ``[answer]`` line, normalized and cut to
-    ``LEFT_CHARS``. The hint lists the missing question and choice words on a ``[missing]`` line and
-    the missing answer words on an ``[answer missing]`` line, so that an answer the record does not
-    show does not count against the question.
+    The sections are ``[passage]`` (only for an item with a passage, cut to ``PASSAGE_CHARS``),
+    ``[question]``, ``[choices]`` and ``[answer]``, normalized and cut to ``LEFT_CHARS``. The hints
+    list the missing passage words (``[passage missing]``), question and choice words
+    (``[missing]``) and answer words (``[answer missing]``) separately: an item with a passage is
+    held only by a record with both its passage and its question, and an answer that the record
+    does not show does not count against the question.
     """
-    answer = answer or ""
-    item = text_normalize(question) + ("\n[choices] " + " | ".join(map(text_normalize, choices)) if choices else "")
-    left = (item + ("\n[answer] " + text_normalize(answer) if answer else ""))[:LEFT_CHARS]
+    answer, passage = answer or "", text_normalize(passage or "")[:PASSAGE_CHARS]
+    sections = [f"[passage] {passage}"] if passage else []
+    sections.append(f"[question] {text_normalize(question)}")
+    if choices:
+        sections.append("[choices] " + " | ".join(map(text_normalize, choices)))
+    if answer:
+        sections.append(f"[answer] {text_normalize(answer)}")
+    left = "\n".join(sections)[:LEFT_CHARS]
     present = set(_TOKEN.findall(right.lower()))
-    answer_missing = _missing(answer, present) if answer else "none"
-    return f"{left}\n[missing] {_missing(' '.join([question, *choices]), present)}\n[answer missing] {answer_missing}"
+    hints = [f"[passage missing] {_missing(passage, present)}"] if passage else []
+    hints.append(f"[missing] {_missing(' '.join([question, *choices]), present)}")
+    hints.append(f"[answer missing] {_missing(answer, present) if answer else 'none'}")
+    return left + "\n" + "\n".join(hints)
 
 
-def with_pair_text(frame: pd.DataFrame) -> pd.DataFrame:
-    """*frame* with `right` normalized and cut to ``RIGHT_CHARS``, and `left` built by ``pair_left``."""
+def with_pair_text(frame: pd.DataFrame, passages: dict[str, str]) -> pd.DataFrame:
+    """*frame* with `right` normalized and cut to ``RIGHT_CHARS``, and `left` built by ``pair_left``
+    with each item's passage from *passages* (see ``item_passages``)."""
     frame = frame.copy()
     frame["right"] = frame["right"].map(text_normalize).str.slice(0, RIGHT_CHARS)
     frame["left"] = [
-        pair_left(question, list(choices), answer, right)
-        for question, choices, answer, right in zip(
-            frame["question"], frame["choices"], frame["answer"], frame["right"], strict=True
+        pair_left(question, list(choices), answer, passages.get(item, ""), right)
+        for question, choices, answer, item, right in zip(
+            frame["question"], frame["choices"], frame["answer"], frame["item"], frame["right"], strict=True
         )
     ]
     return frame
 
 
-def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load(
+    data: str, synthetic_name: str, extra: list[str], passages: dict[str, str]
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     judged = read_frame(prefix_join(data, JUDGED_PAIRS))
     judged["source"], judged["kind"], judged["eval"] = "judged", judged["judges"], ""
     synthetic = read_frame(prefix_join(data, synthetic_name))
@@ -92,7 +107,7 @@ def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame
     for path in extra:
         # More labeled pairs, for example judged stage-1 candidates, with the same columns.
         frames.append(read_frame(path)[TRAINING_COLUMNS])
-    frame = with_pair_text(pd.concat(frames, ignore_index=True))
+    frame = with_pair_text(pd.concat(frames, ignore_index=True), passages)
     # The threshold comes from judge-labeled stage-1 candidates, not synthetic, silver, or older pairs.
     real = frame["source"].str.startswith("set")
     real_train = sorted(frame.loc[(frame.split == "train") & real, "item"].unique())
@@ -205,6 +220,7 @@ def main() -> None:
     parser.add_argument("--data", required=True, help="directory with judged_pairs_v2.parquet and the synthetic pairs")
     parser.add_argument("--synthetic", required=True, help="file name in --data of the generic synthetic pairs")
     parser.add_argument("--extra", action="append", default=[], help="parquet of more labeled pairs")
+    parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet), for passages")
     parser.add_argument("--seed", type=int, default=0, help="seed of the training order and the output layer")
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", required=True)
@@ -215,7 +231,7 @@ def main() -> None:
     if device == "cuda":
         # The cuDNN attention backend builds no plan for these padded bf16 batches; the others do.
         torch.backends.cuda.enable_cudnn_sdp(False)
-    train, dev, test = load(args.data, args.synthetic, args.extra)
+    train, dev, test = load(args.data, args.synthetic, args.extra, item_passages(args.items))
     print("train", len(train), "dev", len(dev), "test", len(test), "device", device, flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(OUTPUTS)).to(device)

@@ -28,6 +28,22 @@ question together with its choices: label `COPY` only when the choices are there
 
 Use `UNSURE` only when the excerpt is cut so that you cannot decide.
 
+## Items with a passage
+
+Some items come with a passage (`eval_passage`): the text that the question is about, such as a
+story, a game report or a context sentence. For these items the item is the passage and the
+question together.
+
+- `COPY` or `EDITED`: the excerpt holds most of the passage and the question (the rules above for
+  small changes apply to both parts). When the excerpt starts or ends inside the passage, judge
+  from the part shown and say so in the note.
+- `GENERIC`: the excerpt holds the question but not this passage (the same question about another
+  text), or the passage but not the question (for example the passage's source article alone).
+- `VARIANT`: the excerpt holds this passage with another or a changed question, or this question
+  with a changed passage. The same passage with a different question of the same test is a
+  `VARIANT`, not a copy of this item.
+- `answer`: `YES` only when the excerpt also shows this item's answer to this question.
+
 ## Answer
 
 - `YES`: the label is `COPY` or `EDITED`, and the excerpt also shows the answer of this item next to
