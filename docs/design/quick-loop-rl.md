@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 12:30 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 12:40 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -459,10 +459,11 @@ and bytes. TensorStore still takes its own copy where a snapshot must
 outlive staging. The exact fresh-process restore gate still hashes complete
 model and optimizer state. On pinned JAX 0.11.0 the CPU fixture matched the
 old digest across all 65,536 BF16 bit patterns, and the one- and two-rank
-fresh-process restore tests passed. The frozen launch preview matched
-`.16` after normalizing run identities. H100 fingerprint time and gradient
-memory remain open.
-[Fingerprint retry coordinator][iris-smoke-fingerprint] · [Frozen source and checks][h100-fingerprint-handoff]
+fresh-process restore tests passed. The frozen preview and live resolved
+configuration matched `.16` after normalizing run identities. The exact
+GPU child uses the same five H100 hosts as `.16`. H100 fingerprint time
+and gradient memory remain open.
+[Fingerprint retry attempt][iris-smoke-fingerprint] · [Frozen source and checks][h100-fingerprint-handoff]
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -1171,8 +1172,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   independently started process byte for byte.
   Porting cross-request prefix reuse also requires preserving expert IDs
   and router thresholds alongside cached pages for training replay.
-  Measure a same-policy hit and a miss on first use of the next policy
-  when that cache is enabled. [Earlier handoff][launch-handoff]
+  A one-slot CPU prototype retained four prefix tokens under policy A,
+  reused zero on the first policy B request after installing B, and reused
+  six on a repeat under B. The cached and cold runs produced identical
+  tokens, positions, validity masks, expert routes, routing thresholds,
+  and logprobs. The prototype used a simulated tool continuation. Concurrent
+  retention on the eight-slot serving configuration and a real 67B tool turn
+  remain open. [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
   Parquet has SHA-256
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
@@ -1235,7 +1241,7 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-shutdown-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-coordinator-93324d26%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-ae0b645fbb4e
 [iris-smoke-nccl-headroom-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-coordinator-69a6cbbb%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-a453f4b331ee
 [iris-smoke-preallocated-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-coordinator-317129fa%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-ac3d40727bb4
-[iris-smoke-fingerprint]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-coordinator-88b26859
+[iris-smoke-fingerprint]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-coordinator-88b26859%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-a9c7f68045d0
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
