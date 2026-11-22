@@ -147,6 +147,7 @@ def main() -> None:
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
     parser.add_argument("--kv-cache-contexts", type=int, default=1)
+    parser.add_argument("--window-cache-pages", type=int, help="Separate capacity for sliding-window KV")
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
     parser.add_argument("--decode-buckets", type=int, nargs="+", default=())
     parser.add_argument("--max-unrolled-prefill-tokens", type=int)
@@ -209,6 +210,7 @@ def main() -> None:
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         decode_bucket_sizes=tuple(args.decode_buckets),
         prefix_cache=args.prefix_cache,
+        window_cache_max_pages=args.window_cache_pages,
     )
     service = dataclasses.replace(service, max_pages=service.max_pages_per_seq * args.kv_cache_contexts)
     config = InferenceServerConfig(trainer=trainer, model_name=series["model"], service=service, batch_timeout=0.001)
@@ -284,6 +286,7 @@ def main() -> None:
             "max_seqs": service.max_seqs,
             "max_seqs_in_prefill": service.max_seqs_in_prefill,
             "max_pages": service.max_pages,
+            "window_cache_max_pages": service.window_cache_max_pages,
             "max_queued_tokens": service.max_queued_tokens,
             "max_tokens_per_round": service.max_tokens_per_round,
             "max_rounds": service.max_rounds,

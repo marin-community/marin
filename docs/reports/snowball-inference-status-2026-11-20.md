@@ -9,7 +9,7 @@ integration remain open.
 
 The full BF16 67B checkpoint completed the matched 64K AgentX replay at
 128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
-reached 75% and 34% of compiled vLLM's aggregate output throughput on
+reached 80% and 34% of compiled vLLM's aggregate output throughput on
 v5p-8 and v6e-8. On eight H100s, two native replicas with singleton decode
 reached 616.68–621.18 output tok/s versus 590.24–593.09 for compiled vLLM.
 Native p90 time to first token was 0.96–1.01 s versus 1.43–1.44 s. At
@@ -663,6 +663,8 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v5p-8, native EP4 with fused append through 32 rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v6-fused-decode) | 157 | 26,337 | 121.82 | 20,917 | 33,037 |
 | [v5p-8, native EP4 with 24 KV contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v7-24-contexts) | 304 | 75,891 | 361.38 | 1,698 | 4,856 |
 | [v5p-8, native EP4 with 32 KV contexts and bounded prefill scratch](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v10-bounded-32-contexts) | 325 | 84,402 | 401.91 | 1,548 | 3,932 |
+| [v5p-8, 48 logical contexts and a FIFO window pool](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v11-hybrid-48-contexts) | 151 | 25,648 | 122.13 | 21,675 | 33,494 |
+| [v5p-8, 60 logical contexts with retained window tails](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v12-hybrid-pinned-60-contexts) | 336 | 90,975 | 433.21 | 1,445 | 2,632 |
 | [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
 | [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
 | [v6e-8, native EP8 with shared reservations and 16 decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v5-shared-pages) | 111 | 19,864 | 94.59 | 36,227 | 53,402 |
@@ -728,6 +730,33 @@ tok/s with zero errors and matching output lengths for all 325 paired
 turns. Paired active decode reached 21.32 versus 33.34 tok/s. Serial
 fresh 64,512-token prefill took 1.846 s, or 35.0k prompt tok/s. Primed
 prefill with a 256-token suffix took 0.168 s versus vLLM's 0.115 s.
+
+The hybrid BF16 cache keeps full pages for seven full-attention layers
+and shares a smaller page map across the 19 sliding-window layers. The
+48-context FIFO trial retained just 1.22 million reused prompt tokens
+over 29 admissions and measured 122.13 output tok/s. Preserving the
+window tails of recent prompts with 60 logical contexts and 4,096
+window pages raised reuse to 10.79 million tokens over 241 admissions.
+Throughput reached 433.21 output tok/s with p90 TTFT of 2.63 s. All 336
+paired output lengths matched and native reported zero profiling errors.
+Native paired active decode reached 24.11 versus 33.34 tok/s.
+The 64,512-token fresh and primed measurements were 1.836 s and 0.157 s.
+
+Run the hybrid configuration inside a v5p-8 Iris job with local weights
+and the frozen replay receipt.
+
+```bash
+export JAX_PLATFORMS=tpu
+export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true'
+uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
+  --weights "$weights" --workload "$workload" --chips 4 --concurrency 128 \
+  --attention tpu_v3 --decode-layers unrolled_split_cache --kv-sharding expert \
+  --kv-append fused --decode-experts separate --prefix-cache recent_prompts \
+  --max-unrolled-prefill-tokens 65536 --max-seqs-in-prefill 4 \
+  --kv-cache-contexts 60 --window-cache-pages 4096 --max-tokens-per-round 32 \
+  --max-rounds 16 --decode-buckets 4 8 16 \
+  --prefill-buckets 512 2048 8192 16384 32768 49152 --measure-prefill
+```
 
 On one v6e chip, fusing KV append at 16 padded rows cut full-context
 attention plus cache update from 0.727 to 0.520 ms and sliding-window

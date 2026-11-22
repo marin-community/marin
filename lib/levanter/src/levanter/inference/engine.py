@@ -29,16 +29,18 @@ from levanter.inference.jit_scheduler import (
     DecodeState,
     FinishReason,
     SeqDecodingParams,
+    SequenceTable,
     TokenQueue,
     _DecodeOutputs,
 )
-from levanter.inference.page_table import PageTable, kv_pages_for_request
+from levanter.inference.page_table import PageBatchInfo, PageTable, kv_pages_for_request
 from levanter.inference.snowball_replay_payload import (
     _SnowballDecodeOutputs,
     _SnowballReplayCollector,
     _SnowballRouteBuffer,
 )
 from levanter.inference.utils import INVALID, is_valid
+from levanter.inference.window_page_map import WindowPageMap
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache, PageCache, StackedKvPageCache
 from levanter.layers.sampler import Sampler
@@ -88,6 +90,9 @@ class InferenceEngineConfig:
 
     max_pages: Optional[int] = None
     """Total number of KV pages available. If None, inferred from :attr:`hbm_utilization`."""
+
+    window_cache_max_pages: int | None = None
+    """Separate page capacity for Snowball sliding-window layers, in the configured KV dtype."""
 
     compute_dtype: jnp.dtype = jnp.bfloat16
     """KV cache dtype. Default bfloat16 for performance/accuracy balance."""
@@ -306,12 +311,23 @@ class GenState(eqx.Module):
 
     cache: PageCache
     decode_state: DecodeState
+    window_pages: WindowPageMap | None = None
 
     def reset(self):
         return GenState(
             cache=self.cache.reset(),
             decode_state=self.decode_state.reset(),
+            window_pages=None if self.window_pages is None else self.window_pages.reset(),
         )
+
+    def remap_window_pages(
+        self, sequences: SequenceTable, batch: PageBatchInfo
+    ) -> tuple["GenState", PageBatchInfo | None]:
+        """Allocate and translate sliding-window pages when a separate pool is configured."""
+        if self.window_pages is None:
+            return self, None
+        window_pages, window_batch = self.window_pages.remap(sequences, batch)
+        return dataclasses.replace(self, window_pages=window_pages), window_batch
 
     def clone_sequence(
         self,
@@ -531,6 +547,8 @@ def _prefill_kernel(
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
     binfo = binfo.with_seq_capacity(max_seqs_in_prefill)
 
+    gen_state, window_info = gen_state.remap_window_pages(decode_state.sequences, binfo)
+
     seq_lens = decode_state.seq_lens
 
     sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs_in_prefill)
@@ -550,7 +568,9 @@ def _prefill_kernel(
         routes = routes.append(captured, slot_ids)
         logits_at_samples = _gather_logits(logits, sample_indices)
     elif isinstance(model, SnowballLMHeadModel) and model.config.projection_implementation == "native":
-        logits_at_samples, cache = model.decode_for_sampling(tokens, gen_state.cache, binfo, pos_ids, sample_indices)
+        logits_at_samples, cache = model.decode_for_sampling(
+            tokens, gen_state.cache, binfo, pos_ids, sample_indices, window_batch_info=window_info
+        )
     else:
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
         logits_at_samples = _gather_logits(logits, sample_indices)
@@ -892,6 +912,8 @@ def _run_generation_loop(
             # A packed round cannot touch more sequences than it has token rows.
             binfo = binfo.with_seq_capacity(max_sample_indices)
 
+        gen_state, window_info = gen_state.remap_window_pages(decode_state.sequences, binfo)
+
         # Decode logits and sample new tokens
         if routes is not None:
             assert isinstance(model, SnowballLMHeadModel)
@@ -909,6 +931,9 @@ def _run_generation_loop(
         ):
             # The generation queue holds at most one sampled token per active sequence.
             logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, max_active_tokens=1)
+        elif window_info is not None:
+            assert isinstance(model, SnowballLMHeadModel)
+            logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, window_batch_info=window_info)
         else:
             logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
 
@@ -1102,6 +1127,16 @@ class _PageReservation:
     shared_pages: np.ndarray | None = None
 
 
+def _window_working_set_pages(config: InferenceEngineConfig, table: PageTable, window: int) -> int:
+    # Budget every live tail and all new pages in the largest packed prefill.
+    prefill_capacity = config.max_prefill_size or table.max_len_per_seq
+    return (
+        config.max_seqs * ((window + table.page_size - 1) // table.page_size + 1)
+        + (prefill_capacity + table.page_size - 1) // table.page_size
+        + config.max_seqs_in_prefill
+    )
+
+
 class InferenceEngine:
     """Encapsulates batch inference: prefill + decode + output extraction.
 
@@ -1133,7 +1168,16 @@ class InferenceEngine:
         self.model = model
         self.tokenizer = tokenizer
         self.sampler = sampler
-        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state)
+        window_pages = None
+        self._window_terminal_limit = 0
+        if config.window_cache_max_pages is not None:
+            assert isinstance(model, SnowballLMHeadModel)
+            window_pages = WindowPageMap.init(
+                decode_state.page_table.num_pages, config.window_cache_max_pages, model.config.sliding_window
+            )
+            working_set = _window_working_set_pages(config, decode_state.page_table, model.config.sliding_window)
+            self._window_terminal_limit = config.window_cache_max_pages - working_set
+        self.gen_state = GenState(cache=cache, decode_state=decode_state, window_pages=window_pages)
         self._initial_decode_state = decode_state
         # Impute max_prefill_size if not set
         if config.max_prefill_size is None:
@@ -1188,16 +1232,38 @@ class InferenceEngine:
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
         cache: PageCache
-        if (
+        prefill_capacity = config.max_prefill_size or table.max_len_per_seq
+        use_layer_caches = (
             isinstance(model, SnowballLMHeadModel)
             and config.max_seqs > 1
             and model.config.inference_decode_implementation == "unrolled_split_cache"
-            and (config.max_prefill_size or table.max_len_per_seq)
-            <= model.config.inference_max_unrolled_prefill_tokens
-        ):
+            and prefill_capacity <= model.config.inference_max_unrolled_prefill_tokens
+        )
+        window_capacity = config.window_cache_max_pages
+        if window_capacity is not None:
+            if (
+                not use_layer_caches
+                or not isinstance(model, SnowballLMHeadModel)
+                or model.config.projection_implementation != "native"
+            ):
+                raise ValueError("Sliding-window KV requires split per-layer Snowball buffers and native projection")
+            min_window_pages = _window_working_set_pages(config, table, model.config.sliding_window)
+            if not min_window_pages <= window_capacity < table.num_pages:
+                raise ValueError(f"Sliding-window KV capacity must be in [{min_window_pages}, {table.num_pages})")
+        if use_layer_caches:
+            assert isinstance(model, SnowballLMHeadModel)
             allocate_layer = hax.named_jit(model.initial_layer_cache, axis_resources=axis_resources)
+            layers = len(model.transformer.blocks)
+            spec = table.spec()
+            window_spec = spec if window_capacity is None else dataclasses.replace(spec, num_pages=window_capacity)
             cache = ListCache(
-                tuple(allocate_layer(table.spec(), dtype=config.compute_dtype) for _ in model.transformer.blocks)
+                tuple(
+                    allocate_layer(
+                        spec if is_long_attention_layer(layer, layers) else window_spec,
+                        dtype=config.compute_dtype,
+                    )
+                    for layer in range(layers)
+                )
             )
         else:
             cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
@@ -1345,6 +1411,7 @@ class InferenceEngine:
             pages = self._cached_prompts.pop(evict).pages
             np.add.at(after, pages, -1)
             pinned -= np.count_nonzero((after[pages] == 0) & ~shared[pages])
+        self._refresh_window_prompt_tails()
         change = after - before
         if not np.any(change):
             return
@@ -1352,13 +1419,44 @@ class InferenceEngine:
         table = dataclasses.replace(table, page_ref_counts=table.page_ref_counts + hax.named(delta, "page"))
         self.gen_state = dataclasses.replace(self.gen_state, decode_state=dataclasses.replace(state, page_table=table))
 
-    def _matching_prompt_pages(self, tokens: np.ndarray) -> np.ndarray:
+    def _refresh_window_prompt_tails(self) -> None:
+        window_pages = self.gen_state.window_pages
+        if window_pages is None or self._window_terminal_limit == 0:
+            return
+
+        page_size = self.config.page_size
+        retained_tail = (window_pages.window + page_size - 1) // page_size + 1
+        mask = np.zeros(window_pages.logical_to_window.size, dtype=np.bool_)
+        free = self._window_terminal_limit
+        for prompt in reversed(self._cached_prompts):
+            tail = prompt.pages[-retained_tail:]
+            cost = int(np.count_nonzero(~mask[tail]))
+            if cost > free:
+                break
+            mask[tail] = True
+            free -= cost
+        pins = jax.device_put(mask, window_pages.terminal_pins.sharding)
+        window_pages = dataclasses.replace(window_pages, terminal_pins=pins)
+        self.gen_state = dataclasses.replace(self.gen_state, window_pages=window_pages)
+
+    def _matching_prompt_pages(self, tokens: np.ndarray, window_residency: np.ndarray | None) -> np.ndarray:
         pages = np.empty(0, dtype=np.int32)
+        window_pages = self.gen_state.window_pages
+        page_size = self.config.page_size
+        tail_pages = 0 if window_pages is None else (window_pages.window + page_size - 1) // page_size
         for cached in reversed(self._cached_prompts):
             # Leave one query so prefill can compute next-token logits.
             limit = min(len(tokens) - 1, len(cached.tokens))
             mismatches = np.flatnonzero(tokens[:limit] != cached.tokens[:limit])
-            count = (int(mismatches[0]) if mismatches.size else limit) // self.config.page_size
+            count = (int(mismatches[0]) if mismatches.size else limit) // page_size
+            if window_residency is not None and count > len(pages):
+                # A textual match can resume only where the previous window is resident.
+                resident = window_residency[cached.pages[:count]] != INVALID
+                boundaries = np.arange(1, count + 1)
+                unavailable = np.pad(np.cumsum(~resident, dtype=np.int32), (1, 0))
+                valid = unavailable[boundaries] == unavailable[np.maximum(boundaries - tail_pages, 0)]
+                eligible = boundaries[valid]
+                count = int(eligible[-1]) if eligible.size else 0
             if count > len(pages):
                 pages = cached.pages[:count]
         return pages
@@ -1413,6 +1511,12 @@ class InferenceEngine:
         total_new = 0
         reserved, shared = self._reserved_page_usage(decode_state.page_table)
         pages_left = decode_state.page_table.num_pages - reserved
+        window_pages = self.gen_state.window_pages
+        window_residency = (
+            None
+            if window_pages is None or not self._cached_prompts
+            else np.asarray(jax.device_get(window_pages.logical_to_window))
+        )
 
         for request in requests:
             seq_tokens = request.prompt_tokens
@@ -1425,7 +1529,7 @@ class InferenceEngine:
             this_tokens = np.asarray(seq_tokens, dtype=np.int32)
             pages = None
             if prefix_pages is not None and self._cached_prompts:
-                pages = self._matching_prompt_pages(this_tokens)
+                pages = self._matching_prompt_pages(this_tokens, window_residency)
             reused_pages = 0 if pages is None else len(pages)
             private_pages = self._request_pages(request) - reused_pages if max_slots > 1 else 0
             pages_needed = private_pages
@@ -1602,6 +1706,8 @@ class InferenceEngine:
                 "Prefix caching requires generation without route capture and one request for a single slot"
             )
 
+        if replay is not None and self.gen_state.window_pages is not None:
+            raise ValueError("Route capture requires full KV for every layer")
         self._start_generation()
         call_rids = [request.request_id for request in requests]
         for request in requests:
@@ -1673,6 +1779,7 @@ class InferenceEngine:
             replicated_single_token = (
                 active == 1
                 and self.config.max_seqs > 1
+                and self.gen_state.window_pages is None
                 and replay is None
                 and isinstance(self.model, SnowballLMHeadModel)
                 and self.model.config.inference_attention_implementation == "gpu"
@@ -1758,6 +1865,8 @@ class InferenceEngine:
             raise ValueError("Each prompt must be nonempty and fit within max_prefill_size.")
         if len(request.prompt_tokens) >= self.config.max_seq_len:
             raise ValueError("Each prompt must leave room for generation within max_seq_len.")
+        if request.n_generations != 1 and self.gen_state.window_pages is not None:
+            raise ValueError("Sliding-window KV requires one generation per request")
         if request.n_generations < 1 or request.n_generations > self.config.max_seqs:
             raise ValueError(
                 f"Requested {request.n_generations} sequences for a service with {self.config.max_seqs} slots"

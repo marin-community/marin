@@ -1998,6 +1998,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
         max_active_tokens: int | None = None,
+        window_batch_info: PageBatchInfo | None = None,
     ) -> tuple[NamedArray, SnowballDecodeCache]:
         """Prefill or decode using the existing two-value generation protocol.
 
@@ -2011,6 +2012,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             key=key,
             capture_routes=False,
             max_active_tokens=max_active_tokens,
+            window_batch_info=window_batch_info,
         )
         return logits, caches
 
@@ -2036,12 +2038,20 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         sample_indices: NamedArray,
+        *,
+        window_batch_info: PageBatchInfo | None = None,
     ) -> tuple[NamedArray, SnowballDecodeCache]:
         """Prefill the cache and project only the rows needed by the sampler."""
         if self.config.projection_implementation != "native":
             raise ValueError("Selected-row decoding requires Snowball's native projection")
         logits, caches, _ = self._decode(
-            input_ids, kv_cache, batch_info, pos_ids, capture_routes=False, sample_indices=sample_indices
+            input_ids,
+            kv_cache,
+            batch_info,
+            pos_ids,
+            capture_routes=False,
+            sample_indices=sample_indices,
+            window_batch_info=window_batch_info,
         )
         return logits, caches
 
@@ -2057,6 +2067,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         capture_routes: bool,
         sample_indices: NamedArray | None = None,
         max_active_tokens: int | None = None,
+        window_batch_info: PageBatchInfo | None = None,
     ) -> tuple[NamedArray, SnowballDecodeCache, SnowballDecodeRouteCaptureBatch | None]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
@@ -2130,13 +2141,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             )
             return eqx.tree_at(lambda b: b.mlp.expert_mlp, block, experts)
 
-        def layer_forward(x, cache, block, use_long):
+        def layer_forward(x, cache, block, use_long, layer_info):
             attn_in = block.attn_gated_norm(block.rms_attn(x))
             if isinstance(use_long, bool) or num_layers == 1:
                 attn_out, cache = block.attn.decode(
                     attn_in,
                     cache,
-                    batch_info,
+                    layer_info,
                     positions,
                     use_long=True if num_layers == 1 else use_long,
                     kv_append=kv_append,
@@ -2149,7 +2160,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                     lambda _: block.attn.decode(
                         attn_in,
                         cache,
-                        batch_info,
+                        layer_info,
                         positions,
                         use_long=True,
                         kv_append=kv_append,
@@ -2159,7 +2170,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                     lambda _: block.attn.decode(
                         attn_in,
                         cache,
-                        batch_info,
+                        layer_info,
                         positions,
                         use_long=False,
                         kv_append=kv_append,
@@ -2187,9 +2198,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 raise ValueError("Per-layer KV buffers require unrolled Snowball decode")
             updated = []
             for layer, (block, cache) in enumerate(zip(self.transformer.blocks, kv_cache, strict=True)):
-                hidden, layer_cache, _ = layer_forward(
-                    hidden, cache, inference_block(block), is_long_attention_layer(layer, num_layers)
-                )
+                use_long = is_long_attention_layer(layer, num_layers)
+                layer_info = window_batch_info if window_batch_info is not None and not use_long else batch_info
+                hidden, layer_cache, _ = layer_forward(hidden, cache, inference_block(block), use_long, layer_info)
                 updated.append(layer_cache)
             caches = ListCache(tuple(updated))
             stacked_captures = None
@@ -2201,7 +2212,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 layer, block, use_long = layer_data
                 layer_pages = jax.lax.dynamic_index_in_dim(pages, layer, keepdims=False)
                 cache = KvPageCache(hax.named(layer_pages, cache_axes))
-                x, cache, capture = layer_forward(x, cache, block, use_long)
+                x, cache, capture = layer_forward(x, cache, block, use_long, batch_info)
                 pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
                 return (x, pages), capture
 
