@@ -151,12 +151,32 @@ with an update restored from that same A1 checkpoint. With pinned JAX/JAXLIB
 input identity, exact restoration and continuation, unchanged scores across
 restore, finite checkpoint arrays, and both natural process exits zero. The
 actual second-step gradient was finite and nonzero in both paths; state,
-scores and loss metrics matched exactly. GPU execution remains a separate gate.
+scores and loss metrics matched exactly. This establishes local orchestration,
+without accelerator acceptance.
 
 The gradient callback changes compilation, so this is an instrumented resume
 test. It uses a newly scored fixed trajectory batch, not fresh rollout
 generation. Passing it would not clear the short-sequence NaNs, the independent
 first-update divergence or full-model acceptance.
+
+The eight-H100 run `/dlwh/native-lifecycle-paired-2026-11-22-1`, from
+`d3fecc6bf743e25ae26f42bac8df8b5602d3242b`, completed with task exit zero and
+no retries or preemptions. Its complete archive and frozen source were
+independently verified. The paired test passed 16 of 18 checks: restoration,
+pre-update scores, complete frozen input, RNG, step, state finiteness and both
+natural process exits passed. Exact continued state and scores failed. The
+maximum model deviation was 0.000531805, maximum Adam deviation 0.0000229746,
+and maximum score deviation 0.000222206. Independent decoding of all three
+checkpoint trees confirmed the reported finite states and deviations.
+
+The actual consumed second-step gradients were finite and nonzero in both
+paths, but their norms differed: 4.25701332 versus 4.25689793. Both differentiated
+losses reported unit policy ratios and no clipping pressure. The shared-A1
+comparison removes the earlier independent-initialization confound, but it
+does not identify whether execution variability, physical layout, compilation
+or another cause produced the difference. Exact continuation remains failed;
+the tolerances have not changed. Further work must distinguish repeated
+execution from reload and process changes before claiming a remedy.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
 gates. No new 40-H100 full-model smoke or matched 25-update comparison has been
