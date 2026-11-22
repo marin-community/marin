@@ -849,11 +849,13 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
             "seccompProfile": {"type": "RuntimeDefault"},
         }
 
-    # DEFAULT and PRIVILEGED keep the profiling cap; TPU adds the memlock cap.
+    # DEFAULT, BUBBLEWRAP, and PRIVILEGED keep the profiling cap; TPU adds the memlock cap.
     capabilities = ["SYS_PTRACE"]
     if has_tpu:
         capabilities.append("SYS_RESOURCE")
     ctx: dict = {"capabilities": {"add": capabilities}}
+    if resolved == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP:
+        ctx["appArmorProfile"] = {"type": "Unconfined"}
     if resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED:
         ctx["privileged"] = True
         ctx["allowPrivilegeEscalation"] = True
@@ -984,7 +986,12 @@ def _build_pod_manifest(
         if storage_error:
             raise PodManifestError(storage_error)
     job_env = dict(run_req.environment.env_vars)
-    combined = {**cluster_env, **job_env, **iris_env}
+    combined = {
+        **cluster_env,
+        **job_env,
+        **iris_env,
+        "IRIS_CONTAINER_PROFILE": job_pb2.ContainerProfile.Name(resolve_container_profile(run_req.container_profile)),
+    }
     if job_secrets:
         combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
         for name, value in secret_file_environment(job_secrets).items():

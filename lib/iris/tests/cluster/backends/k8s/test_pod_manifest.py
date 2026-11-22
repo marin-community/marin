@@ -1065,6 +1065,21 @@ def test_default_profile_matches_baseline():
     assert ctx == {"capabilities": {"add": ["SYS_PTRACE"]}}
 
 
+def test_bubblewrap_profile_changes_only_apparmor_and_stamps_task_profile():
+    request = make_run_req("/job/task-0")
+    default_pod = _build_pod_manifest(request, pod_config())
+    request.container_profile = job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
+    bubblewrap_pod = _build_pod_manifest(request, pod_config())
+
+    default_task = default_pod["spec"]["containers"][0]
+    bubblewrap_task = bubblewrap_pod["spec"]["containers"][0]
+    security = bubblewrap_task["securityContext"]
+    assert security == {**default_task["securityContext"], "appArmorProfile": {"type": "Unconfined"}}
+    env = {entry["name"]: entry["value"] for entry in bubblewrap_task["env"] if "value" in entry}
+    assert env["IRIS_CONTAINER_PROFILE"] == "CONTAINER_PROFILE_BUBBLEWRAP"
+    assert bubblewrap_pod["spec"].get("hostNetwork") == default_pod["spec"].get("hostNetwork")
+
+
 def test_restricted_profile_drops_all_caps():
     ctx = _security_context(job_pb2.CONTAINER_PROFILE_RESTRICTED, has_tpu=False)
     assert ctx["capabilities"] == {"drop": ["ALL"], "add": []}

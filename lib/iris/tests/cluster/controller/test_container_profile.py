@@ -41,6 +41,7 @@ DOCKER_ACCESS = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
 RESTRICTED = job_pb2.CONTAINER_PROFILE_RESTRICTED
 DEFAULT = job_pb2.CONTAINER_PROFILE_DEFAULT
 SANDBOX = job_pb2.CONTAINER_PROFILE_SANDBOX
+BUBBLEWRAP = job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
 
 
 @pytest.fixture
@@ -110,13 +111,15 @@ def test_admin_can_use_elevated_profile(service, profile):
     assert resp.job_id == "/admin/job"
 
 
-@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, SANDBOX, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
+@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, SANDBOX, BUBBLEWRAP, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
 def test_non_admin_can_use_unprivileged_profile(service, profile):
-    """RESTRICTED/DEFAULT/SANDBOX/UNSPECIFIED need no authorization.
+    """Non-elevated profiles need no authorization.
 
     SANDBOX is un-gated on purpose: the sandbox runtime gives in-guest capabilities while
     isolating the host, so it is safe to hand out without the admin role.
     """
+    if profile == BUBBLEWRAP:
+        service._controller.backend.descriptor = k8s_backend_descriptor()
     resp = _as("user", "alice", service.launch_job, _launch("/alice/job", profile), None)
     assert resp.job_id == "/alice/job"
 
@@ -177,6 +180,15 @@ def test_docker_access_rejected_on_cluster_backend(state, tmp_path, log_client):
         _as("admin", "admin", service.launch_job, _launch("/admin/job", DOCKER_ACCESS), None)
     assert exc.value.code == Code.INVALID_ARGUMENT
     assert "docker_access" in str(exc.value.message).lower()
+
+
+def test_bubblewrap_profile_rejected_on_docker_worker_before_job_is_stored(service, state):
+    with pytest.raises(ConnectError) as exc:
+        _as("user", "alice", service.launch_job, _launch("/alice/job", BUBBLEWRAP), None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "Kubernetes" in str(exc.value.message)
+    with state._db.read_snapshot() as snapshot:
+        assert reads.get_job_detail(snapshot, JobName.from_wire("/alice/job")) is None
 
 
 def test_null_auth_allows_elevated(state, tmp_path, log_client):

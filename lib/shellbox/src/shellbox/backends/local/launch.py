@@ -39,6 +39,10 @@ def execute_in_namespaces(configuration_fd: int) -> None:
             # Move the trusted launcher before it can fork any guest process.
             with open(config["cgroup"], "w") as membership:
                 membership.write(str(os.getpid()))
+        if config.get("program_user") is not None:
+            # A peer's user namespace may disallow setgroups, so clear groups
+            # before entering it while retaining the privilege needed for setns.
+            os.setgroups([])
         entered = {
             os.stat(f"/proc/self/ns/{name}").st_ino for name in ("user", "net", "ipc", "uts", "mnt", "pid", "cgroup")
         }
@@ -57,6 +61,10 @@ def execute_in_namespaces(configuration_fd: int) -> None:
         if config.get("program") is not None:
             # Creating another member needs bwrap's own namespace setup. Its
             # descriptors are consumed and closed by bwrap, before the keeper runs.
+            if config.get("program_user") is not None:
+                uid, gid = config["program_user"]
+                os.setgid(gid)
+                os.setuid(uid)
             os.execv(config["program"][0], config["program"])
         os.fchdir(config["root"])
         os.chroot(".")

@@ -4,9 +4,11 @@
 """Persistent launcher behavior at the namespace and exec boundaries."""
 
 import asyncio
+import json
 import os
 import select
 import signal
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -31,6 +33,37 @@ def factory() -> local.LocalMachineFactory:
         return local.LocalMachineFactory()
     except local.SandboxUnavailable as error:
         pytest.skip(str(error))
+
+
+def test_local_factory_in_iris_task_requires_bubblewrap_profile(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.delenv("IRIS_CONTAINER_PROFILE", raising=False)
+    with pytest.raises(local.ContainerProfileRequired, match="CONTAINER_PROFILE_BUBBLEWRAP"):
+        local.LocalMachineFactory()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap launcher to an unprivileged uid")
+def test_keeper_launcher_drops_to_non_root_before_exec(tmp_path):
+    configuration = tmp_path / "launcher.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "namespaces": [],
+                "program": [sys.executable, "-c", "import os; print(os.geteuid())"],
+                "program_user": [local.BUBBLEWRAP_UID, local.BUBBLEWRAP_GID],
+                "cgroup": None,
+            }
+        )
+    )
+    with configuration.open("rb") as source:
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, str(source.fileno())],
+            pass_fds=(source.fileno(),),
+            capture_output=True,
+            check=False,
+        )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout.strip() == str(local.BUBBLEWRAP_UID).encode()
 
 
 def test_factory_rejects_namespace_entry_failure_and_removes_probe_files(factory, monkeypatch, tmp_path):
