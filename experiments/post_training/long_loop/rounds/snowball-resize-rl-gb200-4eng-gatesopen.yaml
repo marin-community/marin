@@ -315,6 +315,7 @@ rl:
             cp_comm_type: all_gather
       resume_mode: none
       rollout_buffer:
+        eval_drain: wait
         batch_policy: full_batch
         consumed_route_quotas:
           agentic: 22
