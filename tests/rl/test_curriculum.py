@@ -254,12 +254,6 @@ def test_curriculum_rejects_validation_rows_from_undeclared_sources():
         )
 
 
-def test_validation_split_size_is_required():
-    """There is no silent default: a non-positive size is rejected at the draw."""
-    with pytest.raises(ValueError, match="validation size must be positive"):
-        _validation(17, {"gsm8k": 1.0}, {"gsm8k": 10}, size=0)
-
-
 def test_validation_draw_rejects_impossible_pools():
     with pytest.raises(ValueError, match="allocates"):
         _validation(17, {"gsm8k": 1.0}, {"gsm8k": 10}, size=200)

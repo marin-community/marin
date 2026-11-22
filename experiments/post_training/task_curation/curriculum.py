@@ -8,10 +8,12 @@ owns the policy binding: which of them a curriculum samples, at what weights or 
 order. ``weighted_curriculum`` is the RL analog of :func:`marin.experiment.data.mixture` — the
 caller maps pool steps to weights, and the curriculum's entries pin the same pools by artifact
 identity, so the mix record and the training data cannot drift apart. Fixing a curriculum also
-draws its validation holdout from these pools: the builders require an explicit
-``validation_size`` and each pool's row identities, and the drawn split is recorded in the
-curriculum's metadata while the pools the run trains on are written from the split's training
-remainder, so the holdout is a random subset of the training set and disjoint from it.
+draws its validation holdout: the builders require an explicit ``validation_size`` and each
+pool's row identities, and the drawn split is recorded in the curriculum's metadata. The pool
+builder that materializes the pools calls :func:`marin.rl.curriculum.draw_validation_split`
+itself — the same pure call, so record and data derive one split — writes the training pools
+from its ``ValidationSplit.training`` remainder and the validation data from its held-out rows,
+so the holdout is a random subset of the training set and disjoint from it.
 """
 
 from collections.abc import Mapping, Sequence
@@ -49,7 +51,9 @@ def weighted_curriculum(
     draws its validation holdout here: ``validation_size`` is required (there is no default),
     ``pool_rows`` carries each pool's row identities keyed by pool step name, and the drawn
     split is recorded in the curriculum's metadata. The pools the run trains on must exclude
-    the drawn rows — write them from :class:`ValidationSplit.training` so the holdout is true.
+    the drawn rows: the pool builder materializes them from
+    :func:`marin.rl.curriculum.draw_validation_split`'s ``ValidationSplit.training`` — the same
+    deterministic call this builder makes — so record and data cannot disagree.
     """
     pools: dict[str, ArtifactStep[Artifact]] = {}
     mixture: dict[str, float] = {}
