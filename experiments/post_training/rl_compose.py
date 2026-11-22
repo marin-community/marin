@@ -405,14 +405,22 @@ def utc_millis(value: str) -> int:
 def _training_config(
     preset: presets.Preset,
     settings: tuple[str, ...],
+    model: SkyRLModelSource | ResolvedModelLocator,
 ) -> RecipePatch:
     recipe = preset.recipe
-    authored = recipe.config.to_skyrl()
+    recipe_config = recipe.config
+    draft = preset.default_speculative_decoding
+    if draft is not None and (
+        model == preset.model
+        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
+    ):
+        recipe_config = recipe_config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=draft)))
+    authored = recipe_config.to_skyrl()
     if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
-    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe.config)
+    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe_config)
     geometry = asdict(recipe.layout.megatron)
-    budget = recipe.config.context_budget
+    budget = recipe_config.context_budget
     assert budget is not None
     if recipe.fixed_reply_tokens is not None:
         budget = budget.replace(max_new_tokens_per_turn=recipe.fixed_reply_tokens)
@@ -437,9 +445,7 @@ def _training_config(
         for key, value in recipe.training_plan.config_values().items():
             if key.startswith("trainer."):
                 set_path(training_geometry, key, value)
-        recipe_config = recipe.config.merge(RecipePatch.from_document(training_geometry))
-    else:
-        recipe_config = recipe.config
+        recipe_config = recipe_config.merge(RecipePatch.from_document(training_geometry))
     config = recipe_config.merge(
         RecipePatch(
             context_budget=budget,
@@ -477,15 +483,7 @@ def run_spec(
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
     model = (resume.model if resume is not None else None) or init or preset.model
-    if preset.default_speculative_decoding is not None and (
-        model == preset.model
-        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
-    ):
-        config = preset.recipe.config.merge(
-            RecipePatch(generator=sections.Generator(speculative_decoding=preset.default_speculative_decoding))
-        )
-        preset = replace(preset, recipe=replace(preset.recipe, config=config))
-    config = _training_config(preset, settings)
+    config = _training_config(preset, settings, model)
     explicit = override_document(settings)
     authored = config.to_skyrl()
     batch_changes = {
