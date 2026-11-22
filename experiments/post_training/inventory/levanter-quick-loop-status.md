@@ -1,23 +1,38 @@
 # Levanter quick-loop status
 
-November 21, 2026 (PST).
+November 22, 2026 (PST).
 
-No completed full Snowball optimizer update is established. Updated-weight
-publication, subsequent generation, exact native checkpoint continuation, and
-the matched 25-update comparison remain unverified.
+Four full-model training calls returned, and step-1/version-1 checkpoint
+metadata was committed. End-to-end update confirmation, fresh-process
+continuation, updated-weight publication and generation, and the matched
+25-update comparison remain unverified.
 
-BATCH smoke `2026.11.21.13` is running from
-`cb3fd4e7d767e52f0409ecb0b0fda5b98902e957`. By the 23:27 PST check, all four
+BATCH smoke `2026.11.21.13`, from
+`cb3fd4e7d767e52f0409ecb0b0fda5b98902e957`, failed during checkpoint
+validation on November 21 at 23:46 PST. A native learner acknowledged shutdown but did not
+exit within the unchanged five-second grace period. `Trainer.__exit__` and
+`jax.distributed.shutdown` already run before acknowledgement; the remaining
+finalization cause is unproven. All five GPU pods are gone.
+
+Before that failure, all four
 native learners had initialized the full 67,078,882,816-parameter model across
 32 H100s with data4/expert8. Every native receipt confirms NumPy 2.3.5 on Linux
 with the advisory disabled, and VMM at 0.90 with preallocation off. Both
 accepted bundles match all 4,583 frozen entries, including 43 required runtime
 files, and the executed configuration matches the preflight. All five physical
 hosts changed, so improved loading does not isolate the policy's effect from
-placement. By 23:37 PST, initial model-version-zero publication was byte-exact
+placement. Initial model-version-zero publication was byte-exact
 on all eight vLLM receivers, generation returned nonempty stamp-1 tokens, and
-initial evaluation completed 100/100 tasks. The first compiled update was
-executing; completed optimizer updates and resume remained unverified.
+initial evaluation completed 100/100 tasks. All four native train requests
+returned at 23:34:57 PST; checkpoint step-1/version-1 metadata and its array
+manifest were committed at 23:40:14 PST. The checkpoint's array contents have
+not been independently restored, and no complete roundtrip or end-to-end
+update receipt was emitted before shutdown failed.
+
+A lifecycle candidate is under local validation: synchronize and release
+owned resources before acknowledgement, with shutdown/finalization diagnostics.
+It preserves the real exit-zero requirement and the existing five-second
+grace period. No replacement run has been submitted.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
@@ -89,11 +104,11 @@ every host. The first compiled update then failed at 18:04:31 PST, requesting
 41.05 GiB in `jit__train_step`. The exact buffer cause remains unknown. Both
 jobs are failed and all five GPU pods are gone.
 
-The quick loop now reaches generation and the compiled learner update with
-the original recipe, but no completed optimizer update is established.
-Publication and generation after an update, exact checkpoint continuation,
-and the matched 25-update comparison remain unverified. No comparison arm
-has been submitted; full smoke acceptance is still required.
+The quick loop now reaches generation, returned native training calls, and a
+committed step-1 checkpoint with the original recipe. Publication and
+generation after an update, exact checkpoint continuation, and the matched
+25-update comparison remain unverified. No comparison arm has been submitted;
+full smoke acceptance is still required.
 
 ## Scope and fixed recipe
 
