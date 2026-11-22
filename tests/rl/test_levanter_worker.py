@@ -37,9 +37,164 @@ from levanter.testing.devices import use_test_devices
 from levanter.trainer import WrappedLossFunction
 from levanter.utils.mesh import MeshConfig
 from marin.rl.levanter_worker_protocol import LearnerProcess
-from marin.rl.levanter_worker_runtime import NativePolicyRuntime
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime, _state_fingerprint
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
+
+
+@pytest.mark.parametrize(
+    "dtype,expected_sha,expected_layout,expected_bytes",
+    [
+        (
+            "float32",
+            "aa8f1209084d0ef305e8ea9bda7d14f863453aa512df256724fe306999c57b7b",
+            "253fe9f21f5495c92547974e6b12d212dc93345b6a3715ae177ab42e66e76e0c",
+            4194322,
+        ),
+        (
+            "bfloat16",
+            "710da197f2a2341a63310f6b453d1b75f8d18019f2e0a62a25a1612e912f7476",
+            "7f4ee246ef231b7164efe179ef7e6fa524de0b0957ce69ed07511a88831a1455",
+            14,
+        ),
+    ],
+)
+def test_fingerprint_reports_nonfinite_without_changing_legacy_bytes(
+    dtype, expected_sha, expected_layout, expected_bytes
+):
+    # Literal digests were produced by the published d3fecc6 byte encoder.
+    if dtype == "float32":
+        weights = np.zeros((1 << 20) + 3, np.float32)
+        weights.view(np.uint32)[0] = 0x7FC01234
+        weights[(1 << 20) - 1] = np.inf
+        weights[1 << 20] = -np.inf
+    else:
+        weights = np.array([0, np.nan, np.inf, -np.inf], dtype=jnp.bfloat16)
+    original = weights.tobytes()
+    proof = _state_fingerprint({"weights": weights, "counter": np.array(7, np.int32), "flag": np.array([True, False])})
+    assert proof["sha256"] == expected_sha and proof["layout_sha256"] == expected_layout
+    assert proof["addressable_bytes"] == expected_bytes
+    assert weights.tobytes() == original
+    assert proof["nonfinite_elements"] == 3
+    assert proof["elements"] == weights.size + 3
+    assert proof["finite_elements"] == weights.size
+
+
+_FINITE_FAILURE_WORKER = """
+import json, sys
+from types import SimpleNamespace
+import jax, jax.numpy as jnp, numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime
+rank, address, scenario = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+jax.distributed.initialize(coordinator_address=address, num_processes=2, process_id=rank)
+try:
+    mesh = Mesh(np.array(jax.devices()), ('data',))
+    source = np.arange(4, dtype=np.float32)
+    if rank == 1 and scenario in ('poison', 'poison_io'):
+        source[2] = np.nan
+    weight = jax.make_array_from_callback((4,), NamedSharding(mesh, PartitionSpec('data')), lambda i: source[i])
+    runtime = NativePolicyRuntime()
+    runtime.settings = {'distributed': {'num_processes': 2, 'process_id': rank, 'local_device_count': 1}, 'runtime': {}}
+    runtime.source_identity = {'path': 'finite-test', 'revision': None}
+    runtime.version = 1
+    runtime.state = SimpleNamespace(model={'weight': weight}, opt_state={'mu': jnp.zeros(4)},
+        training_key=jax.random.PRNGKey(41), step=jnp.array(1), model_averaging=None)
+    print(json.dumps({'ready': rank}), flush=True)
+    for line in sys.stdin:
+        command = json.loads(line)
+        if command['method'] == 'plain':
+            print(json.dumps(runtime.state_fingerprints()), flush=True)
+            continue
+        if rank == 1 and scenario == 'scan_error':
+            weight.delete()
+        request = {'phase': 'step1', 'step': 1, 'version': 1}
+        if rank == 1 and scenario == 'phase':
+            request = {'phase': 'step2', 'step': 2, 'version': 2}
+        try:
+            runtime.validate_state_finite(request)
+        except RuntimeError as error:
+            print(json.dumps({'rank': rank, 'error': str(error)}), flush=True)
+        else:
+            print(json.dumps({'rank': rank, 'error': None}), flush=True)
+        break
+finally:
+    jax.distributed.shutdown()
+"""
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(90)
+@pytest.mark.parametrize(
+    "scenario,kind",
+    [
+        ("poison", "nonfinite_state"),
+        ("scan_error", "state_scan_failed"),
+        ("phase", "validation_mismatch"),
+        ("io", "proof_persistence_failed"),
+        ("poison_io", "nonfinite_state"),
+    ],
+)
+def test_finite_gate_rejects_all_hosts_without_making_plain_hash_collective(tmp_path, scenario, kind):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        address = f"127.0.0.1:{listener.getsockname()[1]}"
+    children, logs = [], []
+    try:
+        for rank in range(2):
+            directory = tmp_path / f"rank-{rank}"
+            if rank == 1 and scenario in ("io", "poison_io"):
+                directory.write_text("A real file prevents creation of the required proof directory.")
+            env = {
+                **os.environ,
+                "JAX_PLATFORMS": "cpu",
+                "JAX_CPU_COLLECTIVES_IMPLEMENTATION": "gloo",
+                "XLA_FLAGS": "--xla_force_host_platform_device_count=1",
+                "IRIS_OUTPUT_DIR": str(directory),
+            }
+            env.pop("SKYRL_DEBUG_ARTIFACT_DIR", None)
+            log = (tmp_path / f"child-{rank}.log").open("w")
+            logs.append(log)
+            children.append(
+                subprocess.Popen(
+                    [sys.executable, "-u", "-c", _FINITE_FAILURE_WORKER, str(rank), address, scenario],
+                    env=env,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=log,
+                    text=True,
+                )
+            )
+        for rank, child in enumerate(children):
+            assert json.loads(child.stdout.readline()) == {"ready": rank}
+        # Rank1 is idle on stdin: a plain rank0 fingerprint must return alone.
+        children[0].stdin.write(json.dumps({"method": "plain"}) + "\n")
+        children[0].stdin.flush()
+        plain = json.loads(children[0].stdout.readline())
+        assert plain["components"]["model"]["nonfinite_elements"] == 0
+        for child in children:
+            child.stdin.write(json.dumps({"method": "validate"}) + "\n")
+            child.stdin.flush()
+        errors = [json.loads(child.stdout.readline())["error"] for child in children]
+        assert all(kind in error for error in errors)
+        assert all(child.wait(timeout=10) == 0 for child in children)
+        verdicts = list((tmp_path / "rank-0").rglob("*-verdict.json"))
+        assert len(verdicts) == 1
+        verdict = json.loads(verdicts[0].read_text())
+        assert verdict["status"] == "failed" and verdict["failure_kind"] == kind
+        assert sorted(peer["process_id"] for peer in verdict["peers"]) == [0, 1]
+        if scenario == "poison":
+            assert verdict["peers"][0]["fingerprints"]["components"]["model"]["nonfinite_elements"] == 0
+            assert verdict["peers"][1]["fingerprints"]["components"]["model"]["nonfinite_elements"] == 1
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            child.stdin.close()
+            child.stdout.close()
+        for log in logs:
+            log.close()
 
 
 @pytest.mark.multidevice
@@ -670,9 +825,10 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             "weight_decay": 0.0,
         },
     }
-    if host_restart or compiler_failure:
-        output_dir = tmp_path / "attempt-output"
-        monkeypatch.setenv("IRIS_OUTPUT_DIR", str(output_dir))
+    output_dir = tmp_path / "attempt-output"
+    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(output_dir))
+    if host_restart and process_count == 2:
+        monkeypatch.delenv("SKYRL_DEBUG_ARTIFACT_DIR", raising=False)
     if compiler_failure:
         blocked = tmp_path / "blocked-upload"
         blocked.write_text("This regular file prevents the real uploader from creating its destination.")
@@ -700,6 +856,11 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             == {"allocator": allocator, "memory_fraction": 0.9, "preallocate": preallocate, "unified_memory": False}
             for row in receipts
         )
+        initial_finite = _same_request(children, "validate_state_finite", {"phase": "initial", "step": 0, "version": 0})
+        for proof in initial_finite:
+            for component in proof["components"].values():
+                assert component["nonfinite_elements"] == 0
+                assert component["finite_elements"] == component["elements"]
         if fast_bwd_override_rank is not None:
             # Keep every parent alive until all four real children report the
             # collective rejection; FIRST_EXCEPTION teardown would hide stragglers.
@@ -733,6 +894,8 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                 0,
             )
             observer.child = children[0]
+            observer.initialization_config = config
+            observer._record_finite_state("initial", 0, 0, initial_finite[0])
             observer.sender = host.LevanterExpertBlockSender(observer.publication)
             observer.expert_block_rpc("inventory")
             # This real parent-side filesystem failure must not stop publication
@@ -763,32 +926,6 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             assert any("buffer-assignment" in path.name for path in stage.iterdir())
             assert any("memory-usage-report" in path.name for path in stage.iterdir())
             return
-        before_models = _same_request(children, "model_fingerprint", {})
-        updates = _same_request(children, "train", payload)
-        assert all(update["optimizer_step"] == 1 and update["router_bias_unchanged"] == 1 for update in updates)
-        after = _same_request(children, "forward", payload)[0]["output"]
-        assert np.max(np.abs(after - scores)) > 1e-5
-        saved = _same_request(children, "save_checkpoint", checkpoint)
-        for row in saved:
-            for name in ("model", "opt_state", "training_key", "step"):
-                assert row["state_fingerprints"]["components"][name]["addressable_bytes"] > 0
-        if host_restart and process_count == 1:
-            # A fresh, diagnostics-off learner receives the same frozen batch.
-            # Exact state equality covers model, Adam, RNG, step and averaging.
-            baseline = copy.deepcopy(config)
-            baseline["runtime"]["validate_checkpoint_roundtrip"] = False
-            baseline["runtime"]["numpy_madvise_hugepage"] = None
-            with _learner_processes(baseline, 1) as (control, _, _):
-                _same_request(control, "train", payload)
-                actual = _same_request(control, "state_fingerprints", {})[0]
-            assert actual == saved[0]["state_fingerprints"]
-            stages = list((output_dir / "native-compile").iterdir())
-            assert len(stages) == 1
-            compile_receipt = json.loads((stages[0] / "before-update.json").read_text())
-            assert compile_receipt["compiled_memory"]["alias_size_in_bytes"] > 0
-            assert compile_receipt["selected_reports"]
-            upload = json.loads((stages[0] / "upload-before-update.json").read_text())
-            assert upload["uploaded"] and upload["uploader"]["backend"] == "cpu"
         if host_restart:
             output_dir = tmp_path / "attempt-output"
             monkeypatch.setenv("IRIS_OUTPUT_DIR", str(output_dir))
@@ -816,6 +953,39 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                 worker.child = child
                 worker.initialization_config = local
                 worker.sender = host_module.LevanterExpertBlockSender(worker.publication)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=process_count) as pool:
+                list(pool.map(lambda worker: worker._set_pad_token_id(0), workers))
+            if process_count == 2:
+                # Block ONLY rank1's supplemental parent mirror. The required
+                # child native-finite subtree remains writable on both hosts.
+                (output_dir / "native-state-finite-step1-process-1.json").mkdir()
+        before_models = [row["components"]["model"] for row in initial_finite]
+        updates = _same_request(children, "train", payload)
+        assert all(update["optimizer_step"] == 1 and update["router_bias_unchanged"] == 1 for update in updates)
+        after = _same_request(children, "forward", payload)[0]["output"]
+        assert np.max(np.abs(after - scores)) > 1e-5
+        saved = _same_request(children, "save_checkpoint", checkpoint)
+        for row in saved:
+            for name in ("model", "opt_state", "training_key", "step"):
+                assert row["state_fingerprints"]["components"][name]["addressable_bytes"] > 0
+        if host_restart and process_count == 1:
+            # A fresh, diagnostics-off learner receives the same frozen batch.
+            # Exact state equality covers model, Adam, RNG, step and averaging.
+            baseline = copy.deepcopy(config)
+            baseline["runtime"]["validate_checkpoint_roundtrip"] = False
+            baseline["runtime"]["numpy_madvise_hugepage"] = None
+            with _learner_processes(baseline, 1) as (control, _, _):
+                _same_request(control, "train", payload)
+                actual = _same_request(control, "state_fingerprints", {})[0]
+            assert actual == saved[0]["state_fingerprints"]
+            stages = list((output_dir / "native-compile").iterdir())
+            assert len(stages) == 1
+            compile_receipt = json.loads((stages[0] / "before-update.json").read_text())
+            assert compile_receipt["compiled_memory"]["alias_size_in_bytes"] > 0
+            assert compile_receipt["selected_reports"]
+            upload = json.loads((stages[0] / "upload-before-update.json").read_text())
+            assert upload["uploaded"] and upload["uploader"]["backend"] == "cpu"
+        if host_restart:
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=process_count) as pool:
                     futures = [
@@ -833,6 +1003,10 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                 assert row["model_change"]["global_model_changed"]
                 assert row["saved"] == row["restored"]
                 assert row["saved"]["state_fingerprints"] == saved[rank]["state_fingerprints"]
+                if process_count == 2 and rank == 1:
+                    mirror = row["finite_state_phases_at_restore"]["step1"]["parent_mirror"]
+                    assert mirror["persisted"] is False and mirror["paths"] == []
+                    assert "IsADirectoryError" in mirror["error_types"]
                 assert workers[rank].publication("inventory", {})["version"] == 1
                 assert len(workers[rank].expert_block_rpc("inventory")) == local_count
                 artifact = output_dir / f"native-checkpoint-roundtrip-process-{rank}.json"
@@ -873,6 +1047,30 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             expected = _same_request(children, "train", payload)
         expected_scores = _same_request(children, "forward", payload)[0]["output"]
         expected_state = _same_request(children, "state_fingerprints", {})
+        if host_restart:
+            for rank in range(process_count):
+                for phase in ("initial", "step1", "restored", "step2"):
+                    path = output_dir / f"native-state-finite-{phase}-process-{rank}.json"
+                    if process_count == 2 and rank == 1 and phase == "step1":
+                        assert path.is_dir()
+                    else:
+                        finite = json.loads(path.read_text())
+                        assert finite["status"] == "passed" and finite["parent_mirror"]["persisted"]
+                    candidates = list(
+                        (output_dir / "native-finite").glob(f"process-{rank}-pid-*/{phase}-candidate.json")
+                    )
+                    verdicts = list((output_dir / "native-finite").glob(f"process-{rank}-pid-*/{phase}-verdict.json"))
+                    assert len(candidates) == len(verdicts) == 1
+                    finite = json.loads(candidates[0].read_text())
+                    verdict = json.loads(verdicts[0].read_text())
+                    assert finite["ok"] and finite["complete"] and verdict["status"] == "passed"
+                    assert all(peer["persistence"]["persisted"] for peer in verdict["peers"])
+                    assert all(c["nonfinite_elements"] == 0 for c in finite["fingerprints"]["components"].values())
+        else:
+            assert (
+                _same_request(children, "validate_state_finite", {"phase": "step2", "step": 2, "version": 2})
+                == expected_state
+            )
         if projection_dtype == "float32":
             # Coordinator EOF must finish owned resources and exit naturally too.
             for child in children:

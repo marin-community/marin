@@ -122,6 +122,8 @@ class LevanterHostWorker:
         self._checkpoint_validation_complete = False
         self._publication_memory_recorded = False
         self._training_memory_recorded = False
+        self._initial_finite = None
+        self._finite_state_receipts = {}
 
     def node_address(self) -> str:
         return ray.util.get_node_ip_address()
@@ -130,6 +132,8 @@ class LevanterHostWorker:
         self.coordinator_address = coordinator_address
 
     def init_model(self, model_path: str, num_training_steps: int):
+        self._initial_finite = None
+        self._finite_state_receipts = {}
         self.initialization_config = _runtime_config(
             self.cfg, model_path=model_path, num_training_steps=num_training_steps,
             process_id=self.process_id, coordinator_address=self.coordinator_address,
@@ -140,6 +144,7 @@ class LevanterHostWorker:
         return receipt
 
     def _start_child(self):
+        self._initial_finite = None
         runtime = self.cfg.trainer.policy.levanter_config
         environment = _child_environment(
             runtime.python_executable,
@@ -169,6 +174,64 @@ class LevanterHostWorker:
     def _set_pad_token_id(self, pad_token_id: int) -> None:
         # Coordinator padding and explicit masks already carry token validity.
         self.pad_token_id = pad_token_id
+        # SkyRL invokes this concurrently only after ALL model-init refs finish.
+        # A new 200s host rendezvous must not race another host's long HF load.
+        if self.cfg.trainer.policy.levanter_config.validate_checkpoint_roundtrip:
+            self.capture_initial_finiteness()
+
+    def _record_finite_state(self, phase, step, version, fingerprints=None, error=None):
+        receipt = {
+            "status": "passed" if error is None else "failed", "phase": phase,
+            "process_id": self.process_id, "optimizer_step": step, "policy_version": version,
+            "model_source": self.initialization_config["model"],
+            "state_fingerprints": fingerprints, "error_type": type(error).__name__ if error is not None else None,
+            "validation": "Explicit all-rank native host verdict; local unique shards may repeat across processes",
+            "proof_authority": "Durable native child candidate and coordinated verdict; parent mirror is supplemental",
+            "parent_mirror": {"persisted": False, "paths": [], "error_types": []},
+        }
+        # The child's mandatory persistence was already checked jointly. A
+        # parent-only observer error must not strand peers at the next device
+        # collective after they received a successful child verdict.
+        if error is None:
+            self._finite_state_receipts[phase] = receipt
+        for directory in dict.fromkeys(
+            value for name in ("SKYRL_DEBUG_ARTIFACT_DIR", "IRIS_OUTPUT_DIR") if (value := os.environ.get(name))
+        ):
+            try:
+                path = Path(directory) / f"native-state-finite-{phase}-process-{self.process_id}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                candidate = {
+                    **receipt,
+                    "parent_mirror": {"persisted": True, "paths": [str(path)],
+                                      "error_types": list(receipt["parent_mirror"]["error_types"])},
+                }
+                path.write_text(json.dumps(candidate, sort_keys=True) + "\n")
+                receipt["parent_mirror"]["persisted"] = True
+                receipt["parent_mirror"]["paths"].append(str(path))
+            except Exception as mirror_error:
+                receipt["parent_mirror"]["error_types"].append(type(mirror_error).__name__)
+        with suppress(Exception):
+            logger.info("NATIVE_STATE_FINITE_PARENT {}", json.dumps(receipt, sort_keys=True))
+
+    def _capture_finite_state(self, phase, step, version):
+        try:
+            fingerprints = self.child.request("validate_state_finite", {"phase": phase, "step": step, "version": version})
+        except Exception as error:
+            self._initial_finite = None
+            with suppress(Exception):
+                self._record_finite_state(phase, step, version, error=error)
+            raise
+        self._record_finite_state(phase, step, version, fingerprints)
+        return fingerprints
+
+    def capture_initial_finiteness(self):
+        try:
+            self._initial_finite = self._capture_finite_state("initial", 0, 0)
+        except Exception:
+            self.child.close()
+            self.child = None
+            raise
+        return self._initial_finite
 
     def publication(self, method: str, payload: dict):
         if method == "next" and not self._publication_memory_recorded:
@@ -218,10 +281,20 @@ class LevanterHostWorker:
             path.write_text(encoded + "\n")
 
     def train(self, payload: dict) -> dict:
+        validation = self.cfg.trainer.policy.levanter_config.validate_checkpoint_roundtrip
+        if validation and "initial" not in self._finite_state_receipts:
+            raise RuntimeError("Native diagnostic training requires its initial finite-state proof")
         if self.cfg.trainer.policy.levanter_config.validate_checkpoint_roundtrip and not self._training_memory_recorded:
             self._record_memory("before-first-train")
             self._training_memory_recorded = True
-        return self.child.request("train", payload)
+        try:
+            status = self.child.request("train", payload)
+        finally:
+            self._initial_finite = None
+        if validation and int(status["optimizer_step"]) >= 2:
+            step, version = int(status["optimizer_step"]), int(status["policy_version"])
+            self._capture_finite_state(f"step{step}", step, version)
+        return status
 
     def forward(self, data: TrainingInputBatch) -> TrainingOutputBatch:
         result = self.child.request("forward", forward_payload(data).as_dict())
@@ -244,7 +317,9 @@ class LevanterHostWorker:
                     self.cfg.trainer.policy.levanter_config.validate_checkpoint_roundtrip
                     and not self._checkpoint_validation_complete
                 )
-                before_model = self.child.request("model_fingerprint", {}) if validate_checkpoint else None
+                if validate_checkpoint and self._initial_finite is None:
+                    raise RuntimeError("Native checkpoint validation has no current initial finite-state proof")
+                before_model = self._initial_finite["components"]["model"] if validate_checkpoint else None
                 status = self.train(policy_payload(batch, self.cfg.trainer.algorithm).as_dict())
                 if validate_checkpoint:
                     self.validate_checkpoint_roundtrip(before_model, status)
@@ -261,12 +336,24 @@ class LevanterHostWorker:
 
     def validate_checkpoint_roundtrip(self, before_model: dict, train_status: dict) -> dict:
         """Restore the first updated policy in a fresh JAX child, keeping serving alive."""
+        if "initial" not in self._finite_state_receipts:
+            raise RuntimeError("Native checkpoint validation requires the initial finite-state proof")
         checkpoint = join_resource_path(
             self.initialization_config["runtime"]["checkpoint_dir"],
             f"native-validation/optimizer-step-{train_status['optimizer_step']}",
         )
         previous = self.child.request("runtime_identity", {})
-        saved = self.child.request("save_checkpoint", {"ckpt_dir": checkpoint, "include_fingerprints": True})
+        step, version = int(train_status["optimizer_step"]), int(train_status["policy_version"])
+        validation = {"phase": "step1", "step": step, "version": version}
+        try:
+            saved = self.child.request("save_checkpoint", {
+                "ckpt_dir": checkpoint, "include_fingerprints": True, "finite_validation": validation,
+            })
+        except Exception as error:
+            with suppress(Exception):
+                self._record_finite_state("step1", step, version, error=error)
+            raise
+        self._record_finite_state("step1", step, version, saved["state_fingerprints"])
         model_change = self.child.request(
             "validate_model_change",
             {"before": before_model, "after": saved["state_fingerprints"]["components"]["model"]},
@@ -277,7 +364,16 @@ class LevanterHostWorker:
         self.child.close()
         self.child = None
         self._start_child()
-        restored = self.child.request("load_checkpoint", {"ckpt_dir": checkpoint, "include_fingerprints": True})
+        try:
+            restored = self.child.request("load_checkpoint", {
+                "ckpt_dir": checkpoint, "include_fingerprints": True,
+                "finite_validation": {"phase": "restored", "step": step, "version": version},
+            })
+        except Exception as error:
+            with suppress(Exception):
+                self._record_finite_state("restored", step, version, error=error)
+            raise
+        self._record_finite_state("restored", step, version, restored["state_fingerprints"])
         if saved != restored:
             raise RuntimeError("Fresh native learner did not restore model/Adam/RNG/step/averaging exactly")
         current = self.child.request("runtime_identity", {})
@@ -297,6 +393,8 @@ class LevanterHostWorker:
             "saved": saved,
             "restored": restored,
             "frozen_batch_sha256": train_status["frozen_batch_sha256"],
+            "initial_finite_state": self._finite_state_receipts["initial"],
+            "finite_state_phases_at_restore": dict(self._finite_state_receipts),
         }
         encoded = json.dumps(receipt, sort_keys=True)
         logger.info("NATIVE_CHECKPOINT_ROUNDTRIP {}", encoded)

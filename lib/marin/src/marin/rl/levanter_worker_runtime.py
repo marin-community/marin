@@ -24,6 +24,7 @@ import time
 import traceback
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 
 import equinox as eqx
 import haliax as hax
@@ -58,6 +59,8 @@ from marin.rl.levanter_worker_protocol import read_frame, write_frame
 
 _DIAGNOSTIC_STALL_SECONDS = 120.0
 _FINALIZATION_TRACE_SECONDS = 3.0
+_FINITE_CHUNK_ELEMENTS = 1 << 20
+_FINITE_COMPONENTS = ("model", "opt_state", "training_key", "step", "model_averaging")
 
 
 def _diagnostic_receipt(event: str, **fields) -> None:
@@ -107,9 +110,14 @@ def _state_fingerprint(tree) -> dict:
     digest = hashlib.sha256()
     layout_digest = hashlib.sha256()
     addressable_bytes = 0
+    schema_digest = hashlib.sha256()
+    elements = nonfinite = arrays = unique_shards = 0
+    bad_shards = []
     for path, value in jax.tree_util.tree_flatten_with_path(tree)[0]:
         if not eqx.is_array(value):
             continue
+        arrays += 1
+        schema_digest.update(json.dumps((jax.tree_util.keystr(path), value.shape, str(value.dtype))).encode())
         shards = (
             [
                 (repr(shard.index), shard)
@@ -138,12 +146,62 @@ def _state_fingerprint(tree) -> dict:
             array = np.ascontiguousarray(snapshot)
             digest.update(memoryview(array.view(np.uint8)))
             addressable_bytes += array.nbytes
+            unique_shards += 1
+            flat = array.reshape(-1)
+            bad = 0
+            for start in range(0, flat.size, _FINITE_CHUNK_ELEMENTS):
+                block = flat[start : start + _FINITE_CHUNK_ELEMENTS]
+                finite = np.isfinite(block)
+                bad += int(block.size) - int(np.count_nonzero(finite))
+                del finite, block
+            elements += int(array.size)
+            nonfinite += bad
+            if bad and len(bad_shards) < 8:
+                bad_shards.append({"path": jax.tree_util.keystr(path)[:256], "index": index[:256], "nonfinite": bad})
+            del flat
             del array, snapshot
     return {
         "sha256": digest.hexdigest(),
         "layout_sha256": layout_digest.hexdigest(),
         "addressable_bytes": addressable_bytes,
+        "schema_sha256": schema_digest.hexdigest(),
+        "arrays": arrays,
+        "unique_local_shards": unique_shards,
+        "elements": elements,
+        "finite_elements": elements - nonfinite,
+        "nonfinite_elements": nonfinite,
+        "first_nonfinite_shards": bad_shards,
     }
+
+
+def _persist_finite_proof(receipt: dict, *, suffix: str) -> dict:
+    """Persist bounded host evidence without replacing an existing failure."""
+    paths, errors = [], []
+    phase = receipt.get("phase", "invalid")
+    safe_phase = phase if isinstance(phase, str) and phase.isalnum() and len(phase) < 32 else "invalid"
+    directories = dict.fromkeys(
+        value for name in ("SKYRL_DEBUG_ARTIFACT_DIR", "IRIS_OUTPUT_DIR") if (value := os.environ.get(name))
+    )
+    encoded = json.dumps(receipt, sort_keys=True, allow_nan=False)
+    for directory in directories:
+        path = (
+            Path(directory)
+            / "native-finite"
+            / f"process-{receipt['process_id']}-pid-{os.getpid()}"
+            / f"{safe_phase}-{suffix}.json"
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(encoded + "\n")
+            paths.append(str(path))
+        except Exception as error:
+            errors.append(type(error).__name__)
+    try:
+        if sys.stderr is not None:
+            print("NATIVE_STATE_FINITE " + encoded, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    return {"persisted": bool(paths), "paths": paths, "error_types": errors}
 
 
 def _initialize_distributed(config: dict) -> None:
@@ -816,17 +874,134 @@ class NativePolicyRuntime:
                 raise ValueError("Policy checkpoint changed the initializer's frozen QB router biases")
         receipt = {"step": int(self.state.step), "version": self.version, "checkpoint": path}
         if payload.get("include_fingerprints", False):
-            receipt["state_fingerprints"] = self.state_fingerprints()
+            receipt["state_fingerprints"] = (
+                self.validate_state_finite(payload["finite_validation"])
+                if "finite_validation" in payload
+                else self.state_fingerprints()
+            )
         return receipt
 
     def state_fingerprints(self) -> dict:
         return {
             "process_id": jax.process_index(),
-            "components": {
-                name: _state_fingerprint(getattr(self.state, name))
-                for name in ("model", "opt_state", "training_key", "step", "model_averaging")
-            },
+            "components": {name: _state_fingerprint(getattr(self.state, name)) for name in _FINITE_COMPONENTS},
         }
+
+    def validate_state_finite(self, request: dict) -> dict:
+        """Collect local host counts once, then jointly reject bad or missing proof."""
+        rank = self.settings["distributed"]["process_id"]
+        local: dict = {"process_id": rank, "phase": request.get("phase"), "ok": False, "complete": False}
+        fingerprints = None
+        stage = "request"
+        try:
+            phase, expected_step, expected_version = (request[name] for name in ("phase", "step", "version"))
+            valid = phase in ("initial", "restored") or (
+                isinstance(phase, str) and phase.startswith("step") and phase[4:].isdecimal() and len(phase) < 32
+            )
+            if not valid or type(expected_step) is not int or type(expected_version) is not int:
+                raise ValueError("Invalid finite-validation phase or step/version")
+            if (
+                (phase == "initial" and (expected_step, expected_version) != (0, 0))
+                or (phase == "restored" and (expected_step, expected_version) != (1, 1))
+                or (phase.startswith("step") and expected_step != int(phase[4:]))
+            ):
+                raise ValueError("Finite-validation phase does not match its requested boundary")
+            stage = "fingerprint"
+            fingerprints = self.state_fingerprints()
+            actual_step = int(self.state.step)
+            stage = "schema"
+            if (actual_step, self.version) != (expected_step, expected_version):
+                raise ValueError("Finite-validation state differs from the requested boundary")
+            config = {
+                key: value
+                for key, value in self.settings.items()
+                if key not in ("distributed", "compiler_dump_dir", "model")
+            }
+            config["distributed"] = {
+                key: self.settings["distributed"][key] for key in ("num_processes", "local_device_count")
+            }
+            config["model_source"] = self.source_identity
+            local.update(
+                ok=True,
+                complete=True,
+                step=actual_step,
+                version=self.version,
+                model_source=self.source_identity,
+                common_config_sha256=hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest(),
+                fingerprints=fingerprints,
+                averaging_is_none=self.state.model_averaging is None,
+                schema="local-unique-shards-finite-v1",
+            )
+            stage = "serialization"
+            json.dumps(local, allow_nan=False)
+        except Exception as error:
+            local = {
+                "process_id": rank,
+                "phase": request.get("phase") if isinstance(request.get("phase"), str) else "invalid",
+                "ok": False,
+                "complete": False,
+                "error_stage": stage,
+                "error_type": type(error).__name__,
+            }
+        try:
+            local["persistence"] = _persist_finite_proof(local, suffix="candidate")
+        except Exception as error:
+            local["persistence"] = {"persisted": False, "paths": [], "error_types": [type(error).__name__]}
+        peers = multihost_allgather_sync(local)
+        expected_ranks = list(range(self.settings["distributed"]["num_processes"]))
+        kind = None
+        if any(not peer["ok"] for peer in peers):
+            kind = (
+                "state_scan_failed"
+                if any(peer.get("error_stage") == "fingerprint" for peer in peers)
+                else "validation_mismatch"
+            )
+        elif sorted(peer["process_id"] for peer in peers) != expected_ranks:
+            kind = "validation_mismatch"
+        else:
+            schemas = []
+            for peer in peers:
+                components = peer["fingerprints"]["components"]
+                schemas.append(
+                    (
+                        peer["phase"],
+                        peer["step"],
+                        peer["version"],
+                        peer["common_config_sha256"],
+                        peer["averaging_is_none"],
+                        {name: value["schema_sha256"] for name, value in components.items()},
+                    )
+                )
+                if set(components) != set(_FINITE_COMPONENTS) or any(
+                    value["arrays"] <= 0 or value["unique_local_shards"] <= 0 or value["elements"] <= 0
+                    for name, value in components.items()
+                    if name != "model_averaging" or not peer["averaging_is_none"]
+                ):
+                    kind = "validation_mismatch"
+            if any(schema != schemas[0] for schema in schemas[1:]):
+                kind = "validation_mismatch"
+            if any(
+                value["nonfinite_elements"] for peer in peers for value in peer["fingerprints"]["components"].values()
+            ):
+                kind = "nonfinite_state"
+        if kind is None and any(not peer["persistence"]["persisted"] for peer in peers):
+            kind = "proof_persistence_failed"
+        verdict = {
+            "status": "passed" if kind is None else "failed",
+            "failure_kind": kind,
+            "phase": local["phase"],
+            "process_id": rank,
+            "peers": peers,
+            "coverage_scope": "unique addressable indices per process; replicas across processes may repeat",
+        }
+        try:
+            _persist_finite_proof(verdict, suffix="verdict")
+        except Exception:
+            pass  # The gathered candidate persistence is the mandatory proof.
+        if kind is not None:
+            raise RuntimeError(f"Native finite validation failed: {kind}; phase={local['phase']}")
+        assert fingerprints is not None
+        return fingerprints
 
     def runtime_identity(self) -> dict:
         return {
@@ -1040,6 +1215,8 @@ class NativePolicyRuntime:
             return self.checkpoint(method, payload)
         if method == "state_fingerprints":
             return self.state_fingerprints()
+        if method == "validate_state_finite":
+            return self.validate_state_finite(payload)
         if method == "model_fingerprint":
             return _state_fingerprint(self.state.model)
         if method == "runtime_identity":
