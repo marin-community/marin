@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 6:49 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 7:55 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,8 +15,8 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The first `2026.11.20.6` child completed 17 updates before Iris preempted its CPU coordinator. All 144 receiver receipts passed. The first replacement also lost its coordinator during initialization. The third child started at step 0 and reached update 5. | Verify all 25 updates and the final fixed panel on a successful child. |
-| Levanter learner with vLLM | The artifact main passed the frozen 40-H100 smoke through training, exact restart, byte-verified publication, and terminal checkpoint. | Run the 25-update Levanter arm with the same workload and evaluation panel as the Megatron control. |
+| Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Iris accepted the frozen 25-update `2026.11.20.7` candidate. | Verify the candidate's terminal receipts and compare it with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
@@ -725,10 +725,12 @@ Report publication, including any temporary staging and SHA-256 checks,
 separately from optimizer time.
 The Megatron control `2026.11.20.6` was submitted after the smoke passed
 its receipt and weight-change audits.
-Run Levanter `2026.11.20.7` as the second arm. Both use the same regional
-route and publication verification. The trainer differences are the
-learner strategy, batch builder and Levanter policy configuration.
-[Megatron matched control][iris-matched-megatron]
+Iris accepted Levanter `2026.11.20.7` as the second arm after the Megatron
+control passed the terminal audit. Both use the same regional route and
+publication verification. The trainer differences are the learner
+strategy, batch builder and Levanter policy configuration.
+[Accepted Megatron control][iris-matched-megatron-third] ·
+[Levanter candidate coordinator][iris-matched-levanter]
 
 The first control child started at step 0 on the same five physical H100 hosts. Its
 initial panel scored 0.2602. The row-level audit verified all 100 tasks,
@@ -759,12 +761,21 @@ no committed step. Keep each child's panel, timing and receiver evidence
 together. [First control child][iris-matched-megatron] ·
 [First replacement][iris-matched-megatron-retry]
 
-The third child started at step 0 and applied its first update. Its initial
-panel scored 0.1902 versus 0.2602 in the first child. All 100 task IDs and
+The third child started at step 0. Its initial panel scored 0.1902 versus
+0.2602 in the first child. All 100 task IDs and
 prompt token sequences matched. Twenty response token sequences matched
 exactly and received the same scores in both runs. Compare each completed
 arm against its own initial panel and report per-task changes on the
 common panel. [Third control child][iris-matched-megatron-third]
+
+The third child and its coordinator succeeded. The audit tied 25 applied
+updates, 208 zero-mismatch receiver receipts and 25 nonempty generation
+witnesses stamped 26 to the same original GPU child. The step-25 checkpoint
+marker committed, and the final panel scored 0.2700 over the same 100 tasks
+and exact prompt tokens. The successful child consumed 38.12 million loss
+tokens over 3,785 seconds of active training and used 56.26 H100-hours.
+The final checkpoint phase took 505 seconds and the final evaluation took
+94 seconds. The two interrupted children have separate evidence.
 
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
@@ -1529,6 +1540,7 @@ arms. [Prior timing comparison][timing]
 [iris-matched-megatron]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-a30288e64eea
 [iris-matched-megatron-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-a361bc746b85
 [iris-matched-megatron-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-ab4ae1aae5e9
+[iris-matched-levanter]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
