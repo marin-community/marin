@@ -1,0 +1,73 @@
+{
+  "mode": "benchmark",
+  "model": {
+    "weights": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/long-loop-exp3/round3/sft-handoff/2026.11.16.51/hf",
+    "api_model": "snowball-resize",
+    "num_chips": 8,
+    "tensor_parallel_size": 1,
+    "dtype": "bfloat16",
+    "max_model_len": 102400,
+    "chat_template_content": null,
+    "tokenizer": "marin-community/marin-tokenizer-tools",
+    "revision": null,
+    "tokenizer_revision": "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
+  },
+  "engine": {
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 64,
+    "startup_timeout_seconds": 7200,
+    "extra_args": [
+      "--enable-expert-parallel",
+      "--enable-prefix-caching",
+      "--enable-chunked-prefill",
+      "--gpu-memory-utilization",
+      "0.75",
+      "--attention-backend",
+      "FLASH_ATTN",
+      "--moe-backend",
+      "triton",
+      "--enable-return-routed-experts",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser",
+      "hermes",
+      "--default-chat-template-kwargs",
+      "{\"enable_thinking\": true}",
+      "--hf-overrides",
+      "{\"max_position_embeddings\": 262144, \"max_seq_len\": 262144}",
+      "--load-format",
+      "runai_streamer",
+      "--model-loader-extra-config",
+      "{\"distributed\": false, \"concurrency\": 4, \"memory_limit\": 8589934592}"
+    ]
+  },
+  "geometry": {
+    "tensor_parallel_size": 1,
+    "data_parallel_size": 8,
+    "pipeline_parallel_size": 1,
+    "gpus_per_task": 8
+  },
+  "output_uri": "s3://marin-us-east-08a/marin/users/benfeuer/snowball-resize/decode/baseline-kv75-20261122a",
+  "seeds": [
+    17
+  ],
+  "concurrencies": [
+    512
+  ],
+  "warmup_seconds": 120,
+  "measurement_seconds": 1500,
+  "request_timeout_seconds": 1200,
+  "workloads": [
+    {
+      "name": "synthetic-context65k-output1024-shared8",
+      "kind": "synthetic",
+      "context_repetitions": 641,
+      "output_tokens": 1024,
+      "sampling_params": {
+        "logprobs": true,
+        "top_logprobs": 0,
+        "skip_special_tokens": false
+      },
+      "prompt_group_size": 8
+    }
+  ]
+}
