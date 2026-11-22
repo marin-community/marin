@@ -1,0 +1,13 @@
+experiment: X0255
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: debiased sampled softmax, 1/8 shortlist, 1 in 16
+    flags:
+    - --model-set
+    - sampled_softmax_shortlist_frac=0.125
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
