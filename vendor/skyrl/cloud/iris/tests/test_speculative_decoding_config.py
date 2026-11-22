@@ -112,7 +112,8 @@ def test_frozen_object_store_speculator_is_supported(method: str, vllm_sampling:
     draft["method"] = method
     draft["training"] = None
     model = draft["model"]
-    model["source_uri"] = "s3://models/snowball/draft"
+    source_uri = "s3://models/snowball/draft"
+    model["source_uri"] = source_uri
     model["source_identity"] = "sha256:" + "a" * 64
 
     parsed = parse_rl_config(config)
@@ -130,7 +131,7 @@ def test_frozen_object_store_speculator_is_supported(method: str, vllm_sampling:
     assert resolved is not None
     assert resolved.vllm_speculative_config() == {
         "method": method,
-        "model": "s3://models/snowball/draft",
+        "model": source_uri,
         "num_speculative_tokens": 3,
         "draft_load_config": {"load_format": "runai_streamer"},
         **vllm_sampling,
