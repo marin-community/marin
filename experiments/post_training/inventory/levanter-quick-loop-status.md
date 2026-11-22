@@ -266,9 +266,10 @@ native path still requires a new H100 acceptance run.
 A supplemental affected-suite run on JAX/JAXLIB `0.11.1` recorded 4,124 passes,
 468 skips, and 29 failures with a 600-second session limit. All 13 launcher
 cases pass when inherited UV environment overrides are removed. Clean-main
-controls reproduce the six Linux-only sandbox failures on macOS. The ten router
-startup/cleanup failures reproduce with clean-main router code under the same
-dependency context; the deeper router package-build stall is unresolved. This
+controls reproduce the Linux-only sandbox error seen in six cases on macOS.
+Three router representatives reproduce both startup/cleanup failure types with
+clean-main router code under the same dependency context; the deeper router
+package-build stall is unresolved. This
 broader run is not green. The focused fixed-plan and native checks use the
 runtime's pinned JAX/JAXLIB `0.11.0` and pass independently.
 
