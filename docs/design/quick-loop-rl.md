@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first fourteen updates. | Verify the candidate's terminal receipts and compare it with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The first `2026.11.20.7` child completed 16 of 25 updates before its CPU coordinator was preempted. | Verify the replacement child's complete 25-update receipts and compare it with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Four H100 hosts converted both trained 67B policies. One serving process completed the tool exchange and released policy 2 after verifying its weights and replacing the KV pool. Its first post-swap request ran out of allocator space for a contiguous buffer. | Qualify post-swap generation and both fused checks, then run the held-learner comparison. |
+| Native inventory backend | Four H100 hosts converted both trained 67B policies. Fused replay passed the 293 sampled tokens from the real tool exchange. The serving process returned its first reply under policy 2 with the CUDA async allocator. | Verify old cache ownership is cleared and pass fused replay of four full-length policy-2 responses, then run the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -737,7 +737,8 @@ control passed the terminal audit. Both use the same regional route and
 publication verification. The trainer differences are the learner
 strategy, batch builder and Levanter policy configuration.
 [Accepted Megatron control][iris-matched-megatron-third] ·
-[Levanter candidate GPU child][iris-matched-levanter]
+[First Levanter child][iris-matched-levanter] ·
+[Levanter replacement][iris-matched-levanter-retry]
 
 The first control child started at step 0 on the same five physical H100 hosts. Its
 initial panel scored 0.2602. The row-level audit verified all 100 tasks,
@@ -784,8 +785,8 @@ tokens over 3,785 seconds of active training and used 56.26 H100-hours.
 The final checkpoint phase took 505 seconds and the final evaluation took
 94 seconds. The two interrupted children have separate evidence.
 
-The Levanter candidate uses the same five physical H100 hosts in the same
-Iris task order. Its initial score was 0.2900 across the same 100 exact
+The first Levanter child used the same five physical H100 hosts in the same
+Iris task order as the accepted control. Its initial score was 0.2900 across the same 100 exact
 prompt-token sequences. The first training batch admitted 128 groups and
 512 trajectories with zero staleness. Verified publication took 208.913
 seconds at initialization and 163.672 seconds after update 1. The latter
@@ -812,6 +813,20 @@ group. Averaged over the seven steps, Levanter spent 159.5 additional
 seconds on publication, 81.8 on policy training and 27.0 on learner
 preparation. All 72 candidate receiver checks passed through version 8.
 These timings cover the original attempts and the same update numbers.
+
+The first Levanter child completed 16 applied updates and 136
+zero-mismatch receiver checks through version 16. It consumed 24.61
+million loss tokens over 6,723 seconds of active training. Its warm
+median step took 416.7 seconds, with 162.1 seconds for verified
+publication. Kubernetes preempted the CPU coordinator and Iris stopped
+all five GPU tasks. The recipe schedules its regular checkpoint at step
+25, and the regional checkpoint prefix held no committed step after
+this interruption. Iris admitted all five GPU tasks for the automatic
+replacement, which starts at step 0 on the same frozen source. Use the
+first child's data for phase diagnosis. Compare terminal panel, timing
+and receiver evidence from each complete child.
+[First Levanter child][iris-matched-levanter] ·
+[Levanter replacement][iris-matched-levanter-retry]
 
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
@@ -1528,18 +1543,32 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   and four fixed seeds for each short turn. The selected call and answer
   produced 224 and 69 sampled tokens. Their actual SkyRL learner inputs
   preserve all raw scores and exclude 46 tool observation and boundary tokens
-  from the objective. The same serving process verified policy 2, allocated
-  its replacement KV pool and released it. The full-context gate retains
-  the original 24,576-token shape and 8,192-token reply cap.
+  from the objective. A fresh eight-H100 worker independently restored
+  policy 1 and scored all 293 sampled targets from those exact turns using
+  FA4 and the fused vocabulary projection. Their absolute log-ratio p99
+  values were 0.094 and 0.120, with zero PPO clip crossings.
+  [Independent tool-turn scorer][iris-native-tool-scorer]
+
+  The same serving process verified policy 2, allocated its replacement
+  KV pool and released it. The full-context gate retains the original
+  24,576-token shape and 8,192-token reply cap.
   Before the swap, device allocation was 24.48 GiB live. It reached
   49.00 GiB while both policies and KV pools were present, then fell to
   24.53 GiB after release. All eight BFC allocators failed the first
   post-swap request for a contiguous 35.50 GiB buffer. The allocator maps
   show free memory split across smaller regions. The isolated serving
-  retry selects JAX's CUDA async allocator on the same model and context.
+  retry used JAX's CUDA async allocator on the same model and context
+  and returned the first verified policy-2 reply in 8.32 seconds. The
+  repeated request produced a different binary frame. The retry stopped
+  before persisting both frames, so the difference could be sampled
+  tokens or another captured field. The next run measures page references,
+  live sequence and request slots, and retained prefix state at the
+  install boundary and on cold restore. It preserves all three reply
+  frames and verifies each one's request, positions and policy identity.
   The two independent fused scorers retain their original allocator.
   [Original live swap][iris-native-live-score] ·
   [CUDA async allocator retry][iris-native-allocator-retry] ·
+  [Cache ownership and full-context run][iris-native-cache-ownership] ·
   [JAX allocator options][jax-allocator-options]
 
   The typed install keeps the old model and KV pool live until it verifies
@@ -1631,9 +1660,12 @@ arms. [Prior timing comparison][timing]
 [iris-matched-megatron-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-a361bc746b85
 [iris-matched-megatron-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-ab4ae1aae5e9
 [iris-matched-levanter]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af8929ab8ff2
+[iris-matched-levanter-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-ae4bda9bd4c7
 [iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122e
 [iris-native-live-score]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122g
 [iris-native-allocator-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122h
+[iris-native-cache-ownership]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122i
+[iris-native-tool-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-tool-scorer-20261122a
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
 [iris-native-conversion]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122d%2Fnative-native-fused-20261122d-convert
 [native-typed-conversion-receipt]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-tool-67b%2F2026.11.22.1%2Fnative-fused-20261122d%2Fevidence%2Ftyped-snapshot-receipts.json
