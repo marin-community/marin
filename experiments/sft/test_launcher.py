@@ -4,6 +4,7 @@
 import json
 import sys
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -207,3 +208,22 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
     assert request.timeout == Duration.from_seconds(72_000)
     flags = request.environment.env_vars["XLA_FLAGS"].split()
     assert "--xla_gpu_shard_autotuning=false" in flags
+
+
+def test_snowball_262k_mixture_follows_the_rl_coordinator_to_its_regional_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    manifests = []
+    for cluster in ("cw-us-east-02a", "cw-rno2a"):
+        step = MIXTURE_262K_32NODE.model(coordinator_cluster=cluster).step
+        # No target cluster places the SFT job on the coordinator's own controller.
+        assert step.runtime_args["train_resources"].target_cluster is None
+        manifest = step.deps[0]
+        config = materialized_config(manifest, str(tmp_path))
+        manifest.run(config)
+        [published] = Path(config["output"]).iterdir()
+        manifests.append(published.read_text())
+    source, regional = manifests
+    assert "s3://marin-us-east-02a/" not in regional
+    assert regional == source.replace("s3://marin-us-east-02a/", "s3://marin-us-east-08a/")
+    with pytest.raises(ValueError, match="SFT targets cw-us-east-02a"):
+        MIXTURE_262K_32NODE.model(coordinator_cluster="cw-us-west-04a")

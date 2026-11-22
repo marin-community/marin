@@ -25,7 +25,8 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 ### Long loop
 
 The long loop trains a model and evaluates it on held-out tasks.
-Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
+Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts. `train-long` runs on
+cw-us-east-02a and `train-long-rno2a` runs the same recipe on cw-rno2a.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
 |---|---|---|---|---| --- |

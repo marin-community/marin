@@ -51,7 +51,14 @@ bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
 Use `--sft PRESET` on the RL command to train a starting model and use its export for RL.
-Both stages use the RL layout's storage prefix.
+Both stages run on the RL layout's cluster and use its storage prefix, so the RL preset chooses the
+cluster. An SFT preset whose data lives in object storage lists the clusters that hold a copy;
+`mixture-262k-32node` trains on cw-us-east-02a or cw-rno2a and is refused elsewhere.
+
+| Cluster | Long loop | Quick loop |
+|---|---|---|
+| cw-us-east-02a | `--preset train-long --sft mixture-262k-32node` | `--preset train-long --sft openthoughts-32k-4node --set trainer.max_steps=10` |
+| cw-rno2a | `--preset train-long-rno2a --sft mixture-262k-32node`, or `--preset train-long-agentic --tasks snowball-100k-agentic@2026.11.19.2 --sft mixture-262k-32node` | `--preset train-long-rno2a --sft openthoughts-32k-4node --set trainer.max_steps=10`, or `--preset train-medium-agentic --tasks snowball-100k-agentic@2026.11.19.2 --sft openthoughts-32k-4node` |
 
 ```bash
 MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.snowball_rl \
