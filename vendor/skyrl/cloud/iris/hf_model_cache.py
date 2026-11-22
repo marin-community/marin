@@ -16,6 +16,7 @@ from huggingface_hub.hf_api import RepoFile
 from loguru import logger
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from skyrlrecipe.model_staging import immutable_model_cache_key
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -30,7 +31,6 @@ from marinskyrl.hf_model import (
     TOKENIZER_CONFIG_NAME,
     TOKENIZER_JSON_NAME,
     hugging_face_hub_online,
-    immutable_model_cache_key,
     normalize_fast_tokenizer_metadata_bytes,
     validate_hf_model_weights,
 )
