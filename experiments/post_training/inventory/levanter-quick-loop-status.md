@@ -311,6 +311,16 @@ GPU MoE kernels differ, and GPU allocator reservations were not measured.
 The memory diagnosis therefore remains open, with recipe, numerical
 tolerances, kernels, and memory fraction unchanged.
 
+The follow-up adds compiler evidence to the existing checkpoint-validation
+option: memory analysis, scheduled optimized HLO, buffer assignment, and
+available allocator counters are saved before the first update. Bounded
+uploads use a CPU-only process and explicit 02a lifecycle storage. Real CPU
+tests preserve exact diagnostics-on/off model, Adam, RNG, step, and averaging
+state, and retain the original training exception when upload fails.
+Two-process checkpoint continuation and independent source review pass.
+Diagnostic smoke `2026.11.21.9` is prepared but not yet submitted; these checks
+do not establish its GPU fit or explain the earlier allocation failure.
+
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch

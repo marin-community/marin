@@ -5,8 +5,11 @@
 
 import concurrent.futures
 import copy
+import gzip
+import hashlib
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -323,16 +326,27 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
         listener.bind(("127.0.0.1", 0))
         address = f"127.0.0.1:{listener.getsockname()[1]}"
     children = []
+    child_environments = []
     try:
         for rank in range(process_count):
             child_environment = dict(environment)
+            if config["runtime"].get("validate_checkpoint_roundtrip", False):
+                host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+                child_environment = host._child_environment(
+                    sys.executable, 0.9, require_accelerator=False, compiler_diagnostics=True
+                )
+                child_environment["JAX_CPU_COLLECTIVES_IMPLEMENTATION"] = "gloo"
             if rank == fast_bwd_override_rank:
                 child_environment["LEVANTER_CE_XLA_FAST_BWD"] = "1"
+            child_environments.append(child_environment)
             children.append(LearnerProcess(sys.executable, environment=child_environment, timeout_seconds=60))
         configs = []
         for rank in range(process_count):
             local = copy.deepcopy(config)
             local["distributed"].update(process_id=rank, coordinator_address=address)
+            if config["runtime"].get("validate_checkpoint_roundtrip", False):
+                # Each native child has its own actual compiler output directory.
+                local["compiler_dump_dir"] = shlex.split(child_environments[rank]["XLA_FLAGS"])[-3].split("=", 1)[1]
             configs.append(local)
         receipts = _request_all(children, "initialize", configs)
         yield children, receipts, configs
@@ -343,18 +357,19 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize(
-    "process_count,host_restart,projection_dtype,fast_bwd_override_rank",
+    "process_count,host_restart,projection_dtype,fast_bwd_override_rank,compiler_failure",
     [
-        pytest.param(1, False, "bfloat16", None, id="bf16-single"),
-        pytest.param(2, False, "bfloat16", None, marks=pytest.mark.multidevice, id="bf16-multihost"),
-        pytest.param(1, True, "bfloat16", None, id="bf16-host-restart"),
-        pytest.param(2, True, "bfloat16", None, marks=pytest.mark.multidevice, id="bf16-multihost-restart"),
-        pytest.param(1, False, "float32", None, id="default-fp32"),
-        pytest.param(4, False, "bfloat16", 3, marks=pytest.mark.multidevice, id="bf16-override-rejected"),
+        pytest.param(1, False, "bfloat16", None, False, id="bf16-single"),
+        pytest.param(2, False, "bfloat16", None, False, marks=pytest.mark.multidevice, id="bf16-multihost"),
+        pytest.param(1, True, "bfloat16", None, False, id="bf16-host-restart"),
+        pytest.param(2, True, "bfloat16", None, False, marks=pytest.mark.multidevice, id="bf16-multihost-restart"),
+        pytest.param(1, False, "float32", None, False, id="default-fp32"),
+        pytest.param(4, False, "bfloat16", 3, False, marks=pytest.mark.multidevice, id="bf16-override-rejected"),
+        pytest.param(1, False, "bfloat16", None, True, id="compiler-evidence-failure"),
     ],
 )
 def test_native_learner_subprocess_updates_and_resumes_exactly(
-    tmp_path, process_count, host_restart, projection_dtype, fast_bwd_override_rank, monkeypatch
+    tmp_path, process_count, host_restart, projection_dtype, fast_bwd_override_rank, compiler_failure, monkeypatch
 ):
     host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker") if host_restart else None
     initializer = tmp_path / "initializer"
@@ -365,7 +380,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     batch_size = count * 2
     config = {
         "runtime": {
-            "validate_checkpoint_roundtrip": host_restart,
+            "validate_checkpoint_roundtrip": host_restart or compiler_failure,
             "mesh_axes": {"replica_dcn": 1, "replica": 1, "data": count, "expert": 1, "model": 1, "context": 1},
             "checkpoint_dir": str(tmp_path),
             "projection_block_size": 16,
@@ -403,6 +418,13 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             "weight_decay": 0.0,
         },
     }
+    if host_restart or compiler_failure:
+        output_dir = tmp_path / "attempt-output"
+        monkeypatch.setenv("IRIS_OUTPUT_DIR", str(output_dir))
+    if compiler_failure:
+        blocked = tmp_path / "blocked-upload"
+        blocked.write_text("This regular file prevents the real uploader from creating its destination.")
+        config["runtime"]["checkpoint_dir"] = str(blocked / "checkpoint")
     tokens = np.tile(np.array([0, 2, 3, 4, 5, 6], dtype=np.int32), (batch_size, 1))
     arrays = {
         "tokens": tokens,
@@ -433,6 +455,30 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                 "kl_weights": np.zeros((batch_size, 2), dtype=np.float32),
             }
         )
+        if compiler_failure:
+            arrays["advantages"].fill(np.nan)
+            with pytest.raises(RuntimeError, match="Loss is NaN"):
+                children[0].request("train", payload)
+            stages = list((output_dir / "native-compile").iterdir())
+            assert len(stages) == 1
+            stage = stages[0]
+            before = json.loads((stage / "before-update.json").read_text())
+            failed = json.loads((stage / "failure-final.json").read_text())
+            assert before["compiled_memory"]["alias_size_in_bytes"] > 0
+            assert "error_type" not in before
+            assert failed["error_type"] == "RuntimeError"
+            assert (
+                failed["before_update_sha256"] == hashlib.sha256((stage / "before-update.json").read_bytes()).hexdigest()
+            )
+            for phase in ("before-update", "failure-final"):
+                upload = json.loads((stage / f"upload-{phase}.json").read_text())
+                assert upload["uploaded"] is False
+                assert upload["uploader"]["backend"] == "cpu"
+            with gzip.open(stage / "train.optimized.hlo.txt.gz", "rt") as hlo:
+                assert "is_scheduled=true" in hlo.readline()
+            assert any("buffer-assignment" in path.name for path in stage.iterdir())
+            assert any("memory-usage-report" in path.name for path in stage.iterdir())
+            return
         before_models = _same_request(children, "model_fingerprint", {})
         updates = _same_request(children, "train", payload)
         assert all(update["optimizer_step"] == 1 and update["router_bias_unchanged"] == 1 for update in updates)
@@ -442,6 +488,22 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
         for row in saved:
             for name in ("model", "opt_state", "training_key", "step"):
                 assert row["state_fingerprints"]["components"][name]["addressable_bytes"] > 0
+        if host_restart and process_count == 1:
+            # A fresh, diagnostics-off learner receives the same frozen batch.
+            # Exact state equality covers model, Adam, RNG, step and averaging.
+            baseline = copy.deepcopy(config)
+            baseline["runtime"]["validate_checkpoint_roundtrip"] = False
+            with _learner_processes(baseline, 1) as (control, _, _):
+                _same_request(control, "train", payload)
+                actual = _same_request(control, "state_fingerprints", {})[0]
+            assert actual == saved[0]["state_fingerprints"]
+            stages = list((output_dir / "native-compile").iterdir())
+            assert len(stages) == 1
+            compile_receipt = json.loads((stages[0] / "before-update.json").read_text())
+            assert compile_receipt["compiled_memory"]["alias_size_in_bytes"] > 0
+            assert compile_receipt["selected_reports"]
+            upload = json.loads((stages[0] / "upload-before-update.json").read_text())
+            assert upload["uploaded"] and upload["uploader"]["backend"] == "cpu"
         if host_restart:
             output_dir = tmp_path / "attempt-output"
             monkeypatch.setenv("IRIS_OUTPUT_DIR", str(output_dir))

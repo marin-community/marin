@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import shlex
+import tempfile
 import time
 from pathlib import Path
 
@@ -23,7 +25,7 @@ from skyrl_train.workers.levanter_batch import forward_payload, policy_payload, 
 
 
 def _child_environment(
-    python_executable: str, memory_fraction: float, *, require_accelerator: bool
+    python_executable: str, memory_fraction: float, *, require_accelerator: bool, compiler_diagnostics: bool = False
 ) -> dict[str, str]:
     environment = dict(os.environ)
     for name in (
@@ -38,6 +40,11 @@ def _child_environment(
     # CPU coordinator defaults must not select the learner backend. CUDA comes
     # first; the runtime verifies it before loading a model. CPU supports staging.
     environment["JAX_PLATFORMS"] = "cuda,cpu" if require_accelerator else "cpu"
+    if compiler_diagnostics:
+        dump = tempfile.mkdtemp(prefix="native-xla-")
+        flags = shlex.split(environment.get("XLA_FLAGS", ""))
+        flags.extend([f"--xla_dump_to={dump}", "--xla_dump_hlo_as_text", "--xla_dump_hlo_module_re=train_step"])
+        environment["XLA_FLAGS"] = shlex.join(flags)
     return environment
 
 
@@ -121,13 +128,17 @@ class LevanterHostWorker:
 
     def _start_child(self):
         runtime = self.cfg.trainer.policy.levanter_config
+        environment = _child_environment(
+            runtime.python_executable,
+            runtime.device_memory_fraction,
+            require_accelerator=self.initialization_config["require_accelerator"],
+            compiler_diagnostics=runtime.validate_checkpoint_roundtrip,
+        )
+        if runtime.validate_checkpoint_roundtrip:
+            self.initialization_config["compiler_dump_dir"] = shlex.split(environment["XLA_FLAGS"])[-3].split("=", 1)[1]
         self.child = LearnerProcess(
             runtime.python_executable,
-            environment=_child_environment(
-                runtime.python_executable,
-                runtime.device_memory_fraction,
-                require_accelerator=self.initialization_config["require_accelerator"],
-            ),
+            environment=environment,
             timeout_seconds=runtime.command_timeout_seconds,
         )
         try:

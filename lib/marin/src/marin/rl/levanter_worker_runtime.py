@@ -44,6 +44,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import multihost_allgather_sync
 from levanter.utils.mesh import MeshConfig
 
+from marin.rl.levanter_compile_diagnostics import capture_compile, capture_failure, scientific_xla_flags
 from marin.rl.levanter_publication import SnowballPublication
 from marin.rl.levanter_worker_protocol import read_frame, write_frame
 
@@ -279,6 +280,7 @@ class NativePolicyRuntime:
         self.publisher = None
         self.version = 0
         self.source_identity = None
+        self._compiler_evidence = None
 
     def initialize(self, config: dict) -> dict:
         if self.trainer is not None:
@@ -539,6 +541,7 @@ class NativePolicyRuntime:
                 "enable_x64": jax.config.jax_enable_x64,
                 "default_prng_impl": jax.config.jax_default_prng_impl,
             },
+            "xla_flags": scientific_xla_flags(self.settings),
             "mesh": {
                 "axes": list(mesh.axis_names),
                 "shape": dict(mesh.shape),
@@ -671,7 +674,17 @@ class NativePolicyRuntime:
         batch = self._batch(payload)
         if diagnostics:
             _diagnostic_receipt("update_begin")
-        result = learner.update(self.state, batch)
+        if diagnostics and self._compiler_evidence is None:
+            self._compiler_evidence = capture_compile(self.trainer, self.state, batch, plan, self.settings)
+            # One fast rank must not trigger an execution OOM and tear down peers
+            # while their pre-execution evidence is still being uploaded.
+            multihost_allgather_sync({"compiler_evidence_ready": True})
+        try:
+            result = learner.update(self.state, batch)
+        except BaseException as error:
+            if self._compiler_evidence is not None:
+                capture_failure(self._compiler_evidence, self.settings, error)
+            raise
         if diagnostics:
             _diagnostic_receipt("update_end")
         self.state = result.state

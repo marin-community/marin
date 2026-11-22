@@ -66,6 +66,15 @@ first update changes parameters, saves complete native state, restarts the JAX
 learner processes, and checks exact restored state fingerprints before training
 continues. Parent actors and rollout engines remain in the same allocation.
 Leave this option disabled for performance comparisons.
+It also captures the first compiled train step's memory analysis, optimized HLO,
+buffer assignment, and available device-memory counters before execution.
+Bounded text and metadata artifacts upload to the checkpoint bucket's
+`tmp/ttl=14d/xla-dumps/<run-id>/process-<rank>/pid-<pid>/` prefix; stderr's
+`native_compiler_evidence` receipt gives the exact destination and upload status.
+Artifacts also copy into `IRIS_OUTPUT_DIR/native-compile/` when that directory
+is configured. Failure counters are saved separately, preserving the original
+training exception if diagnostic collection or upload fails. These diagnostics
+preserve the recipe and do not establish successful updates or peak-memory fit.
 Require every learner process to report the pinned model revision and completed
 optimizer steps. Receiver replay receipts must identify the installed version
 and report zero byte mismatches against learner weights. Generation receipts
