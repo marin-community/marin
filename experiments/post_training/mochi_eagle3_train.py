@@ -12,6 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+import torch
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorTrainingConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from safetensors import safe_open
@@ -80,6 +81,8 @@ def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraini
     seed = seed_root / "seed-draft"
     seed_weights = load_file(seed / "model.safetensors")
     map_digest = hashlib.sha256(seed_weights["d2t"].numpy().tobytes()).hexdigest()
+    with (seed / "model.safetensors").open("rb") as stream:
+        initial_weights_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     # Features and embeddings are unchanged. Reproject only the frozen head to
     # the training-fold vocabulary, preserving the raw rank captures intact.
     target_weights = load_file(merged / "target.safetensors")
@@ -91,10 +94,14 @@ def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraini
         "heldout_groups": sorted({window["group_id"] for window in heldout}),
         "training_continuation_tokens": frequencies.total(),
         "vocabulary_map_sha256": map_digest,
+        "initial_draft": prefix_join(spec["output"], "initial-draft"),
+        "initial_weights_sha256": initial_weights_digest,
+        "initial_config_sha256": hashlib.sha256((seed / "config.json").read_bytes()).hexdigest(),
         "initialization": initialization,
         "source": spec,
     }
     (merged / "mochi-training-fold.json").write_text(json.dumps(split, indent=2))
+    io.upload_directory(str(seed), split["initial_draft"])
     io.upload_directory(str(merged), prefix_join(spec["output"], "training-capture"))
     job = OnlineEagleTrainingJob(
         step=1,
@@ -116,10 +123,14 @@ def publish_serving_draft(candidate: Path, seed: Path, output: str, receipt: dic
     bundle.mkdir()
     shutil.copyfile(candidate / "config.json", bundle / "config.json")
     weights = load_file(candidate / "model.safetensors")
+    if not {"t2d", "d2t"}.issubset(weights):
+        raise ValueError("Standalone draft is missing its vocabulary maps")
     with safe_open(seed / "model.safetensors", framework="pt") as initial:
+        for name in ("t2d", "d2t"):
+            expected = initial.get_tensor(name)
+            if weights[name].dtype != expected.dtype or not torch.equal(weights[name], expected):
+                raise ValueError(f"Trained vocabulary map differs from its training-fold seed: {name}")
         weights["lm_head.weight"] = initial.get_tensor("lm_head.weight")
-    if not {"t2d", "d2t", "lm_head.weight"}.issubset(weights):
-        raise ValueError("Standalone draft is missing its vocabulary maps or projected target head")
     if not weights["t2d"][list(STOP_TOKEN_IDS)].all():
         raise ValueError("Standalone draft vocabulary omits a Mochi stop token")
     weights_path = bundle / "model.safetensors"
