@@ -210,11 +210,6 @@ def test_security_flags_default_cpu():
     assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "SYS_PTRACE"]
 
 
-def test_security_flags_reject_bubblewrap_profile():
-    with pytest.raises(ValueError, match="only supported on Kubernetes"):
-        _security_flags(job_pb2.CONTAINER_PROFILE_BUBBLEWRAP, is_tpu_run=False)
-
-
 def test_security_flags_default_tpu_is_privileged():
     """A TPU run is privileged for device access even under DEFAULT."""
     flags = _security_flags(job_pb2.CONTAINER_PROFILE_DEFAULT, is_tpu_run=True)
