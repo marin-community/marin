@@ -4,10 +4,10 @@
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. Both sides are parsed as anchored LaTeX (``$...$``) so math-verify reads a whole expression
-instead of the first bare number it finds, falling back to parsing the raw text with math-verify's
-own anchors (``the answer is ...``) when the anchored parse yields nothing. Other profiles retain
-raw source extraction or require a boxed expression; their parser options remain task-controlled.
+none. References require an anchored LaTeX parse of the whole expression. Candidates first use
+anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
+nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
+options remain task-controlled.
 
 ``math_type`` selects the comparison. Set and interval answers allow math-verify's set/relation
 comparison, so an expected ``(2, \infty)`` accepts a candidate ``x > 2``. A list is an ordered
@@ -78,12 +78,39 @@ def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = N
 
 
 def _parse(text: str) -> list:
-    """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
+    """Parse a candidate as anchored LaTeX, else as written."""
 
     timeout = _timeout()
     return _math_verify_parse(
         f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True
     ) or _math_verify_parse(text, parsing_timeout=timeout, raise_on_error=True)
+
+
+def _parse_reference(text: str) -> list:
+    """Parse one whole reference without falling through to a number inside it."""
+    from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
+
+    value = strip_math_delimiters(text)
+    text_group = re.search(r"\\(?:text|mbox)\{", value)
+    if text_group:
+        # Unit normalization removes a terminal \text{} or \mbox{} suffix. It can
+        # also swallow any intervening expression up to the final closing brace.
+        _, first_close = _scan_brackets(value[text_group.end() - 1 :])
+        if first_close is None or value[text_group.end() + first_close :].strip():
+            return []
+    latex = LatexExtractionConfig(boxed_match_priority=-1)
+    if not text_group:
+        # The default unit normalizer also removes trailing variable names, such
+        # as the s in x - s. Keep those variables in reference expressions.
+        latex = replace(latex, normalization_config=replace(latex.normalization_config, units=False))
+    return _math_verify_parse(
+        f"${value}$",
+        extraction_config=[latex],
+        fallback_mode="no_fallback",
+        extraction_mode="first_match",
+        parsing_timeout=_timeout(),
+        raise_on_error=True,
+    )
 
 
 def _as_list(value: Any) -> list:
@@ -448,7 +475,11 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
     is_list = spec.math_type is MathType.LIST
-    expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
+    expected = (
+        [_parse_reference(member) for member in _split_members(spec.expected)]
+        if is_list
+        else [_parse_reference(spec.expected)]
+    )
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 

@@ -166,6 +166,22 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
     assert dispatch(MathSpec(expected=expected), tmp_path, tmp_path).status == Status.INVALID_TASK
 
 
+@pytest.mark.parametrize(
+    "expected, math_type",
+    [
+        (r"67.\overline{3}", MathType.SCALAR),
+        (r"\begin{pmatrix} -1 & 0 \\ 0 & -1 \end{pmatrix}.", MathType.SCALAR),
+        (r"2007 + \frac\pi 2", MathType.SCALAR),
+        (r"\{x \mid 2 < x < 3\}", MathType.SET),
+        (r"32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
+        (r"[1, 67.\overline{3}]", MathType.LIST),
+    ],
+)
+def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
+    with pytest.raises(InvalidTask, match="cannot parse expected"):
+        grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
+
+
 def test_math_grades_from_a_worker_thread(tmp_path):
     """Pipelines grade in worker threads, where math-verify's signal-based timeout cannot be armed."""
     _answer(tmp_path, "\\boxed{\\frac{1}{2}}")
