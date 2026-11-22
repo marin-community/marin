@@ -6,7 +6,6 @@
 import copy
 import hashlib
 import json
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
@@ -23,6 +22,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL
 from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec
 from experiments.post_training.long_loop.sft import fresh_sft_config, read_json, sft_run
+from experiments.post_training.long_loop.sft_epoch import step_exposure
 from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
 from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
 from experiments.sft.launcher import DeprecatedSFTSpec, HFModel, SFTSpec, levanter_train_request, sft_step
@@ -92,10 +92,9 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     # hybrid layout, rather than a flat virtual CPU mesh, before allocation.
     mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
     data = copy.deepcopy(recipe["data"])
-    steps = min(
-        math.ceil(recipe["target_positions"] / (recipe["seq_len"] * recipe["batch_size"])),
-        recipe["stop_after_steps"],
-    )
+    steps = recipe["stop_after_steps"]
+    if recipe["target_positions"] != steps * recipe["seq_len"] * recipe["batch_size"]:
+        raise ValueError("SFT target_positions must equal the declared updates times batch and context")
     new_step_positions = recipe["seq_len"] * recipe["batch_size"]
     data["train_weights"] = [
         (step * recipe["source_step_positions"] // new_step_positions, weights)
@@ -157,7 +156,10 @@ def native_sft_step(
     run = trained.run
 
     def execute(config):
-        if recipe["profile"] == "snowball_exp3":
+        for key in ("sft_capacity", "sft_exposure"):
+            if key in recipe:
+                (StoragePath(config.output_path) / f"{key}.json").write_text(json.dumps(recipe[key], indent=2))
+        if recipe["profile"] == "snowball_exp3" and recipe["stage_guard"] is not None:
             request = levanter_train_request(
                 config, task_timeout_seconds=recipe["task_timeout_seconds"], priority=priority_band_value("production")
             )
@@ -172,6 +174,16 @@ def native_sft_step(
             select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
         else:
             select_time_limited_sft(output=config.output_path, maximum_updates=spec.num_train_steps, budget=budget)
+        if "sft_capacity" in recipe:
+            selected = read_json(prefix_join(config.output_path, "selected.json"))
+            actual = step_exposure(recipe, recipe["sft_capacity"]["sources"], selected["completed_updates"])
+            actual["completed_updates"] = selected["completed_updates"]
+            actual["epoch_target_complete"] = selected["completed_updates"] == spec.num_train_steps
+            (StoragePath(config.output_path) / "sft_actual_exposure.json").write_text(json.dumps(actual, indent=2))
+            if recipe["sft_exposure"]["stopping"]["type"] == "mixture_epochs" and (
+                not actual["epoch_target_complete"] or not actual["full_sft_coverage"]
+            ):
+                raise ValueError("SFT stopped before the declared full-store epoch; see sft_actual_exposure.json")
 
     return replace(trained, run=execute, build_config=build_config)
 

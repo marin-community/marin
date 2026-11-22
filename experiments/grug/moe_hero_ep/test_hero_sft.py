@@ -13,6 +13,7 @@ import numpy as np
 import optax
 import pytest
 from jax.sharding import AxisType, Mesh, reshard
+from levanter.data.mixture_epoch import epoch_weight_stages, plan_mixture_epoch
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.testing.devices import use_test_devices
@@ -28,8 +29,6 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
     SftStore,
-    one_epoch_weight_stages,
-    plan_sft_mixture,
     sft_components,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
@@ -91,17 +90,20 @@ def _optimizer():
 
 def test_one_epoch_stages_read_every_sft_store_exactly_once():
     stores = {"a": _store(600_000), "b": _store(200_000), "c": _store(50)}
-    plan = plan_sft_mixture(stores, batch_size=16, replay_fraction=0.2)
+    plan = plan_mixture_epoch(
+        {name: store.packed_sequences for name, store in stores.items()}, batch_size=16, replay_fraction=0.2
+    )
     assert plan.num_blocks > 1
     _, sft_counts = sft_components(stores, plan)
-    stages = one_epoch_weight_stages(sft_counts, {"replay/x": 3.0, "replay/y": 1.0}, plan)
+    stages = epoch_weight_stages(sft_counts, {"replay/x": 3.0, "replay/y": 1.0}, plan)
 
     assert len(stages) == plan.num_blocks
     assert [step for step, _ in stages] == [block * plan.block_size // 16 for block in range(plan.num_blocks)]
     draws: dict[str, int] = {}
-    for _, weights in stages:
-        counts = {name: round(weight * plan.block_size) for name, weight in weights.items()}
-        assert sum(counts.values()) == plan.block_size
+    for step, weights in stages:
+        block_length = min(plan.block_size, plan.run_sequences - step * plan.batch_size)
+        counts = {name: round(weight * block_length) for name, weight in weights.items()}
+        assert sum(counts.values()) == block_length
         assert counts["replay/x"] >= 1 and counts["replay/y"] >= 1
         for name, count in counts.items():
             draws[name] = draws.get(name, 0) + count
@@ -111,7 +113,9 @@ def test_one_epoch_stages_read_every_sft_store_exactly_once():
 
 def test_stores_smaller_than_the_block_count_share_one_component():
     stores = {"big": _store(1_000_000), "tiny1": _store(9), "tiny2": _store(15)}
-    plan = plan_sft_mixture(stores, batch_size=16, replay_fraction=0.2)
+    plan = plan_mixture_epoch(
+        {name: store.packed_sequences for name, store in stores.items()}, batch_size=16, replay_fraction=0.2
+    )
     assert 15 < plan.num_blocks <= 24
 
     components, counts = sft_components(stores, plan)
@@ -123,7 +127,9 @@ def test_stores_smaller_than_the_block_count_share_one_component():
 def test_sft_stores_offer_no_validation_split():
     # Evaluation asks every component for a validation split; the SFT stores hold only train.
     stores = {"a": _store(600_000), "tiny": _store(14)}
-    plan = plan_sft_mixture(stores, batch_size=16, replay_fraction=0.2)
+    plan = plan_mixture_epoch(
+        {name: store.packed_sequences for name, store in stores.items()}, batch_size=16, replay_fraction=0.2
+    )
     components, _ = sft_components(stores, plan)
     config = LmDataConfig(tokenizer="gpt2", cache_dir=None, components=components)
 

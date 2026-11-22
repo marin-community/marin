@@ -238,6 +238,8 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, spec)),
     )
     validation_output.mkdir(parents=True, exist_ok=True)
+    for key in ("sft_capacity", "sft_exposure"):
+        (validation_output / f"{key}.json").write_text(json.dumps(resolved["sft"][key], indent=2) + "\n")
     (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2) + "\n")
     (validation_output / "optimizer-groups.json").write_text(
         json.dumps(optimizer_group_receipt(resolved["sft"]), indent=2)

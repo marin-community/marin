@@ -22,6 +22,7 @@ import yaml
 from click.testing import CliRunner
 from fray.types import ResourceConfig
 from iris.rpc.proto_display import priority_band_value
+from levanter.training_budget import TrainingBudgetConfig
 from marin.execution.lazy import StepContext
 from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
@@ -41,6 +42,7 @@ from experiments.post_training.long_loop.round_runner import (
     require_permanent_round_storage,
     round_sft_spec,
 )
+from experiments.post_training.long_loop.sft_epoch import SftSteps
 from experiments.post_training.long_loop.tests.test_exp3_production import (
     preview_release as preview_release,
 )
@@ -98,6 +100,9 @@ def _canonical(plan: dict) -> str:
     normalized = json.loads(json.dumps(plan))
     for key in ("resolved_sha256", "runtime_source", "spec_sha256"):
         normalized.pop(key, None)
+    # Capacity/exposure admission is tested separately from the frozen training controls.
+    normalized.get("sft", {}).pop("sft_capacity", None)
+    normalized.get("sft", {}).pop("sft_exposure", None)
     normalized["marin_revision"] = "<revision>"
     return json.dumps(normalized, sort_keys=True, indent=1)
 
@@ -279,15 +284,16 @@ def test_round_schema_rejects_unknown_and_mistyped_fields(tmp_path):
     with pytest.raises(ValueError, match=r"unknown fields.*unknown_knob"):
         load_round(path)
     document = yaml.safe_load((ROUND_DIR / "exp4.yaml").read_text())
-    document["sft"]["updates"] = "360"
+    document["sft"]["stopping"]["count"] = "360"
     path.write_text(yaml.safe_dump(document, sort_keys=False))
-    with pytest.raises(ValueError, match=r"sft\.updates must be int"):
+    with pytest.raises(ValueError, match=r"sft\.stopping\.count must be int"):
         load_round(path)
 
 
 def _round_spec(recipe: dict, **sft_overrides) -> RoundSpec:
     sft = RoundSft(
-        updates=360,
+        stopping=SftSteps(360),
+        training_budget=draccus.decode(TrainingBudgetConfig | None, recipe.get("trainer", {}).get("training_budget")),
         batch_size=recipe["batch_size"],
         min_lr_ratio=0.1,
         learning_rate=5.0e-05,
@@ -393,7 +399,7 @@ def test_round_xla_flags_reach_native_worker_once(production_recipe, tmp_path):
 def test_round_sft_spec_follows_the_declared_schedule_after_warmup(
     production_recipe, updates, lr_schedule, expected_ratios
 ):
-    round_spec = _round_spec(production_recipe, updates=updates, warmup_steps=30, lr_schedule=lr_schedule)
+    round_spec = _round_spec(production_recipe, stopping=SftSteps(updates), warmup_steps=30, lr_schedule=lr_schedule)
     recipe = _annealed_recipe(production_recipe, updates=updates, warmup=30, decay=updates - 30, lr_schedule=lr_schedule)
     spec = round_sft_spec(round_spec, "round-test/sft", "fixture", recipe)
     receipt = whole_run_lr_receipt(spec, schedule=SftLrSchedule(**recipe["optimizer_schedule"]))

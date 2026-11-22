@@ -26,6 +26,60 @@ pin `marin_revision` to the clean code commit; Iris bundles those explicit input
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
+## Full-store SFT epochs
+
+New round YAMLs default to `stopping: {type: mixture_epochs, count: 1}`.
+The epoch reads every packed sequence from every included SFT store's declared
+training portion once. Explicit IID validation reservations remain validation-only
+and appear separately in the capacity and exposure receipts. Corrections and
+filters belong to the pinned source version. The full-store path rejects runtime
+subsampling through `max_train_batches`, `experiment_budget` or `target_budget`.
+
+The planner used by the October 5 Hero SFT recipe assigns exact SFT quotas.
+Replay fills its declared fraction of the final mixture, measured in packed
+sequences. Whole-batch rounding adds replay slots; it never repeats or drops
+SFT sequences. The final mixture block can be shorter
+than 64,000 sequences and is still shuffled in full. Only the training batch
+rounds the run length. Every included source receives at least one integer slot across the epoch,
+including tiny replay sources. The preflight rejects zero allocations or
+incomplete SFT coverage. Replay need
+not exhaust its stores; its declared share controls how much replay is drawn.
+
+Measure native packed capacities on in-region CPUs before constructing the round:
+
+```bash
+uv run python -m experiments.post_training.long_loop.sft_epoch_capacity \
+  --data "$DATA_URI" --sha256 "$DATA_SHA256" \
+  --output-prefix "$CAPACITY_PREFIX" --version 2026.11.22.1 --run
+```
+
+`DATA_URI` and its SHA-256 identify the release's `data.json`; `CAPACITY_PREFIX`
+must be a permanent prefix in the same US-EAST-08A bucket as the data. The CPU job reads document
+offsets and native pack indices, without token bodies. Its `SFT_CAPACITY_COMPLETE`
+line gives the immutable `capacity.json` path and SHA-256 for the round:
+
+```yaml
+sft:
+  stopping: {type: mixture_epochs, count: 1}
+  epoch_capacity: {path: "<capacity.json URI>", sha256: "<SHA-256>"}
+  data_seed: 0
+  training_budget: null
+```
+
+The round derives `num_train_steps` and the optimizer horizon from that epoch.
+The LR schedule remains explicit. A wall-clock cooldown requires an explicit
+`sft.training_budget`; it scales the scheduled LR using the remaining training
+time. Without that budget, the step-based optimizer horizon controls annealing. There is no default training-clock or allocation-hour budget.
+The separate operational task timeout interrupts an unfinished run; it does not
+certify an epoch as complete. Historical step-controlled round YAMLs retain
+their original step and budget settings explicitly.
+
+Every plan and SFT output carries `sft_capacity.json` and the planned
+`sft_exposure.json`. After training, `sft_actual_exposure.json` records the
+packed-sequence counts through the completed updates and the unique sequences
+read divided by each source's declared training capacity. An epoch that stops early
+keeps its checkpoint and fails before downstream RL can treat it as complete.
+
 ## Exp5 SFT release
 
 Exp5 setup reuses qualified V7, whose four science components already derive

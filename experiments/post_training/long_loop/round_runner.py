@@ -26,14 +26,14 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from types import UnionType
-from typing import get_origin
+from typing import get_args, get_origin
 
 import click
 import draccus
 import jmp
 import yaml
 from iris.cluster.client.job_info import get_job_info
-from levanter.training_budget import WallClockCooldown
+from levanter.training_budget import TrainingBudgetConfig, WallClockCooldown
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
@@ -49,6 +49,7 @@ from experiments.evaluation.micro210_policy import Micro210Model, micro210_evalu
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.adopted_sft import pinned_json
 from experiments.post_training.long_loop.archive import PERMANENT_TMP_SEGMENT
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.exp3_production import (
     INITIALIZER_RECEIPT,
     INITIALIZER_SHA256,
@@ -73,8 +74,10 @@ from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, v
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
+from experiments.post_training.long_loop.sft_epoch import MixtureEpochs, SftStopping, bind_sft_stopping
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph, runtime_execution
+from experiments.post_training.long_loop.stage_guard import StageGuard
 from experiments.post_training.task_curation.datasets.long_loop_rl import TEACHER_ROUTE_LABELS
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
@@ -105,13 +108,18 @@ class RoundArchive:
 
 @dataclass(frozen=True)
 class RoundSft:
-    updates: int
     batch_size: int
     min_lr_ratio: float
     learning_rate: float
     adam_learning_rate: float
     mesh: dict
     resources: dict
+    stopping: SftStopping = dataclasses.field(default_factory=MixtureEpochs)
+    epoch_capacity: FilePin | None = None
+    training_budget: TrainingBudgetConfig | None = None
+    stage_guard: StageGuard | None = None
+    task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
+    data_seed: int = 0
     special_token_lr_multiplier: float | None = None
     warmup_steps: int = 0
     lr_schedule: str = "linear"
@@ -282,7 +290,17 @@ def _decode_strict(section: dict, target: type, label: str):
         value_type = get_origin(field.type)
         value_type = field.type if value_type in (None, UnionType) else value_type
         nested = isinstance(field.type, type) and dataclasses.is_dataclass(field.type)
-        if nested:
+        if isinstance(field.type, type) and issubclass(field.type, draccus.ChoiceRegistry):
+            if not isinstance(value, dict):
+                raise ValueError(f"{label}.{name} must be a mapping")
+            choice = value.get("type", field.type.default_choice_name())
+            target_choice = field.type.get_choice_class(choice)
+            value = _decode_strict(
+                {key: item for key, item in value.items() if key != "type"}, target_choice, f"{label}.{name}"
+            )
+        elif get_origin(field.type) is UnionType and any(dataclasses.is_dataclass(arg) for arg in get_args(field.type)):
+            value = draccus.decode(field.type, value)
+        elif nested:
             if not isinstance(value, dict):
                 raise ValueError(f"{label}.{name} must be a mapping")
             value = _decode_strict(value, field.type, f"{label}.{name}")
@@ -513,6 +531,7 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
 def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict) -> SFTSpec:
     """Bind and verify the round's declared precision, token rates and LR controls."""
     spec = shared_sft_spec(name, version, recipe)
+    spec = dataclasses.replace(spec, data_seed=round_spec.sft.data_seed)
     spec = dataclasses.replace(spec, xla_flags=tuple(dict.fromkeys((*spec.xla_flags, *round_spec.sft.xla_flags))))
     timeout = round_spec.sft.first_collective_call_timeout
     if timeout is not None:
@@ -557,6 +576,11 @@ def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict)
         if round_spec.sft.wall_clock_cooldown_fraction is not None
         else None
     )
+    expected_budget = round_spec.sft.training_budget
+    if expected_budget is not None:
+        expected_budget = dataclasses.replace(expected_budget, cooldown=expected_cooldown)
+    if budget != expected_budget:
+        raise ValueError("Built training budget differs from the round declaration")
     if (budget.cooldown if budget is not None else None) != expected_cooldown:
         raise ValueError("Built wall-clock cooldown differs from the round declaration")
     whole_run_lr_receipt(spec, schedule=schedule)
@@ -584,7 +608,19 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
         sft["xla_flags"] = [*sft["xla_flags"], "--xla_dump_to=/tmp/long-loop-xla", "--xla_dump_hlo_as_text"]
     if round_spec.sft.expert_weight_sharding:
         sft["model"]["expert_weight_sharding"] = round_spec.sft.expert_weight_sharding
-    updates = round_spec.sft.updates
+    sft["trainer"]["training_budget"] = draccus.encode(round_spec.sft.training_budget)
+    sft["stage_guard"] = draccus.encode(round_spec.sft.stage_guard)
+    sft["task_timeout_seconds"] = round_spec.sft.task_timeout_seconds
+    resolved["execution"]["task_timeouts"]["sft"] = round_spec.sft.task_timeout_seconds
+    coordinator = resolved["execution"]["coordinator"]
+    envelope = round_spec.sft.task_timeout_seconds + sum(
+        STAGE_TIMEOUT_SECONDS[stage] for stage in ("rl", "evaluation", "export", "archive")
+    )
+    if round_spec.sft.training_budget is None:
+        coordinator["job_timeout_seconds"] = max(coordinator["job_timeout_seconds"], envelope)
+        coordinator["coordinator_timeout_hours"] = math.ceil(coordinator["job_timeout_seconds"] / 3600)
+    sft["data_seed"] = round_spec.sft.data_seed
+    updates = bind_sft_stopping(sft, round_spec.sft.stopping, round_spec.sft.epoch_capacity)
     sft["stop_after_steps"] = updates
     sft["trainer"]["num_train_steps"] = updates
     sft["target_positions"] = updates * sft["batch_size"] * sft["seq_len"]
@@ -857,6 +893,8 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, round_spec)),
     )
     validation_output.mkdir(parents=True, exist_ok=True)
+    for key in ("sft_capacity", "sft_exposure"):
+        (validation_output / f"{key}.json").write_text(json.dumps(resolved["sft"][key], indent=2) + "\n")
     (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
     (validation_output / "optimizer-groups.json").write_text(
         json.dumps(optimizer_group_receipt(resolved["sft"]), indent=2)
