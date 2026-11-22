@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.12` completed the first optimizer update. The step-1 checkpoint timed out with three ranks at the commit barrier. Iris accepted `2026.11.20.13` with Levanter's standard checkpoint commit budget. | Complete checkpoint commit and fresh restore, then verify two updates and post-update receiver bytes and generation before the matched runs. |
+| 40-H100 learner smoke | Run `2026.11.20.13` completed the first optimizer update and committed the step-1 checkpoint. The old learner acknowledged shutdown and exceeded its five-second process-exit grace period. | Finish fresh restore, then verify two updates and post-update receiver bytes and generation before the matched runs. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -378,6 +378,16 @@ deadline. The exact JAX 0.11.0 focused suite passed 15 tests. The 40-H100
 configuration matches the previous smoke after normalizing version and
 attempt identities.
 [Checkpoint retry coordinator][iris-smoke-checkpoint] · [Frozen source and tests][h100-checkpoint-handoff]
+
+The retry committed the step-1 checkpoint at 02:25:47 UTC on November 22,
+16 minutes and 10 seconds after the save began. The last learner reached
+the commit barrier 13 minutes and 16 seconds after the first. The step-1
+metadata records policy version 1 and the pinned initializer. At 02:29:54
+the parent reported a shutdown acknowledgement from the old learner, then
+timed out waiting five seconds for exit. The failure occurred after the
+save, state fingerprint and model-change check, before any fresh-process
+restore or version-1 serving publication.
+[Checkpoint retry attempt][iris-smoke-checkpoint-child] · [Original exit-timeout evidence][h100-shutdown-failure]
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -1103,6 +1113,7 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-readiness]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.12-coordinator-8b936a37
 [iris-smoke-readiness-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.12-coordinator-8b936a37%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.12-a2e820308486
 [iris-smoke-checkpoint]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.13-coordinator-22237d08
+[iris-smoke-checkpoint-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.13-coordinator-22237d08%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.13-a6da35eb027d
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
 [frozen-validation-uid]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/dataset/dataset.py#L62-L105
 [h100-retry-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.9%2Fh100-learner-retry.tar.zst
@@ -1114,6 +1125,7 @@ arms. [Prior timing comparison][timing]
 [h100-readiness-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.12%2Fh100-readiness-retry.tar.zst
 [h100-checkpoint-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.12%2Fobserved-failure.json
 [h100-checkpoint-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.13%2Fh100-checkpoint-commit-retry.tar.zst
+[h100-shutdown-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.13%2Fobserved-failure.json
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
 [skyrl-hf-prefetch]: https://github.com/marin-community/marin/pull/10662
