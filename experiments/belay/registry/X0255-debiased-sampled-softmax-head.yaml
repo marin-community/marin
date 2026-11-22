@@ -4,7 +4,7 @@ name: Debiased sampled softmax head
 category: Output head and loss
 summary: 'Track: speedrun'
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7083603637
@@ -33,3 +33,15 @@ trials:
   steps: 3030
   baseline: belay-X0255-control 3.0442 (same commit, seed 0)
   step_time_change: -5%
+- id: t002
+  variant: debiased sampled softmax, 1/8 shortlist, 1 in 16
+  rung: speedrun
+  protocol: fixed_time
+  batch: X0255
+  date: '2026-11-22'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0255
+  wandb: []
+  settings:
+    sampled_softmax_shortlist_frac: '0.125'
+  commit: cb3d3539f3
+  priority: interactive
