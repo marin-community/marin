@@ -4,6 +4,7 @@
 """Exercise the Daytona adapter against a local process and filesystem fake."""
 
 import asyncio
+import io
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
@@ -42,6 +44,7 @@ from daytona import (
     Image,
     Resources,
 )
+from daytona._async.object_storage import AsyncObjectStorage
 from daytona_api_client_async import SandboxState, SnapshotState
 from rigging.timing import ExponentialBackoff, active_timeout
 from shellbox.backends.daytona.connection import DaytonaConnection
@@ -61,6 +64,7 @@ from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.daytona.snapshot import (
     MissingDockerCopySource,
     SnapshotRequest,
+    daytona_image,
     ensure_snapshot,
     list_snapshots,
     purge_stale_snapshots,
@@ -2142,3 +2146,35 @@ def test_missing_native_copy_fails_before_any_create_or_ownership_request(tmp_pa
     assert not client.snapshot.snapshots
     assert lifecycle.read_bytes() == b""
     assert not (tmp_path / "task_file").exists()
+
+
+@pytest.mark.asyncio
+async def test_daytona_build_context_roundtrip_preserves_empty_copy_directory(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "task_file").mkdir(mode=0o750)
+    dockerfile = source / "Dockerfile"
+    original = b"FROM ubuntu:22.04\nCOPY ./task_file /app/task_file\n"
+    dockerfile.write_bytes(original)
+    (source / "original-build-input").write_bytes(b"original context bytes")
+    image = daytona_image(DockerfileSource(source, dockerfile))
+    assert isinstance(image, Image)
+    assert image.dockerfile().encode() == original
+    restored = tmp_path / "restored"
+    restored.mkdir()
+
+    class Storage:
+        async def put_async(self, key, chunks):
+            data = b"".join([chunk async for chunk in chunks])
+            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                assert archive.getmember("./task_file").mode == 0o750
+                archive.extractall(restored, filter="data")
+
+    storage = AsyncObjectStorage.__new__(AsyncObjectStorage)
+    storage.store = Storage()
+    for context in image._context_list:
+        await storage._upload_as_tar("fixture/context.tar", context.source_path, context.archive_path)
+    assert (restored / "task_file").is_dir()
+    assert list((restored / "task_file").iterdir()) == []
+    assert (restored / "Dockerfile").read_bytes() == original
+    assert (restored / "original-build-input").read_bytes() == b"original context bytes"

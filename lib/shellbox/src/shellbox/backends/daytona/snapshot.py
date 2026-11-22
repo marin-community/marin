@@ -30,6 +30,7 @@ from daytona import (
     Image,
     Resources,
 )
+from daytona.common.image import Context
 from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
@@ -234,7 +235,12 @@ async def _snapshot_metadata(
 
 def daytona_image(source: RegistryImage | DockerfileSource) -> str | Image:
     """Convert a validated source to the image argument Daytona builds from."""
-    return source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+    if isinstance(source, RegistryImage):
+        return source.reference
+    image = Image.from_dockerfile(source.dockerfile)
+    # Submit the original context as one archive, including explicit empty directories.
+    image._context_list = [Context(source_path=str(source.context), archive_path=".")]
+    return image
 
 
 async def _resolve_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> Snapshot:
@@ -242,11 +248,7 @@ async def _resolve_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> S
     try:
         return await client.snapshot.get(name)
     except DaytonaNotFoundError:
-        image = (
-            request.source.reference
-            if isinstance(request.source, RegistryImage)
-            else Image.from_dockerfile(request.source.dockerfile)
-        )
+        image = daytona_image(request.source)
         try:
             return await client.snapshot.create(
                 CreateSnapshotParams(name=name, image=image, resources=request.resources)

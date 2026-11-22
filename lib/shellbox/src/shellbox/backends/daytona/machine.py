@@ -27,7 +27,6 @@ from daytona import (
     DaytonaConflictError,
     DaytonaError,
     DaytonaNotFoundError,
-    Image,
 )
 from daytona_api_client_async import SandboxState
 
@@ -794,8 +793,7 @@ class DaytonaDeclarativeMachineFactory(DaytonaMachineFactory):
     ) -> CreateSandboxFromImageParams:
         self._check_spec(spec)
         request = snapshot_request_for_spec(spec)
-        source = request.source
-        image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+        image = daytona_image(request.source)
         return CreateSandboxFromImageParams(
             image=image, resources=request.resources, **self._sandbox_parameters(spec, name)
         )
