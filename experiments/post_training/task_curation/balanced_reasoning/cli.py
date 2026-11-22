@@ -162,7 +162,7 @@ def command_publish(args: argparse.Namespace) -> int:
 
 
 def command_report(args: argparse.Namespace) -> int:
-    """Token and resolution totals over a run root, by band — the pilot's cost meter."""
+    """Token and resolution totals over a run root, by band -- the pilot's cost meter."""
     root = Path(args.run_root) / "tasks"
     totals: dict[str, dict[str, int]] = {}
     for attempt_path in sorted(root.glob("*/attempt.json")):
@@ -185,8 +185,12 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     plan = commands.add_parser("plan", help="band and quota the verified tasks (no model calls)")
-    plan.add_argument("--tasks", required=True, help="JSONL of verified tasks: task_id, source_id, task_sha256, domain, task_path")
-    plan.add_argument("--difficulty-ledger", default=None, help="Atlas difficulty ledger root; defaults to the production ledger")
+    plan.add_argument(
+        "--tasks", required=True, help="JSONL of verified tasks: task_id, source_id, task_sha256, domain, task_path"
+    )
+    plan.add_argument(
+        "--difficulty-ledger", default=None, help="Atlas difficulty ledger root; defaults to the production ledger"
+    )
     plan.add_argument("--output", required=True, help="Run root for selection.json")
     plan.add_argument("--solver", default="hosted", help="Solver family to band by")
     plan.add_argument("--easy-quota", type=int, default=None)

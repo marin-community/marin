@@ -6,9 +6,10 @@
 Rows follow the repo's chat conventions: ``openai_chat_document`` serializes the
 conversation into Harmony messages (the trace's reasoning into the analysis channel, which
 the Marin chat template renders as ``<|start_think|>…<|end_think|>``) under ``CHAT_SCHEMA``;
-the lane's metadata rides beside it the way the calibforge-relay rows carry theirs. The
-decontamination pass reproduces the Q2 lexical method (word 13-grams, stride 0, alphabetic
-filter) against the RL blend prompt set.
+the lane's metadata rides beside it the way the repo's relay-trace rows carry theirs. The
+decontamination pass is the lexical method the Nemotron-overthinking study used against the
+RL blend prompt set: word 13-grams, stride zero, alphabetic-token filter, with boilerplate
+suppression and per-prompt coverage thresholds.
 """
 
 import json
@@ -20,11 +21,12 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
 from marin.datakit.chat_normalize import CHAT_SCHEMA
 from marin.datakit.download.rollout_transforms import openai_chat_document
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import prefix_join
 
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
 from experiments.post_training.task_curation.balanced_reasoning.lane import (
     AttemptTrace,
     TaskOutcome,
@@ -37,8 +39,8 @@ logger = logging.getLogger(__name__)
 BALANCED_SOURCE = "balanced-reasoning-v1"
 STORE_VERSION = "2026.11.22.1"
 
-N = 13
-"""Q2's ngram length in whitespace-split word tokens."""
+NGRAM_LENGTH = 13
+"""Ngram length in whitespace-split word tokens."""
 BOILERPLATE_MIN_PROMPTS = 3
 """Features present in at least this many blend prompts are boilerplate and never match."""
 MIN_MATCHED_FEATURES = 8
@@ -51,8 +53,8 @@ def _has_alpha(token: str) -> bool:
     return any(char.isalpha() for char in token)
 
 
-def word_ngrams(text: str, n: int = N, stride: int = 0) -> frozenset[str]:
-    """Word n-grams over alphabetic tokens, stride 0 (the Q2 configuration)."""
+def word_ngrams(text: str, n: int = NGRAM_LENGTH, stride: int = 0) -> frozenset[str]:
+    """Word n-grams over alphabetic tokens, stride 0."""
     tokens = [token for token in text.split() if _has_alpha(token)]
     starts = range(0, len(tokens) - n + 1) if stride <= 0 else range(0, len(tokens) - n + 1, stride)
     return frozenset(" ".join(tokens[index : index + n]) for index in starts)
@@ -140,7 +142,7 @@ def conversation_prompt(messages: list[dict]) -> str:
 
 
 def row_metadata(outcome: TaskOutcome, attempt: AttemptTrace, receipt_uri: str, attempt_index: int) -> dict:
-    """The per-row metadata columns, mirroring DESIGN.md §4."""
+    """The lane's per-row metadata columns: identity, banding, budget, grade and generation."""
     return {
         "atlas_task_id": outcome.task_id,
         "task_sha256": outcome.task_sha256,
@@ -166,9 +168,7 @@ def row_metadata(outcome: TaskOutcome, attempt: AttemptTrace, receipt_uri: str, 
     }
 
 
-def outcome_rows(
-    outcome: TaskOutcome, *, receipt_root: str, blend: BlendFilter | None
-) -> tuple[list[dict], str | None]:
+def outcome_rows(outcome: TaskOutcome, *, receipt_root: str, blend: BlendFilter | None) -> tuple[list[dict], str | None]:
     """The store rows one outcome contributes, and why it contributes none.
 
     A solved outcome contributes its selected trace; a graceful outcome its graceful trace.
@@ -177,7 +177,7 @@ def outcome_rows(
     if outcome.selected_index is None:
         return [], outcome.unsolved_reason or "no selected attempt"
     attempt = outcome.attempts[outcome.selected_index]
-    receipt_uri = f"{receipt_root}/{outcome.task_id}"
+    receipt_uri = prefix_join(receipt_root, outcome.task_id)
     document = openai_chat_document(
         outcome.task_prompt_messages(attempt),
         BALANCED_SOURCE,
@@ -232,7 +232,7 @@ def build_store(
     the versioned artifact prefix. Returns the manifest document.
     """
     digest_value, selected, census = read_selection(selection_path)
-    receipt_root = f"{run_root.rstrip('/')}/tasks"
+    receipt_root = prefix_join(run_root, "tasks")
     store_dir = Path(run_root) / "store"
     store_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
@@ -258,8 +258,7 @@ def build_store(
     with receipts_path.open("wt") as sink:
         for row in rows:
             sink.write(
-                json.dumps({"id": row["id"], "verification_receipt": row["verification_receipt"]}, sort_keys=True)
-                + "\n"
+                json.dumps({"id": row["id"], "verification_receipt": row["verification_receipt"]}, sort_keys=True) + "\n"
             )
     rows_bytes = rows_path.read_bytes()
     receipts_bytes = receipts_path.read_bytes()
@@ -281,29 +280,28 @@ def build_store(
             "rows": {"sha256": sha256(rows_bytes).hexdigest(), "bytes": len(rows_bytes)},
             "receipts": {"sha256": sha256(receipts_bytes).hexdigest()},
         },
-        "blend_filter": None
-        if blend is None
-        else {
-            "prompts": len(blend.prompts),
-            "method": (
-                f"word {N}-grams, stride 0, alphabetic filter; boilerplate >= {BOILERPLATE_MIN_PROMPTS} prompts; "
-                f"hit requires >= {MIN_MATCHED_FEATURES} shared features and >= {MIN_COVERAGE:.0%} coverage"
-            ),
-        },
+        "blend_filter": (
+            None
+            if blend is None
+            else {
+                "prompts": len(blend.prompts),
+                "method": (
+                    f"word {NGRAM_LENGTH}-grams, stride 0, alphabetic filter; "
+                    f"boilerplate >= {BOILERPLATE_MIN_PROMPTS} prompts; "
+                    f"hit requires >= {MIN_MATCHED_FEATURES} shared features and >= {MIN_COVERAGE:.0%} coverage"
+                ),
+            }
+        ),
     }
     manifest_path = store_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
-    logger.info(
-        "STORE %s rows=%d dropped=%d resolutions=%s", rows_path, len(rows), dropped, sorted(resolutions.items())
-    )
+    logger.info("STORE %s rows=%d dropped=%d resolutions=%s", rows_path, len(rows), dropped, sorted(resolutions.items()))
     return manifest
 
 
 def publish_store(store_dir: str, destination: str) -> list[str]:
     """Upload the built store files to the versioned artifact prefix; returns the URIs."""
-    prefix = f"{CANONICAL_ARTIFACT_ROOT}/{destination.strip('/')}"
+    prefix = prefix_join(CANONICAL_ARTIFACT_ROOT, destination.strip("/"))
     files = {name: (Path(store_dir) / name).read_bytes() for name in ("rows.parquet", "receipts.jsonl", "manifest.json")}
     publish_once(prefix, files)
-    written = [f"{prefix}/{name}" for name in files]
-    logger.info("PUBLISHED %s", written)
-    return written
+    return [prefix_join(prefix, name) for name in files]

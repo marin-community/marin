@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
+from taskcompendium.models import TaskSpec, TextMessage
 from taskforge.effects.context import Context
 from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.llm.policy import LLMPolicy

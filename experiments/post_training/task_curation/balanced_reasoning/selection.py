@@ -9,22 +9,26 @@ which budget, in which order. Rows are written in the canonical difficulty-sorte
 from the published metadata.
 """
 
-import fsspec
 import json
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import PurePosixPath
+
+import fsspec
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import (
+    BAND_BUDGETS,
     BAND_ORDER,
     Band,
     BandBudget,
-    BAND_BUDGETS,
     budget_for,
 )
-from experiments.post_training.task_curation.balanced_reasoning.difficulty import TaskDifficulty, url_parent, url_protocol
+from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
+    TaskDifficulty,
+    url_parent,
+    url_protocol,
+)
 
 logger = logging.getLogger(__name__)
 

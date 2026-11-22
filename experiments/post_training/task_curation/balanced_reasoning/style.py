@@ -1,24 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace-style filters derived from the Nemotron-overthinking evidence.
+"""Trace-style filters derived from the Nemotron-overthinking measurements.
 
 The store must not carry the looping style even inside correct traces. The battery
-reproduces the per-1k recheck-phrase rates measured in the nemotron-overthinking report
-(Q1/Q3: wait / actually / let-me are the dominant markers) and adds a verbatim-line
-detector for the degenerate repetition the report measured on truncated reasoning-gym
-responses.
+reproduces the per-1k recheck-phrase rates that study measured on the Nemotron SFT stores
+and on truncated policy responses -- wait / actually / let-me are the dominant recheck
+markers -- and adds a verbatim-line detector for the degenerate repetition that study
+measured on truncated reasoning-gym responses.
 """
 
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 
 RECHECK_PHRASES: tuple[str, ...] = ("wait", "actually", "let me")
 """Case-insensitive recheck markers; rates are per 1k trace tokens."""
 
 DEFAULT_RECHECK_RATE_LIMIT = 6.0
 """Combined recheck rate (per 1k tokens) above which a trace is rejected. The measured
-Nemotron stores run 1.4–3.1/1k and truncated policy responses 1.7–4.1/1k, so 6.0 keeps
+Nemotron stores run 1.4-3.1/1k and truncated policy responses 1.7-4.1/1k, so 6.0 keeps
 correct-but-rechecking traces while cutting the pathological tail."""
 
 DEFAULT_MIN_LOOP_REPEATS = 6
@@ -55,7 +56,7 @@ class StyleReport:
 def _longest_consecutive_repeat(lines: list[str]) -> int:
     longest = 0
     run = 0
-    for previous, current in zip(lines, lines[1:], strict=False):
+    for previous, current in pairwise(lines):
         run = run + 1 if current == previous else 1
         longest = max(longest, run)
     return longest

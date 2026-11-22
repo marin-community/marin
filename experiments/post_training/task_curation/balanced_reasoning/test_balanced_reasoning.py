@@ -3,6 +3,7 @@
 
 """Unit tests for the balanced-reasoning lane's pure modules."""
 
+
 import pytest
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import (
@@ -14,6 +15,7 @@ from experiments.post_training.task_curation.balanced_reasoning.bands import (
 )
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
     LedgerAttempt,
+    TaskDifficulty,
     parse_ledger_row,
     tally_attempts,
 )
@@ -25,6 +27,7 @@ from experiments.post_training.task_curation.balanced_reasoning.graceful import 
     graceful_convergence_prompt,
 )
 from experiments.post_training.task_curation.balanced_reasoning.selection import (
+    CandidateTask,
     Quota,
     select_tasks,
     selection_digest,
@@ -105,14 +108,14 @@ def test_graceful_form_contract() -> None:
         assert marker in prompt
     good = check_graceful_trace(
         "I could not finish the reduction.",
-        f"{BEST_EFFORT_MARKER} 12 — the partial sums point here.",
+        f"{BEST_EFFORT_MARKER} 12 -- the partial sums point here.",
         "stop",
     )
     assert good.passed
     assert good.resolution == "graceful_best_effort"
     uncertain = check_graceful_trace(
         "The last case diverges.",
-        f"{UNCERTAIN_MARKER} 13 — the final case does not terminate.",
+        f"{UNCERTAIN_MARKER} 13 -- the final case does not terminate.",
         "stop",
     )
     assert uncertain.passed
@@ -125,16 +128,16 @@ def test_graceful_form_contract() -> None:
     assert "lacks both contract closings" in (missing.reason or "")
 
 
-def _candidate(task_id: str, sha: str, domain: str = "math"):
-    from experiments.post_training.task_curation.balanced_reasoning.selection import CandidateTask
+def _candidate(task_id: str, sha: str, domain: str = "math") -> CandidateTask:
+    return CandidateTask(
+        task_id=task_id, source_id="src", task_sha256=sha, domain=domain, task_path=f"/tasks/{task_id}.json"
+    )
 
-    return CandidateTask(task_id=task_id, source_id="src", task_sha256=sha, domain=domain, task_path=f"/tasks/{task_id}.json")
 
-
-def _difficulty(sha: str, rate: float):
-    from experiments.post_training.task_curation.balanced_reasoning.difficulty import TaskDifficulty
-
-    return TaskDifficulty(source_id="src", task_sha256=sha, task_id="t", solve_rate=rate, scored=3, basis="ledger:hosted")
+def _difficulty(sha: str, rate: float) -> TaskDifficulty:
+    return TaskDifficulty(
+        source_id="src", task_sha256=sha, task_id="t", solve_rate=rate, scored=3, basis="ledger:hosted"
+    )
 
 
 def test_selection_quotas_sort_and_census() -> None:

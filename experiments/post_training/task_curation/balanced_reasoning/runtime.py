@@ -21,7 +21,6 @@ from iris.cluster.client import get_job_info
 from pydantic import TypeAdapter
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
-
 from taskforge.llm.glm_client import EndpointSource, GlmClient
 from taskforge.llm.policy import LLMProviderConfig
 from taskforge.policy import Policy, load_policy
@@ -101,12 +100,9 @@ async def lane_runtime(
         yield resources, factories
 
 
-def relay_or_fixed_source(
-    base_url: str | None, relay_job: str | None, token: str, pool: str = "bulk"
-) -> EndpointSource:
+def relay_or_fixed_source(base_url: str | None, relay_job: str | None, token: str, pool: str = "bulk") -> EndpointSource:
     """The generator's endpoint source; the bulk pool is the lane's default."""
     return endpoint_source(base_url, relay_job, token, model="glm-5.3", pool=pool)
 
 
-__all__ = ["lane_policy", "lane_runtime", "lane_factories", "relay_or_fixed_source"]
-
+__all__ = ["lane_factories", "lane_policy", "lane_runtime", "relay_or_fixed_source"]

@@ -5,7 +5,7 @@
 
 For a task the generator cannot solve within its band budget, the lane continues from the
 best failed attempt under a form contract: bounded re-derivation, then exactly one of two
-closings — commit to a best-effort answer, or state the uncertainty explicitly. The
+closings -- commit to a best-effort answer, or state the uncertainty explicitly. The
 structural checks below enforce the contract on every graceful trace; the store carries
 only traces that pass them.
 """
@@ -13,6 +13,7 @@ only traces that pass them.
 from dataclasses import dataclass
 
 from experiments.post_training.task_curation.balanced_reasoning.style import StyleReport, style_report
+
 BEST_EFFORT_MARKER = "Final answer (best effort):"
 UNCERTAIN_MARKER = "Final answer (uncertain):"
 CLOSING_MARKERS: tuple[str, ...] = (BEST_EFFORT_MARKER, UNCERTAIN_MARKER)
@@ -40,8 +41,8 @@ it despite not verifying it. The second states that the answer is uncertain, giv
 candidate, and names the concrete blocker. Never leave the reply without this final line.
 """
 
-BEST_EFFORT_LINE = f"{BEST_EFFORT_MARKER} <answer> — <one sentence on why this is your best candidate>"
-UNCERTAIN_LINE = f"{UNCERTAIN_MARKER} <answer> — <the concrete blocker>"
+BEST_EFFORT_LINE = f"{BEST_EFFORT_MARKER} <answer> -- <one sentence on why this is your best candidate>"
+UNCERTAIN_LINE = f"{UNCERTAIN_MARKER} <answer> -- <the concrete blocker>"
 
 
 @dataclass(frozen=True, slots=True)

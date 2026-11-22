@@ -5,8 +5,8 @@
 
 The fakes stand in for the two machines the lane talks to: a scripted completion backend
 replays the generator, and a scripted grading engine grades the candidate reply the way an
-in-process verifyit grader would. The taskforge effect machinery — inference effects, grade
-effects, event-log replay — is the real production code.
+in-process verifyit grader would. The taskforge effect machinery -- inference effects, grade
+effects, event-log replay -- is the real production code.
 """
 
 import asyncio
@@ -51,29 +51,36 @@ EXPECTED = "12"
 EXPECTED_PROMPT = "What is 6 + 6? Answer with the number only."
 
 
-def example_task() -> TaskSpec:
+def make_task(prompt: str, expected: str, task_id: str = "lane-test-task") -> TaskSpec:
+    """A minimal machine-less exact-match task: the shape the lane's reasoning round consumes."""
     return TaskSpec(
-        id="lane-test-task",
-        context=ConversationInput(events=(TextMessage(role="user", content=EXPECTED_PROMPT),)),
+        id=task_id,
+        context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
-        grader=verifyit_package(ExactSpec(expected=(EXPECTED,))).grader,
+        grader=verifyit_package(ExactSpec(expected=(expected,))).grader,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
 
 
-def selected_task(solve_rate: float = 0.5, task_id: str = "t1") -> SelectedTask:
+def example_task() -> TaskSpec:
+    return make_task(EXPECTED_PROMPT, EXPECTED)
+
+
+def selected_task(
+    solve_rate: float = 0.5, task_id: str = "t1", sha: str = "ab" * 32, domain: str = "math"
+) -> SelectedTask:
     candidate = CandidateTask(
         task_id=task_id,
         source_id="src",
-        task_sha256="ab" * 32,
-        domain="math",
-        task_path="/tasks/t1.json",
+        task_sha256=sha,
+        domain=domain,
+        task_path=f"/tasks/{task_id}.json",
     )
     difficulty = TaskDifficulty(
         source_id="src",
-        task_sha256="ab" * 32,
+        task_sha256=sha,
         task_id=task_id,
         solve_rate=solve_rate,
         scored=3,
@@ -140,10 +147,10 @@ class FakeGradingEngine:
         return GradedRollout(rollout=rollout, grade=grade)
 
 
-def lane_resources(policy, backend):
+def lane_resources(policy, backend, expected: str = EXPECTED):
     """The resources bundle with the grading engine swapped for the scripted grader."""
     resources = build_resources(policy, {"author": backend, "solver": backend}, {}, FakeWeb({}, {}))
-    grading = GradingResource(FakeGradingEngine(), "lane-grader")
+    grading = GradingResource(FakeGradingEngine(expected), "lane-grader")
     return replace(resources, grading=grading)
 
 
@@ -188,7 +195,7 @@ def test_lane_graceful_resolution(tmp_path: Path) -> None:
                 provider_completion("thirteen", completion_tokens=42),
                 provider_completion("fourteen", completion_tokens=43),
                 provider_completion(
-                    f"{BEST_EFFORT_MARKER} 13 — the partial sums point here.",
+                    f"{BEST_EFFORT_MARKER} 13 -- the partial sums point here.",
                     completion_tokens=60,
                     reasoning="I could not finish the reduction.",
                 ),
