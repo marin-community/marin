@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 2:31 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 2:54 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap and real tool-turn replay passed. The full-context score gate found three crossings with ordered gather and one with scatter. The five-host pilot committed policy 0 and reached a model-config binding error at serving initialization. | Fix config binding, complete the held comparison and resolve the full-context scoring discrepancy. |
+| Native inventory backend | The 67B live swap and real tool-turn replay passed. The full-context score gate found three crossings with ordered gather and one with scatter. The first five-host pilot committed policy 0 and hit a config binding error. The CPU-tested repair is now running on 40 H100s. | Complete the held comparison and resolve the full-context scoring discrepancy. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1786,8 +1786,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   claim binds the worker configuration and Iris root. After regional
   acceptance, Kueue found zero eligible nodes because the prototype
   added an `iris.region` selector absent from the managed nodes. The next direct dispatch must rely on the
-  already-selected regional controller for placement. Both successful
-  gang admission and terminal artifact recovery remain open.
+  already-selected regional controller for placement. The revised request
+  matches the admitted ordinary job's managed-node selector in a local
+  fixture. The previous job is unstarted. Successful gang admission and
+  terminal artifact recovery remain open.
 
   The native coordinator lost its first slot before the GPU group was
   admitted and its second during regional initializer streaming. Its
@@ -1799,8 +1801,23 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   reconstruction from the committed metadata matched all 502
   serving-template shapes and dtypes and isolated this field. Require
   the same typed config representation before hashing and keep the
-  existing tensor and policy identity checks. The failed child reached
-  neither rollout admission nor evaluation.
+  existing tensor and policy identity checks. The failed child stopped
+  before admitting rollouts or starting evaluation.
+
+  The repaired learner source `ab79d757b0` normalizes that field during
+  model construction. A CPU regression reproduced the frozen learner's
+  weights and optimizer results after a real update. Integer and float
+  inputs produced identical binary replay after normalization. A changed
+  capacity still failed the install check. The repaired pilot has its own
+  artifact under tree `ac90c03` and uses the same learner algorithm, data,
+  seed and 40-H100 layout. The five original GPU tasks have started.
+  [Repaired held native run][iris-held-native-repaired]
+
+  A separate one-host H100 diagnostic restored the same step-2 snapshot
+  and began the four full-context responses. The diagnostic will compare
+  the serving and learner activations at the persistent outlier only if
+  all four replay frames match the original bytes.
+  [Original-frame head comparison][iris-native-head-comparison]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request limit. Native uses the cache geometry from the
   67B live-swap run. Use the same learner, selection and fixed panel to
@@ -1903,6 +1920,8 @@ arms. [Prior timing comparison][timing]
 [iris-held-vllm-pilot]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-coordinator-c033eabc
 [iris-held-vllm-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-coordinator-c033eabc%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-ae1c053f89fb
 [iris-held-vllm-profile]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-coordinator-5490d623
+[iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
+[iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
 [iris-held-native-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-38f335b-in-424011b4-2026.11.22.1-coordinator-eaec3017%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-38f335b-in-424011b4-2026.11.22.1-a830de53136f
 [iris-held-vllm-direct]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-a028a6627d0d
 [native-full-capture-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122i%2Fnative-native-fused-20261122i-tool-fused%2F0%2F2d4106a1e0593f89%2Foutputs.tar.zst
