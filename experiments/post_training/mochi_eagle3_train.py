@@ -24,7 +24,7 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
 )
 from skyrl_train.io import io
 
-from experiments.post_training.mochi_eagle3 import TARGET_IDENTITY, initialize_draft, worker_spec
+from experiments.post_training.mochi_eagle3 import STOP_TOKEN_IDS, TARGET_IDENTITY, initialize_draft, worker_spec
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +120,18 @@ def publish_serving_draft(candidate: Path, seed: Path, output: str, receipt: dic
         weights["lm_head.weight"] = initial.get_tensor("lm_head.weight")
     if not {"t2d", "d2t", "lm_head.weight"}.issubset(weights):
         raise ValueError("Standalone draft is missing its vocabulary maps or projected target head")
-    save_file(weights, bundle / "model.safetensors", metadata={"format": "pt"})
-    (bundle / "lineage.json").write_text(json.dumps(receipt, indent=2))
+    if not weights["t2d"][list(STOP_TOKEN_IDS)].all():
+        raise ValueError("Standalone draft vocabulary omits a Mochi stop token")
+    weights_path = bundle / "model.safetensors"
+    save_file(weights, weights_path, metadata={"format": "pt"})
+    with weights_path.open("rb") as stream:
+        weights_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    lineage = {
+        **receipt,
+        "serving_weights_sha256": weights_digest,
+        "serving_config_sha256": hashlib.sha256((bundle / "config.json").read_bytes()).hexdigest(),
+    }
+    (bundle / "lineage.json").write_text(json.dumps(lineage, indent=2))
     io.upload_directory(str(bundle), prefix_join(output, "serving-draft"))
 
 

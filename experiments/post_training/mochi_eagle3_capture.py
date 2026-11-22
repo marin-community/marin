@@ -32,6 +32,7 @@ from skyrl_train.trajectory_runners.routed_experts import normalize_routed_exper
 from experiments.post_training.long_loop.throughput import graph_capture_observed, write_json
 from experiments.post_training.mochi_eagle3 import (
     AUXILIARY_LAYERS,
+    STOP_TOKEN_IDS,
     TARGET_IDENTITY,
     TARGET_URI,
     TOKENIZER,
@@ -111,7 +112,7 @@ async def generate(environment: VllmEnvironment, spec: dict) -> None:
                         "temperature": 0.7,
                         "top_p": 1.0,
                         "seed": spec["seed"] + index,
-                        "stop_token_ids": [128001, 128009],
+                        "stop_token_ids": list(STOP_TOKEN_IDS),
                         "return_token_ids": True,
                         "routed_experts_prompt_start": len(row["prompt_token_ids"]) - 1,
                     },

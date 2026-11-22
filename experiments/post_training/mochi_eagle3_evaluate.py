@@ -29,7 +29,7 @@ from skyrl_train.io import io
 from skyrl_train.trajectory_runners.routed_experts import decode_routed_experts, normalize_routed_experts
 
 from experiments.post_training.long_loop.throughput import graph_capture_observed, workload_requests, write_json
-from experiments.post_training.mochi_eagle3 import worker_spec
+from experiments.post_training.mochi_eagle3 import STOP_TOKEN_IDS, worker_spec
 from experiments.post_training.mochi_eagle3_capture import mochi_engine_config, mochi_model_spec
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ async def decode_probes(base_url: str, probes: list[dict], seeds: list[int]) -> 
                     "temperature": temperature,
                     "top_p": 1.0,
                     "seed": seed,
-                    "stop_token_ids": [128001, 128009],
+                    "stop_token_ids": list(STOP_TOKEN_IDS),
                     "return_token_ids": True,
                     "return_tokens_as_token_ids": True,
                     "logprobs": 1,

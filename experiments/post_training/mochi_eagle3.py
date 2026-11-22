@@ -47,6 +47,7 @@ BOOTSTRAP_ARCHIVES = (
 DRAFT_VOCAB_SIZE = 32000
 MAX_PROMPT_TOKENS = 90112
 AUXILIARY_LAYERS = (3, 24, 45)
+STOP_TOKEN_IDS = (128001, 128009)
 AGENTIC_SOURCE = "long-loop-smartie-swesmith"
 
 
@@ -191,6 +192,17 @@ def worker_spec(description: str | None) -> dict:
     return spec
 
 
+def draft_vocabulary_ids(frequencies: Counter[int]) -> torch.Tensor:
+    """Select the frequent Mochi training tokens while preserving stop-token logits."""
+    # The terminal sampled token has no subsequent verifier feature row, so
+    # captured input-token counts can omit EOS even when every response stops.
+    ranked = sorted(
+        (token for token in range(128256) if token not in STOP_TOKEN_IDS),
+        key=lambda token: (-frequencies[token], token),
+    )
+    return torch.tensor(sorted([*STOP_TOKEN_IDS, *ranked[: DRAFT_VOCAB_SIZE - len(STOP_TOKEN_IDS)]]), dtype=torch.long)
+
+
 def initialize_draft(directory: Path, frequencies: Counter[int], seed: int) -> dict:
     torch.manual_seed(seed)
     metadata_dir = directory / "target-metadata"
@@ -242,8 +254,7 @@ def initialize_draft(directory: Path, frequencies: Counter[int], seed: int) -> d
         model = Eagle3DraftModel(config)
     finally:
         torch.set_default_dtype(previous_dtype)
-    ranked = sorted(range(128256), key=lambda token: (-frequencies[token], token))[:DRAFT_VOCAB_SIZE]
-    selected = torch.tensor(sorted(ranked), dtype=torch.long)
+    selected = draft_vocabulary_ids(frequencies)
     target_to_draft = torch.zeros(128256, dtype=torch.bool)
     target_to_draft[selected] = True
     model.load_vocab_mappings(target_to_draft, selected - torch.arange(DRAFT_VOCAB_SIZE))
@@ -263,7 +274,8 @@ def initialize_draft(directory: Path, frequencies: Counter[int], seed: int) -> d
         "trainable_parameters": sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad),
         "auxiliary_layers": AUXILIARY_LAYERS,
         "draft_vocab_size": DRAFT_VOCAB_SIZE,
-        "bootstrap_vocabulary_coverage": sum(frequencies[token] for token in selected.tolist()) / frequencies.total(),
+        "vocabulary_coverage": sum(frequencies[token] for token in selected.tolist()) / frequencies.total(),
+        "reserved_stop_token_ids": STOP_TOKEN_IDS,
     }
 
 
