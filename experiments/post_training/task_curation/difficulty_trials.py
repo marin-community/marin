@@ -168,8 +168,13 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
     lock-built machine; callers that need the toolchain fail closed at the toolchain probe.
     """
 
-    from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415
+    from experiments.post_training.task_curation.difficulty_artifacts import (  # noqa: PLC0415
+        REGIONAL_ENVIRONMENT_ROOT,
+    )
+    from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415  # noqa: PLC0415
         DEFAULT_REPOSITORY,
+        ENVIRONMENT_ARTIFACT_VERSION,
+        IDENTITY_CHARS,
         identity_digest,
         image_tag,
     )
@@ -180,7 +185,19 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
             continue
         declared = _declared_lock(environment)
         if declared is not None and declared == lock:
-            return image_tag(DEFAULT_REPOSITORY, identity_digest(environment))
+            identity = identity_digest(environment)
+            # The LOCAL backend refuses tag references: deliver the digest-pinned image the
+            # in-region build recorded, falling back to the identity tag when no record exists.
+            try:
+                from marin.execution.artifact import read_record
+
+                record = read_record(
+                    f"{REGIONAL_ENVIRONMENT_ROOT}/env-{identity[:IDENTITY_CHARS]}/{ENVIRONMENT_ARTIFACT_VERSION}"
+                )
+                image = (record.result or {}).get("image") if record is not None else None
+            except Exception:
+                image = None
+            return image or image_tag(DEFAULT_REPOSITORY, identity)
     return None
 
 
