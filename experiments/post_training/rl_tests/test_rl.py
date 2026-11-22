@@ -716,7 +716,7 @@ def _assert_mochi_preset_documents(revisions, configs):
         assert served[path] == value, path
 
 
-def test_speed_short_can_disable_speculation_without_changing_the_workload(selection, tmp_path):
+def test_speed_short_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path):
     table = snowball_model.SNOWBALL
     preset = table.by_name["speed-short"]
     [default_run] = snowball.build_experiment(preset, table=table).runs
@@ -731,7 +731,7 @@ def test_speed_short_can_disable_speculation_without_changing_the_workload(selec
     assert default["inputs"] == plain["inputs"]
 
 
-def test_snowball_draft_is_bound_to_the_pinned_initializer(selection, tmp_path):
+def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tmp_path):
     table = snowball_model.SNOWBALL
     preset = table.by_name["eval-short"]
     initializer = ArtifactHfModel(

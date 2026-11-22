@@ -433,7 +433,8 @@ def _normalize_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
         if tokenizer_uri
         else model_metadata
     )
-    model["local_path"] = "<model-staging>"
+    model_staging = "<model-staging>"
+    model["local_path"] = model_staging
     for path, metadata in (
         ("skyrl.trainer.policy.model.path", model_metadata),
         ("skyrl.trainer.ref.model.path", model_metadata),
@@ -459,7 +460,7 @@ def _normalize_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
                 raise InvalidComparison(f"native tokenizer revision differs from the staged tokenizer: {revision_path}")
             # Staging resolves the revision into the path, so the worker no longer needs it.
             set_path(config, revision_path, recorded.model_identity)
-        set_path(config, path, "<model-staging>")
+        set_path(config, path, model_staging)
 
 
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
@@ -581,7 +582,7 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
 
 
 def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
-    """Resolve a worker's draft mirror back to the exact Hub source requested by the plan."""
+    """Normalize a draft mirror when its receipt matches the planned Hub source and revision."""
     path = "skyrl.generator.speculative_decoding.model"
     draft, expected = get_path(config, path), get_path(expected_launch, path)
     if not isinstance(draft, dict) or not isinstance(expected, dict) or not expected["source_uri"].startswith("hf://"):

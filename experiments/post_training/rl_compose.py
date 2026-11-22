@@ -402,19 +402,23 @@ def utc_millis(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
 
 
+def _recipe_config_for_model(preset: presets.Preset, model: SkyRLModelSource | ResolvedModelLocator) -> RecipePatch:
+    draft = preset.default_speculative_decoding
+    if draft is not None and (
+        model == preset.model
+        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
+    ):
+        return preset.recipe.config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=draft)))
+    return preset.recipe.config
+
+
 def _training_config(
     preset: presets.Preset,
     settings: tuple[str, ...],
     model: SkyRLModelSource | ResolvedModelLocator,
 ) -> RecipePatch:
     recipe = preset.recipe
-    recipe_config = recipe.config
-    draft = preset.default_speculative_decoding
-    if draft is not None and (
-        model == preset.model
-        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
-    ):
-        recipe_config = recipe_config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=draft)))
+    recipe_config = _recipe_config_for_model(preset, model)
     authored = recipe_config.to_skyrl()
     if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
