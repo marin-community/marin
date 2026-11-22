@@ -1076,12 +1076,24 @@ with the v5p-8 settings above.
 
 Among successful replay requests, the time-weighted p90 number of
 requests awaiting a first token was seven on native v5p-8 versus three
-on compiled vLLM. The native v6e-8 run with the lowest measured p90 TTFT
-had five waiting versus three on vLLM. At p90, the corresponding
+on compiled vLLM. The eight-step v6e-8 replay with 32 KV contexts had
+five waiting versus three on vLLM. At p90, the corresponding
 counts for requests already generating were 22 versus 22 on v5p-8
 and 20 versus 21 on v6e-8. This measures client-observed first-token
 backlog, including prefill time.
 [v5p-8 compiled repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v5-repeat-cpu-loader) · [v6e-8 native replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v25-32-contexts-2880-window-pages)
+
+First-token latency was split at the next output from a request already
+decoding, or at the first token when it arrived sooner. Among 374
+eligible turns in the v5p-8 same-slice pair, the slowest 38 native turns
+took a median 897 ms to reach
+that boundary and another 2,905 ms to emit their first token. On those
+same turns, the respective vLLM medians were 15 ms and 368 ms. For the
+four-step v6e-8 run, the corresponding medians across all 388 eligible
+turns were 85 ms and 198 ms on native, versus 12 ms and 207 ms on vLLM.
+These are client-observed intervals. They include any prefill, scheduling,
+and streaming work between the observed events.
+[v5p-8 same-slice pair](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix) · [v6e-8 four-step replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v35-four-round-unchunked)
 
 In a local CPU microbenchmark with 80 cached 48,000-token prompts,
 finding only the first mismatching token reduced median comparison time
