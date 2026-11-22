@@ -303,10 +303,10 @@ def test_packed_sampling_matches_serial_requests_on_expert_mesh(serving_model):
     )
     packed = InferenceEngineConfig(
         max_seq_len=8,
-        max_pages=8,
-        max_seqs=4,
+        max_pages=16,
+        max_seqs=8,
         page_size=4,
-        max_queued_tokens=4,
+        max_queued_tokens=8,
         max_seqs_in_prefill=4,
         max_tokens_per_round=4,
         compute_dtype=jnp.float32,
@@ -320,7 +320,8 @@ def test_packed_sampling_matches_serial_requests_on_expert_mesh(serving_model):
         serial = InferenceEngine.from_model_with_config(
             model, None, dataclasses.replace(packed, max_seqs=1, max_seqs_in_prefill=1)
         )
-        requests = _requests()[:2]
+        requests = _requests()
+        requests.append(dataclasses.replace(requests[0], request_id=505))
         expected = [serial.generate([request]).tokens[0] for request in requests]
         assert parallel.generate(requests).tokens == expected
 

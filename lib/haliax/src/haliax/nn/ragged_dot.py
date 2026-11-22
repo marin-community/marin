@@ -170,14 +170,16 @@ def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
 
 
 @functools.lru_cache(maxsize=None)
-def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Callable[..., jax.Array]:
+def _triton_default_matmul(
+    m: int, k: int, n: int, num_groups: int, dtype, *, block_sizes: tuple[int, int, int] | None = None
+) -> Callable[..., jax.Array]:
     """Build the default-layout kernel for one static shape.
 
     ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call and JAX's
     tracing cache is keyed on function identity, so building it inline re-traces
     the kernel and its index maps at every call site.
     """
-    block_m, block_n, block_k = _triton_default_block_sizes(m, k, n)
+    block_m, block_n, block_k = block_sizes or _triton_default_block_sizes(m, k, n)
     return pl.pallas_call(
         lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(
             a,
@@ -202,13 +204,27 @@ def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Ca
     )
 
 
-def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _triton_default_pallas_call(
+    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, *, block_sizes: tuple[int, int, int] | None = None
+) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
-    matmul = _triton_default_matmul(m, k, n, num_groups, lhs.dtype)
+    matmul = _triton_default_matmul(m, k, n, num_groups, lhs.dtype, block_sizes=block_sizes)
     return matmul(lhs, rhs, cum_rows[:-1], cum_rows[1:])
+
+
+def triton_decode_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Run forward-only CUDA grouped matmul with small token tiles for decode."""
+    rows, width = lhs.shape
+    token_tile, contraction_tile = (16, 32) if rows <= 32 else (32, 64)
+    _, output_tile, _ = _triton_default_block_sizes(rows, width, rhs.shape[-1])
+    # The last expert can start anywhere in the input and read a full tile.
+    padded = jnp.pad(lhs, ((0, token_tile - 1), (0, 0)))
+    return _triton_default_pallas_call(
+        padded, rhs, group_sizes, block_sizes=(token_tile, output_tile, contraction_tile)
+    )[:rows]
 
 
 def _triton_ragged_contracting_dim_dot_kernel(
@@ -481,4 +497,4 @@ def ragged_dot(
     return out
 
 
-__all__ = ["Implementation", "ragged_dot"]
+__all__ = ["Implementation", "ragged_dot", "triton_decode_ragged_dot"]

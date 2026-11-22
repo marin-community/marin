@@ -448,6 +448,7 @@ mesh. Both engines enabled prefix caching.
 | [Native, adaptive prefix retention](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v5-adaptive-prefix) | 260 | 58,491 | 278.53 | 9.09 | 12.42 |
 | [Native, separate expert projections](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v7-separate-moe) | 335 | 87,435 | 416.35 | 1.61 | 6.68 |
 | [Native, shard-local sampling and 32 KV contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v8-shard-sampling) | 378 | 100,674 | 479.40 | 0.94 | 2.02 |
+| [Native, shared page reservations and 1 ms batching](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v9-shared-pages) | 385 | 101,743 | 484.49 | 0.76 | 1.45 |
 
 The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
 requests at the drain deadline. On 47 common turns, both engines emitted
@@ -503,6 +504,18 @@ native reached 80.8% of vLLM's aggregate throughput. All 378 paired turns
 matched output lengths. Active decode reached 34.52 tok/s on those turns,
 compared with 53.81 tok/s for vLLM. Both runs reported zero profiling errors.
 
+The shared-page follow-up charges each physical prefix page once and
+reduces the native HTTP admission wait from 100 ms to 1 ms. All 385 paired
+turns matched output length. Paired active decode was 35.41 tok/s for
+native and 53.95 tok/s for vLLM. Paired p90 TTFT was 1.453 s for native and
+1.467 s for vLLM. The native run reported zero profiling errors.
+
+On one H100, smaller grouped matmul tiles reduced the three expert
+projections from 0.213 to 0.175 ms with 128 padded rows and 12 active
+routes. The 32-row case improved from 0.171 to 0.136 ms. Outputs matched
+bitwise on all six tested route distributions, including a skewed batch
+with 62 routes assigned to one expert. [H100 tile benchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-h100-small-expert-tiles-20261122-v1)
+
 ## AgentX at concurrency 128 on TPU
 
 The first native v5p-8 attempt with 16 full KV contexts reached decode
@@ -542,6 +555,13 @@ Native active decode on the paired turns measured 9.95 tok/s against
 Both native runs reported zero profiling errors. Neither TPU run logged
 prefix reuse during profiling. The H100 32-context run logged 11.15 million
 reused prompt tokens across 252 requests.
+
+On one v6e chip, trimming the attention metadata to the packed decode
+width reduced sliding-window attention from 0.813 to 0.242 ms for eight
+padded rows and from 0.880 to 0.295 ms for 16 rows. Each result matched
+the padded-metadata output bitwise. The 32-row case measured 0.510 ms
+with compact FP32 attention and 0.381 ms with paged BF16 attention.
+[v6e window benchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-short-window-attention-v6e-20261122-v1) · [Compact decode trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v6-compact-decode)
 
 ### Serial raw prefill with the concurrency-128 server configurations
 

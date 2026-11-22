@@ -529,15 +529,7 @@ def _prefill_kernel(
     slot_ids = queue.queued_slot_ids
 
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
-    if max_seqs_in_prefill < binfo.slot_ids.axis_size("seq"):
-        seq_slice = slice(0, max_seqs_in_prefill)
-        binfo = dataclasses.replace(
-            binfo,
-            slot_ids=binfo.slot_ids["seq", seq_slice],
-            page_indices=binfo.page_indices["seq", seq_slice],
-            seq_lens=binfo.seq_lens["seq", seq_slice],
-            cu_q_lens=binfo.cu_q_lens["seq", : max_seqs_in_prefill + 1],
-        )
+    binfo = binfo.with_seq_capacity(max_seqs_in_prefill)
 
     seq_lens = decode_state.seq_lens
 
@@ -882,6 +874,9 @@ def _run_generation_loop(
         decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
         max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
+        if isinstance(model, SnowballLMHeadModel):
+            # A packed round cannot touch more sequences than it has token rows.
+            binfo = binfo.with_seq_capacity(max_sample_indices)
 
         # Decode logits and sample new tokens
         if routes is not None:

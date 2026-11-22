@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Bool, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
+from haliax.nn.ragged_dot import ragged_dot, triton_decode_ragged_dot
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
@@ -23,6 +23,8 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug._moe.selected_gpu import selected_expert_mlp, supports_selected_matvec
+
+_H100_DECODE_EXPERT_CAPACITY = 256
 
 
 def _moe_mlp_ep_ring_local(
@@ -42,7 +44,6 @@ def _moe_mlp_ep_ring_local(
     megablox_output_tile: int | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Gather routes and scatter expert outputs using packed or separate gate and up weights."""
-    dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile, megablox_output_tile=megablox_output_tile)
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
@@ -103,6 +104,17 @@ def _moe_mlp_ep_ring_local(
         order_key = local_expert * assignments + flat_pos
         max_order_key = local_experts * assignments
         selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+
+    if (
+        up_weight is not None
+        and physical_capacity <= _H100_DECODE_EXPERT_CAPACITY
+        and x_local.dtype == jnp.bfloat16
+        and jax.default_backend() == "gpu"
+        and "H100" in jax.devices()[0].device_kind
+    ):
+        dot = triton_decode_ragged_dot
+    else:
+        dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile, megablox_output_tile=megablox_output_tile)
 
     def compute(buffer_rows: int) -> jax.Array:
         valid = jnp.arange(buffer_rows, dtype=jnp.int32) < accepted_total
