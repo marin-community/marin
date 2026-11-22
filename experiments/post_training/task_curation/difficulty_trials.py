@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import tarfile
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
@@ -122,6 +123,27 @@ def task_spec_actor_image(task: PreparedTask) -> str | None:
         return None
     spec = json.loads(spec_path.read_text())
     return ((spec.get("environment_requirements") or {}).get("docker_image")) or None
+
+
+@cache
+def pinned_registry_reference(reference: str, authfile: str | None = None) -> str:
+    """Resolve a registry tag to its immutable digest reference.
+
+    The LOCAL machine spec refuses registry images that are not pinned by
+    sha256 digest. Composed toolchain images carry content-addressed tags but
+    no digest, so the wave resolves the tag once and pins the manifest digest
+    it verified. An already-pinned reference returns unchanged.
+    """
+    if "@sha256:" in reference:
+        return reference
+    command = ["skopeo", "inspect", "--format", "{{.Digest}}"]
+    if authfile is not None:
+        command.extend(("--src-authfile", authfile))
+    command.append(reference)
+    digest = subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
+    if not digest.startswith("sha256:"):
+        raise ValueError(f"Registry digest lookup returned no digest for {reference}: {digest!r}")
+    return f"{reference}@{digest}"
 
 
 def actor_phase_gap_reason(task: PreparedTask, result) -> str | None:
@@ -555,6 +577,10 @@ def run_task(
     attempts = []
     machine_image = task_spec_grader_machine_image(task)
     if machine_image is not None:
+        # The LOCAL machine spec refuses unpinned registry images; resolve the
+        # composed toolchain tag to the manifest digest it currently serves.
+        if task.backend == "local":
+            machine_image = pinned_registry_reference(machine_image, config.environment_options.get("registry_authfile"))
         LOGGER.info("Grader machine for %s runs from the composed toolchain image %s", task.task_id, machine_image)
     pending_reason = None
     math_deadlines = prior_math_deadlines

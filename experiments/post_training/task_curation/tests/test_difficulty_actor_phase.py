@@ -18,7 +18,11 @@ from experiments.post_training.task_curation.difficulty.planner import AttemptBa
 from experiments.post_training.task_curation.difficulty.run_action import REGISTRY_AUTH_SECRET, attempt_command
 from experiments.post_training.task_curation.difficulty.state import GapReason, Outcome
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
-from experiments.post_training.task_curation.difficulty_trials import DEFECTIVE_ACTOR_IMAGES, actor_phase_gap_reason
+from experiments.post_training.task_curation.difficulty_trials import (
+    DEFECTIVE_ACTOR_IMAGES,
+    actor_phase_gap_reason,
+    pinned_registry_reference,
+)
 
 FULL_INDEX_PIN = (
     "ghcr.io/marin-community/rl-data-openresearcher@sha256:"
@@ -123,3 +127,25 @@ def test_attempt_batch_carries_its_registry_credential():
     assert with_auth[-2:] == ["--registry-auth-secret", REGISTRY_AUTH_SECRET]
     without_auth = attempt_command(action, "manifest.json", "ledger", "output", "/tmp/local", registry_auth=False)
     assert "--registry-auth-secret" not in without_auth
+
+
+def test_registry_reference_pins_its_digest(monkeypatch):
+    pinned_registry_reference.cache_clear()
+    pinned = "ghcr.io/marin-community/rollout-images:task-curation-env-0427f1c8ec6612e4@sha256:" + "e" * 64
+    assert pinned_registry_reference(pinned) == pinned
+
+    calls = []
+
+    def fake_run(command, check, capture_output, text):
+        calls.append(command)
+        return SimpleNamespace(stdout="sha256:" + "e" * 64 + "\n", returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    reference = "ghcr.io/marin-community/rollout-images:task-curation-env-0427f1c8ec6612e4"
+    resolved = pinned_registry_reference(reference, authfile="/run/auth.json")
+    assert resolved == reference + "@sha256:" + "e" * 64
+    assert calls[0][0:2] == ["skopeo", "inspect"] and calls[0][-1] == reference
+    assert calls[0][calls[0].index("--src-authfile") + 1] == "/run/auth.json"
+    # One registry lookup per (reference, authfile) pair.
+    pinned_registry_reference(reference, authfile="/run/auth.json")
+    assert len(calls) == 1
