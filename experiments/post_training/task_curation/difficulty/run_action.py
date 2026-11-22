@@ -74,22 +74,25 @@ def main() -> None:
     configure_coreweave_s3()
     action = load_action(args.manifest)
     key = action_id(action)
-    with tempfile.TemporaryDirectory(prefix="difficulty-action-") as directory:
-        local = Path(directory)
-        if isinstance(action, AttemptBatch):
-            output = str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
-            command = attempt_command(
-                action,
-                args.manifest,
-                args.ledger,
-                output,
-                local / "runtime",
-                registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
-            )
-            subprocess.run(command, check=True)
-            result = {"status": "completed", "run_root": output}
-        else:
-            result = repair_action(action, local, args.ledger)
+    if isinstance(action, AttemptBatch):
+        output = str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
+        # The batch's local root must live on the node's NVMe /cache mount: the
+        # container root and /tmp are memory-backed on CoreWeave bare metal, so
+        # pulled images and sandbox disks there are unreclaimable cgroup memory.
+        local_root = Path("/cache/atlas-difficulty/actions") / key / "runtime"
+        command = attempt_command(
+            action,
+            args.manifest,
+            args.ledger,
+            output,
+            local_root,
+            registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
+        )
+        subprocess.run(command, check=True)
+        result = {"status": "completed", "run_root": output, "local_root": str(local_root)}
+    else:
+        with tempfile.TemporaryDirectory(prefix="difficulty-action-") as directory:
+            result = repair_action(action, Path(directory), args.ledger)
     target = StoragePath(args.ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{key}.json"
     target.parent.mkdirs()
     if target.exists():

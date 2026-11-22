@@ -58,6 +58,15 @@ from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJud
 TOGETHER_BASE_URL = "https://api.together.xyz/v1"
 TOGETHER_MODEL = "zai-org/GLM-5.3"
 
+LOCAL_IMAGE_CACHE = "/cache/atlas-difficulty/images"
+"""Node-local NVMe scratch for pulled actor images.
+
+The container's root filesystem and /tmp are memory-backed on CoreWeave bare
+metal: a 55GB image pull charged to them is unreclaimable cgroup memory and
+kills the pod. The /cache mount is a hostPath on the node NVMe, so the pull
+lands on disk and persists across pods on that node.
+"""
+
 
 def hosted_liveness_response(base_url: str, api_key: str, model: str) -> httpx.Response:
     """Return the provider's response to one bounded liveness request."""
@@ -415,6 +424,9 @@ def main() -> None:
         raise ValueError("Snowball action does not bind its established vLLM GPU release")
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
+    # Pulled actor images go to the node's NVMe scratch, never the container's
+    # memory-backed root: a cached image also survives later pods on the node.
+    options.setdefault("image_cache", LOCAL_IMAGE_CACHE)
     if args.registry_auth_secret is not None:
         authfile = args.local_root / "registry-auth.json"
         authfile.write_text(require_secret(args.registry_auth_secret))
