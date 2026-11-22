@@ -82,7 +82,8 @@ trials:
   batch: X0242
   date: '2026-11-22'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0242
-  wandb: []
+  wandb:
+  - belay-X0242d1280-seed0
   settings:
     ngram_cache_mixture: 'true'
   commit: c7eb9d114b
