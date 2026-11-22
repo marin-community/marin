@@ -241,7 +241,7 @@ async def run_cohort(base_url: str, metrics_url: str, model: str, requests: list
     gauge_series = {}
     stopped = asyncio.Event()
     ready = asyncio.Event()
-    scraper = PrometheusScraper(metrics_url)
+    scraper = PrometheusScraper(metrics_url, timeout=cohort["metrics_timeout_seconds"])
     started = time.perf_counter()
     logger.info(
         "Starting finite cohort: cap=%s prompts=%s attempts=%s concurrency=%s unix_time=%s",

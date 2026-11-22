@@ -71,6 +71,7 @@
     "concurrency": 1024,
     "http_idle_timeout": 21600,
     "wall_budget_seconds": 28800,
-    "max_tokens": 16384
+    "max_tokens": 16384,
+    "metrics_timeout_seconds": 30
   }
 }

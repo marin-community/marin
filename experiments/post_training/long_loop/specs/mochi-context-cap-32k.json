@@ -46,7 +46,7 @@
     "pipeline_parallel_size": 1,
     "gpus_per_task": 4
   },
-  "output_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/32k-20261122a",
+  "output_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/32k-20261122b",
   "seeds": [
     17
   ],
@@ -71,6 +71,7 @@
     "concurrency": 1024,
     "http_idle_timeout": 21600,
     "wall_budget_seconds": 28800,
-    "max_tokens": 32768
+    "max_tokens": 32768,
+    "metrics_timeout_seconds": 30
   }
 }
