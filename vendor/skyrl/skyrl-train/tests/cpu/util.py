@@ -155,6 +155,7 @@ def stub_megatron_modules() -> None:
         },
         "megatron.core.dist_checkpointing.dict_utils": {"nested_values": lambda value: value.values()},
         "megatron.core.dist_checkpointing.mapping": {
+            "ShardedBase": type("ShardedBase", (), {}),
             "ShardedStateDict": dict,
             "ShardedTensor": type("ShardedTensor", (), {}),
         },
@@ -171,6 +172,7 @@ def stub_megatron_modules() -> None:
             "FullyParallelLoadStrategyWrapper": type("FullyParallelLoadStrategyWrapper", (), {}),
             "FullyParallelSaveStrategyWrapper": type("FullyParallelSaveStrategyWrapper", (), {}),
         },
+        "megatron.core.dist_checkpointing.strategies.state_dict_saver": {"save_state_dict_async_plan": None},
         "megatron.core.dist_checkpointing.strategies.torch": {
             "TorchDistLoadShardedStrategy": type("TorchDistLoadShardedStrategy", (), {}),
             "TorchDistSaveShardedStrategy": type("TorchDistSaveShardedStrategy", (), {}),

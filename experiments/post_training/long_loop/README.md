@@ -1098,6 +1098,33 @@ Colocated configurations retain sequential saving because checkpoint residency
 management can sleep their rollout engines. Storage failures retain the existing
 checkpoint failure metric and the last complete checkpoint.
 
+Direct S3 saving retains the MCore save strategy and its FullyParallel wrapper
+on each policy actor. MCore 0.18 metadata/local/central-plan caching and save
+distribution caching stay in memory across destinations. Each save still creates
+a fresh streaming writer and resolves the current tensor payloads. The coordinator
+carries the BF16-to-FP32 master alias map with the plans and reapplies it before
+finalizing a new checkpoint; cached logical metadata never receives an earlier
+checkpoint's storage records.
+
+Before distribution, each rank fingerprints tensor keys, shapes, dtypes, shard
+coordinates, replica metadata and process-group membership. A change or failure
+on any rank invalidates distribution, plans and aliases for all ranks. DCP's
+collective error handling also covers fingerprint failures. Normal access-integrity
+validation remains enabled. Four consecutive stable saves exercise reuse; key,
+shape, dtype and one-rank-only changes exercise rebuilding. Both model-only and
+optimizer restores must remain bit-identical at every saved destination.
+
+`megatron_checkpoint_state` records materialization/setup and state construction.
+`megatron_checkpoint_save` records the destination, rank, physical save index,
+structure digest, enabled/invalidated/validated/reused cache state and separate
+preprocess, fingerprint, distribution, key-translation, planning and writing
+times. MCore first builds and then validates plans before reusing them. Compare
+cold saves with later reused saves at the same geometry and report the maximum
+across all policy ranks, rather than summing parallel durations. State construction
+and access-integrity validation still run: planning time alone is not the full
+checkpoint wall time. Production `.122` timing requires a separately authorized
+training launch.
+
 
 ## Mochi response-cap cohort
 

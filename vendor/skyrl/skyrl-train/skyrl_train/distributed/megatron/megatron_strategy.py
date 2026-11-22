@@ -4,6 +4,7 @@ import random
 import tempfile
 from contextlib import nullcontext
 from datetime import timedelta
+from time import perf_counter
 from typing import List, Union, Optional
 from loguru import logger
 
@@ -29,6 +30,7 @@ from skyrl_train.distributed.megatron.megatron_utils import (
     restore_offloaded_optimizer_state,
 )
 from skyrl_train.distributed.megatron.direct_checkpoint import (
+    CachedFullyParallelSaveStrategy,
     DirectS3TorchDistLoadShardedStrategy,
     DirectS3TorchDistSaveShardedStrategy,
 )
@@ -60,6 +62,7 @@ from skyrl_train.distributed.step_policy import (
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 
 from skyrl_train import hf_model_io
+from skyrl_train.telemetry import record_event
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 
 
@@ -174,6 +177,7 @@ class MegatronStrategy(DistributedStrategy):
         self.optimizer_config = optimizer_config
         self.seed = seed
         self.hf_config = None  # Set by the megatron worker once configs are initialized.
+        self._direct_save_strategy: CachedFullyParallelSaveStrategy | None = None
         if optimizer_config is not None:
             _optimizer_checkpoint_metadata(megatron_config.optimizer_checkpoint_sharding_type)
 
@@ -324,6 +328,7 @@ class MegatronStrategy(DistributedStrategy):
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
+        prepare_started = perf_counter()
         # Extract base model.
         model: List[nn.Module] = model.actor_module
         materialize_megatron_params(model)
@@ -339,6 +344,8 @@ class MegatronStrategy(DistributedStrategy):
         # All ranks wait for the checkpoint directory to be created before saving.
         dist.barrier()
 
+        prepare_seconds = perf_counter() - prepare_started
+        state_started = perf_counter()
         # Collect the sharded state dicts for model and optimizer, and full state dict for the scheduler.
         sharded_state_dict = {}
         model_sharded_state_dict = model.sharded_state_dict()
@@ -363,6 +370,13 @@ class MegatronStrategy(DistributedStrategy):
 
         # Save RNG state.
         sharded_state_dict["rng"] = self.get_rng_state()
+        state_fields = {
+            "checkpoint_dir": ckpt_dir, "rank": dist.get_rank(),
+            "prepare_seconds": prepare_seconds,
+            "state_build_seconds": perf_counter() - state_started,
+        }
+        record_event("megatron_checkpoint_state", state_fields, attributes={"role": "trainer"})
+        logger.info("DCP checkpoint state: {}", state_fields)
 
         # Save the checkpoint across ranks in parallel. Each S3 rank shard is one
         # multipart object; the local work directory contains only small control files.
@@ -378,15 +392,23 @@ class MegatronStrategy(DistributedStrategy):
                         ckpt_dir,
                     )
             dist.barrier()
-            save_strategy = DirectS3TorchDistSaveShardedStrategy(ckpt_dir)
+            if self._direct_save_strategy is None:
+                self._direct_save_strategy = CachedFullyParallelSaveStrategy(
+                    DirectS3TorchDistSaveShardedStrategy(ckpt_dir),
+                    mpu.get_data_parallel_group(with_context_parallel=True),
+                )
+            self._direct_save_strategy.direct_strategy.checkpoint_dir = ckpt_dir
+            save_strategy = self._direct_save_strategy
         else:
-            save_strategy = get_default_save_sharded_strategy("torch_dist")
-        save_strategy = FullyParallelSaveStrategyWrapper(
-            save_strategy, mpu.get_data_parallel_group(with_context_parallel=True)
-        )
+            save_strategy = FullyParallelSaveStrategyWrapper(
+                get_default_save_sharded_strategy("torch_dist"),
+                mpu.get_data_parallel_group(with_context_parallel=True),
+            )
 
         with io.local_work_dir(ckpt_dir) as work_dir:
             # TODO(tgriggs): Support configurable async saves.
+            if isinstance(save_strategy, CachedFullyParallelSaveStrategy):
+                save_strategy.direct_strategy.serialization_started = perf_counter()
             async_save_request = dist_checkpointing.save(
                 sharded_state_dict=sharded_state_dict,
                 checkpoint_dir=work_dir,
