@@ -18,10 +18,11 @@ def test_post_training_evaluation_identities_stay_pinned(monkeypatch):
     )
 
     # The judged evaluations bind generation plans (the merged entrypoint contract
-    # derives the entrypoint from the plan), which shifts the pinned fingerprints
-    # from the a0268301/3b56f26e/34198f43 set the role-plan form produced.
+    # derives the entrypoint from the plan) and the epoch mechanism's store controls,
+    # which shifts the pinned fingerprints from the a0268301/3b56f26e/34198f43 set
+    # the role-plan form produced.
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
-        ("evals/iceball-micro/gsm8k-smoke-aime24-smoke", "2026.10.26", "e177b3b7"),
+        ("evals/iceball-micro/gsm8k-smoke-aime24-smoke", "2026.10.26", "ef8f5cc8"),
         ("evals/skyrl-port-smoke/gsm8k-smoke", "2026.10.26", "db22a44b"),
         ("evals/alice-curriculum-rl-naive-smoke/gsm8k-smoke", "2026.10.26", "7dfc8ee4"),
     ]
