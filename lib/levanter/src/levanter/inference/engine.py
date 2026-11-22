@@ -1950,6 +1950,7 @@ class InferenceEngine:
         def _create_dummy_work():
             max_slots = self.config.max_seqs_in_prefill
             max_len = self.config.max_prefill_size
+            assert max_len is not None
             prefill_queue = TokenQueue(
                 queued_tokens=hax.zeros({"position": max_len}, dtype=jnp.int32),
                 queued_slot_ids=hax.zeros({"position": max_len}, dtype=jnp.int32),
