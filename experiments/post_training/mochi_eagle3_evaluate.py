@@ -6,9 +6,10 @@
 import asyncio
 import json
 import logging
+import math
 import tempfile
 from pathlib import Path
-from statistics import median
+from statistics import mean, median, variance
 
 import httpx
 from iris.cluster.client.job_info import get_job_info
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 PROBE_POSITIONS = (0, 1, 3, 7, 15, 31, 63)
 DECODE_POSITIONS = (*PROBE_POSITIONS, 127, 255)
 AUTOREGRESSIVE_ARTIFACT = "autoregressive.json"
+SAMPLING_STANDARD_ERRORS = 3
 
 
 async def probe_inventory(base_url: str, requests: list[LoadRequest]) -> list[dict]:
@@ -126,11 +128,11 @@ def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> 
     }
 
 
-async def decode_probes(base_url: str, probes: list[dict]) -> dict:
+async def decode_probes(base_url: str, probes: list[dict], seeds: list[int]) -> dict:
     """Retain autoregressive target logprobs and routes across speculative rejections."""
     async with httpx.AsyncClient(timeout=1800) as client:
 
-        async def decode(probe: dict, temperature: float) -> dict:
+        async def decode(probe: dict, temperature: float, seed: int) -> dict:
             prompt = probe["prompt"][:-1]
             response = await client.post(
                 f"{base_url}/completions",
@@ -140,7 +142,7 @@ async def decode_probes(base_url: str, probes: list[dict]) -> dict:
                     "max_tokens": 256,
                     "temperature": temperature,
                     "top_p": 1.0,
-                    "seed": 17,
+                    "seed": seed,
                     "stop_token_ids": [128001, 128009],
                     "return_token_ids": True,
                     "return_tokens_as_token_ids": True,
@@ -158,7 +160,7 @@ async def decode_probes(base_url: str, probes: list[dict]) -> dict:
             for position in DECODE_POSITIONS:
                 if position >= len(tokens):
                     continue
-                identity = f"{probe['identity']}/temp{temperature}/decode{position}"
+                identity = f"{probe['identity']}/seed{seed}/temp{temperature}/decode{position}"
                 top = choice["logprobs"]["top_logprobs"][position]
                 top_token = min(top, key=lambda token: (-top[token], int(token.removeprefix("token_id:"))))
                 decoded[identity] = {
@@ -172,20 +174,84 @@ async def decode_probes(base_url: str, probes: list[dict]) -> dict:
                 }
             return {
                 "scores": decoded,
-                "trajectory": {"identity": probe["identity"], "temperature": temperature, "choice": choice},
+                "trajectory": {
+                    "identity": probe["identity"],
+                    "seed": seed,
+                    "temperature": temperature,
+                    "choice": choice,
+                },
             }
 
         results = await asyncio.gather(
             *(
-                decode(probe, temperature)
+                decode(probe, temperature, seed)
                 for probe in probes
                 if probe["identity"].endswith("@0")
                 for temperature in (0, 0.7)
+                for seed in seeds
             )
         )
     return {
         "scores": {key: row for result in results for key, row in result["scores"].items()},
         "trajectories": [result["trajectory"] for result in results],
+    }
+
+
+def sampling_by_prompt(trajectories: list[dict]) -> dict[str, list[dict]]:
+    """Keep the prompt as the sampling unit rather than treating correlated tokens as independent."""
+    grouped: dict[str, list[dict]] = {}
+    for row in trajectories:
+        if row["temperature"] == 0:
+            continue
+        choice = row["choice"]
+        logprobs = choice["logprobs"]
+        grouped.setdefault(row["identity"], []).append(
+            {
+                "seed": row["seed"],
+                "mean_logprob": mean(logprobs["token_logprobs"]),
+                "mean_top1_probability": mean(math.exp(max(top.values())) for top in logprobs["top_logprobs"]),
+                "tokens": len(choice["token_ids"]),
+                "finish_reason": choice["finish_reason"],
+            }
+        )
+    return grouped
+
+
+def sampling_calibration(grouped: dict[str, list[dict]], numerical_bounds: dict) -> dict:
+    """Predeclare three-standard-error bounds from paired target-only seed repeats."""
+    metrics = {"mean_logprob": "max_absolute_logprob_error", "mean_top1_probability": "max_top1_logprob_error"}
+    calibrated = {}
+    for metric, numerical_metric in metrics.items():
+        values = [[row[metric] for row in rows] for rows in grouped.values()]
+        standard_error = math.sqrt(sum(2 * variance(group) / len(group) for group in values)) / len(values)
+        numerical_bound = numerical_bounds[numerical_metric]
+        if metric == "mean_top1_probability":
+            numerical_bound = math.expm1(numerical_bound)
+        calibrated[metric] = {
+            "reference": mean(mean(group) for group in values),
+            "maximum_mean_shift": max(numerical_bound, SAMPLING_STANDARD_ERRORS * standard_error),
+            "standard_error": standard_error,
+        }
+    return {"by_prompt": grouped, "metrics": calibrated, "standard_errors": SAMPLING_STANDARD_ERRORS}
+
+
+def sampling_difference(grouped: dict[str, list[dict]], calibration: dict) -> dict:
+    if grouped.keys() != calibration["by_prompt"].keys():
+        raise ValueError("Sampling-check prompt inventories differ")
+    for prompt, rows in grouped.items():
+        if {row["seed"] for row in rows} != {row["seed"] for row in calibration["by_prompt"][prompt]}:
+            raise ValueError("Sampling-check seed inventories differ")
+    metrics = {
+        metric: {
+            "observed": mean(mean(row[metric] for row in rows) for rows in grouped.values()),
+            **bounds,
+        }
+        for metric, bounds in calibration["metrics"].items()
+    }
+    return {
+        "passed": all(abs(row["observed"] - row["reference"]) <= row["maximum_mean_shift"] for row in metrics.values()),
+        "metrics": metrics,
+        "by_prompt": grouped,
     }
 
 
@@ -262,7 +328,7 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
         reference = await prefix_scores(environment.server_url, probes, 1)
         repeat = await prefix_scores(environment.server_url, probes, 16)
         noise = score_difference(reference, repeat)
-        autoregressive = await decode_probes(environment.server_url, probes)
+        autoregressive = await decode_probes(environment.server_url, probes, spec["correctness_seeds"])
         write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
         teacher = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
         decode_noise = score_difference(autoregressive["scores"], teacher)
@@ -283,6 +349,9 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
                 "route_mismatch_fraction": decode_noise["route_mismatch_fraction"] + 1 / len(teacher),
             },
         }
+        calibration["sampling"] = sampling_calibration(
+            sampling_by_prompt(autoregressive["trajectories"]), calibration["decode_bounds"]
+        )
         write_json(spec["output"], "correctness-calibration.json", calibration)
         return
     calibration = json.loads((root / "correctness-calibration.json").read_text())
@@ -298,8 +367,12 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
     )
     if not passed:
         raise ValueError("Fixed-prefix correctness exceeded the predeclared baseline-noise bound")
-    autoregressive = await decode_probes(environment.server_url, calibration["probes"])
+    autoregressive = await decode_probes(environment.server_url, calibration["probes"], spec["correctness_seeds"])
     write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
+    sampling = sampling_difference(sampling_by_prompt(autoregressive["trajectories"]), calibration["sampling"])
+    write_json(spec["output"], f"{arm['name']}/sampling-correctness.json", sampling)
+    if not sampling["passed"]:
+        raise ValueError("Sampled logprob/top-one mass shifted beyond predeclared target-only seed variation")
     if arm["name"] != spec["arms"][-1]["name"]:
         return
     for candidate in spec["arms"][1:]:
@@ -327,6 +400,8 @@ def run(spec: dict) -> None:
         raise ValueError("Each arm requires a distinct serving coordinator name")
     if not spec["output"].startswith("s3://marin-us-east-08a/"):
         raise ValueError("Mochi evaluation artifacts must remain in regional 08a S3")
+    if len(set(spec["correctness_seeds"])) < 2 or len(set(spec["correctness_seeds"])) != len(spec["correctness_seeds"]):
+        raise ValueError("Sampling calibration requires independent target-only seed repeats")
     geometry = ServingGeometry(**spec["geometry"])
     with tempfile.TemporaryDirectory(prefix="mochi-eagle3-evaluate-") as scratch:
         for arm in spec["arms"]:
