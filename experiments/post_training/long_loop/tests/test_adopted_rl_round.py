@@ -155,6 +155,29 @@ def test_round_rejects_schema1_step_mismatch(round_inputs, local_round):
         adopted_round_rl(spec)
 
 
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_preserves_explicit_route_quotas(local_round, tmp_path):
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {"agentic": 11, "nonagentic": 21}
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
+    assert buffer["consumed_route_quotas"] == {"agentic": 11, "nonagentic": 21}
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_rejects_route_quotas_that_do_not_partition_the_batch(local_round):
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {"agentic": 22, "nonagentic": 42}
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    with pytest.raises(ValueError, match="sum to the training batch groups"):
+        adopted_round_rl(spec)
+
+
 @pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
 def test_round_preserves_disabled_route_quotas(local_round, tmp_path):
     recipe = copy.deepcopy(local_round.rl.recipe)

@@ -251,6 +251,18 @@ PROFILES = MappingProxyType(
 )
 
 
+def route_quotas(recipe: SkyRLRecipe, groups: int, smoke: bool) -> dict[str, int]:
+    """Smoke batches shrink, so their quotas derive from the smoke batch; otherwise the
+    round's declared split is preserved and must partition the batch, matching the
+    rollout buffer's runtime invariant (positive shares summing to batch_size)."""
+    declared = recipe.trainer.rollout_buffer.consumed_route_quotas
+    if smoke:
+        return {"agentic": groups // 2, "nonagentic": groups // 2}
+    if declared and (any(value < 1 for value in declared.values()) or sum(declared.values()) != groups):
+        raise ValueError("consumed_route_quotas must be positive and sum to the training batch groups")
+    return declared
+
+
 def build_run(
     *,
     profile: MochiProfile,
@@ -357,11 +369,7 @@ def build_run(
                 ckpt_interval=checkpoint_interval,
                 callbacks=tuple(callbacks),
                 rollout_buffer=sections.RolloutBuffer(
-                    consumed_route_quotas=(
-                        {"agentic": groups // 2, "nonagentic": groups // 2}
-                        if recipe.trainer.rollout_buffer.consumed_route_quotas
-                        else {}
-                    ),
+                    consumed_route_quotas=route_quotas(recipe, groups, smoke),
                     max_in_flight=SMOKE_BATCH_GROUPS if smoke else recipe.trainer.rollout_buffer.max_in_flight,
                 ),
                 micro_forward_batch_size_per_gpu=profile.role_plan.micro_train_batch_size_per_gpu,
