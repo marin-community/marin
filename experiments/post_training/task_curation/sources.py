@@ -75,6 +75,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
+from experiments.post_training.task_curation.datasets.terminalworld import tasks as terminalworld
 from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
@@ -105,6 +106,7 @@ CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
+    *terminalworld.sources(),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),

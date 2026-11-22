@@ -1,0 +1,10 @@
+{
+  "source_id": "TerminalWorld:TerminalWorld",
+  "dataset_id": "terminalworld/TerminalWorld",
+  "dataset_revision": "364549435c0fc130eaf0ccfc047a8a698c72643c",
+  "upstream_config": "full",
+  "upstream_split": "test",
+  "intended_use": "train",
+  "authority": "user decision relayed by coordinator, 2026-11-22",
+  "reason": "TerminalWorld is not a known benchmark. The Hugging Face split=test config naming does not make it EVAL. Ingest as TRAIN and use standard decontamination to handle any overlap."
+}

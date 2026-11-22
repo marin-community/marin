@@ -1173,6 +1173,20 @@
   },
   "pending": [
     {
+      "id": "TerminalWorld:TerminalWorld",
+      "name": "terminalworld-full-train",
+      "display_name": "TerminalWorld full",
+      "status": "Pending",
+      "origin": "TerminalWorld",
+      "upstream_dataset": "TerminalWorld",
+      "upstream_url": "https://huggingface.co/datasets/terminalworld/TerminalWorld/tree/364549435c0fc130eaf0ccfc047a8a698c72643c",
+      "notes": "TRAIN under user decision relayed by coordinator, 2026-11-22: TerminalWorld is not a known benchmark. The Hugging Face split=test config naming does not make it EVAL. Ingest as TRAIN and use standard decontamination to handle any overlap. The upstream config is full and its named split remains test. Verified (200) and sample (20) are exact subsets and are not appended as separate training populations. Native prompts, canary comments, task.toml budgets, environment, tests and original solutions remain unchanged. Use ruling: experiments/post_training/task_curation/datasets/terminalworld/intended-use.json.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
       "id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
       "name": "nemotron-cascade-2-if-rl",
       "display_name": "Nemotron Cascade-2 RL data",

@@ -178,6 +178,7 @@ class SourceOrigin(StrEnum):
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
+    TERMINALWORLD = "TerminalWorld"
     AGENTICA_ORG = "agentica-org"
     CYBENCH = "CyBench"
     DI_ZHANG_FDU = "di-zhang-fdu"

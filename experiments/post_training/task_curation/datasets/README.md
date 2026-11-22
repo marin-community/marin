@@ -62,6 +62,7 @@ ones stay out of `final/`.
 | Module | Sources |
 | --- | --- |
 | [browsecomp/](browsecomp/README.md) | Evaluation-only BrowseComp-Plus task-directory preparation with the pinned offline BM25 retrieval protocol; admission remains pending exact-pin receipts. |
+| [terminalworld/tasks.py](terminalworld/tasks.py) | Full native Harbor population as TRAIN under the user decision of 2026-11-22. Upstream `test` naming is retained; standard TRAIN decontamination applies. Verified and sample are subsets. |
 | [ifbench/tasks.py](ifbench/tasks.py) | Explicit IFBench training split with the original pinned IFEvalG scorer and hidden constraint bundles. No released oracle; final-pin lexical, SAMPLE and admission receipts remain pending. |
 | [cascade/tasks.py](cascade/tasks.py) | Cascade-2 TRAIN subsets with original NeMo MCQA, structured-output and configured symbolic math grading. Unsupported IF, workplace and SWE runtime contracts retain typed rejections. Pending final-pin qualification. |
 | [skyrl/math.py](skyrl/math.py) | MarinSkyRL math and numeric-answer sets, graded in process. |
