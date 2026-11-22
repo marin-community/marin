@@ -4,7 +4,7 @@ name: Document n-gram count cache mixture
 category: Output head and loss
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6972547895
@@ -47,6 +47,13 @@ trials:
   commit: 5fffa9df7b
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8581
+  delta:
+  - -0.01
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: +1%
 - id: t003
   variant: document n-gram count cache mixed into output
   rung: competitive-d768
