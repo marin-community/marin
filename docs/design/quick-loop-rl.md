@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 5:42 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 5:49 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,7 +15,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The fresh verified-publication control `2026.11.20.6` completed the initial panel and its first two updates on H100. | Verify all 25 updates, their final policy publication and the final fixed-panel evaluation. |
+| Megatron learner with vLLM | The fresh verified-publication control `2026.11.20.6` completed the initial panel and its first five updates on H100. | Verify all 25 updates, their final policy publication and the final fixed-panel evaluation. |
 | Levanter learner with vLLM | The artifact main passed the frozen 40-H100 smoke through training, exact restart, byte-verified publication, and terminal checkpoint. | Run the 25-update Levanter arm with the same workload and evaluation panel as the Megatron control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
@@ -721,10 +721,12 @@ learner strategy, batch builder and Levanter policy configuration.
 [Megatron matched control][iris-matched-megatron]
 
 The control started at step 0 on the same five physical H100 hosts. Its
-initial panel scored 0.2602 across 100 tasks. The original Ray driver logs
-verified all eight receivers with zero mismatches for versions 0 and 1,
-each covering 157,226,237,952 bytes. Its first two training rollouts each
-admitted 128 groups and 512 trajectories with zero staleness. Version-1
+initial panel scored 0.2602. The row-level audit verified all 100 tasks,
+including exact prompt tokens for subsequent panel comparison. The
+original Ray driver logs verified all eight receivers with zero mismatches
+for versions 0 and 1, each covering 157,226,237,952 bytes. Its first two
+training rollouts each admitted 128 groups and 512 trajectories with zero
+staleness. Version-1
 publication took 2.998 seconds. The accepted Levanter smoke took 164.066
 seconds to publish version 1, including 128.147 seconds to install.
 The Megatron install took 0.439 seconds. The Levanter expert-phase timer
@@ -1379,20 +1381,23 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   raw policy logprobs matched the sampled tokens exactly.
   The first request after a live policy install reused zero prefix tokens.
   Its binary replay frame matched a cold subprocess's frame byte for byte.
-  A repeat under the same policy reused 32 tokens. The 67B fixture now
-  pins the hashes of the tokenizer assets staged by the H100 run. It still
-  needs two consecutive typed snapshots from a real learner update and
-  a local copy of those tokenizer assets.
+  A repeat under the same policy reused 32 tokens. The 67B fixture pins
+  the three tokenizer assets and raw model configuration used by the
+  accepted H100 smoke. All four files were restored from the regional
+  initializer mirror and their bytes match the recorded hashes.
 
   A CPU bridge restored the model subtree of two checkpoints written by
   the frozen learner. It reproduced the original FP32 master fingerprints,
   applied the learner's compute cast while retaining FP32 router and QB
   fields, and published typed manifests without changing the source files.
-  Serving verified both snapshots on a different mesh. Once the H100
-  smoke accepts both checkpoints, the same bridge can prepare the 67B
-  tool fixture on the original four-learner layout. That conversion still
-  needs the resolved model configuration and separate verification on
-  the one-host serving mesh.
+  Serving verified both snapshots on a different mesh. The regional
+  preflight rechecked both accepted H100 checkpoint manifests, the
+  step-2 completion marker, and the bounded changed-weight sample. The
+  resolved configuration builds an abstract model of 67,078,882,816
+  parameters. Convert the two checkpoints on the original Data4/EP8
+  learner layout, then independently verify the typed snapshots on the
+  one-host serving mesh. The full conversion and live swap remain
+  accelerator gates.
 
   The typed install keeps the old model and KV pool live until it verifies
   the replacement weights and allocates the new pool. A CPU probe found
