@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 3:23 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 3:39 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -868,9 +868,17 @@ local pipe, stages it on the sender GPU and spools the same bytes for
 receiver verification. The maintained binary pipe reached a median of
 1.60 GiB/s versus 0.71 GiB/s for the frozen pickle pipe in a local ARM CPU
 test with the production 6.25 and 12.5 MiB expert matrix sizes. This
-measures framing and decoding. Time the JAX reshard, device-to-host copy,
-pipe, GPU staging, NCCL and exact replay separately on H100 before
-estimating the end-to-end gain.
+measures framing and decoding.
+
+The instrumented held vLLM arm measured its first H100 publication on all
+four learner hosts. Per-host median install and replay wall time was 124.5
+seconds. Source SHA-256 took 39.0 seconds and recorded broadcast synchronization
+8.3 seconds. The time in per-payload requests outside the learner's `next`
+method was 25.6 seconds. The learner's method accounted for 29.0 seconds,
+including export staging, device-to-host copies and payload serialization.
+These are nested host timers. Measure the same phases after training updates
+and use the result to choose a batching, hashing or staging change. Keep
+versioned byte verification on the receiver.
 
 Across the 23 warm updates from step 2 through 24, median step time was
 450.4 seconds for Levanter and 150.1 seconds for Megatron. They processed
@@ -1837,8 +1845,18 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Verified failed-task archive][native-head-first-archive] ·
   [Revised diagnostic][iris-native-head-retry]
 
-  Both plans use a 24,576-token serving limit and a 16,896-token request limit. Native uses the cache geometry from the
-  67B live-swap run. Use the same learner, selection and fixed panel to
+  The native baseline completed 23 of 100 tasks in 23 minutes. The actor's
+  evaluation path holds the serving-process lock for each decode. Training
+  requests already coalesce, so report the evaluation wall time separately
+  from training admission. On the small BF16 CPU fixture, one native batch
+  with four independent seeds, stops, temperature 0.6 and top-p 0.95
+  preserved all tokens, score bits and finish reasons in either request
+  order. Extend the typed evaluation RPC to carry bounded batches without
+  replay payloads. Close admission and drain both queues before installing
+  weights. Measure this change on the same fixed panel.
+
+  Both plans use a 24,576-token serving limit and a 16,896-token request
+  limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
   compare the completed attempts.
   [First held vLLM coordinator][iris-held-vllm-pilot] ·
   [Preempted replacement child][iris-held-vllm-replacement] ·
