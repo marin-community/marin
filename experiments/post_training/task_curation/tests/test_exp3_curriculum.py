@@ -48,14 +48,6 @@ from experiments.post_training.task_curation.exp3_curriculum import (
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-NEMOTRON_BLENDS_ROWS = 12426
-OPEN_SCIENCE_ROWS = 20790
-REASONING_GYM_ROWS = 20800
-SNOWBALL_SMARTIE_ROWS = 11634
-TASKTROVE_ROWS = 24033
-EURUS_ROWS = 10317
-AGENTIC_TRAIN_ROWS = 5608
-
 
 def _fixture_pool_rows(counts: dict[str, int]) -> dict[str, tuple[PoolRow, ...]]:
     """Synthetic row identities per route pool, keyed the way the draw consumes them."""

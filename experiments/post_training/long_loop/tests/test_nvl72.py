@@ -9,6 +9,7 @@ import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import materialized_config
+from marin.rl.curriculum import CurriculumEntry, PoolRow, RlCurriculum, SamplingMode, SourcePin, draw_validation_split
 
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
@@ -60,15 +61,6 @@ def test_profile_build_preserves_native_resume_and_nvlink_roles(run_spec, tmp_pa
 
 def _curriculum():
     """A small fixed curriculum so a non-smoke launch can bind its holdout."""
-    from marin.rl.curriculum import (
-        CurriculumEntry,
-        PoolRow,
-        RlCurriculum,
-        SamplingMode,
-        SourcePin,
-        draw_validation_split,
-    )
-
     labels = ("gsm8k", "svamp")
     rows = {label: tuple(PoolRow(id=f"{label}-{i}", sha256=f"{i:064x}") for i in range(500)) for label in labels}
     validation = draw_validation_split({"gsm8k": 0.7, "svamp": 0.3}, rows, size=50, seed=17)

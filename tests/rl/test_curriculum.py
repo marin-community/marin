@@ -261,7 +261,6 @@ def test_validation_draw_rejects_incomplete_rows():
 
 def test_ordered_curriculum_draws_from_consumed_prompts():
     """An ordered holdout allocates by each pool's consumed prompts, not its declared quotas alone."""
-    counts = {"gsm8k": 4096, "svamp": 1000}
     curriculum = _ordered()
     counts_drawn = Counter(row.label for row in curriculum.validation.rows)
     # consumption: gsm8k quota 4096 (pool 4096), svamp None -> 1000; 200 of the 5096 consumed prompts

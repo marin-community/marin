@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from marin.rl.curriculum import PoolRow, draw_validation_split
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import (
     AnswerType,
@@ -74,8 +75,6 @@ def test_hardmath_base_preserves_equation_references_across_difficulty_labels(di
 
 def _exp5_validation():
     """A synthetic full-mixture holdout: the object-level policy test needs no pools."""
-    from marin.rl.curriculum import PoolRow, draw_validation_split
-
     labels = dict(TARGET_SHARES)
     rows = {
         label: tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(60)) for label in labels
