@@ -1,70 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the Numina row report and final manifest together in one offline run.
+"""Build the Numina row-quality report and task manifest from saved decisions.
 
-Run from the repository root. To download the pinned inputs:
+Run from the repository root:
 
-    revision=51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94
-    hub=https://huggingface.co/datasets/project-numina/NuminaMath-LEAN
-    curl -fL "$hub/resolve/$revision/data/train-00000-of-00001.parquet" -o numina.parquet
-    prime=https://raw.githubusercontent.com/PrimeIntellect-ai/prime-envs
-    prime_commit=15e4e9d2f7d52d8d725a2668e483cf51a067e5ba
-    mkdir -p prime-lists
-    for name in unported misformalized; do
-        curl -fL "$prime/$prime_commit/environments/lean/numina/numina/data/$name.json.gz" -o "prime-lists/$name.json.gz"
-    done
-
-The three scripts each complete their own step in one invocation:
-
-    lean=experiments.post_training.task_curation.datasets.lean
-    uv run python -m "$lean.numina_autoinformalization_classify_answer_disclosure" numina.parquet \\
+    module=experiments.post_training.task_curation.datasets.lean.autoinformalization.build_task_selection
+    uv run python -m "$module" numina.parquet \\
         --prime-lists prime-lists \\
-        --output numina_autoinformalization_answer_disclosure_labels.jsonl
-    uv run python -m "$lean.numina_autoinformalization_golden_batch" numina.parquet \\
-        --prime-lists prime-lists \\
-        --labels numina_autoinformalization_answer_disclosure_labels.jsonl \\
-        --output numina_autoinformalization_golden_controls.jsonl
-    uv run python -m "$lean.numina_autoinformalization_quality" numina.parquet \\
-        --prime-lists prime-lists \\
-        --labels numina_autoinformalization_answer_disclosure_labels.jsonl \\
-        --golden numina_autoinformalization_golden_controls.jsonl \\
+        --labels answer_disclosure_labels.jsonl \\
+        --golden PRIMARY_RESULTS \\
+        --require-golden SECOND_RESULTS \\
         --output-dir quality-output
 
-The first two commands submit paid Gemini batches using an exported GEMINI_API_KEY, wait,
-and collect results in the same invocation. They make one request per row with no automatic
-retry. The golden judge defaults to 4,096 output tokens. --max-output-tokens chooses the cap
-for a new run. Batch state lives beside the output in a directory ending .batch.
-After an interruption, rerun the exact command to resume its job. If submission is uncertain,
-the error identifies the state.json file to reconcile against the job in Google AI Studio.
+Disclosure labels are JSONL records keyed by source row. Golden results can be
+judge-result JSONL or a reviewer CSV with numina_row, uuid, golden_control, cause,
+and note columns. Omit --require-golden when only one golden-result file applies.
 
-Use --golden REVIEW.csv to rebuild from a supplied reviewer CSV instead. It must have
-numina_row, uuid, golden_control, cause, and note columns. Rows are matched to the pinned
-source by row index and UUID. Only PASS verdicts are retained, regardless of cause annotations.
-The CSV hash is recorded as provenance; its unknown judge configuration is left blank.
-Add --require-golden SECOND_RESULT_FILE to require PASS in both result files. Both individual
-verdicts and notes remain in the report, with both file hashes recorded in the manifest.
-
-This script reads the parquet, disclosure labels, and golden verdicts. It applies the shared
-source exclusions, deduplication, split and eval-overlap rules, removes MCQs and word problems,
-and retains only "no" disclosure labels and PASS golden controls. It writes
-numina_autoinformalization_row_quality_report.csv and numina_autoinformalization_tasks.json. Excluded rows have
-included=False and a reason in cause. Missing golden results stop the build.
-
-Saved disclosure labels default to numina_autoinformalization_answer_disclosure_labels.jsonl beside this module.
-Disclosure labels, golden verdicts, and the quality CSV are generated local files.
-For the existing local run, golden results are saved under
-artifacts/numina-answer-disclosure/numina_autoinformalization_golden_controls.jsonl. Rebuild both quality
-artifacts from those saved results without another paid run:
-
-    uv run python -m "$lean.numina_autoinformalization_quality" numina.parquet --prime-lists prime-lists \\
-        --golden REVIEW.csv \\
-        --require-golden artifacts/numina-answer-disclosure/numina_autoinformalization_golden_controls.jsonl \\
-        --output-dir quality-output
-
-Review the output and copy numina_autoinformalization_tasks.json to
-experiments/post_training/task_curation/datasets/lean/numina_autoinformalization_tasks.json
-to activate the selection.
+The build verifies the pinned inputs, applies source exclusions, deduplication,
+split and evaluation-overlap rules, and retains rows with a "no" disclosure label
+and PASS golden controls. It writes numina_autoinformalization_row_quality_report.csv
+and tasks.json. Copy tasks.json beside this module to activate the selection.
 """
 
 import argparse
@@ -84,10 +40,10 @@ from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.lean import numina
-from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization as auto
+from experiments.post_training.task_curation.datasets.lean.autoinformalization import dataset as auto
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key, statement_key
 
-LABELS = Path(__file__).with_name("numina_autoinformalization_answer_disclosure_labels.jsonl")
+LABELS = Path(__file__).with_name("answer_disclosure_labels.jsonl")
 GOLDEN = Path("artifacts/numina-answer-disclosure/numina_autoinformalization_golden_controls.jsonl")
 SOURCE_SHA256 = auto.MANIFEST["input"]["sha256"]
 
@@ -129,15 +85,6 @@ def read_labels(path: Path) -> dict[str, str]:
             raise ValueError(f"Duplicate key or invalid disclosure label at {key}")
         labels[key] = label
     return labels
-
-
-def write_records(path: Path, records: list[dict]) -> None:
-    """Replace a JSONL output after writing it completely."""
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        for record in records:
-            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-    temporary.replace(path)
 
 
 def prepare_rows(parquet: Path, prime_dir: Path, labels: dict | None) -> Iterator[dict]:
@@ -323,7 +270,7 @@ def write_artifacts(rows: list[dict], metadata: dict, output_dir: Path) -> dict:
             writer.writeheader()
             writer.writerows(rows)
         manifest["report_sha256"] = file_sha256(StoragePath(str(report)))
-        target = Path(temporary) / "numina_autoinformalization_tasks.json"
+        target = Path(temporary) / "tasks.json"
         target.write_text(json.dumps(manifest, indent=1) + "\n")
         os.replace(report, output_dir / report.name)
         os.replace(target, output_dir / target.name)
@@ -372,14 +319,10 @@ def build_intersection(
         return write_artifacts(rows, metadata, output_dir)
 
 
-def add_source_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("parquet", type=Path)
-    parser.add_argument("--prime-lists", type=Path, required=True)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    add_source_arguments(parser)
+    parser.add_argument("parquet", type=Path)
+    parser.add_argument("--prime-lists", type=Path, required=True)
     parser.add_argument("--labels", type=Path, default=LABELS)
     parser.add_argument("--golden", type=Path, default=GOLDEN)
     parser.add_argument("--require-golden", type=Path, help="Require PASS in this second set of results too")

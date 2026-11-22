@@ -12,12 +12,20 @@ from taskcompendium.models import TextMessage, verifyit_spec
 from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation.datasets.lean import (
-    numina_autoinformalization as auto,
+from experiments.post_training.task_curation.datasets.lean import proofs
+from experiments.post_training.task_curation.datasets.lean.autoinformalization import dataset as auto
+from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
+    deduplicate_and_split as numina_autoinformalization_manifest,
 )
-from experiments.post_training.task_curation.datasets.lean import (
-    numina_autoinformalization_manifest,
-    proofs,
+from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import (
+    assigned_split,
+    human_statement,
+)
+from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import (
+    sources as informalization_sources,
+)
+from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import (
+    build_manifest,
 )
 from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
 from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
@@ -41,14 +49,6 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     is_human_statement_row,
 )
 from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
-from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization import (
-    assigned_split,
-    human_statement,
-)
-from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization import (
-    sources as informalization_sources,
-)
-from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_manifest import build_manifest
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
     NUMINA,

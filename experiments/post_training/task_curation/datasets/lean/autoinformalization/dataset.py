@@ -21,6 +21,10 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.spec import RUBRIC_LABELS, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import (
+    PROOF_TRAIN_UUIDS,
+    split_for,
+)
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key
 from experiments.post_training.task_curation.datasets.lean.numina import (
     NUMINA_FILE,
@@ -32,16 +36,12 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     prime_list_source,
     statement_row_contract,
 )
-from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_manifest import (
-    PROOF_TRAIN_UUIDS,
-    split_for,
-)
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-MANIFEST_FILE = Path(__file__).with_name("numina_autoinformalization_dedup.json")
+MANIFEST_FILE = Path(__file__).with_name("dedup.json")
 MANIFEST = json.loads(MANIFEST_FILE.read_text())
-QUALITY_FILE = Path(__file__).with_name("numina_autoinformalization_tasks.json")
+QUALITY_FILE = Path(__file__).with_name("tasks.json")
 QUALITY = json.loads(QUALITY_FILE.read_text())
 ACCEPTED_ROWS = frozenset(QUALITY["accepted"])
 JUDGE_OUTPUT_TOKENS = 4096
