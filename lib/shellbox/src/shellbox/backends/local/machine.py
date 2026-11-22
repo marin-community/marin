@@ -256,7 +256,7 @@ def _layer(layers: Path, directory: str) -> Path:
 
 def _prepare_layers(layers: Path, bwrap_user: tuple[int, int] | None) -> None:
     if bwrap_user is not None:
-        layers.chown(*bwrap_user)
+        os.chown(layers, *bwrap_user)
     for directory in _overlaid_directories():
         layer = _layer(layers, directory)
         upper = layer / "upper"
@@ -265,7 +265,7 @@ def _prepare_layers(layers: Path, bwrap_user: tuple[int, int] | None) -> None:
         work.mkdir()
         if bwrap_user is not None:
             for path in (layer, upper, work):
-                path.chown(*bwrap_user)
+                os.chown(path, *bwrap_user)
 
 
 def _submounts(mountinfo: str, directories: Iterable[str]) -> tuple[str, ...]:
@@ -415,7 +415,7 @@ def _probe_image_broker(bwrap: Path, runtime: Path, identity: tuple[int, int]) -
 
     async def probe() -> None:
         root = Path(tempfile.mkdtemp(prefix="shellbox-image-probe-"))
-        root.chown(*identity)
+        os.chown(root, *identity)
         image = PreparedLocalImage(root, {}, "/", (), (), None)
         machine = LocalMachine(
             MachineSpec(HostImage(), workdir="/"),
@@ -468,7 +468,7 @@ def _command_account(user: str | None, sandbox_uid: int) -> pwd.struct_passwd | 
 def _prepare_root(root: Path, workdir: PurePosixPath | None, bwrap_user: tuple[int, int] | None) -> None:
     root.chmod(ROOT_MODE)
     if bwrap_user is not None:
-        root.chown(*bwrap_user)
+        os.chown(root, *bwrap_user)
     for directory in (*PRIVATE_SYSTEM_DIRECTORIES, "/opt"):
         (root / directory.lstrip("/")).mkdir(parents=True)
     for configuration in RUNTIME_CONFIGURATION:
@@ -484,7 +484,7 @@ def _prepare_root(root: Path, workdir: PurePosixPath | None, bwrap_user: tuple[i
         path = root / workdir.relative_to("/")
         path.mkdir(parents=True, exist_ok=True)
         if bwrap_user is not None:
-            path.chown(*bwrap_user)
+            os.chown(path, *bwrap_user)
 
 
 def _archive(source: Path, name: str) -> bytes:
@@ -667,8 +667,10 @@ class LocalMachine:
                 arguments.append("--unshare-net")
         if self._broker_runtime is not None:
             runtime_mount = self.root / BROKER_GUEST_RUNTIME.lstrip("/")
+            if runtime_mount.is_symlink():
+                raise UnsupportedMachineSpec(f"The local backend reserves {BROKER_GUEST_RUNTIME}")
             runtime_mount.mkdir(exist_ok=True)
-            runtime_mount.chown(*self._sandbox_identity)
+            os.chown(runtime_mount, *self._sandbox_identity)
             arguments += ["--ro-bind", str(self._broker_runtime), BROKER_GUEST_RUNTIME]
         # A new user namespace is needed for each independent mount namespace,
         # including members that inherit a peer's network namespace.
@@ -1413,8 +1415,8 @@ class LocalMachineFactory:
                     f"LocalMachineFactory in an Iris task requires {IRIS_BUBBLEWRAP_PROFILE} or "
                     f"{IRIS_PRIVILEGED_PROFILE}"
                 )
-            if profile == IRIS_BUBBLEWRAP_PROFILE and os.geteuid() == 0:
-                bwrap_user = (BUBBLEWRAP_UID, BUBBLEWRAP_GID)
+            if profile == IRIS_BUBBLEWRAP_PROFILE:
+                bwrap_user = (BUBBLEWRAP_UID, BUBBLEWRAP_GID) if os.geteuid() == 0 else (os.geteuid(), os.getegid())
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
@@ -1629,7 +1631,7 @@ class LocalMachineFactory:
             if image.user not in (None, "", "0", "0:0"):
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
             if self._bwrap_user is not None:
-                image.root.chown(*self._bwrap_user)
+                os.chown(image.root, *self._bwrap_user)
             effective = replace(spec, workdir=spec.workdir or image.workdir)
             machine = LocalMachine(
                 effective,

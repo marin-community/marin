@@ -50,7 +50,7 @@ def execute_in_namespaces(configuration_fd: int) -> None:
             # Move the trusted launcher before it can fork any guest process.
             with open(config["cgroup"], "w") as membership:
                 membership.write(str(os.getpid()))
-        if config.get("program_user") is not None:
+        if config.get("program_user") is not None and os.geteuid() == 0:
             # A peer's user namespace may disallow setgroups, so clear groups
             # before entering it while retaining the privilege needed for setns.
             os.setgroups([])

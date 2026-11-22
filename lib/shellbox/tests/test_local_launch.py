@@ -89,6 +89,39 @@ def test_iris_bubblewrap_factory_writes_to_workdir_as_sandbox_user(monkeypatch, 
     asyncio.run(check())
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="This path requires a non-root Iris task")
+def test_iris_bubblewrap_factory_uses_broker_as_non_root(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_BUBBLEWRAP_PROFILE)
+    monkeypatch.setattr(local, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + local.LAUNCH_SOURCE)
+    probe_entered = False
+    control = local.LocalMachine._control
+
+    async def observed_control(self, *args, **kwargs):
+        nonlocal probe_entered
+        probe_entered = True
+        return await control(self, *args, **kwargs)
+
+    monkeypatch.setattr(local.LocalMachine, "_control", observed_control)
+    try:
+        factory = local.LocalMachineFactory()
+    except local.SandboxUnavailable as error:
+        if probe_entered:
+            raise
+        pytest.skip(str(error))
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            result = await machine.run(Command(("id", "-u")))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout == f"{os.geteuid()}\n".encode()
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
 @pytest.mark.skipif(os.geteuid() != 0, reason="The privileged Iris path requires a root task")
 def test_iris_privileged_factory_keeps_root_command_identity(monkeypatch):
     monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
@@ -132,6 +165,30 @@ def test_keeper_launcher_drops_to_non_root_before_exec(tmp_path):
         )
     assert result.returncode == 0, result.stderr.decode()
     assert result.stdout.strip() == str(local.BUBBLEWRAP_UID).encode()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="This path requires a non-root launcher")
+def test_keeper_launcher_accepts_current_non_root_identity(tmp_path):
+    configuration = tmp_path / "launcher.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "namespaces": [],
+                "program": [sys.executable, "-c", "import os; print(os.geteuid())"],
+                "program_user": [os.geteuid(), os.getegid()],
+                "cgroup": None,
+            }
+        )
+    )
+    with configuration.open("rb") as source:
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, str(source.fileno())],
+            pass_fds=(source.fileno(),),
+            capture_output=True,
+            check=False,
+        )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout.strip() == str(os.geteuid()).encode()
 
 
 @pytest.mark.parametrize("cgroup", [False, True])
