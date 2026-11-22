@@ -32,7 +32,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric
+from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, is_conclusive
 from taskcompendium.pipeline.query_cache import CachedRequests
 from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult, review_tasks
 from taskcompendium.pipeline.reviewer_spec import REVIEW_PAYLOAD_REVISION, JudgeTier, ReviewerSpec
@@ -44,7 +44,6 @@ from experiments.post_training.task_curation.judges import (
     LocalJudgeModel,
     PinnedLocalJudgeEndpoint,
 )
-from experiments.post_training.task_curation.review_quality import is_conclusive
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3.yaml")

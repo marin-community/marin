@@ -22,7 +22,7 @@ from taskcompendium.harbor.shared_source import SOURCE_ARCHIVE, SourceBootstrapP
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, ScriptGrader, TaskResource, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
-from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
+from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict, is_conclusive
 from taskcompendium.pipeline.query_cache import (
     CachedRequests,
     cached_batch_output,
@@ -713,7 +713,7 @@ def _review_with_retries(
                         max(max_tokens, reviewer.spec.retry_max_tokens),
                         max(max_prompt_characters, reviewer.spec.retry_prompt_budget),
                     )
-        remaining = [task for task in tasks if records[task.id].status != ReviewStatus.REVIEWED]
+        remaining = [task for task in tasks if not is_conclusive(records[task.id])]
     return ReviewBatchResult([records[task.id] for task in tasks], attempts)
 
 
@@ -792,4 +792,4 @@ def review_attempt(
 
 
 def valid_review_completion(output: str, task_id: str) -> bool:
-    return review_records(output, [task_id])[0].status == ReviewStatus.REVIEWED
+    return is_conclusive(review_records(output, [task_id])[0])

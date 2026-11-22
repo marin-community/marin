@@ -47,12 +47,12 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import TASK_IDENTITY_EXCLUDED_FIELDS, canonical_sha256
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
+from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus, is_conclusive
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.content_identity import PopulationDigest
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from experiments.post_training.task_curation.review_quality import is_conclusive, quality_result
+from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE, SamplePanel
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId

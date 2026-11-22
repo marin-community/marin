@@ -319,7 +319,7 @@ def test_shard_replenishes_batches_before_slow_tail_finishes_and_preserves_cache
         rubric,
         ReviewService(
             invalid_task_ids=frozenset(task.id for task in batches[0].tasks if task.id != cached_id),
-            confidence=Confidence.LOW,
+            confidence=Confidence.HIGH,
         ),
         output,
     )
@@ -372,7 +372,7 @@ def test_shard_replenishes_batches_before_slow_tail_finishes_and_preserves_cache
     assert [receipt.batch_index for receipt in shard.receipts] == [0, 1, 2]
     result = assemble_shards(inputs, [shard], shard.reviewer, rubric, str(tmp_path / "assembled"))
     rows = pq.read_table(result.records_path).to_pylist()
-    assert result.coverage_complete and result.result.uncertain_count == 1
+    assert result.coverage_complete and result.result.uncertain_count == 0
     assert json.loads(next(row["review"] for row in rows if row["task_id"] == cached_id)) == saved
     assert [row["task_id"] for row in rows] == [task.id for batch in batches for task in batch.tasks]
     replay = review_shard(
@@ -744,3 +744,43 @@ def test_owned_repair_pool_spreads_requests_and_skips_unregistered_or_foreign_wo
         client.complete(body)
         assert second.requests[-1] == body
         assert len(review_server.requests) + len(second.requests) == 17
+
+
+@pytest.mark.parametrize("legacy_complete_marker", [False, True])
+def test_batch_resume_retries_uncertain_reviews_and_preserves_conclusive_observations(
+    qc_inputs, tmp_path, legacy_complete_marker
+):
+    config, _ = qc_inputs
+    inputs = prepare_inputs(config)
+    rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
+    output = str(tmp_path / "reviews")
+
+    class MixedConfidenceService(ReviewService):
+        def review(self, tasks, rubric, *, originals=None, cached=None):
+            result = super().review(tasks, rubric, originals=originals, cached=cached)
+            return ReviewBatchResult(
+                [
+                    (
+                        row.model_copy(update={"verdict": row.verdict.model_copy(update={"confidence": Confidence.LOW})})
+                        if row.task_id == "unshaped" and row.verdict is not None
+                        else row
+                    )
+                    for row in result.reviews
+                ],
+                result.attempts,
+            )
+
+    first = review_inputs(inputs, MixedConfidenceService(), rubric, output)
+    assert first.result.reviewed == 1 and first.result.uncertain_count == 1
+    batch = Path(first.batch_receipts[0])
+    original_batch = batch.read_bytes()
+    if legacy_complete_marker:
+        root = batch.parent.parent
+        (root / "complete.json").write_bytes((root / "latest.json").read_bytes())
+    resumed = review_inputs(inputs, ReviewService(unavailable_task_ids=frozenset({"kept"})), rubric, output)
+    assert resumed.result.reviewed == 2 and resumed.result.uncertain_count == 0
+    original = {r["task_id"]: r["review"] for r in pq.read_table(first.records_path).to_pylist()}
+    updated = {r["task_id"]: r["review"] for r in pq.read_table(resumed.records_path).to_pylist()}
+    assert updated["kept"] == original["kept"] and updated["unshaped"] != original["unshaped"]
+    assert batch.read_bytes() == original_batch
+    assert file_sha256(StoragePath(first.records_path)) == first.records_sha256

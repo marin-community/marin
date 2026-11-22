@@ -4143,6 +4143,12 @@ observations count as missing for qualification;
 their measured counts remain separate. Issue rates divide findings by conclusive
 reviewed rows.
 
+Retries and batch completion use that same conclusive-review rule. A saved
+`REVIEWED` response with low confidence or an issueless unknown verdict remains
+pending. Resuming an older batch completion marker reuses its conclusive rows
+and retries the uncertain rows. Query caches also reuse only conclusive
+responses; prior immutable attempts remain available as evidence.
+
 Keep the seed and panel fixed. Do not replace or resample missing tasks.
 Preserve each missing task ID, status and exact reason, bounded-attempt evidence,
 and deployment and batch receipts with SHA-256 hashes. Generated SAMPLE receipts

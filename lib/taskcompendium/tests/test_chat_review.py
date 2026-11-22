@@ -8,7 +8,7 @@ import pytest
 from finestore.cache import PersistentKvCache
 
 from taskcompendium.models import ScriptGrader, Source, TaskSpec
-from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
+from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus, is_conclusive
 from taskcompendium.pipeline.query_cache import cached_request_output
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
@@ -160,7 +160,9 @@ def test_cached_request_output_preserves_unicode_separators(tmp_path, separator)
     assert calls == [requests]
 
 
-@pytest.mark.parametrize("corruption", ["malformed", "mismatched", "invalid_output", "invalid_shape"])
+@pytest.mark.parametrize(
+    "corruption", ["malformed", "mismatched", "invalid_output", "invalid_shape", "low_confidence", "unknown"]
+)
 def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
     calls = []
     requests = [{"custom_id": "task", "body": {"prompt": "Count apples."}}]
@@ -190,6 +192,15 @@ def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
             envelope["identity"]["model_revision"] = "different"
         elif corruption == "invalid_shape":
             envelope["raw_output"] = json.dumps({"custom_id": "task", "response": []})
+        elif corruption in {"low_confidence", "unknown"}:
+            output = json.loads(envelope["raw_output"])
+            function = output["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+            verdict = json.loads(function["arguments"])
+            verdict["confidence" if corruption == "low_confidence" else "quality"] = (
+                "low" if corruption == "low_confidence" else "unknown"
+            )
+            function["arguments"] = json.dumps(verdict)
+            envelope["raw_output"] = json.dumps(output)
         else:
             envelope["raw_output"] = "invalid response"
         corrupted = json.dumps(envelope).encode()
@@ -339,3 +350,36 @@ def test_content_cache_reuses_calibration_but_tracks_grader_and_image_changes(tm
     )
     reviewer.review([changed_image], rubric)
     assert len(chat.requests) == 3
+
+
+@pytest.mark.parametrize("uncertainty", ["low_confidence", "unknown"])
+def test_direct_review_retries_uncertain_completion_instead_of_replaying_cache(tmp_path, uncertainty):
+    task = svamp_row_task(
+        RawRow(
+            "task",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    rubric = ReviewRubric("fixture", "1", ("Check the supplied count.",))
+
+    class RecoveringChat(ReviewChat):
+        def complete(self, body):
+            output = super().complete(body)
+            if len(self.requests) == 1:
+                function = output["choices"][0]["message"]["tool_calls"][0]["function"]
+                verdict = json.loads(function["arguments"])
+                verdict["confidence" if uncertainty == "low_confidence" else "quality"] = (
+                    "low" if uncertainty == "low_confidence" else "unknown"
+                )
+                function["arguments"] = json.dumps(verdict)
+            return output
+
+    chat = RecoveringChat()
+    reviewer = ChatReviewer(chat, reviewer_spec("fixture", "deployment"), query_cache_root=str(tmp_path / "cache"))
+    result = reviewer.review([task], rubric)
+    assert is_conclusive(result.reviews[0])
+    assert len(result.attempts) == 2
+    assert len(chat.requests) == 2
+    assert reviewer.review([task], rubric).reviews == result.reviews
+    assert len(chat.requests) == 2

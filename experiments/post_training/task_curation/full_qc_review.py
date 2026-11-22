@@ -25,6 +25,8 @@ from taskcompendium.pipeline.models import (
     ReviewRecord,
     ReviewRubric,
     ReviewStatus,
+    has_review_issues,
+    is_conclusive,
 )
 from taskcompendium.pipeline.review import Reviewer, review_tasks
 
@@ -37,7 +39,7 @@ from experiments.post_training.task_curation.full_qc_artifacts import (
 )
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.published_census import population_documents
-from experiments.post_training.task_curation.review_quality import has_review_issues, quality_result
+from experiments.post_training.task_curation.review_quality import quality_result
 
 logger = logging.getLogger(__name__)
 REVIEW_BATCH_SIZE = 32
@@ -69,7 +71,9 @@ def review_batch(
     complete = root / "complete.json"
     if complete.exists():
         receipt = json.loads(complete.read_text())
-        return load_batch_reviews(receipt["path"], receipt["sha256"], identity), receipt["path"]
+        reviews = load_batch_reviews(receipt["path"], receipt["sha256"], identity)
+        if all(is_conclusive(row) for row in reviews):
+            return reviews, receipt["path"]
     latest = root / "latest.json"
     previous = {}
     attempts = []
@@ -78,7 +82,7 @@ def review_batch(
         previous = {
             row.task_id: row
             for row in load_batch_reviews(receipt["path"], receipt["sha256"], identity)
-            if row.status is ReviewStatus.REVIEWED
+            if is_conclusive(row)
         }
         attempts = json.loads(StoragePath(receipt["path"]).read_text())["attempts"]
     pending = [task for task in tasks if task.id not in previous]
@@ -102,7 +106,7 @@ def review_batch(
     receipt = {"path": str(path), "sha256": file_sha256(path)}
     with latest.open("w", auto_mkdir=True) as stream:
         json.dump(receipt, stream)
-    if all(row.status is ReviewStatus.REVIEWED for row in reviews):
+    if all(is_conclusive(row) for row in reviews):
         with complete.open("w", auto_mkdir=True) as stream:
             json.dump(receipt, stream)
     return reviews, str(path)
@@ -299,7 +303,7 @@ def review_shard_batch(
     records, path = review_batch(batch.tasks, batch.contracts, rubric, reviewer, output)
     first_statuses = Counter(str(row.status) for row in records)
     for _ in range(1, max_passes):
-        if all(row.status is ReviewStatus.REVIEWED for row in records):
+        if all(is_conclusive(row) for row in records):
             break
         records, path = review_batch(batch.tasks, batch.contracts, rubric, reviewer, output)
     return ShardBatchResult(

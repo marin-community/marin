@@ -264,6 +264,27 @@ class ReviewRecord(BaseModel):
     detail: str
 
 
+def has_review_issues(verdict: ReviewVerdict) -> bool:
+    return (
+        verdict.quality in {Quality.ISSUES, Quality.BAD}
+        or bool(verdict.defects)
+        or verdict.reference_status is ReferenceStatus.CONFLICT
+    )
+
+
+def is_conclusive(record: ReviewRecord) -> bool:
+    """Whether one observation resolves to a usable quality judgment.
+
+    A REVIEWED record is conclusive when its verdict is neither low-confidence
+    nor an issueless unknown.
+    """
+    verdict = record.verdict
+    if record.status is not ReviewStatus.REVIEWED or verdict is None:
+        return False
+    issueless_unknown = verdict.quality is Quality.UNKNOWN and not has_review_issues(verdict)
+    return not (verdict.confidence is Confidence.LOW or issueless_unknown)
+
+
 class Disposition(StrEnum):
     KEEP = "keep"
     REJECT = "reject"
