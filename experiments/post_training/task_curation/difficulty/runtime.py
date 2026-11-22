@@ -29,7 +29,7 @@ from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret, 
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
+from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty_config import (
     DATA_ACCOUNT,
@@ -613,7 +613,10 @@ def main() -> None:
                     else {
                         "endpoint": judge_endpoint,
                         "api_model": judge_api_model,
-                        "api_key_secret": None if judge_tier is not None else GLM_BULK_TOKEN_ENV,
+                        # The shared judge route serves from Together, so its relay must
+                        # authenticate upstream with the same key judge_serving resolves;
+                        # the old GLM_BULK_TOKEN name is rejected there (measured 401).
+                        "api_key_secret": None if judge_tier is not None else TOGETHER_API_KEY_ENV,
                         "provider_limits": asdict(judge_limits),
                         "identity": {
                             **{
