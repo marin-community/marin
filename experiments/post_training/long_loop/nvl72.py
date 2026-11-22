@@ -272,6 +272,7 @@ def build_run(
     execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
     openresearcher_service: OpenResearcherService | None = None,
+    gpu_variant: str = "GB200",
 ) -> ArtifactStep[SkyRLRun]:
     """Build an RL training artifact from model, data and optional native checkpoint handles.
 
@@ -383,7 +384,7 @@ def build_run(
             topology=SkyRLTopology(
                 num_nodes=profile.role_plan.num_nodes,
                 gpus_per_node=profile.role_plan.policy_num_gpus_per_node,
-                gpu_variant="GB200",
+                gpu_variant=gpu_variant,
                 role_plan=profile.role_plan,
             ),
             retention=retention,

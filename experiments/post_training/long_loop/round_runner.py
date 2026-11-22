@@ -181,6 +181,7 @@ class RoundRl:
     max_steps: int
     selection_eligibility: str
     native_checkpoint: str | None = None
+    gpu_variant: str = "GB200"
 
 
 @dataclass(frozen=True)
@@ -354,13 +355,17 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
 
 
 def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
-    """Adopt a schema-3 HF export or a native RL checkpoint without an SFT stage."""
+    """Adopt a pinned HF export or a native RL checkpoint without an SFT stage."""
     model = spec.adopted_model
     manifest = pinned_json(prefix_join(model.uri, "export-manifest.json"), model.export_manifest_sha256)
     config = pinned_json(prefix_join(model.uri, "config.json"), model.config_sha256)
-    if config["grugmoe_artifact_schema_version"] != 3:
-        raise ValueError("RL adoption requires a schema-3 HF export")
-    if not manifest["request"]["config"]["checkpoint"].endswith(f"/step-{model.checkpoint_step}"):
+    if config["grugmoe_artifact_schema_version"] not in (1, 3):
+        raise ValueError("RL adoption requires a schema-1 or schema-3 HF export")
+    if "request" in manifest:
+        recorded_step = int(manifest["request"]["config"]["checkpoint"].rsplit("/step-", 1)[-1])
+    else:
+        recorded_step = int(manifest["step"])
+    if recorded_step != model.checkpoint_step:
         raise ValueError("Adopted HF export checkpoint step changed")
     rl = spec.rl
     roles = draccus.decode(SkyRLRolePlan, rl.role_plan)
@@ -413,6 +418,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         resume=resume,
         smoke=smoke,
         recipe_document=recipe,
+        gpu_variant=rl.gpu_variant,
     )
     original_build = step.build_config
 

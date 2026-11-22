@@ -106,6 +106,55 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
         terminal.build_config(context)
 
 
+def _write_schema1_model(tmp_path: Path, checkpoint_step: int) -> tuple[Path, dict[str, str]]:
+    """A Snowball-style handoff export: schema-1 config and a direct step manifest."""
+    model = tmp_path / "model-schema1"
+    model.mkdir()
+    manifest = json.dumps({"step": checkpoint_step}).encode()
+    config = json.dumps(
+        {"grugmoe_artifact_schema_version": 1, "num_hidden_layers": 96, "num_attention_heads": 96, "num_experts": 384}
+    ).encode()
+    (model / "export-manifest.json").write_bytes(manifest)
+    (model / "config.json").write_bytes(config)
+    pins = {
+        name: hashlib.sha256((model / name).read_bytes()).hexdigest() for name in ("config.json", "export-manifest.json")
+    }
+    return model, pins
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_adopts_schema1_step_manifest_export(round_inputs, local_round):
+    _, data = round_inputs
+    model, pins = _write_schema1_model(Path(data).parent, 400407)
+    spec = dataclasses.replace(
+        local_round,
+        adopted_model=dataclasses.replace(
+            local_round.adopted_model,
+            uri=str(model),
+            config_sha256=pins["config.json"],
+            export_manifest_sha256=pins["export-manifest.json"],
+        ),
+    )
+    assert adopted_round_rl(spec) is not None
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_rejects_schema1_step_mismatch(round_inputs, local_round):
+    _, data = round_inputs
+    model, pins = _write_schema1_model(Path(data).parent, 400500)
+    spec = dataclasses.replace(
+        local_round,
+        adopted_model=dataclasses.replace(
+            local_round.adopted_model,
+            uri=str(model),
+            config_sha256=pins["config.json"],
+            export_manifest_sha256=pins["export-manifest.json"],
+        ),
+    )
+    with pytest.raises(ValueError, match="checkpoint step changed"):
+        adopted_round_rl(spec)
+
+
 @pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
 def test_round_preserves_disabled_route_quotas(local_round, tmp_path):
     recipe = copy.deepcopy(local_round.rl.recipe)
