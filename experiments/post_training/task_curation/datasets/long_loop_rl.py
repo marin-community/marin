@@ -14,15 +14,20 @@ qualification evidence.
 
 import hashlib
 import json
+import tempfile
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from types import MappingProxyType
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.lazy import ArtifactStep
+from marin.rl.curriculum import PoolRow
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
@@ -84,6 +89,17 @@ RELEASE_SOURCE_ROUTES = MappingProxyType(
     }
 )
 """Each training row's ``data_source`` and the route the runs admitted it through."""
+
+REASONING_GYM_LABEL = "Reasoning Gym:reasoning_gym"
+"""The ``teacher_route`` the stamped pools label the reasoning-gym rows with: the
+upstream ``data_source`` is the 0.1.25 wheel URL, which is not a valid pool step
+name, so the stamped population renames it to the source identity."""
+
+TEACHER_ROUTE_LABELS: Mapping[str, str] = MappingProxyType(
+    {**{source: source for source in RELEASE_SOURCE_ROUTES}, REASONING_GYM_SOURCE: REASONING_GYM_LABEL}
+)
+"""Each training row's ``data_source`` and the ``teacher_route`` the stamped pools
+label it with — identical except the reasoning-gym wheel URL."""
 
 
 @dataclass(frozen=True)
@@ -333,3 +349,155 @@ def sources() -> list[RlDataSource[AdoptedRelease]]:
 AGENTIC_RELEASE = agentic_release()
 NONAGENTIC_RELEASE = nonagentic_release()
 """The two adopted releases as catalog sources; curricula bind entries against them."""
+
+
+STAMPED_POOL_SCHEMA = pa.schema(
+    [
+        pa.field("task_spec", pa.string(), nullable=False),
+        pa.field("teacher_route", pa.string(), nullable=False),
+    ]
+)
+"""The stamped long-loop pool layout: task content plus the trainer's sampling key."""
+
+STAMPED_POOLS_VERSION = "2026.11.18.71"
+STAMPED_AGENTIC_POOL_URI = (
+    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pool-agentic/2026.11.18.71"
+)
+STAMPED_AGENTIC_POOL_SHA256 = "ad435c5bdd3ac7ef46be5359a8f5fa1b095e80fbc9bfbcb968f22b5fe7befae3"
+STAMPED_NONAGENTIC_POOL_URI = (
+    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pool-nonagentic/2026.11.18.71"
+)
+STAMPED_NONAGENTIC_POOL_SHA256 = "4cb4fd8206a113509e6fcd9c0c4b1198c6d925eb964b1622c98d12ef36151402"
+"""The regional Exp4 stamped pools the runs train on: route-labeled populations
+over the adopted releases plus the admitted Nemotron instruction-following rows,
+pinned by their train.parquet digests."""
+
+STAMPED_POOLS: Mapping[str, tuple[str, str]] = MappingProxyType(
+    {
+        AGENTIC_ROUTE: (STAMPED_AGENTIC_POOL_URI, STAMPED_AGENTIC_POOL_SHA256),
+        NONAGENTIC_ROUTE: (STAMPED_NONAGENTIC_POOL_URI, STAMPED_NONAGENTIC_POOL_SHA256),
+    }
+)
+
+
+def stream_stamped_pool(fs, path: str) -> Iterator[tuple[str, str]]:
+    """Stream one stamped pool's ``(teacher_route, raw task_spec)`` pairs."""
+    with fs.open(path, "rb") as handle:
+        for batch in pq.ParquetFile(handle).iter_batches(batch_size=64, columns=["task_spec", "teacher_route"]):
+            routes = batch.column("teacher_route").to_pylist()
+            tasks = batch.column("task_spec").to_pylist()
+            yield from zip(routes, tasks)
+
+
+def stamped_pool_rows(pools: Mapping[str, tuple[str, str]] = STAMPED_POOLS) -> dict[str, tuple[PoolRow, ...]]:
+    """Every stamped pool's row identities, keyed by ``teacher_route``.
+
+    Row identity is the task spec's ``id`` plus the canonical SHA-256 of its
+    task document — the identity a curriculum's holdout records and extraction
+    verifies."""
+    rows_by_label: dict[str, list[PoolRow]] = {}
+    for uri, sha256 in pools.values():
+        filesystem, base = filesystem_for(uri)
+        path = prefix_join(base, "train.parquet")
+        observed = stream_sha256(filesystem, path)
+        if observed != sha256:
+            raise ValueError(f"{path}: sha256 {observed} does not match the pinned {sha256}")
+        for route, raw in stream_stamped_pool(filesystem, path):
+            task = json.loads(raw)
+            rows_by_label.setdefault(route, []).append(PoolRow(id=task["id"], sha256=canonical_sha256(task)))
+    return {label: tuple(rows) for label, rows in rows_by_label.items()}
+
+
+def stamped_pool_step(route: str, version: str = STAMPED_POOLS_VERSION) -> ArtifactStep:
+    """Adopt one pinned stamped pool as a graph artifact."""
+    uri, sha256 = STAMPED_POOLS[route]
+    return ArtifactStep.adopt(f"long-loop-exp4/stamped-{route}", version, source=uri, config={"sha256": sha256})
+
+
+def _verified_pool_path(pool: dict) -> str:
+    """Resolve and digest-verify one pinned stamped pool's train.parquet."""
+    filesystem, base = filesystem_for(pool["uri"])
+    path = prefix_join(base, "train.parquet")
+    observed = stream_sha256(filesystem, path)
+    if observed != pool["sha256"]:
+        raise ValueError(f"{path}: sha256 {observed} does not match the pinned {pool['sha256']}")
+    return path
+
+
+def _write_pool_parquet(destination: StoragePath, name: str, rows: list[dict]) -> str:
+    """Write one stamped-schema parquet through a local temp file and verify the readback."""
+    destination.mkdirs(exist_ok=True)
+    with tempfile.TemporaryDirectory() as temporary:
+        local = Path(temporary) / name
+        pq.write_table(pa.Table.from_pylist(rows, schema=STAMPED_POOL_SCHEMA), local)
+        with local.open("rb") as reader:
+            digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        target = destination / name
+        with local.open("rb") as reader, target.open("wb") as writer:
+            while chunk := reader.read(8 * 1024 * 1024):
+                writer.write(chunk)
+        with target.open("rb") as reader:
+            if hashlib.file_digest(reader, "sha256").hexdigest() != digest:
+                raise ValueError(f"{target}: readback differs from the written bytes")
+        return digest
+
+
+def extract_source_pool(*, output: str, pool: dict, label: str, excluded: Sequence[str], expected_rows: int) -> None:
+    """Write one ``teacher_route`` population of a stamped pool, minus holdout rows.
+
+    The pool's bytes must match their pinned digest. The kept rows carry the
+    stamped schema unchanged, the holdout ids are excluded, and the remaining
+    count must match ``expected_rows``. The manifest records the exclusion."""
+    filesystem, _ = filesystem_for(pool["uri"])
+    path = _verified_pool_path(pool)
+    excluded_ids = set(excluded)
+    kept: list[dict] = []
+    for route, raw in stream_stamped_pool(filesystem, path):
+        if route != label or json.loads(raw)["id"] in excluded_ids:
+            continue
+        kept.append({"task_spec": raw, "teacher_route": route})
+    if len(kept) != expected_rows:
+        raise ValueError(f"{path}: {label!r} holds {len(kept)} rows after exclusion, expected {expected_rows}")
+    destination = StoragePath(output)
+    _write_pool_parquet(destination, "train.parquet", kept)
+    manifest = {"label": label, "rows": len(kept), "excluded_holdout_rows": len(excluded_ids)}
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+def extract_validation_pool(*, output: str, pools: Sequence[dict], rows: Sequence[dict], seed: int) -> None:
+    """Materialize a curriculum's holdout as validation.parquet from the stamped pools.
+
+    Every recorded row must appear exactly once across the pools and its task
+    document must hash to the recorded SHA-256 — the content check that makes
+    the recorded identity load-bearing. The manifest records the full split
+    payload and its per-label composition."""
+    wanted = {(row["label"], row["id"]): row["sha256"] for row in rows}
+    found: dict[tuple[str, str], str] = {}
+    composition: Counter = Counter()
+    for pool in pools:
+        filesystem, _ = filesystem_for(pool["uri"])
+        path = _verified_pool_path(pool)
+        for route, raw in stream_stamped_pool(filesystem, path):
+            task = json.loads(raw)
+            key = (route, task["id"])
+            if key not in wanted:
+                continue
+            if canonical_sha256(task) != wanted[key]:
+                raise ValueError(f"{path}: holdout row {route!r}/{task['id']!r} differs from its recorded sha256")
+            if key in found:
+                raise ValueError(f"{path}: holdout row {route!r}/{task['id']!r} appears twice")
+            found[key] = raw
+            composition[route] += 1
+    missing = sorted(wanted.keys() - found.keys())
+    if missing:
+        raise ValueError(f"holdout rows absent from the pools: {missing[:5]}")
+    destination = StoragePath(output)
+    ordered = sorted(found.items(), key=lambda item: item[0])
+    _write_pool_parquet(
+        destination, "validation.parquet", [{"task_spec": raw, "teacher_route": route} for (route, _), raw in ordered]
+    )
+    manifest = {
+        "validation": {"size": len(rows), "seed": seed, "rows": list(rows)},
+        "composition": dict(sorted(composition.items())),
+    }
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
