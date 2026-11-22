@@ -128,9 +128,9 @@ the callbacks. Isolated replays of those inputs passed the existing reference
 tolerances and repeated exactly. The observer can change compilation, layout
 or timing. These results keep attention backward in the investigation; they
 do not identify a failing primitive or establish that isolated replay reproduces
-the original execution context. The next attention probe will capture the
-original backward residuals, including LSE, with the returned gradients in one
-packet rather than recomputing forward residuals during replay.
+the original execution context. The subsequent probe captured the original
+backward residuals, including LSE, with the returned gradients in one packet
+rather than recomputing forward residuals during replay.
 
 The aligned fixture had finite raw gradients and all four saved model/Adam
 states were finite. Restoration was exact and all three learner processes
@@ -177,6 +177,27 @@ does not identify whether execution variability, physical layout, compilation
 or another cause produced the difference. Exact continuation remains failed;
 the tolerances have not changed. Further work must distinguish repeated
 execution from reload and process changes before claiming a remedy.
+
+The same run captured 32 complete backward packets. Five replay failures had
+already-nonfinite output cotangents. Two other packets had finite inputs and
+original gradients, but direct replay produced NaN dQ after earlier NaN-input
+cases; their dK and dV remained finite. Identical residual values had passed
+earlier in that process. Immediate repeated calls had identical raw output bits,
+including NaN bits. This measures execution-history sensitivity without proving
+a scratch-buffer, stream or allocator mechanism. The
+[pinned package source](https://files.pythonhosted.org/packages/bb/aa/3fbbf512a901b8174f840fa35fcc5eaed03dd3dba9879c16c435f6e62092/flash_attn_4-4.0.0b28-py3-none-any.whl)
+explicitly clears the padded dQ accumulator; a missing-clear explanation has
+not been established.
+
+Two separate diagnostics are being prepared: repeat one publicly compiled pure
+Trainer gradient program at fixed A1, and run finite/finite/NaN-dO/finite/finite
+backward calls with the same compiled object and saved residuals. Their local
+CPU checks pass; GPU results are pending. Passing either would not clear the
+actual optimizer-body mismatch. The next full smoke will also require durable,
+coordinated child-process finiteness proofs for initial, saved, restored and
+continued states. Parent copies are supplemental; the mandatory child proof
+must succeed on every learner process. Extra host-transfer cost remains
+unmeasured on the full model.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
 gates. No new 40-H100 full-model smoke or matched 25-update comparison has been

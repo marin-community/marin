@@ -475,6 +475,137 @@ def _paired_suite(args) -> dict:
     return result
 
 
+def _run_probe_module(args, module: str, command_args: list[str], receipt: Path, log: Path) -> dict:
+    """Collect independent probe evidence without treating numerical findings as execution errors."""
+    with log.open("wb") as stream:
+        try:
+            process = subprocess.run(
+                [args.python_executable, "-m", module, *command_args],
+                env=_environment(args.platform, args.python_executable),
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+                timeout=600,
+            )
+            code = process.returncode
+        except subprocess.TimeoutExpired:
+            code = None
+    try:
+        result = json.loads(receipt.read_text())
+    except (OSError, ValueError):
+        result = {"status": "error", "error_type": "missing_or_invalid_probe_receipt"}
+    result["diagnostic_child_exit_code"] = code
+    result["execution_errors_present"] = (
+        code != 0 or result.get("status") != "completed" or result.get("execution_errors_present", False)
+    )
+    return result
+
+
+def _repeatability_suite(args) -> dict:
+    """Preserve the actual paired gate; separately test pure-program and invocation-history repeatability."""
+    target = args.output_dir / "repeatability-probe.json"
+    config = _configuration(args.output_dir / "aligned-initializer", args.output_dir, args.platform, 8)
+    config_path = args.output_dir / "paired-config.json"
+    _write(config_path, config)
+    config_sha256 = hashlib.sha256(
+        json.dumps(config, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    root = Path(__file__).resolve().parent
+    result = {
+        "status": "running",
+        "scope": "Actual paired gate plus separate pure-gradient and saved-residual history diagnostics; not full67B",
+        "platform": args.platform,
+        "source_hashes": _source_hashes(),
+        "probe_source_hashes": {
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in ("fixed_gradient_repeat_probe.py", "backward_history_probe.py")
+        },
+        "cases": {},
+        "paired_resume_qualified": False,
+        "config_sha256": config_sha256,
+        "limitations": (
+            "Pure-program repetition does not establish actual optimizer-body repeatability. "
+            "Intentional NaN dO is a diagnostic input only. No old failed gate is waived."
+        ),
+    }
+    _write(target, result)
+    try:
+        paired_args = argparse.Namespace(**{**vars(args), "paired_resume_oracle": True})
+        paired = _paired_suite(paired_args)
+        result["paired"] = paired
+        result["paired_resume_qualified"] = paired["paired_resume_qualified"]
+        if paired["paired_oracle"]["config_sha256"] != config_sha256:
+            raise ValueError("Paired configuration differs from the separately frozen probe input")
+    except Exception as error:
+        result["paired_execution_error"] = {"type": type(error).__name__, "message": str(error)[:4000]}
+    _write(target, result)
+    if result.get("paired", {}).get("paired_execution_complete", False) and "paired_execution_error" not in result:
+        output = args.output_dir / "fixed-gradient-repeat"
+        result["cases"]["fixed-gradient-repeat"] = _run_probe_module(
+            args,
+            "experiments.post_training.inventory.fixed_gradient_repeat_probe",
+            [
+                "--config",
+                str(config_path),
+                "--paired-oracle-dir",
+                str(args.output_dir / "paired-oracle"),
+                "--output-dir",
+                str(output),
+                "--platform",
+                args.platform,
+                "--repeats",
+                "2",
+            ],
+            output / "fixed-gradient-repeat.json",
+            args.output_dir / "fixed-gradient-repeat.log",
+        )
+    else:
+        result["cases"]["fixed-gradient-repeat"] = {
+            "status": "not_run_incomplete_paired_evidence",
+            "execution_errors_present": True,
+        }
+    _write(target, result)
+    output = args.output_dir / "backward-history"
+    result["cases"]["backward-history"] = _run_probe_module(
+        args,
+        "experiments.post_training.inventory.backward_history_probe",
+        [
+            "--packet",
+            str(args.history_packet),
+            "--metadata",
+            str(args.history_metadata),
+            "--packet-sha256",
+            args.history_packet_sha256,
+            "--metadata-sha256",
+            args.history_metadata_sha256,
+            "--output-dir",
+            str(output),
+            "--mode",
+            "gpu" if args.platform == "gpu" else "cpu_reference",
+        ],
+        output / "history-probe.json",
+        args.output_dir / "backward-history.log",
+    )
+    result["all_requested_cases_completed"] = (
+        "paired_execution_error" not in result
+        and result.get("paired", {}).get("all_requested_cases_completed", False)
+        and all(not row["execution_errors_present"] for row in result["cases"].values())
+    )
+    result["numerical_findings_present"] = result.get("paired", {}).get("numerical_findings_present", False) or any(
+        row.get("numerical_findings_present", False) for row in result["cases"].values()
+    )
+    result["status"] = "completed" if result["all_requested_cases_completed"] else "completed_with_errors"
+    _write(target, result)
+    total = sum(path.stat().st_size for path in args.output_dir.rglob("*") if path.is_file())
+    result["output_bytes"] = total
+    result["output_limit_bytes"] = 2 * 2**30
+    if total >= result["output_limit_bytes"]:
+        result.update(
+            status="completed_with_errors", all_requested_cases_completed=False, error_type="OutputBudgetExceeded"
+        )
+    _write(target, result)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path(os.environ.get("IRIS_OUTPUT_DIR", ".")))
@@ -510,12 +641,33 @@ def main() -> None:
     parser.add_argument(
         "--paired-resume-oracle", action="store_true", help="Separate same-A1 active-gradient resume gate"
     )
+    parser.add_argument(
+        "--repeatability-probe", action="store_true", help="Separate compiled-program repeatability diagnostics"
+    )
+    parser.add_argument("--history-packet", type=Path)
+    parser.add_argument("--history-metadata", type=Path)
+    parser.add_argument("--history-packet-sha256")
+    parser.add_argument("--history-metadata-sha256")
     args = parser.parse_args()
-    if args.paired_resume_oracle and args.capture_replay_states:
-        parser.error("Paired oracle and historical fresh-init replay are separate modes")
+    if sum((args.paired_resume_oracle, args.capture_replay_states, args.repeatability_probe)) > 1:
+        parser.error("Paired oracle, historical replay and repeatability probes are separate modes")
+    if args.repeatability_probe and (
+        args.case != "suite"
+        or args.raw_only
+        or not all(
+            (args.history_packet, args.history_metadata, args.history_packet_sha256, args.history_metadata_sha256)
+        )
+    ):
+        parser.error("Repeatability suite requires explicit packet/metadata paths and hashes, without raw-only")
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.case == "suite":
+        if args.repeatability_probe:
+            result = _repeatability_suite(args)
+            print(json.dumps({"receipt": str(args.output_dir / "repeatability-probe.json"), "status": result["status"]}))
+            if not result["all_requested_cases_completed"]:
+                raise SystemExit(1)
+            return
         if args.paired_resume_oracle:
             result = _paired_suite(args)
             print(
