@@ -194,13 +194,13 @@ prefix. Every primed trial was preceded by a request for the same prompt
 without its final 256 tokens. The measurement includes HTTP and one token
 of generation. [Native baseline](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-native-v5p8-20261121-v1) · [vLLM baseline](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-prefill-vllm-v5p8-20261121-v1)
 
-| Input tokens | Native original, fresh / primed (s) | Native active expert rows, fresh / primed (s) | Native adaptive dispatch, fresh / primed (s) | Native finer buckets, fresh / primed (s) | vLLM, fresh / primed (s) |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 2,048 | 0.374 / 0.316 | 0.210 / 0.167 | 0.206 / 0.100 | 0.140 / 0.100 | 0.076 / 0.043 |
-| 8,192 | 0.563 / 0.329 | 0.369 / 0.173 | 0.338 / 0.107 | 0.267 / 0.106 | 0.209 / 0.052 |
-| 32,768 | 1.491 / 0.378 | 1.046 / 0.198 | 0.923 / 0.131 | 0.828 / 0.128 | 0.889 / 0.087 |
-| 51,840 | 2.778 / 0.395 | 1.883 / 0.215 | 1.622 / 0.149 | 1.510 / 0.145 | 1.560 / 0.112 |
-| 64,512 | 3.175 / 0.395 | 2.149 / 0.227 | 1.907 / 0.164 | 1.902 / 0.156 | 1.966 / 0.129 |
+| Input tokens | Native original, fresh / primed (s) | Native active expert rows, fresh / primed (s) | Native adaptive dispatch, fresh / primed (s) | Native finer buckets, fresh / primed (s) | Native smaller expert tiles, fresh / primed (s) | vLLM, fresh / primed (s) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2,048 | 0.374 / 0.316 | 0.210 / 0.167 | 0.206 / 0.100 | 0.140 / 0.100 | 0.088 / 0.058 | 0.076 / 0.043 |
+| 8,192 | 0.563 / 0.329 | 0.369 / 0.173 | 0.338 / 0.107 | 0.267 / 0.106 | 0.219 / 0.064 | 0.209 / 0.052 |
+| 32,768 | 1.491 / 0.378 | 1.046 / 0.198 | 0.923 / 0.131 | 0.828 / 0.128 | 0.780 / 0.085 | 0.889 / 0.087 |
+| 51,840 | 2.778 / 0.395 | 1.883 / 0.215 | 1.622 / 0.149 | 1.510 / 0.145 | 1.464 / 0.102 | 1.560 / 0.112 |
+| 64,512 | 3.175 / 0.395 | 2.149 / 0.227 | 1.907 / 0.164 | 1.902 / 0.156 | 1.858 / 0.113 | 1.966 / 0.129 |
 
 The tuned run used two BF16 products with FP32 accumulation for the
 prefill attention value multiply, smaller buffers for cached suffixes,
@@ -245,6 +245,14 @@ and 0.100 s with finer buckets alone. The 64,512-token medians were
 1.875 and 0.142 s. On the same 26 AgentX turns, active decode reached
 159.78 tokens/s with 746 ms p90 TTFT. The full run measured 58.37
 output tokens/s over 28 turns. [Separate projections](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v10)
+
+Expert matmul tiles of 128 rows through 8,192 padded prompt tokens and
+256 rows for larger buffers brought native ahead of vLLM on fresh and
+primed prefill at 32,768 tokens and above. The tile sweep preserved exact
+BF16 outputs and zero drops for all five tested sizes. The full native
+run measured 58.38 output tokens/s. On 26 matched turns, active decode
+was unchanged at 159.65 tokens/s and p90 TTFT fell to 711 ms. vLLM
+measured 116.28 active tokens/s and 561 ms. [Tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-ep-prefill-tiles-v5p8-20261121-v1) · [Tiled v5p-8 run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v11)
 
 The fresh prefill trace spent most of its device time in routed expert
 matmuls and long attention. In the primed trace, async copies and packing
@@ -314,13 +322,13 @@ turn. Native active decode was 184.28 tokens/s and streamed p90 TTFT was
 Both prefill grids completed all 60 requests, including warmups. Fresh
 native prefill was within 4% of vLLM at 32,768 tokens and above.
 
-| Input tokens | Native fresh / primed (s) | vLLM fresh / primed (s) |
-| ---: | ---: | ---: |
-| 2,048 | 0.102 / 0.070 | 0.058 / 0.032 |
-| 8,192 | 0.204 / 0.076 | 0.184 / 0.039 |
-| 32,768 | 0.761 / 0.094 | 0.734 / 0.064 |
-| 51,840 | 1.196 / 0.106 | 1.226 / 0.081 |
-| 64,512 | 1.552 / 0.113 | 1.539 / 0.093 |
+| Input tokens | Native baseline, fresh / primed (s) | Native smaller expert tiles, fresh / primed (s) | vLLM fresh / primed (s) |
+| ---: | ---: | ---: | ---: |
+| 2,048 | 0.102 / 0.070 | 0.088 / 0.052 | 0.058 / 0.032 |
+| 8,192 | 0.204 / 0.076 | 0.208 / 0.059 | 0.184 / 0.039 |
+| 32,768 | 0.761 / 0.094 | 0.768 / 0.076 | 0.734 / 0.064 |
+| 51,840 | 1.196 / 0.106 | 1.221 / 0.088 | 1.226 / 0.081 |
+| 64,512 | 1.552 / 0.113 | 1.575 / 0.095 | 1.539 / 0.093 |
 
 A trial with separate projections and smaller expert matmul tiles improved
 all five primed medians. At 64,512 tokens it measured 96 ms, compared
@@ -328,6 +336,12 @@ with 113 ms in the earlier native run and 93 ms for vLLM. The trial
 measured 59.62 output tokens/s overall, 163.69 active decode tokens/s
 and 830 ms p90 TTFT on the same 25 matched turns. Most of the decode
 slowdown came from four consecutive long turns. [v6e expert tile trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v4)
+
+An exact repeat on the same worker measured 64.33 output tokens/s overall.
+On the same 25 matched turns its active decode of 183.86 tokens/s
+was within 0.3% of native's earlier 184.28 tokens/s. Paired p90 TTFT fell
+to 558 ms, against 518 ms for vLLM. The repeat reproduced the primed
+prefill gains shown in the table. [Tiled v6e-8 repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v5)
 
 ## H100 AgentX comparison
 
@@ -362,6 +376,17 @@ weights and KV pages improved native to 50.51 output tokens/s overall,
 14% below vLLM. On the same 26 turns and 9,092 outputs, active decode
 reached 137.29 tokens/s against 164.79 for vLLM. Streamed p90 TTFT was
 877.80 ms against 942.61 ms. [Replicated activation trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v19-replicated-activation)
+
+The integrated branch reproduced 50.51 output tokens/s overall, and
+measured 139.12 active decode tokens/s and 632.47 ms p90 TTFT on the
+same 26 turns. [Integrated H100 run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v28-integrated)
+
+The next trial kept per-layer KV buffers between decode rounds and
+replicated KV for sliding-window layers. It produced 53.48 output tokens/s
+overall against 58.65 for vLLM. Both engines emitted 9,967 tokens on the
+27 common turns with identical counts for each turn. Native measured
+151.93 active decode tokens/s and 891.50 ms p90 TTFT. vLLM measured
+164.06 tokens/s and 941.65 ms. [Sliding-window KV trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v29-window-kv)
 
 Run the native H100 probe with the regional checkpoint and replay receipt.
 These settings preserve the compiled prefill path and four KV contexts

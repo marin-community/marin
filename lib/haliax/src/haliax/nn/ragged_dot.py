@@ -85,13 +85,15 @@ def _megablox_tile_size() -> tuple[int, int, int]:
     return _MEGABLOX_TILE_DEFAULT
 
 
-def _megablox_tiling(m: int, k: int, n: int) -> tuple[int, int, int]:
+def _megablox_tiling(m: int, k: int, n: int, *, token_tile: int | None) -> tuple[int, int, int]:
     """Choose a Megablox tile for the shape of each forward or VJP GMM."""
-    tile_size = _megablox_tile_size()
-    return min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])
+    tile_m, tile_k, tile_n = _megablox_tile_size()
+    return min(m, tile_m if token_tile is None else token_tile), min(k, tile_k), min(n, tile_n)
 
 
-def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_megablox_impl(
+    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, token_tile: int | None
+) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
     return _gmm_megablox(
@@ -99,7 +101,7 @@ def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.A
         rhs,
         group_sizes,
         preferred_element_type=lhs.dtype,
-        tiling=_megablox_tiling,
+        tiling=functools.partial(_megablox_tiling, token_tile=token_tile),
         interpret=jax.default_backend() == "cpu",
     )
 
@@ -395,9 +397,11 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     return ("xla",)
 
 
-def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _run_impl(
+    name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, megablox_token_tile: int | None
+) -> jax.Array:
     if name == "megablox":
-        return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
+        return _ragged_dot_megablox_impl(lhs, rhs, group_sizes, megablox_token_tile)
     if name == "triton":
         return _ragged_dot_triton_impl(lhs, rhs, group_sizes)
     if name == "xla":
@@ -411,6 +415,8 @@ def ragged_dot(
     group_sizes_: jax.Array,
     ar: bool = False,
     implementation: Implementation = "auto",
+    *,
+    megablox_token_tile: int | None = None,
 ) -> jax.Array:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
@@ -422,6 +428,7 @@ def ragged_dot(
         implementation: Backend selection. ``"auto"`` selects per-platform default.
             ``"triton"`` forces GPU Pallas Triton kernel. ``"megablox"`` forces
             TPU megablox. ``"xla"`` forces ``jax.lax.ragged_dot_general``.
+        megablox_token_tile: Optional tile size for the token dimension on TPU.
 
     Returns:
         A [tokens, out] array.
@@ -435,7 +442,7 @@ def ragged_dot(
 
     for impl in _preferred_implementations(implementation):
         try:
-            out = _run_impl(impl, lhs_, rhs_, group_sizes_)
+            out = _run_impl(impl, lhs_, rhs_, group_sizes_, megablox_token_tile)
             break
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":

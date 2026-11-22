@@ -627,6 +627,8 @@ class MoEExpertMlp(eqx.Module):
                 num_experts=self.w_gate.shape[0],
                 capacity_factor=self.capacity_factor,
                 token_sharding_axes=token_axes,
+                # Each expert handles few rows in short prefill buckets.
+                megablox_token_tile=128 if x.shape[0] <= 8192 else 256,
             ),
             mesh=mesh,
             in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),

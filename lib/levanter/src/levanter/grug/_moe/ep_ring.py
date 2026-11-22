@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -37,8 +38,10 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    megablox_token_tile: int | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Gather routes and scatter expert outputs using packed or separate gate and up weights."""
+    dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile)
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
@@ -113,16 +116,14 @@ def _moe_mlp_ep_ring_local(
         with jax.named_scope("moe_up_down"):
             # Omit unused rows from the grouped dots and mask their unwritten results.
             active_rows = valid[:, None]
-            gate_out = jnp.where(active_rows, ragged_dot(x_dispatch, gate_or_packed, accepted_counts), 0)
+            gate_out = jnp.where(active_rows, dot(x_dispatch, gate_or_packed, accepted_counts), 0)
             if up_weight is None:
                 gate_out = tree_checkpoint_name(gate_out, _CHECKPOINT_EXPERT_HIDDEN)
                 gate, up = jnp.split(gate_out, [moe_w2_local.shape[1]], axis=-1)
             else:
                 gate = gate_out
-                up = jnp.where(active_rows, ragged_dot(x_dispatch, up_weight, accepted_counts), 0)
-            out_dispatch = jnp.where(
-                active_rows, ragged_dot(activation_fn(gate) * up, moe_w2_local, accepted_counts), 0
-            )
+                up = jnp.where(active_rows, dot(x_dispatch, up_weight, accepted_counts), 0)
+            out_dispatch = jnp.where(active_rows, dot(activation_fn(gate) * up, moe_w2_local, accepted_counts), 0)
             out_dispatch = tree_checkpoint_name(out_dispatch, _CHECKPOINT_DISPATCH_OUTPUT)
 
         with jax.named_scope("scatter"):
