@@ -346,5 +346,16 @@ rl:
         start_interval_seconds: 0
   max_steps: 32
   selection_eligibility: covered
-  pools:
-    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pools/2026.11.22.1
+  train_data:
+    agentic:
+      uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pool-agentic/2026.11.18.71
+      file: train.parquet
+      sha256: ad435c5bdd3ac7ef46be5359a8f5fa1b095e80fbc9bfbcb968f22b5fe7befae3
+    nonagentic:
+      uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pool-nonagentic/2026.11.18.71
+      file: train.parquet
+      sha256: 4cb4fd8206a113509e6fcd9c0c4b1198c6d925eb964b1622c98d12ef36151402
+  validation_data:
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release
+    file: validation.parquet
+    sha256: 8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838
