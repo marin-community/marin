@@ -56,6 +56,7 @@ trials:
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0242
   wandb:
   - belay-X0242d768-seed0
+  - belay-X0242d768-seed0-r1
   settings:
     ngram_cache_mixture: 'true'
   commit: 72e4fce9c4
