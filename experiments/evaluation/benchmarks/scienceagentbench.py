@@ -44,7 +44,8 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 NAME = "scienceagentbench-verified-66-knowledge-off"
-VERSION = "2026.11.20.2"
+PILOT_VERSION = "2026.11.20.2"
+PANEL_VERSION = "2026.11.22.1"
 UNRUN_TASK_IDS = frozenset({78})
 IMAGES = Path(__file__).resolve().parents[1] / "images"
 VISUAL = IMAGES / "scienceagentbench-visual"
@@ -268,9 +269,10 @@ def item(task: TaskSpec) -> EvaluationItem:
 
 
 def benchmark_source(name: str, condition: KnowledgeCondition, count: int) -> RlDataSource[EvaluationCorpusRecipe]:
+    version = PILOT_VERSION if name == NAME else PANEL_VERSION
     recipe = CurationRecipe(
         name=name,
-        version=VERSION,
+        version=version,
         intended_use=IntendedUse.EVAL,
         convert=partial(convert, condition=condition),
         # The largest task references 910,657,346 bytes before its software and verifier helpers.
@@ -294,7 +296,7 @@ def benchmark_source(name: str, condition: KnowledgeCondition, count: int) -> Rl
             ),
         },
     )
-    protocol = harbor_protocol(name, VERSION, count, max_output_tokens=16384, requires_judge=True, trials=1)
+    protocol = harbor_protocol(name, version, count, max_output_tokens=16384, requires_judge=True, trials=1)
     return RlDataSource(
         info=SourceInfo(
             id=name,
