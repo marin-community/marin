@@ -20,15 +20,15 @@ The three scripts each complete their own step in one invocation:
     lean=experiments.post_training.task_curation.datasets.lean
     uv run python -m "$lean.classify_answer_disclosure" numina.parquet \\
         --prime-lists prime-lists \\
-        --output labels.jsonl.gz
+        --output labels.jsonl
     uv run python -m "$lean.numina_golden_batch" numina.parquet \\
         --prime-lists prime-lists \\
-        --labels labels.jsonl.gz \\
-        --output golden.jsonl.gz
+        --labels labels.jsonl \\
+        --output golden.jsonl
     uv run python -m "$lean.numina_quality" numina.parquet \\
         --prime-lists prime-lists \\
-        --labels labels.jsonl.gz \\
-        --golden golden.jsonl.gz \\
+        --labels labels.jsonl \\
+        --golden golden.jsonl \\
         --output-dir quality-output
 
 The first two commands submit paid Gemini batches using an exported GEMINI_API_KEY, wait,
@@ -44,9 +44,10 @@ and retains only "no" disclosure labels and PASS golden controls. It writes
 numina_row_quality_report.csv and numina_autoinformalization_tasks.json. Excluded rows have
 included=False and a reason in cause. Missing golden results stop the build.
 
-The repository stores disclosure labels at datasets/lean/numina_answer_disclosure_labels.jsonl.gz
-beside this module. For the existing local run, golden results are saved under
-artifacts/numina-answer-disclosure/numina_golden_controls.jsonl.gz. Rebuild both quality
+Saved disclosure labels default to numina_answer_disclosure_labels.jsonl beside this module.
+Disclosure labels, golden verdicts, and the quality CSV are generated local files.
+For the existing local run, golden results are saved under
+artifacts/numina-answer-disclosure/numina_golden_controls.jsonl. Rebuild both quality
 artifacts from those saved results without another paid run:
 
     uv run python -m "$lean.numina_quality" numina.parquet --prime-lists prime-lists --output-dir quality-output
@@ -58,7 +59,6 @@ to activate the selection.
 
 import argparse
 import csv
-import gzip
 import hashlib
 import json
 import os
@@ -77,8 +77,8 @@ from experiments.post_training.task_curation.datasets.lean import autoinformaliz
 from experiments.post_training.task_curation.datasets.lean import numina
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key, statement_key
 
-LABELS = Path(__file__).with_name("numina_answer_disclosure_labels.jsonl.gz")
-GOLDEN = Path("artifacts/numina-answer-disclosure/numina_golden_controls.jsonl.gz")
+LABELS = Path(__file__).with_name("numina_answer_disclosure_labels.jsonl")
+GOLDEN = Path("artifacts/numina-answer-disclosure/numina_golden_controls.jsonl")
 SOURCE_SHA256 = auto.MANIFEST["input"]["sha256"]
 
 FIELDS = (
@@ -101,7 +101,7 @@ FIELDS = (
 
 
 def read_records(path: Path) -> list[dict]:
-    with gzip.open(path, "rt") if path.suffix == ".gz" else path.open() as stream:
+    with path.open(encoding="utf-8") as stream:
         return [json.loads(line) for line in stream if line.strip()]
 
 
@@ -116,9 +116,9 @@ def read_labels(path: Path) -> dict[str, str]:
 
 
 def write_records(path: Path, records: list[dict]) -> None:
-    """Replace one compressed or plain JSONL output after writing it completely."""
+    """Replace a JSONL output after writing it completely."""
     temporary = path.with_name(path.name + ".tmp")
-    with gzip.open(temporary, "wt") if path.suffix == ".gz" else temporary.open("w") as stream:
+    with temporary.open("w", encoding="utf-8") as stream:
         for record in records:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
     temporary.replace(path)

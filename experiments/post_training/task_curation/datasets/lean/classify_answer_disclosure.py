@@ -4,7 +4,7 @@
 """Classify Numina answer disclosure in one paid Gemini batch invocation.
 
     module=experiments.post_training.task_curation.datasets.lean.classify_answer_disclosure
-    uv run python -m "$module" PARQUET --prime-lists DIR --output disclosure.jsonl.gz
+    uv run python -m "$module" PARQUET --prime-lists DIR --output disclosure.jsonl
 
 Set GEMINI_API_KEY before running. This reads the pinned source, filters ineligible question
 types, submits a Gemini file batch, waits, collects results, and writes per-row labels. The

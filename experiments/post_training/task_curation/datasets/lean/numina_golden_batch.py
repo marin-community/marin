@@ -4,8 +4,8 @@
 """Check Numina golden controls in one paid Gemini batch invocation.
 
     module=experiments.post_training.task_curation.datasets.lean.numina_golden_batch
-    uv run python -m "$module" PARQUET --prime-lists DIR --labels disclosure.jsonl.gz \\
-        --output golden.jsonl.gz
+    uv run python -m "$module" PARQUET --prime-lists DIR --labels disclosure.jsonl \\
+        --output golden.jsonl
 
 Set GEMINI_API_KEY before running. This selects eligible no-disclosure rows directly from
 the pinned source, submits a batch, waits, and writes per-row golden results. Each row gets

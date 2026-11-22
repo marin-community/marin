@@ -98,10 +98,10 @@ def test_cli_selects_raw_rows_and_writes_results_in_one_run(tmp_path, monkeypatc
         }
 
     monkeypatch.setattr(module, "run_batch", run)
-    output = tmp_path / "results.jsonl.gz"
+    output = tmp_path / "results.jsonl"
     args = ["script", "source.parquet", "--prime-lists", str(tmp_path), "--output", str(output)]
     if module is golden:
-        labels = tmp_path / "labels.jsonl.gz"
+        labels = tmp_path / "labels.jsonl"
         quality.write_records(labels, [dict(row="0", label="no")])
         args.extend(["--labels", str(labels), "--max-output-tokens", "2048"])
     monkeypatch.setattr(sys, "argv", args)

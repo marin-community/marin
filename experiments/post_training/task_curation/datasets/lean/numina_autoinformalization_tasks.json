@@ -3833,8 +3833,8 @@
  },
  "dataset_revision": "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94",
  "source_sha256": "cddeac3b98ad642b53e41b1751ceb7ab34ad22019d8e542b403de67ecf337bc9",
- "labels_sha256": "ccca90151d9145d37b358da141f8953dc08d373a55532e5fdf174ef666912962",
- "golden_sha256": "100b0f9a0870f357a0a91a26bc1f72de61c157c78360b5857fe2125bc9d385d4",
+ "labels_sha256": "1d72f27ce048c62a739a5a4a27425a89c8b79800d69e1aef3d782be0c37de940",
+ "golden_sha256": "80f3d7cf64a12a5456c98c407aa49a0cd30fa8e1b5b2812f6f94675bd208f55e",
  "judge_models": [
   "gemini-4-carbon"
  ],

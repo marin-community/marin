@@ -34,8 +34,8 @@ def report_row(key, label="no"):
 def test_one_offline_command_builds_both_artifacts_and_filters_rejected_rows(tmp_path, monkeypatch):
     rows = [report_row(str(i)) for i in range(4)]
     rows[-1].update(included=False, cause="answer_disclosed", disclosure="yes")
-    labels = tmp_path / "labels.jsonl.gz"
-    golden = tmp_path / "golden.jsonl.gz"
+    labels = tmp_path / "labels.jsonl"
+    golden = tmp_path / "golden.jsonl"
     quality.write_records(labels, [dict(row=r["row_key"], label=r["disclosure"]) for r in rows])
     records = [
         dict(
