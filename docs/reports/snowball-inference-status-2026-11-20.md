@@ -40,6 +40,8 @@ eligible sessions from the pinned Weka corpus. The frozen workload SHA256 was
 | [Native, fused decode KV append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v15) | 25 | 8,311 | 46.17 | 114.22 |
 | [Native, larger prefix cache with per-token layer copies](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v17) | 18 | 6,461 | 33.31 | 59.04 |
 | [Native, per-layer buffers across each decode round](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v22) | 26 | 9,092 | 50.51 | 157.99 |
+| [Native, per-round buffers and three recent prompt prefixes](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v21) | 26 | 9,092 | 50.51 | 158.99 |
+| [Native, clean checkout of `5580503d9f`](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v23) | 26 | 9,092 | 50.51 | 165.68 |
 | [vLLM TPU, prefix caching enabled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-v01-64k-c1-20261121) | 26 | 9,092 | 50.47 | 116.28 |
 
 Reported throughput includes drain time. The second native run completed one
@@ -133,11 +135,18 @@ The decode trace showed roughly 57 µs per layer per token to copy the layer's
 64 MiB KV shard out of the stacked buffer. The per-round layout splits the
 cache once, carries each layer's physical shard through the 32-token device
 loop, and repacks at the boundary. With 512 physical pages, native and vLLM
-each completed 26 requests and emitted 9,092 tokens. Native matched end-to-end
+each completed the same 26 turns and emitted the same output-token count on
+every turn. Native matched end-to-end
 throughput and measured 36% higher active decode throughput. The p90 time
 to first token was 2.14 seconds on native and 0.56 seconds on vLLM. The
 594-output-token turn took 6.40 seconds on native and 6.29 seconds on vLLM.
 [Matched native run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v22)
+
+Allocating 2,048 physical pages let the engine retain full pages from three
+recent prompts and reserve enough space for the active request. The per-round
+layout sustained 50.51 output tokens/s with this cache. The run reused up to
+63,232 prompt tokens on a turn and brought p90 time to first token to 1.24
+seconds. [Three-prefix run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-v01-64k-c1-20261121-v21)
 
 ### Reproduce the native diagnostic
 
@@ -166,7 +175,9 @@ packed-prefill and decode comparisons against a dense reference.
 
 Add `--profile-decode` to capture short and long warmed decode after the
 measurement. Use `--attention tpu_fp32` to select the earlier bounded
-attention kernel. To rebuild an expired workload receipt on a CPU worker, run
+attention kernel. Set `--prefix-cache recent_prompts --kv-cache-contexts 4`
+to select the larger prefix cache with the per-round layout. To rebuild an
+expired workload receipt on a CPU worker, run
 `python -m experiments.evaluation.knotmeter.workload` with the
 `experiments/evaluation/knotmeter/snowball-v01-tpu-64k.yaml` series, a fresh
 local output directory, and a region-local `--cache-root`. It writes the

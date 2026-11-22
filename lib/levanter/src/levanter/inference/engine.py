@@ -108,8 +108,12 @@ class InferenceEngineConfig:
     Each packed batch uses the smallest fitting size. Include sizes divisible by the model's
     token mesh size. The largest prefill always uses max_prefill_size.
     """
-    prefix_cache: Literal["disabled", "last_prompt"] = "disabled"
-    """Reuse matching full pages of the previous prompt for single-sequence Snowball serving."""
+    prefix_cache: Literal["disabled", "last_prompt", "recent_prompts"] = "disabled"
+    """Reuse full prompt pages for single-sequence Snowball serving.
+
+    The recent-prompts cache reserves one sequence's worth of pages for the active request. Each
+    additional sequence's worth of pages can retain one completed prompt.
+    """
 
     # Decode loop knobs
     max_tokens_per_round: int | None = None
@@ -136,8 +140,8 @@ class InferenceEngineConfig:
             and self.prefill_bucket_sizes[-1] >= self.max_prefill_size
         ):
             raise ValueError("prefill_bucket_sizes must be below max_prefill_size")
-        if self.prefix_cache == "last_prompt" and self.max_seqs != 1:
-            raise ValueError("The last-prompt cache requires max_seqs=1")
+        if self.prefix_cache != "disabled" and self.max_seqs != 1:
+            raise ValueError("The prompt cache requires max_seqs=1")
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -863,7 +867,9 @@ def _run_generation_loop(
         pages = jnp.stack([cache.kv_pages.array for cache in final_gen_state.cache])
         if stacked_sharding is not None and not stacked_sharding.mesh.empty:
             pages = jax.reshard(pages, stacked_sharding)
-        final_gen_state = dataclasses.replace(final_gen_state, cache=StackedKvPageCache(hax.named(pages, stacked_axes)))
+        final_gen_state = dataclasses.replace(
+            final_gen_state, cache=StackedKvPageCache(hax.named(pages, stacked_axes))
+        )
     if routes is not None:
         assert isinstance(model, SnowballLMHeadModel)
         final_gen_state, routes = _capture_terminal_inputs(final_gen_state, model, routes)
@@ -978,10 +984,16 @@ class InferenceEngine:
         # Impute max_prefill_size if not set
         if config.max_prefill_size is None:
             config = dataclasses.replace(config, max_prefill_size=decode_state.page_table.max_len_per_seq)
-        if config.prefix_cache == "last_prompt" and not isinstance(model, SnowballLMHeadModel):
-            raise ValueError("The last-prompt cache requires Snowball")
+        if config.prefix_cache != "disabled" and not isinstance(model, SnowballLMHeadModel):
+            raise ValueError("The prompt cache requires Snowball")
+        self._retained_prompt_limit = 1
+        if config.prefix_cache == "recent_prompts":
+            table = decode_state.page_table
+            self._retained_prompt_limit = table.num_pages // table.pages_per_seq - 1
+            if self._retained_prompt_limit < 1:
+                raise ValueError("The recent-prompts cache requires max_pages for at least two full sequences")
         self.config = config
-        self._cached_prompt: _CachedPrompt | None = None
+        self._cached_prompts: list[_CachedPrompt] = []
         # Track free local sequence slots as explicit ids (smallest id first to match allocator expectations).
         # Respect any pre-populated allocations in the provided PageTable.
         sequences = decode_state.sequences
@@ -1043,7 +1055,7 @@ class InferenceEngine:
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
         self.gen_state = eqx.filter_jit(GenState.reset, donate="all")(self.gen_state)
-        self._cached_prompt = None
+        self._cached_prompts.clear()
         self._clear_requests()
 
     def _clear_requests(self) -> None:
@@ -1077,12 +1089,26 @@ class InferenceEngine:
         )
 
         self.gen_state = new_state
-        if self.config.prefix_cache == "last_prompt":
+        if self.config.prefix_cache != "disabled":
             tokens = np.asarray(batch[0].prompt_tokens, dtype=np.int32)
             count = len(tokens) // self.config.page_size
             pages = np.array(jax.device_get(new_state.decode_state.sequences.page_indices.array[0, :count]))
-            self._cached_prompt = _CachedPrompt(self.model, tokens, pages)
+            if np.any((pages < 0) | (pages >= new_state.decode_state.page_table.num_pages)):
+                raise ValueError("Prefill returned an invalid full prompt page")
+            self._cached_prompts.append(_CachedPrompt(self.model, tokens, pages))
+            del self._cached_prompts[: -self._retained_prompt_limit]
         return outputs
+
+    def _matching_prompt_pages(self, tokens: np.ndarray) -> np.ndarray:
+        pages = np.empty(0, dtype=np.int32)
+        for cached in reversed(self._cached_prompts):
+            # Leave one query so prefill can compute next-token logits.
+            limit = min(len(tokens) - 1, len(cached.tokens))
+            mismatches = np.flatnonzero(tokens[:limit] != cached.tokens[:limit])
+            count = (int(mismatches[0]) if mismatches.size else limit) // self.config.page_size
+            if count > len(pages):
+                pages = cached.pages[:count]
+        return pages
 
     def _prefill_prompts(
         self,
@@ -1106,7 +1132,7 @@ class InferenceEngine:
         prompt_lengths = np.zeros((max_slots,), dtype=np.int32)
         prefix_pages = (
             np.full((max_slots, decode_state.page_table.pages_per_seq), INVALID, dtype=np.int32)
-            if self.config.prefix_cache == "last_prompt"
+            if self.config.prefix_cache != "disabled"
             else None
         )
 
@@ -1147,14 +1173,10 @@ class InferenceEngine:
 
             this_tokens = np.asarray(seq_tokens, dtype=np.int32)
             reused = 0
-            previous = self._cached_prompt
-            if prefix_pages is not None and previous is not None:
-                limit = min(len(this_tokens) - 1, len(previous.tokens))
-                mismatches = np.flatnonzero(this_tokens[:limit] != previous.tokens[:limit])
-                identical = int(mismatches[0]) if mismatches.size else limit
-                page_count = identical // self.config.page_size
-                prefix_pages[total_new, :page_count] = previous.pages[:page_count]
-                reused = page_count * self.config.page_size
+            if prefix_pages is not None and self._cached_prompts:
+                pages = self._matching_prompt_pages(this_tokens)
+                prefix_pages[total_new, : len(pages)] = pages
+                reused = len(pages) * self.config.page_size
                 logger.info("Reused %d prompt tokens", reused)
             end = offset + len(seq_tokens) - reused
             queue_tokens[offset:end] = this_tokens[reused:]
@@ -1315,14 +1337,21 @@ class InferenceEngine:
                 "Decompose your request into smaller batches or increase max_seqs when building the service."
             )
 
-        if self.config.prefix_cache == "last_prompt" and (len(requests) != 1 or replay is not None):
-            raise ValueError("The last-prompt cache requires one request without route capture")
+        if self.config.prefix_cache != "disabled" and (len(requests) != 1 or replay is not None):
+            raise ValueError("The prompt cache requires one request without route capture")
 
-        previous = self._cached_prompt
-        if previous is None or previous.model is not self.model:
+        if not self._cached_prompts or self._cached_prompts[-1].model is not self.model:
             self.reset()
         else:
             decode_state = eqx.filter_jit(DecodeState.reset)(self.gen_state.decode_state)
+            if self.config.prefix_cache == "recent_prompts":
+                table = decode_state.page_table
+                refs = np.zeros(table.num_pages, dtype=np.int32)
+                for cached in self._cached_prompts:
+                    refs[cached.pages] = 1
+                pages = jax.device_put(refs, table.page_ref_counts.array.sharding)
+                table = dataclasses.replace(table, page_ref_counts=hax.named(pages, table.page_ref_counts.axes))
+                decode_state = dataclasses.replace(decode_state, page_table=table)
             self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
             self._clear_requests()
 

@@ -82,8 +82,9 @@ def main() -> None:
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
+    parser.add_argument("--kv-cache-contexts", type=int, default=1)
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
-    parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt"), default="disabled")
+    parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt", "recent_prompts"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -110,7 +111,7 @@ def main() -> None:
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         prefix_cache=args.prefix_cache,
     )
-    service = dataclasses.replace(service, max_pages=service.max_pages_per_seq)
+    service = dataclasses.replace(service, max_pages=service.max_pages_per_seq * args.kv_cache_contexts)
     config = InferenceServerConfig(trainer=trainer, model_name=series["model"], service=service)
 
     with tempfile.TemporaryDirectory(prefix="agentx-native-tpu-") as workdir:

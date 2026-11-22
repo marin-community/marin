@@ -103,10 +103,11 @@ def test_unrolled_decode_preserves_snowball_generation(serving_model, decode_lay
     assert _engine(model, 3).generate(requests) == scanned
 
 
-def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, caplog):
+@pytest.mark.parametrize("prefix_cache,max_pages", [("last_prompt", 4), ("recent_prompts", 12)])
+def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, caplog, prefix_cache, max_pages):
     config = InferenceEngineConfig(
         max_seq_len=8,
-        max_pages=4,
+        max_pages=max_pages,
         max_seqs=1,
         page_size=2,
         max_queued_tokens=2,
@@ -117,12 +118,14 @@ def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, cap
     )
     fresh = InferenceEngine.from_model_with_config(serving_model, None, config)
     cached = InferenceEngine.from_model_with_config(
-        serving_model, None, dataclasses.replace(config, prefix_cache="last_prompt")
+        serving_model, None, dataclasses.replace(config, prefix_cache=prefix_cache)
     )
     params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(7))
     initial = Request([1, 2, 3, 4, 5], 0, params, 1)
     next_turn = Request([1, 2, 3, 4, 6], 1, params, 1)
     cached.generate([initial])
+    if prefix_cache == "recent_prompts":
+        cached.generate([Request([7, 8, 9, 10, 11, 12], 2, params, 1)])
     expected = fresh.generate([next_turn])
     with caplog.at_level(logging.INFO):
         assert cached.generate([next_turn]) == expected
