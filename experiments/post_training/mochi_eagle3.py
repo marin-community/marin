@@ -19,13 +19,14 @@ import pyarrow.parquet as pq
 import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
+from skyrl_gym.task_records import episode_prompt
 from skyrl_train.io.remote_safetensors import RemoteSafetensorsTensorStore
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
-from taskcompendium.submission import chat_request
 from transformers import AutoTokenizer, LlamaConfig
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ BOOTSTRAP_ARCHIVES = (
 DRAFT_VOCAB_SIZE = 32000
 MAX_PROMPT_TOKENS = 90112
 AUXILIARY_LAYERS = [3, 24, 45]
+AGENTIC_SOURCE = "long-loop-smartie-swesmith"
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ def bootstrap_records() -> list[dict]:
                 provenance = record["provenance"]
                 if provenance["model_source_identity"] != TARGET_IDENTITY or provenance["model_version_step"] != 0:
                     continue
+                if record["trajectory"]["environment_extras"]["data_source"] != AGENTIC_SOURCE:
+                    continue
                 records.append(record)
     if not records:
         raise ValueError("No exact-token continuations from the adopted Mochi checkpoint")
@@ -75,28 +79,27 @@ def bootstrap_records() -> list[dict]:
 
 def prepare_prompts(nonagentic_count: int, seed: int) -> tuple[list[DraftPrompt], Counter[int], dict]:
     records = bootstrap_records()
-    frequency_groups = {
-        record["trajectory"]["instance_id"]
-        for record in records
-        if int(canonical_sha256({"task": record["trajectory"]["instance_id"]})[:8], 16) % 2 == 0
-    }
+    grouped_records: dict[str, list[dict]] = {}
+    for record in records:
+        group = canonical_sha256({"messages": record["prompt"]["messages"]})
+        grouped_records.setdefault(group, []).append(record)
+    frequency_groups = {group for group in grouped_records if int(group[:8], 16) % 2 == 0}
     frequencies: Counter[int] = Counter()
     prompts: dict[str, DraftPrompt] = {}
-    for record in records:
-        group = record["trajectory"]["instance_id"]
-        if group in frequency_groups:
-            response = record["response"]
-            frequencies.update(
-                token
-                for token, supervised in zip(response["token_ids"], response["loss_mask"], strict=True)
-                if supervised
-            )
-            continue
-        tokens = record["prompt"]["token_ids"]
-        if not tokens or len(tokens) > MAX_PROMPT_TOKENS:
-            continue
-        group_digest = canonical_sha256({"task": group})
-        prompts.setdefault(group_digest, DraftPrompt(group_digest, group_digest, "agentic", tokens))
+    for group, group_records in grouped_records.items():
+        for record in group_records:
+            if group in frequency_groups:
+                response = record["response"]
+                frequencies.update(
+                    token
+                    for token, supervised in zip(response["token_ids"], response["loss_mask"], strict=True)
+                    if supervised
+                )
+                continue
+            tokens = record["prompt"]["token_ids"]
+            if not tokens or len(tokens) > MAX_PROMPT_TOKENS:
+                continue
+            prompts.setdefault(group, DraftPrompt(group, group, "agentic", tokens))
     if not frequencies:
         raise ValueError("Bootstrap training groups have no supervised target tokens")
 
@@ -113,7 +116,10 @@ def prepare_prompts(nonagentic_count: int, seed: int) -> tuple[list[DraftPrompt]
             generator.shuffle(rows)
             for row in rows:
                 task = TaskSpec.model_validate_json(row["task_spec"])
-                request = chat_request(task)
+                prompt = episode_prompt(task)
+                if prompt.messages[-1]["role"] == "assistant":
+                    prompt = assistant_prefix_prompt(task)
+                request = {"messages": list(prompt.messages), **prompt.options}
                 group_digest = canonical_sha256({"messages": request["messages"], "tools": request.get("tools")})
                 if group_digest in prompts:
                     continue
@@ -121,7 +127,8 @@ def prepare_prompts(nonagentic_count: int, seed: int) -> tuple[list[DraftPrompt]
                     request["messages"],
                     tools=request.get("tools"),
                     tokenize=True,
-                    add_generation_prompt=True,
+                    return_dict=False,
+                    **request.get("extra_body", {"add_generation_prompt": True}),
                     enable_thinking=True,
                 )
                 if not tokens or len(tokens) > MAX_PROMPT_TOKENS:
