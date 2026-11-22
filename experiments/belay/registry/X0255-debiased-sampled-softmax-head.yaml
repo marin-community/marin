@@ -54,8 +54,8 @@ trials:
   baseline: belay-X0255-control 3.0442 (same commit, seed 0)
   step_time_change: +1%
 potential:
-  score: 2
-  rationale: +0.0804 at equal data (clear loss); 5% faster, equal-time run pending → 2
+  score: 1
+  rationale: +0.0804 at equal data, +0.0736 at equal time (3177 steps); clear loss on both → 1
   model: claude-opus-5-5
   date: '2026-11-22'
-  inputs_digest: f714f84d4311
+  inputs_digest: cc74c6ef1261
