@@ -7,6 +7,17 @@ metadata was committed. End-to-end update confirmation, fresh-process
 continuation, updated-weight publication and generation, and the matched
 25-update comparison remain unverified.
 
+The latest eight-H100 diagnostic completed and its entire archive was audited.
+It separates two findings: identical calls to one compiled gradient program
+produce different finite gradients, and the short-sequence attention fallback
+can return NaN dQ on finite inputs after an intentional NaN-input call.
+Checkpoint restoration itself is byte-exact. The strict tiny-model continued
+state/score comparison still fails; no tolerance has changed. The full-model
+validator checks exact restoration before resuming normal training. A separate
+full-model diagnostic is being prepared to test finite updates, natural process
+exit, updated-weight publication and generation while retaining the failed
+tiny-model parity gate.
+
 BATCH smoke `2026.11.22.1`, from
 `8dde046e6980e120e13f577f0035be16c62d77f7`, failed at 00:56 PST during
 fresh-process checkpoint validation. All four native learners completed
@@ -189,14 +200,64 @@ a scratch-buffer, stream or allocator mechanism. The
 explicitly clears the padded dQ accumulator; a missing-clear explanation has
 not been established.
 
-Two separate diagnostics are being prepared: repeat one publicly compiled pure
-Trainer gradient program at fixed A1, and run finite/finite/NaN-dO/finite/finite
-backward calls with the same compiled object and saved residuals. Their local
-CPU checks pass; GPU results are pending. Passing either would not clear the
-actual optimizer-body mismatch. The next full smoke will also require durable,
+The eight-H100 BATCH run
+`/dlwh/native-lifecycle-repeatability-2026-11-22-2`, from
+`761116cb37ae27c9fb1468582d22c3e71e3a1d07`, completed in 4m43.75s with task
+exit zero and no retries or preemptions. Its predecessor was scheduler-preempted
+before producing a numerical verdict. The recovery used identical source-file
+contents, inputs, resources and settings. Independent audits verified all 112
+archive members and 4,588 frozen source entries. The
+[complete archive](s3://marin-us-east-08a/tmp/ttl=7d/iris/task-outputs/dlwh/native-lifecycle-repeatability-2026-11-22-2/0/dba881a4baa5c048/outputs.tar.zst)
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-lifecycle-repeatability-2026-11-22-2%2F0%2Fdba881a4baa5c048%2Foutputs.tar.zst))
+is 810,804,989 bytes, SHA256
+`19dccc5b331eedebbfb6d59bf50f7115be952da64889e42ce0c8b015596c306a`.
+Collection succeeded; learner qualification remains failed. No job is active.
+
+The repeated shared-checkpoint test again passed 16 of 18 checks. Exact
+restoration, frozen input and scores before the update, finite model/Adam state,
+RNG, step and both natural exits passed. Continued state and scores differed:
+maximum absolute model error was 0.00000498537, Adam error 0.0000458113 and
+score error 0.000102043. These are strict failures, irrespective of their size.
+
+The new pure-gradient probe used the aligned 128-token, D128/GQA4 fixture and
+loaded its saved checkpoint and batch. It compiled the Trainer's microbatched
+gradient computation once, separately from the optimizer body, then called
+that executable twice with identical arguments, without an optimizer update or
+restart. All 92 saved gradient arrays
+were finite; 21 of 46 gradient leaves differed. The global relative L2 difference
+was 0.00156557. The token embedding accounted for more than 99.99999% of squared
+difference, with maximum absolute error 0.00390625. Loss and all 20 saved metric
+scalars were exact. State, input bytes, formats and shardings remained unchanged.
+This establishes variability in that differentiated program. It does not identify
+a primitive or prove the cause of the actual optimizer-body mismatch.
+
+The separate short-sequence backward probe called one compiled program with
+finite, finite, NaN-dO, finite and finite inputs, retaining the original forward
+residuals. The first two calls passed the existing reference tolerances and
+matched bitwise. The intentional NaN call returned NaNs in dQ, dK and dV. Both
+subsequent finite-input calls returned 1,024 NaNs in dQ, while dK and dV recovered
+bitwise to their original finite values. All finite input bytes remained
+unchanged. This reproduces history-dependent failure in the D64/MHA fallback.
+Its scratch-buffer or launch-order mechanism is unproven; stage snapshots are
+being prepared. D64/MHA means 64 values per attention head with equal query and
+key/value head counts; this shape selects the adapted segmented backward on
+H100. The full model uses 128 values per head and four query heads per key/value
+head (D128/GQA4), which selects a different native SM90 backward.
+
+The native SM90 adapter selects `deterministic=False`. The pinned upstream
+implementation has shared FP32 GQA gradient reductions, so its source contract
+does not promise bitwise repeatability. That source observation alone does not
+identify the cause of the measured gradient differences. Exact restoration and
+subsequent compute repeatability remain separate questions; the existing strict
+continuation failure has not been reclassified as a pass.
+
+The next full-model diagnostic will require durable,
 coordinated child-process finiteness proofs for initial, saved, restored and
-continued states. Parent copies are supplemental; the mandatory child proof
-must succeed on every learner process. Extra host-transfer cost remains
+continued states. Each learner scans its model, Adam, RNG, step and optional
+averaging arrays, records component element/nonfinite counts, and participates
+in an all-process verdict. Every learner must persist its candidate and passing
+verdict under the task's `native-finite` output directory at each phase. Parent
+copies are supplemental. Extra host-transfer cost remains
 unmeasured on the full model.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
@@ -331,8 +392,8 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `2026.11.21.13` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, effective NumPy advisory disabled on Linux, and VMM at 0.90 with preallocation off. Standard JAX memory counters are unavailable for VMM; this is an observed policy, not a measured allocator cap. | Qualify memory management through publication and two real parameter updates with the pinned CUDA kernels. |
-| Publication and resume | Current smoke `2026.11.21.13` passed initial model-version-zero byte comparisons on all eight receivers: 19,687,358,464 bytes each, zero mismatches, and nonempty generation stamped 1. CPU Gloo replay and fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
+| Actual H100 | Full-model smoke `2026.11.22.1` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, effective NumPy advisory disabled on Linux, and VMM at 0.90 with preallocation off. Standard JAX memory counters are unavailable for VMM; this is an observed policy, not a measured allocator cap. | Qualify memory management through publication and two finite parameter updates with the pinned CUDA kernels. |
+| Publication and resume | Full-model smoke `2026.11.22.1` passed initial model-version-zero byte comparisons on all eight receivers: 19,687,358,464 bytes each, zero mismatches, and nonempty generation stamped 1. Full-model restart failed at natural process exit. Tiny CPU and GPU transactions restored exact model, Adam, RNG, step, and averaging state; strict GPU post-update continuation failed. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh full-model learner processes restoring exact state, and a further finite update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
@@ -688,13 +749,14 @@ lint/types, strict docs, and independent review pass. The rendered control is
 unchanged; native configuration differs from `.10` only by `allocator: vmm`
 and `preallocate: false`. These checks do not qualify GPU allocation or fit.
 
-Smoke `2026.11.21.11` uses coordinator
+Historical smoke `2026.11.21.11` used coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.11-coordinator-b6cb00ac`,
 submitted at `2026-11-22T05:14:39.249Z`, with child suffix
 `users-dlwh-checkpoints-snowball-inventory-2026.11.21.11-ac3a25737ef9`.
 Both jobs have verified BATCH priority and zero automatic failure retries.
-All five child tasks are running with zero failures/preemptions in the startup
-snapshot. Source pin `e9fa30e8a2230a4015d8488280d2b375b81ea07d` is frozen;
+Its startup snapshot recorded all five child tasks running with zero
+failures/preemptions; it later failed at the initialization deadline described
+above. Source pin `e9fa30e8a2230a4015d8488280d2b375b81ea07d` was frozen;
 later status-only documentation commits are not its executed source.
 
 Native initialization
@@ -707,7 +769,7 @@ Comparison versions `2026.11.21.2` and `2026.11.21.3` remain unsubmitted.
 The transport repair passes five pinned JAX/JAXLIB `0.11.0` cases: native
 import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
-No successful accelerator update is established by this record.
+That historical attempt established no successful accelerator update.
 Run from the repository with the required storage, evaluation, and judge
 credentials loaded. The smoke command records the submitted attempt; use a
 fresh unused version for another attempt.
