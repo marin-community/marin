@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 2:38 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 2:54 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.18` applied both updates, restored update 1 exactly on four fresh learners, and verified serving versions 0 and 1. Version 2 failed with 929 mismatched bytes at each of the eight receivers. Seven BF16 K/V projection payloads already differed at the sender. | Freeze one binary export per version and rerun both updates, all three byte checks, final generation, and the terminal checkpoint before the matched arms. |
+| 40-H100 learner smoke | Run `2026.11.20.18` applied both updates, restored update 1 exactly on four fresh learners, and verified serving versions 0 and 1. Version 2 failed with 929 mismatched bytes at each of the eight receivers. Seven BF16 K/V projection payloads already differed at the sender. Iris accepted `2026.11.20.19` with one binary export per version. | Verify both updates, all three byte checks, final generation, and the terminal checkpoint on the new attempt before the matched arms. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -512,21 +512,28 @@ Every mismatch belonged to one of seven BF16 attention K/V projections.
 The 32 sender participants reported all 13,798 unique payloads. The same
 seven immutable CPU payloads differed between exports. These are the input
 bytes to the GPU copy and NCCL broadcast. The cause of the differing
-export bytes remains open. The driver rejected the publication and kept generation
-paused. Iris marked the attempt failed, before stamp-3 generation or a
+export bytes remains open. The driver rejected the publication and kept
+generation paused. The attempt failed before stamp-3 generation or a
 terminal checkpoint.
 [Verified diagnostic failure][h100-replay-diagnostic-failure]
 
-The next smoke will give each version one immutable export. With byte
-verification enabled, the sender writes the first export's raw payloads
-to temporary storage on the learner hosts. It then replays those bytes
+Iris accepted `2026.11.20.19` on source `3e4c59c33c`. The frozen preview
+matches the previous workload and retains the 80% preallocated learner pool.
+With verification enabled, the sender writes the first export's raw
+payloads to a temporary file on each learner host. It replays those bytes
 over NCCL so every vLLM receiver can independently compare them with the
-live weights before admitting generation. The current schedule contains
-134,191,857,664 unique payload bytes across the four learner hosts. Measure
-the added local I/O and the publication time with the second distributed
-export removed. This check establishes equality between the exported
-bytes and installed weights. The numerical investigation of the K/V
-exports remains open.
+live weights before admitting generation. Each sender closes its file
+when verification ends. The current schedule contains 134,191,857,664
+unique source payload bytes across the four learner hosts.
+
+Eleven CPU transport tests passed, including Gloo replay over two
+versions, a staged-file fault, and a fault in the receiver's installed
+weights. The CPU proof observed one learner export per version and
+detected both faults. Measure the local I/O and publication wall time on
+H100. This check establishes equality between the exported bytes and
+installed weights. The numerical investigation of the K/V exports remains
+open.
+[Immutable replay smoke][iris-smoke-canonical-replay] · [Frozen source and checks][h100-canonical-replay-handoff]
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -609,7 +616,7 @@ the original artifact roots with a repository-local Git tree abbreviation.
 Both 25-update recipes passed the artifact main's no-run preflight with
 the regional task selection pinned. The Megatron control retains source
 `9e8664df3b` and fingerprint `ef11bf85`. The prospective Levanter arm
-uses diagnostic smoke source `96f3d6ea0f` and fingerprint `10242ebf`. It enables
+uses immutable replay smoke source `3e4c59c33c` and fingerprint `10242ebf`. It enables
 preallocation and keeps the 80% learner cap and pinned-host optimizer
 state. A clean restore reproduced the authored and composed configuration
 checks. Repin the Levanter arm to the accepted smoke source before submission.
@@ -1317,6 +1324,7 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-preallocated-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-coordinator-317129fa%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-ac3d40727bb4
 [iris-smoke-fingerprint]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-coordinator-88b26859%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.17-a9c7f68045d0
 [iris-smoke-replay-diagnostic]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.18-coordinator-631ad9f7%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.18-a4e74365b4d3
+[iris-smoke-canonical-replay]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.19-coordinator-b37693ff%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.19-abe09138e0b3
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
@@ -1341,6 +1349,7 @@ arms. [Prior timing comparison][timing]
 [h100-version-two-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.17%2Fobserved-failure.json
 [h100-replay-diagnostic-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.18%2Fh100-publication-diagnostics-retry.tar.zst
 [h100-replay-diagnostic-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.18%2Fobserved-failure.json
+[h100-canonical-replay-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.19%2Fh100-immutable-publication-retry.tar.zst
 [h100-matched-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fquick-loop-matched-2026.11.20.15.tar.gz
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
