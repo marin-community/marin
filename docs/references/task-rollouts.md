@@ -546,8 +546,8 @@ event queue or a table's buffer is full, or when the process dies.
 Each table buffers its rows in the process, up to 200,000 rows and 64 MiB of events or 128 MiB of messages by
 the client's size estimate. While Finelog is slow or down, a process with both buffers full held 132 MiB of event
 rows and 160 MiB of message rows, and then lost the oldest rows. `FinelogRolloutLog.flush` waits for the buffered
-rows and logs a table that lost rows. It blocks, so call it off the event loop, and call it before the client
-closes.
+rows and logs a table whose rows Finelog did not confirm, because they were lost or the wait timed out. It blocks,
+so call it off the event loop, and call it before the client closes.
 
 ## Deadlines and failures
 

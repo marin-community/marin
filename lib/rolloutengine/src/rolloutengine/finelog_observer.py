@@ -8,11 +8,6 @@ attempt, with its token IDs and log probabilities. A retry can repeat a row and 
 removes duplicates on ``(rollout_id, event_index, message_index)``. The events of a task attempt are complete
 when ``attempt_ended`` is among them with every lower ``event_index``.
 
-The messages table repeats content that other stores hold after the fact: the FineStore archive of an
-evaluation has the transcript of each finished attempt, and SkyRL trajectory retention keeps a sample of an RL
-run's trajectories. This table has the turns of an attempt while it runs, for every producer, in one place that
-SQL reads across runs. ``content_fraction`` bounds what it costs.
-
 The caller owns the Finelog client and passes each task attempt a unique ``run_id`` in ``run_task``, which is
 the rows' ``rollout_id``. This module needs the ``marin-finelog`` package, which ``marin-rolloutengine`` does
 not depend on.
@@ -21,7 +16,7 @@ not depend on.
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -136,6 +131,9 @@ class EventRow(_ScopedRow):
     """Whether the content went to the messages table. A captured event with fewer rows there lost some."""
 
 
+_EVENT_TEXT_COLUMNS = tuple(column.name for column in fields(EventRow) if column.type == str | None)
+
+
 @dataclass(frozen=True, slots=True)
 class MessageRow(_ScopedRow):
     """One message of a task attempt's transcript, or the options of one conversation, as JSON in ``content``."""
@@ -200,7 +198,7 @@ def _encoded(value: object) -> str:
 
 
 def _text(value: object) -> str | None:
-    """``value`` as a string that the Arrow encode accepts. Harness and model code supply it, and nothing checks it.
+    """``value`` as a string that the Arrow encode accepts. Harness, model and grader code supply it unchecked.
 
     The flush thread encodes the rows of many task attempts in one request, and one value that the encode refuses,
     such as a number or a lone surrogate, loses the whole request.
@@ -208,6 +206,12 @@ def _text(value: object) -> str | None:
     if value is None:
         return None
     return str(value).encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def _encodable(row: EventRow) -> EventRow:
+    """``row`` with every optional string column through ``_text``, whichever payload field filled it."""
+    texts: dict[str, Any] = {name: _text(getattr(row, name)) for name in _EVENT_TEXT_COLUMNS}
+    return replace(row, **texts)
 
 
 @dataclass(frozen=True)
@@ -228,15 +232,15 @@ def _message_content(message: dict[str, Any]) -> _Content:
 
 def _event_content(event: RolloutEvent) -> list[_Content]:
     """The content of an event, in transcript order."""
-    payload = event.payload
-    if isinstance(payload, ConversationStarted):
-        messages = [_message_content(message) for message in payload.messages]
-        return [*messages, _Content(ContentKind.OPTIONS, _encoded(payload.options))]
-    if isinstance(payload, ModelTurnCompleted):
-        return [_message_content(payload.message)]
-    if isinstance(payload, TransitionCompleted):
-        return [_message_content(message) for message in payload.observations]
-    return []
+    match event.payload:
+        case ConversationStarted(messages=messages, options=options):
+            return [*map(_message_content, messages), _Content(ContentKind.OPTIONS, _encoded(options))]
+        case ModelTurnCompleted(message=message):
+            return [_message_content(message)]
+        case TransitionCompleted(observations=observations):
+            return [_message_content(message) for message in observations]
+        case _:
+            return []
 
 
 def _scoped_columns(event: RolloutEvent, scope: RolloutScope) -> dict[str, Any]:
@@ -273,7 +277,7 @@ def _event_row(
                 row,
                 duration=payload.duration,
                 turn_index=payload.turn_index,
-                stop_reason=_text(payload.stop_reason),
+                stop_reason=payload.stop_reason,
                 prompt_tokens=payload.prompt_token_count if usage is None else usage.prompt_tokens,
                 response_tokens=payload.response_token_count if usage is None else usage.completion_tokens,
             )
@@ -281,8 +285,8 @@ def _event_row(
             return replace(
                 row,
                 duration=payload.duration,
-                tool_call_id=_text(payload.call_id),
-                tool_name=_text(payload.name),
+                tool_call_id=payload.call_id,
+                tool_name=payload.name,
                 observation_bytes=payload.observation_bytes,
                 done=payload.done,
             )
@@ -301,7 +305,7 @@ def _event_row(
             return replace(
                 row,
                 duration=payload.duration,
-                stop_reason=_text(payload.stop_reason),
+                stop_reason=payload.stop_reason,
                 failed_operation=None if payload.operation is None else payload.operation.value,
                 error=payload.error,
                 turns=payload.turns,
@@ -334,7 +338,7 @@ class FinelogObserver:
             content_chars=sum(len(item.text) for item in content),
             content_captured=captured,
         )
-        self._log.events.write((row,))
+        self._log.events.write((_encodable(row),))
         if not captured:
             return
         scoped = _scoped_columns(event, self._scope)

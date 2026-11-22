@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 import pytest
 from finelog.client import FlushResult, LogClient
 from finelog.embedded import require_embedded_server
+from taskcompendium.grading_result import Outcome
 
 import rolloutengine.finelog_observer as finelog_observer
 from rolloutengine.engine import RolloutEngine
@@ -24,6 +25,7 @@ from rolloutengine.finelog_observer import (
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     ConversationStarted,
+    Graded,
     GradedRolloutInterrupted,
     Prompt,
     RolloutEvent,
@@ -204,7 +206,11 @@ async def test_values_that_the_encoder_refuses_do_not_lose_the_other_rows(finelo
             tool_call=ToolCallCompleted(7, "calculator\ud800", 2, False, 0.0),
         )
     await run_two_turns(log, content_fraction=1.0)
-    # The rows of both task attempts go out in one request, which one refused value would lose.
+    # A verifier's error detail reaches the grade unchecked.
+    observer = FinelogObserver(log, SCOPE, content_fraction=1.0)
+    for rollout_id, error in (("error-number", 7), ("error-surrogate", "bad\ud800")):
+        await observer.on_event(RolloutEvent(rollout_id, "task", 0, 0.0, Graded(Outcome.GRADED, 0.0, error, None, 0.0)))
+    # The rows of all task attempts go out in one request, which one refused value would lose.
     assert await asyncio.to_thread(log.flush, 30) == (FlushResult.SUCCEEDED, FlushResult.SUCCEEDED)
 
     calls = finelog_client.query(
@@ -218,6 +224,10 @@ async def test_values_that_the_encoder_refuses_do_not_lose_the_other_rows(finelo
         f'SELECT rollout_id, role, tool_call_id FROM "{MESSAGES_NAMESPACE}" WHERE event_index = 4 ORDER BY rollout_id'
     ).to_pylist()
     assert [tuple(row.values()) for row in observations] == [(ROLLOUT_ID, "tool", "call-1"), ("odd", "tool\\ud800", "7")]
+    errors = finelog_client.query(
+        f"SELECT rollout_id, error FROM \"{EVENTS_NAMESPACE}\" WHERE rollout_id LIKE 'error-%' ORDER BY rollout_id"
+    ).to_pylist()
+    assert [tuple(row.values()) for row in errors] == [("error-number", "7"), ("error-surrogate", "bad\\ud800")]
 
 
 async def test_an_interrupted_task_attempt_records_the_failed_operation():
