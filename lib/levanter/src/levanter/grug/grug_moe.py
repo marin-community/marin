@@ -25,6 +25,7 @@ import jax.scipy as jsp
 import numpy as np
 from haliax.jax_utils import named_call
 from jax import shard_map
+from jax.experimental.pallas import tpu as pltpu
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Bool, Float, Int
@@ -619,6 +620,10 @@ class MoEExpertMlp(eqx.Module):
         activation = (
             self.activation.to_jax_fn() if isinstance(self.activation, ActivationFunctionEnum) else self.activation
         )
+        chip = pltpu.get_tpu_info().chip_version if jax.default_backend() == "tpu" else None
+        token_tile = 128 if x.shape[0] <= 8192 else 256
+        # Snowball's 1,280-wide projections use a whole output tile on v6e.
+        output_tile = 1280 if chip == pltpu.ChipVersion.TPU_V6E else None
         expert_spec = P("expert", None, None)
         run = shard_map(
             partial(
@@ -627,8 +632,8 @@ class MoEExpertMlp(eqx.Module):
                 num_experts=self.w_gate.shape[0],
                 capacity_factor=self.capacity_factor,
                 token_sharding_axes=token_axes,
-                # Each expert handles few rows in short prefill buckets.
-                megablox_token_tile=128 if x.shape[0] <= 8192 else 256,
+                megablox_token_tile=token_tile,
+                megablox_output_tile=output_tile,
             ),
             mesh=mesh,
             in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),

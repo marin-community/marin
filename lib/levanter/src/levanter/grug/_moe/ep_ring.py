@@ -39,9 +39,10 @@ def _moe_mlp_ep_ring_local(
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
     megablox_token_tile: int | None = None,
+    megablox_output_tile: int | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Gather routes and scatter expert outputs using packed or separate gate and up weights."""
-    dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile)
+    dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile, megablox_output_tile=megablox_output_tile)
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):

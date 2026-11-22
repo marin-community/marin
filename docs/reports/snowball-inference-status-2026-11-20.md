@@ -254,6 +254,15 @@ run measured 58.38 output tokens/s. On 26 matched turns, active decode
 was unchanged at 159.65 tokens/s and p90 TTFT fell to 711 ms. vLLM
 measured 116.28 active tokens/s and 561 ms. [Tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-ep-prefill-tiles-v5p8-20261121-v1) · [Tiled v5p-8 run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v11)
 
+The timed repeat measured 633 ms p90 TTFT and 160.15 active decode
+tokens/s on the same 26 turns. On 20 of 28 turns, the first arriving
+text followed the first sampled-token callback by more than 120 ms
+after accounting for chat encoding and admission. The median residual
+was 212 ms. A trial with a dynamic four-token first decode round lowered
+matched median TTFT from 533 to 390 ms. Matched active decode fell to
+142.10 tokens/s and full throughput fell from 58.59 to 50.51 output
+tokens/s. The trial is outside the serving branch. [Timed repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-host-v5p8-20261121-v1) · [Dynamic round trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-host-v5p8-20261121-v2-first-round)
+
 The fresh prefill trace spent most of its device time in routed expert
 matmuls and long attention. In the primed trace, async copies and packing
 expert weights were among the largest costs. A BF16 expert microbenchmark
@@ -342,6 +351,13 @@ On the same 25 matched turns its active decode of 183.86 tokens/s
 was within 0.3% of native's earlier 184.28 tokens/s. Paired p90 TTFT fell
 to 558 ms, against 518 ms for vLLM. The repeat reproduced the primed
 prefill gains shown in the table. [Tiled v6e-8 repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v5)
+
+A 1,280-column expert output tile reduced the 51,840-token medians to
+1.175 s fresh and 0.084 s primed, and the 64,512-token medians to 1.523
+and 0.092 s. It preserved bitwise BF16 outputs and zero dropped routes
+in the synthetic tile sweep. The full run measured 64.19 output tokens/s
+and retained 184.13 active decode tokens/s on the same 25 paired turns.
+Paired p90 TTFT was 610 ms. [Output tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-ep-prefill-mxu-tiles-v6e8-20261121-v1) · [Wider tile AgentX run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v6)
 
 ## H100 AgentX comparison
 
