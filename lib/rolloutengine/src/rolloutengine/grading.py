@@ -108,4 +108,5 @@ async def _grade_rollout(
             timeout=spec.limits.verifier_timeout,
             judge_connection=judge,
             before_judge=before_judge,
+            final_machine_owner="attempt",
         )

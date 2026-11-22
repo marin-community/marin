@@ -429,7 +429,7 @@ async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
 
 
 async def test_a_library_error_called_from_a_step_still_reports_the_program_line(tmp_path):
-    source = SOURCE.replace(NUMBERS_FILE, '"6 7"')
+    source = SOURCE.replace('path="workspace/numbers.txt"', 'path="/numbers.txt"')
     assert source != SOURCE
     first_line, detail_line, attr = await failure_first_lines(tmp_path, source)
     assert first_line == detail_line == attr

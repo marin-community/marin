@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from shellbox.machine import (
@@ -506,6 +506,7 @@ async def grade_in_sandbox(
     timeout: float | None = None,
     judge_connection: JudgeConnection | None = None,
     before_judge: Callable[[], Awaitable[None]] | None = None,
+    final_machine_owner: Literal["grader", "attempt"] = "grader",
 ) -> GradeResult:
     """Grade with a ``GraderMachine`` placement: a verifyit or script grader in a fresh machine.
 
@@ -514,7 +515,8 @@ async def grade_in_sandbox(
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
     Input unpacking and environment setup use ``machine_spec.startup_timeout``. The grader's
     execution limit normally applies only to the grading command. For a script grader with replay,
-    it bounds the combined replay, staging, and grading operation.
+    it bounds the combined replay, staging, and grading operation. An attempt-owned factory
+    can defer final verifier teardown until after the attempt records grading time.
     """
     grading, placement = _grader_machine_grading(task, task_machine, timeout)
     validate_machine_spec(placement.environment, factory, machine_spec)
@@ -543,6 +545,7 @@ async def grade_in_sandbox(
         dict(os.environ),
         judge_connection,
         before_judge,
+        final_machine_owner,
     )
 
 
@@ -748,6 +751,7 @@ async def _grade_staged(
     host_environment: Mapping[str, str],
     judge_connection: JudgeConnection | None,
     before_judge: Callable[[], Awaitable[None]] | None = None,
+    final_machine_owner: Literal["grader", "attempt"] = "grader",
 ) -> GradeResult:
     """Grade in a fresh machine, transferring only declared outputs when replay is enabled."""
     limit = grading.limit if isinstance(grading.grader, ScriptGrader) and grading.grader.replay is not None else None
@@ -765,6 +769,7 @@ async def _grade_staged(
                 host_environment,
                 judge_connection,
                 before_judge,
+                final_machine_owner,
             )
     except TimeoutError:
         if not deadline.expired():
@@ -783,6 +788,7 @@ async def _grade_staged_impl(
     host_environment: Mapping[str, str],
     judge_connection: JudgeConnection | None,
     before_judge: Callable[[], Awaitable[None]] | None = None,
+    final_machine_owner: Literal["grader", "attempt"] = "grader",
 ) -> GradeResult:
     """Grade in a fresh machine using the declared replay outputs or captured submissions."""
     placement = grading.placement
@@ -862,7 +868,8 @@ async def _grade_staged_impl(
                     result = replace(result, diagnostics={**result.diagnostics, "replay": replay_diagnostics})
                 return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
             finally:
-                await machine.close()
+                if final_machine_owner == "grader":
+                    await machine.close()
     except _StepFailed as failure:
         return failure.result
     except SubmissionFailure as error:
