@@ -78,12 +78,14 @@ from experiments.post_training.long_loop.sft_epoch import MixtureEpochs, SftStop
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph, runtime_execution
 from experiments.post_training.long_loop.stage_guard import StageGuard
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.long_loop_rl import TEACHER_ROUTE_LABELS
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
     exp4_validation_from_manifest,
 )
+from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.sft.launcher import SFTSpec
 
 MICRO210_PLACEHOLDER_URI = "s3://unresolved/terminal"
@@ -719,7 +721,7 @@ def exp4_round_pools(prefix: str, version: str) -> tuple[dict[str, ArtifactStep]
     The pool step drew the curriculum's holdout and recorded the split and the
     fixed curriculum's identity in its manifest; the curriculum reconstructed
     from that record must match it."""
-    producer = pool_steps(version)["pools"]
+    producer = pool_steps(version, grader_environment=environment_artifact(GRADER_PACKAGES))["pools"]
     path = producer.path(prefix)
     record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
     if json.loads(record_bytes)["fingerprint"] != producer.fingerprint():

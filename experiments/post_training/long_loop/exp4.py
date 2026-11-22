@@ -42,11 +42,14 @@ from experiments.post_training.long_loop.optimizer_admission import optimizer_gr
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.shared_sft import shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
     exp4_validation_from_manifest,
 )
+from experiments.post_training.task_curation.images.build import environment_artifact
 
 OUTPUT_PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4"
 REFERENCE_URI = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/evidence/restart53/frozen51-reference.json"
@@ -243,7 +246,7 @@ def main(
     version = resolve_version("mochi-exp4", None)
     os.environ.update(MARIN_PREFIX=OUTPUT_PREFIX, MARIN_TEMP_PREFIX="s3://marin-us-east-08a/tmp")
     pool_version = "2026.11.18.71"
-    producer = pool_steps(pool_version)["pools"]
+    producer = pool_steps(pool_version, grader_environment=environment_artifact(GRADER_PACKAGES))["pools"]
     path = producer.path(OUTPUT_PREFIX)
     record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
     producer_record = json.loads(record_bytes)

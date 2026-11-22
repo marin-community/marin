@@ -1,8 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stamp admitted Exp4 task populations for the curriculum, in regional CPU workers."""
+"""Stamp the Exp4 pools: adopted releases, the regenerated Reasoning Gym label, and recipe-v2 nemotron_if.
 
+The adopted smartie-mixed blend and the swe-verified agentic release are copied byte for byte; their
+rows embed the graders they were admitted with. Two sources bind versions today's grader fixes created:
+the generated Reasoning Gym label is regenerated with the current pipeline (generated version 3 — the
+same prompts, the repaired verifyit scorers and controls, and the cross-day reproducibility comparison),
+and nemotron_if is converted from the pinned upstream file with the verifyit-IFEval recipe (version 2).
+The manifest records, per source, whether the pool carries the full admitted version or a subsample
+together with the upstream admitted row count and the grader-version provenance.
+"""
+
+import base64
 import hashlib
 import json
 import os
@@ -13,6 +23,7 @@ from pathlib import Path
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
+from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.cli import build_options
@@ -20,8 +31,11 @@ from marin.rl.curriculum import PoolRow, validation_payload
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import ImportRejection, RawRow
 
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_RELEASE_URL,
     AGENTIC_TRAIN_SHA256,
@@ -30,21 +44,58 @@ from experiments.post_training.task_curation.datasets.long_loop_rl import (
     NONAGENTIC_TRAIN_SHA256,
     TEACHER_ROUTE_LABELS,
 )
+from experiments.post_training.task_curation.datasets.reasoning_gym.tasks import (
+    EXCLUDED_GENERATORS,
+    GENERATOR_ARCHIVE,
+    GENERATOR_PARTS,
+    GENERATOR_SHA256,
+    GENERATOR_URL,
+    GENERATOR_VERSION,
+    PYTHON_HASH_SEED,
+    convert_generated,
+    generated_row_count,
+    generated_rows,
+)
+from experiments.post_training.task_curation.datasets.skyrl.ifeval import convert_nemotron_if
 from experiments.post_training.task_curation.exp4_curriculum import (
-    CARRY_OVER_SHARES,
-    NEMOTRON_IF_LABEL,
     SOURCE_ROUTES,
     exp4_rl_curriculum,
     exp4_validation_split,
 )
+from experiments.post_training.task_curation.images.build import environment_artifact
 
-NEMOTRON_URI = (
-    "hf://datasets/open-athena/marinskyrl-nemotron-if-bfb072d2-retained-20261113-v1"
-    "@07de9679afd9afd0f46d30fd4ddccce3ef7ec98e/tasks.parquet"
+NEMOTRON_JSONL_URL = (
+    "hf://datasets/nvidia/Llama-Nemotron-Post-Training-Dataset"
+    "@ab2a40d258a6a4d9d4c277d702aeea445081766c/RL/instruction_following/instruction_following.jsonl"
 )
-NEMOTRON_SHA256 = "e6ee366e4ab4e181713c053c88d6819c1408b6399e4bb6c6bbd2dfb2af724ece"
 NEMOTRON_SOURCE = "nvidia/Llama-Nemotron-Post-Training-Dataset"
 NEMOTRON_REVISION = "ab2a40d258a6a4d9d4c277d702aeea445081766c"
+NEMOTRON_UPSTREAM_ROWS = 56_339
+NEMOTRON_KEPT_ROWS = 56_083
+NEMOTRON_REJECTED_ROWS = 256
+NEMOTRON_IF_RECIPE_VERSION = "2"
+NEMOTRON_IF_LABEL = "nemotron_if"
+GENERATOR_RECIPE_NAME = "reasoning_gym_generated"
+GENERATED_ROW_COUNT = 20_800
+EXPECTED_COMPOSITION = {
+    AGENTIC_TRAIN_SOURCE: 5608,
+    "PRIME-RL/Eurus-2-RL-Data": 10_317,
+    "nvidia/Nemotron-RL-Ultra-Training-Blends": 12_426,
+    "nvidia/OpenScience": 20_790,
+    "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": 11_634,
+    "open-thoughts/TaskTrove": 24_033,
+    NEMOTRON_IF_LABEL: NEMOTRON_KEPT_ROWS,
+}
+EXPECTED_COMPOSITION[TEACHER_ROUTE_LABELS[GENERATOR_URL]] = GENERATED_ROW_COUNT
+FIVE_FAMILIES = ("complex_arithmetic", "coin_flip", "game_of_life_halting", "propositional_logic", "puzzle24")
+FIVE_FAMILY_COUNTS = {
+    "coin_flip": 215,
+    "complex_arithmetic": 216,
+    "game_of_life_halting": 206,
+    "propositional_logic": 186,
+    "puzzle24": 192,
+}
+TIME_INTERVALS_ROWS = 201
 POOL_SCHEMA = pa.schema(
     [
         pa.field("task_spec", pa.string(), nullable=False),
@@ -53,34 +104,39 @@ POOL_SCHEMA = pa.schema(
 )
 
 
-def stamped_rows(rows: list[dict], *, nemotron: bool) -> tuple[list[dict], int]:
-    """Preserve task content and label its curriculum population; reject unknown contracts."""
-    output = []
-    removed_null_contracts = 0
-    for row in rows:
-        serialized = row["task_spec"]
-        task = json.loads(serialized)
-        if nemotron:
-            if task["source"]["dataset"] != NEMOTRON_SOURCE or task["source"]["revision"] != NEMOTRON_REVISION:
-                raise ValueError("Admitted Nemotron row differs from the curriculum's upstream pin")
-            # Atlas records an optional delivery contract. The consumer has no such
-            # field: only an explicitly null contract has no semantics to migrate.
-            if "integrity_contract" in task:
-                if task.pop("integrity_contract") is not None:
-                    raise ValueError("Exp4 cannot discard an Atlas delivery contract")
-                removed_null_contracts += 1
-                serialized = json.dumps(task, ensure_ascii=False, separators=(",", ":"))
-            if json.loads(row.get("runtime") or "{}"):
-                raise ValueError("Exp4 requires an explicit adapter for a nonempty Atlas runtime")
-            route = NEMOTRON_IF_LABEL
-        else:
-            dataset = task["source"]["dataset"]
-            if dataset not in TEACHER_ROUTE_LABELS:
-                raise ValueError(f"Exp4 pool row carries an unadmitted data_source: {dataset!r}")
-            route = TEACHER_ROUTE_LABELS[dataset]
-        TaskSpec.model_validate_json(serialized)
-        output.append({"task_spec": serialized, "teacher_route": route})
-    return output, removed_null_contracts
+def _grader_lock(artifact_path: str) -> str:
+    return prefix_join(artifact_path, "requirements.lock")
+
+
+def row_identity(recipe_name: str, source: Source) -> str:
+    return f"{recipe_name}-{canonical_sha256(source.model_dump())}"
+
+
+def _row_family(task: dict) -> str | None:
+    """The Reasoning Gym family a stamped row's verifier config records, when it carries one."""
+    for resource in (task.get("resources") or {}).get("verifier") or []:
+        if resource.get("path", "").endswith("config.json"):
+            content = base64.b64decode((resource.get("source") or {}).get("content_base64", "")).decode(
+                errors="replace"
+            )
+            config = json.loads(content)
+            return (config.get("contract") or {}).get("entry", {}).get("metadata", {}).get("source_dataset")
+    return None
+
+
+def _cycle_index(task: dict) -> int:
+    return int(task["source"]["row"].rsplit(":", 1)[-1])
+
+
+def _old_question(task: dict) -> str:
+    for resource in (task.get("resources") or {}).get("verifier") or []:
+        if resource.get("path", "").endswith("config.json"):
+            content = base64.b64decode((resource.get("source") or {}).get("content_base64", "")).decode(
+                errors="replace"
+            )
+            config = json.loads(content)
+            return config["contract"]["entry"]["question"]
+    raise ValueError(f"Generated row {task.get('id')!r} carries no verifier config")
 
 
 def _write_pool_file(destination: StoragePath, name: str, rows: list[dict]) -> str:
@@ -102,49 +158,175 @@ def _write_pool_file(destination: StoragePath, name: str, rows: list[dict]) -> s
         return digest
 
 
-def prepare_pool(*, output: str, sources: list[dict]) -> None:
-    """Stamp the admitted Exp4 populations, draw the curriculum's holdout, and write the pools.
+def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -> tuple[list[dict], dict]:
+    """Regenerate the generated label with the current pipeline and guard it against the adopted rows.
 
-    One step over every source, so the holdout draw spans all eight labels: the
-    stamped rows (route-labeled by ``teacher_route``, the reasoning-gym wheel URL
-    renamed to its source identity) split into per-source training pools that
-    exclude the holdout, the holdout's ``validation.parquet``, and a manifest
-    recording the split, the per-file digests, and the fixed curriculum's
-    identity. The launch reads the holdout back from the manifest; the training
-    pools carry no validation prompts."""
-    counts = Counter()
+    Returns the new stamped rows and the grader-provenance record: the per-family counts, the five
+    fail-open families' rows, and the prompt-equality receipt over every regenerated row.
+    """
+    if get_job_info() is None:
+        raise RuntimeError("Regenerate the Reasoning Gym label inside the regional Iris CPU job")
+    context = ConversionContext(
+        inputs={},
+        grader_environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            packages_lock=packages_lock,
+        ),
+    )
+    wheel = StoragePath(GENERATOR_URL)
+    expected_count = generated_row_count(wheel, EXCLUDED_GENERATORS, PYTHON_HASH_SEED)
+    if expected_count != GENERATED_ROW_COUNT:
+        raise ValueError(f"The generator's row count changed: {expected_count} != {GENERATED_ROW_COUNT}")
+    rejections: list[dict] = []
+    regenerated: dict[int, str] = {}
+    for part in range(GENERATOR_PARTS):
+        for index, data in generated_rows(
+            wheel, GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, part, GENERATOR_PARTS, None
+        ):
+            if index not in old_rows:
+                raise ValueError(f"Regenerated cycle index {index} is absent from the adopted label")
+            source = Source(
+                dataset=GENERATOR_URL,
+                revision=GENERATOR_SHA256,
+                row=f"{GENERATOR_ARCHIVE}:{index}",
+                importer_revision="1",
+            )
+            raw = RawRow(id=row_identity(GENERATOR_RECIPE_NAME, source), source=source, data=data)
+            task = convert_generated(raw, context)
+            if isinstance(task, ImportRejection):
+                rejections.append({"index": index, **task.model_dump(mode="json")})
+                continue
+            regenerated[index] = task.model_dump_json()
+    if len(regenerated) != GENERATED_ROW_COUNT or rejections:
+        raise ValueError(
+            f"The regeneration kept {len(regenerated)} rows with {len(rejections)} rejections; "
+            f"the adopted label holds {GENERATED_ROW_COUNT}"
+        )
+    for index, old in sorted(old_rows.items()):
+        new = json.loads(regenerated[index])
+        old_task = json.loads(old["task_spec"])
+        if new["context"]["events"][0]["content"] != _old_question(old_task):
+            raise ValueError(f"Regenerated row {index} changed the prompt")
+        if new["id"] != old_task["id"]:
+            raise ValueError(f"Regenerated row {index} changed the task identity")
+    tasks = [json.loads(raw) for raw in regenerated.values()]
+    counts = Counter(_row_family(task) for task in tasks)
+    five_family = {family: counts[family] for family in FIVE_FAMILIES}
+    if five_family != FIVE_FAMILY_COUNTS:
+        raise ValueError(f"The five repaired families' counts changed: {five_family} != {FIVE_FAMILY_COUNTS}")
+    if counts["time_intervals"] != TIME_INTERVALS_ROWS:
+        raise ValueError(f"time_intervals rows changed: {counts['time_intervals']} != {TIME_INTERVALS_ROWS}")
+    five_ids = sorted(task["id"] for task in tasks if _row_family(task) in FIVE_FAMILIES)
+    provenance = {
+        "generator_version": GENERATOR_VERSION,
+        "generated_version": "3",
+        "row_count": len(regenerated),
+        "prompts_unchanged": True,
+        "shared_grade_script": (
+            "every row's embedded reasoning_gym_grade.py is regenerated: the cross-day entry comparison "
+            "(#11951) and the repaired verifyit scorers (#11987)"
+        ),
+        "five_family_rows": five_family,
+        "five_family_ids": five_ids,
+        "time_intervals_rows": counts["time_intervals"],
+    }
+    rows = [
+        {"task_spec": regenerated[index], "teacher_route": TEACHER_ROUTE_LABELS[GENERATOR_URL]}
+        for index in sorted(regenerated)
+    ]
+    return rows, provenance
+
+
+def prepare_pool(*, output: str, agentic: str, blend: str, nemotron: str, grader_environment: str) -> None:
+    """Stamp the pools: adopted rows byte for byte, the regenerated label, and recipe-v2 nemotron_if."""
+    if get_job_info() is None:
+        raise RuntimeError("Prepare Exp4 pools inside the regional Iris CPU job")
+    packages_lock = _grader_lock(grader_environment)
+    counts: Counter = Counter()
     stamped: list[tuple[str, str]] = []
-    inputs = []
+    nemotron_rejections: list[dict] = []
+    generated_old: dict[int, dict] = {}
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        for index, source in enumerate(sources):
-            local = directory / f"source-{index}.parquet"
-            digest = hashlib.sha256()
-            with StoragePath(source["uri"]).open("rb") as reader, local.open("wb") as target:
-                while chunk := reader.read(8 * 1024 * 1024):
-                    digest.update(chunk)
+        for index, (uri, digest) in enumerate(
+            (
+                (agentic, AGENTIC_TRAIN_SHA256),
+                (blend, NONAGENTIC_TRAIN_SHA256),
+                (nemotron, None),
+            )
+        ):
+            local = directory / f"input-{index}"
+            with StoragePath(uri).open("rb") as source, local.open("wb") as target:
+                while chunk := source.read(8 * 1024 * 1024):
                     target.write(chunk)
-            if digest.hexdigest() != source["sha256"]:
-                raise ValueError("Exp4 pool input hash differs from its admitted release")
-            count = 0
-            null_contracts = 0
-            for batch in pq.ParquetFile(local).iter_batches(batch_size=128):
-                rows, normalized = stamped_rows(batch.to_pylist(), nemotron=source["nemotron"])
-                counts.update(row["teacher_route"] for row in rows)
-                stamped.extend((row["teacher_route"], row["task_spec"]) for row in rows)
-                count += len(rows)
-                null_contracts += normalized
-            if count != source["rows"]:
-                raise ValueError(f"Exp4 input count changed: {count} != {source['rows']}")
-            inputs.append({**source, "verified_rows": count, "removed_null_contracts": null_contracts})
-            local.unlink()
-    expected = {source["label"]: source["rows"] for source in sources if source["nemotron"]}
-    if any(source["rows"] == 100000 for source in sources):
-        expected.update({label: round(weight * 200000) for label, weight in CARRY_OVER_SHARES.items()})
-    if any(source["rows"] == 5608 for source in sources):
-        expected[AGENTIC_TRAIN_SOURCE] = 5608
-    if dict(counts) != expected:
-        raise ValueError(f"Exp4 pool composition differs: {dict(counts)} != {expected}")
+            if digest is not None:
+                with local.open("rb") as reader:
+                    observed = hashlib.file_digest(reader, "sha256").hexdigest()
+                if observed != digest:
+                    raise ValueError(f"Input {index} differs from its admitted digest: {observed}")
+            if index == 0:
+                for batch in pq.ParquetFile(local).iter_batches(batch_size=128):
+                    for row in batch.to_pylist():
+                        task = json.loads(row["task_spec"])
+                        TaskSpec.model_validate_json(row["task_spec"])
+                        route = TEACHER_ROUTE_LABELS[task["source"]["dataset"]]
+                        counts[route] += 1
+                        stamped.append((route, row["task_spec"]))
+            elif index == 1:
+                for batch in pq.ParquetFile(local).iter_batches(batch_size=128):
+                    for row in batch.to_pylist():
+                        task = json.loads(row["task_spec"])
+                        TaskSpec.model_validate_json(row["task_spec"])
+                        route = TEACHER_ROUTE_LABELS[task["source"]["dataset"]]
+                        if route == TEACHER_ROUTE_LABELS[GENERATOR_URL]:
+                            generated_old[_cycle_index(task)] = row
+                            continue
+                        counts[route] += 1
+                        stamped.append((route, row["task_spec"]))
+                rows, generated_provenance = _regenerate_generated_label(generated_old, packages_lock)
+                for row in rows:
+                    counts[row["teacher_route"]] += 1
+                    stamped.append((row["teacher_route"], row["task_spec"]))
+            else:
+                context = ConversionContext(
+                    inputs={},
+                    grader_environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                        packages_lock=packages_lock,
+                    ),
+                )
+                upstream = 0
+                for line in local.read_text().splitlines():
+                    if not line.strip():
+                        continue
+                    upstream += 1
+                    source = Source(
+                        dataset=NEMOTRON_SOURCE,
+                        revision=NEMOTRON_REVISION,
+                        row=f"RL/instruction_following/instruction_following.jsonl:{upstream - 1}",
+                        importer_revision=NEMOTRON_IF_RECIPE_VERSION,
+                    )
+                    raw = RawRow(
+                        id=row_identity("nemotron_if", source),
+                        source=source,
+                        data=json.loads(line),
+                    )
+                    task = convert_nemotron_if(raw, context)
+                    if isinstance(task, ImportRejection):
+                        nemotron_rejections.append({"row": upstream - 1, **task.model_dump(mode="json")})
+                        continue
+                    counts[NEMOTRON_IF_LABEL] += 1
+                    stamped.append((NEMOTRON_IF_LABEL, task.model_dump_json()))
+                if upstream != NEMOTRON_UPSTREAM_ROWS:
+                    raise ValueError(
+                        f"The nemotron upstream file holds {upstream} rows, expected {NEMOTRON_UPSTREAM_ROWS}"
+                    )
+    if dict(counts) != EXPECTED_COMPOSITION:
+        raise ValueError(f"The pool composition differs: {dict(counts)} != {EXPECTED_COMPOSITION}")
+    if len(nemotron_rejections) != NEMOTRON_REJECTED_ROWS:
+        raise ValueError(
+            f"nemotron_if rejected {len(nemotron_rejections)} rows, expected {NEMOTRON_REJECTED_ROWS}"
+        )
     pool_rows = {
         label: tuple(
             PoolRow(id=json.loads(raw)["id"], sha256=canonical_sha256(json.loads(raw)))
@@ -171,7 +353,7 @@ def prepare_pool(*, output: str, sources: list[dict]) -> None:
         elif task["id"] in train_ids[route]:
             train_rows[route].append({"task_spec": raw, "teacher_route": route})
         else:
-            raise ValueError(f"Exp4 pool row {route!r}/{task['id']!r} landed on neither side of the holdout")
+            raise ValueError(f"pool row {route!r}/{task['id']!r} landed on neither side of the holdout")
     files = {
         f"{label}/train.parquet": _write_pool_file(destination, f"{label}/train.parquet", rows)
         for label, rows in train_rows.items()
@@ -186,10 +368,68 @@ def prepare_pool(*, output: str, sources: list[dict]) -> None:
                 "train_composition": {label: len(rows) for label, rows in sorted(train_rows.items())},
                 "routes": dict(sorted(SOURCE_ROUTES.items())),
                 "files": files,
-                "inputs": inputs,
                 "rows": sum(counts.values()),
+                "provisioned": {
+                    AGENTIC_TRAIN_SOURCE: {
+                        "provisioned": "full",
+                        "upstream_admitted_count": 5608,
+                        "version": "swe-verified-20261112-v4 release (the admitted agentic training release)",
+                    },
+                    "PRIME-RL/Eurus-2-RL-Data": {
+                        "provisioned": "subsample",
+                        "upstream_admitted_count": None,
+                        "version": "smartie-mixed-20261110-v1 adopted composition",
+                    },
+                    "nvidia/Nemotron-RL-Ultra-Training-Blends": {
+                        "provisioned": "subsample",
+                        "upstream_admitted_count": None,
+                        "version": "smartie-mixed-20261110-v1 adopted composition",
+                    },
+                    "nvidia/OpenScience": {
+                        "provisioned": "subsample",
+                        "upstream_admitted_count": None,
+                        "version": "smartie-mixed-20261110-v1 adopted composition",
+                    },
+                    TEACHER_ROUTE_LABELS[GENERATOR_URL]: {
+                        "provisioned": "full",
+                        "upstream_admitted_count": GENERATED_ROW_COUNT,
+                        "version": "reasoning_gym-0.1.25 generated v3 (the deterministic full run)",
+                    },
+                    "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": {
+                        "provisioned": "subsample",
+                        "upstream_admitted_count": None,
+                        "version": "smartie-mixed-20261110-v1 adopted composition",
+                    },
+                    "open-thoughts/TaskTrove": {
+                        "provisioned": "subsample",
+                        "upstream_admitted_count": None,
+                        "version": "smartie-mixed-20261110-v1 adopted composition",
+                    },
+                    NEMOTRON_IF_LABEL: {
+                        "provisioned": "full",
+                        "upstream_admitted_count": NEMOTRON_UPSTREAM_ROWS,
+                        "version": (
+                            f"recipe v{NEMOTRON_IF_RECIPE_VERSION} over the pinned upstream file; the "
+                            "conversion's filtration is part of the version"
+                        ),
+                    },
+                },
+                "grader_provenance": {
+                    TEACHER_ROUTE_LABELS[GENERATOR_URL]: generated_provenance,
+                    "ifeval_family_embedded_graders": (
+                        "known-stale: the adopted rows keep their embedded #11978/#11985/#11991-era IFEval "
+                        "graders, which erred toward false negatives; a future full re-admission replaces them"
+                    ),
+                    NEMOTRON_IF_LABEL: (
+                        f"recipe v{NEMOTRON_IF_RECIPE_VERSION}: verifyit's IFEval checks with each row's "
+                        "non-null arguments"
+                    ),
+                },
+                "nemotron_rejections": nemotron_rejections,
                 "task_content_changes": (
-                    "Only absent-consumer Atlas integrity_contract=null removed; all originals pinned"
+                    "The adopted agentic and blend rows are byte-identical; the generated label is "
+                    "regenerated at v3 (same prompts, repaired scorers and controls) and nemotron_if is "
+                    "re-converted at recipe v2"
                 ),
             },
             indent=2,
@@ -197,29 +437,20 @@ def prepare_pool(*, output: str, sources: list[dict]) -> None:
     )
 
 
-def pool_steps(version: str) -> dict[str, ArtifactStep]:
-    """The Exp4 pool artifact: per-source holdout-excluding pools plus the holdout's validation data.
-
-    One step stamps every admitted source, draws the curriculum's holdout, and
-    writes ``{label}/train.parquet`` for each source, ``validation.parquet`` for
-    the holdout, and the manifest that records the split and the fixed
-    curriculum's identity."""
+def pool_steps(version: str, *, grader_environment: ArtifactStep) -> dict[str, ArtifactStep]:
+    """The Exp4 pool artifact: per-source holdout-excluding pools plus the holdout's validation data."""
     sources = [
         {
             "uri": prefix_join(AGENTIC_RELEASE_URL, "agentic-train.parquet"),
             "sha256": AGENTIC_TRAIN_SHA256,
             "rows": 5608,
-            "nemotron": False,
-            "label": AGENTIC_TRAIN_SOURCE,
         },
         {
             "uri": prefix_join(NONAGENTIC_RELEASE_URL, "nonagentic-train.parquet"),
             "sha256": NONAGENTIC_TRAIN_SHA256,
-            "rows": 100000,
-            "nemotron": False,
-            "label": "carry-over",
+            "rows": 100_000,
         },
-        {"uri": NEMOTRON_URI, "sha256": NEMOTRON_SHA256, "rows": 54953, "nemotron": True, "label": NEMOTRON_IF_LABEL},
+        {"uri": NEMOTRON_JSONL_URL, "rows": NEMOTRON_UPSTREAM_ROWS},
     ]
     deps = tuple(
         ArtifactStep.adopt(f"long-loop-exp4/admitted/{index}", version, source=member["uri"], config=member)
@@ -230,7 +461,10 @@ def pool_steps(version: str) -> dict[str, ArtifactStep]:
         prepare_pool,
         version=version,
         output=OUT,
-        sources=[{**member, "uri": dep} for member, dep in zip(sources, deps, strict=True)],
+        agentic=deps[0],
+        blend=deps[1],
+        nemotron=deps[2],
+        grader_environment=grader_environment,
     )
     return {"pools": step}
 
@@ -240,7 +474,7 @@ def pool_steps(version: str) -> dict[str, ArtifactStep]:
 def main() -> dict[str, ArtifactStep]:
     configure_coreweave_s3()
     os.environ["MARIN_PREFIX"] = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4"
-    return pool_steps(resolve_version("exp4-rl-data", None))
+    return pool_steps(resolve_version("exp4-rl-data", None), grader_environment=environment_artifact(GRADER_PACKAGES))
 
 
 if __name__ == "__main__":
