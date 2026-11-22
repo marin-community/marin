@@ -54,6 +54,7 @@ def test_runtime_metadata_round_trip_preserves_resolved_termination_grace(monkey
         bundle_id="bundle-id",
         controller_address=None,
         task_token=None,
+        container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         environment=job_pb2.EnvironmentConfig(),
         constraints=(),
         ports=(),

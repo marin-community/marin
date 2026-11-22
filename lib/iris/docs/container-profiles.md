@@ -54,8 +54,10 @@ at submission:
 `BUBBLEWRAP` removes the container runtime's AppArmor confinement, exposing
 namespace and mount operations inside an unprivileged user namespace to task
 processes. It does not grant capabilities in the host user namespace. Use it
-only for tasks that need nested bubblewrap; shellbox's local backend requires
-it inside an Iris task.
+only for tasks that need nested bubblewrap without elevated privileges.
+Shellbox's local backend accepts `BUBBLEWRAP` and `PRIVILEGED` inside Iris tasks.
+Under `BUBBLEWRAP`, a root-run factory starts its keeper as uid/gid 65534 in a
+user namespace. Under `PRIVILEGED`, it keeps the existing root path.
 
 The controller checks elevation by profile name, not numeric value.
 `DOCKER_ACCESS` and `PRIVILEGED` grant distinct host-equivalent capabilities.

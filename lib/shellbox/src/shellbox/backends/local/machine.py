@@ -118,6 +118,7 @@ STICKY_WORLD_WRITABLE = 0o1777
 PROBE_TIMEOUT = 30
 NS_GET_USERNS = 0xB701
 IRIS_BUBBLEWRAP_PROFILE = "CONTAINER_PROFILE_BUBBLEWRAP"
+IRIS_PRIVILEGED_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 BUBBLEWRAP_UID = 65534
 BUBBLEWRAP_GID = 65534
 
@@ -127,7 +128,7 @@ class SandboxUnavailable(RuntimeError):
 
 
 class ContainerProfileRequired(SandboxUnavailable):
-    """An Iris task must use the bubblewrap container profile for the local backend."""
+    """An Iris task needs a supported container profile for the local backend."""
 
 
 class SystemDirectories(StrEnum):
@@ -206,10 +207,18 @@ def _layer(layers: Path, directory: str) -> Path:
     return layers / directory.strip("/")
 
 
-def _prepare_layers(layers: Path) -> None:
+def _prepare_layers(layers: Path, bwrap_user: tuple[int, int] | None) -> None:
+    if bwrap_user is not None:
+        layers.chown(*bwrap_user)
     for directory in _overlaid_directories():
-        (_layer(layers, directory) / "upper").mkdir(parents=True)
-        (_layer(layers, directory) / "work").mkdir()
+        layer = _layer(layers, directory)
+        upper = layer / "upper"
+        work = layer / "work"
+        upper.mkdir(parents=True)
+        work.mkdir()
+        if bwrap_user is not None:
+            for path in (layer, upper, work):
+                path.chown(*bwrap_user)
 
 
 def _submounts(mountinfo: str, directories: Iterable[str]) -> tuple[str, ...]:
@@ -292,7 +301,9 @@ def _prepare_sandbox(
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
-        root, layers = _machine_directories(None, copy_on_write=system_directories is SystemDirectories.COPY_ON_WRITE)
+        root, layers = _machine_directories(
+            None, copy_on_write=system_directories is SystemDirectories.COPY_ON_WRITE, bwrap_user=bwrap_user
+        )
         machine = LocalMachine(
             MachineSpec(HostImage(), workdir="/"),
             bwrap=bwrap,
@@ -361,9 +372,9 @@ def _resource_limits() -> list[tuple[int, int]]:
     ]
 
 
-def _command_account(user: str | None) -> pwd.struct_passwd | None:
-    """The host account a command switches to, or None to run as this process's user."""
-    uid = os.geteuid()
+def _command_account(user: str | None, sandbox_uid: int) -> pwd.struct_passwd | None:
+    """The host account a command switches to, or None to keep the sandbox identity."""
+    uid = sandbox_uid
     if user is None or user == str(uid):
         return None
     try:
@@ -377,8 +388,10 @@ def _command_account(user: str | None) -> pwd.struct_passwd | None:
     return account
 
 
-def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
+def _prepare_root(root: Path, workdir: PurePosixPath | None, bwrap_user: tuple[int, int] | None) -> None:
     root.chmod(ROOT_MODE)
+    if bwrap_user is not None:
+        root.chown(*bwrap_user)
     for directory in (*PRIVATE_SYSTEM_DIRECTORIES, "/opt"):
         (root / directory.lstrip("/")).mkdir(parents=True)
     for configuration in RUNTIME_CONFIGURATION:
@@ -391,7 +404,10 @@ def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
         path.mkdir(parents=True)
         path.chmod(STICKY_WORLD_WRITABLE)
     if workdir is not None:
-        (root / workdir.relative_to("/")).mkdir(parents=True, exist_ok=True)
+        path = root / workdir.relative_to("/")
+        path.mkdir(parents=True, exist_ok=True)
+        if bwrap_user is not None:
+            path.chown(*bwrap_user)
 
 
 def _archive(source: Path, name: str) -> bytes:
@@ -500,7 +516,8 @@ class LocalMachine:
         self._scopes: set[LocalProcessScope] = set()
         self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
-        self._bwrap_user = bwrap_user
+        self._sandbox_identity = bwrap_user or (os.geteuid(), os.getegid())
+        self._drop_bwrap_privileges = bwrap_user is not None
         self._environment = environment
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
@@ -568,7 +585,7 @@ class LocalMachine:
                 arguments.append("--unshare-net")
         # A new user namespace is needed for each independent mount namespace,
         # including members that inherit a peer's network namespace.
-        bwrap_uid, bwrap_gid = self._bwrap_user or (os.geteuid(), os.getegid())
+        bwrap_uid, bwrap_gid = self._sandbox_identity
         if bwrap_uid != 0 and "--unshare-user" not in arguments:
             arguments.insert(1, "--unshare-user")
         if self.image is None and bwrap_uid != 0:
@@ -624,7 +641,7 @@ class LocalMachine:
             config = {
                 "namespaces": prefix,
                 "program": arguments,
-                "program_user": self._bwrap_user,
+                "program_user": self._sandbox_identity if self._drop_bwrap_privileges else None,
                 "cgroup": None if self._keeper_cgroup is None else str(self._keeper_cgroup.path / "cgroup.procs"),
             }
             with tempfile.TemporaryFile() as configuration:
@@ -661,7 +678,7 @@ class LocalMachine:
                             # the host root rather than the guest root.
                             expected = self.root.stat()
                             actual = os.stat(f"/proc/{pid}/root")
-                            expected_uid = 0 if self.image is not None else (self._bwrap_user or (os.geteuid(),))[0]
+                            expected_uid = 0 if self.image is not None else self._sandbox_identity[0]
                             mapped = Path(f"/proc/{pid}/uid_map").read_text().splitlines()
                             final_user = any(int(row.split()[0]) == expected_uid for row in mapped)
                             if final_user and (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino):
@@ -828,7 +845,7 @@ class LocalMachine:
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
             account = None
         else:
-            selected = _command_account(command.user)
+            selected = _command_account(command.user, self._sandbox_identity[0])
             account = None if selected is None else (selected.pw_uid, selected.pw_gid)
         config = {
             "namespaces": self._namespaces,
@@ -1200,10 +1217,19 @@ class LocalMachineFactory:
         umoci: Path = Path("umoci"),
         cgroup_parent: Path | None = None,
     ):
-        iris_task = "IRIS_TASK_ID" in os.environ
-        if iris_task and os.environ.get("IRIS_CONTAINER_PROFILE") != IRIS_BUBBLEWRAP_PROFILE:
-            raise ContainerProfileRequired(f"LocalMachineFactory in an Iris task requires {IRIS_BUBBLEWRAP_PROFILE}")
-        bwrap_user = (BUBBLEWRAP_UID, BUBBLEWRAP_GID) if iris_task and os.geteuid() == 0 else None
+        bwrap_user = None
+        if "IRIS_TASK_ID" in os.environ:
+            # Iris is an optional Shellbox dependency, installed in task images.
+            from iris.cluster.runtime.env import IRIS_CONTAINER_PROFILE_ENV  # noqa: PLC0415
+
+            profile = os.environ.get(IRIS_CONTAINER_PROFILE_ENV)
+            if profile not in (IRIS_BUBBLEWRAP_PROFILE, IRIS_PRIVILEGED_PROFILE):
+                raise ContainerProfileRequired(
+                    f"LocalMachineFactory in an Iris task requires {IRIS_BUBBLEWRAP_PROFILE} or "
+                    f"{IRIS_PRIVILEGED_PROFILE}"
+                )
+            if profile == IRIS_BUBBLEWRAP_PROFILE and os.geteuid() == 0:
+                bwrap_user = (BUBBLEWRAP_UID, BUBBLEWRAP_GID)
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
@@ -1335,7 +1361,9 @@ class LocalMachineFactory:
         ):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
         # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
-        root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
+        root, layers = _machine_directories(
+            None if overlaid_workdir else workdir, copy_on_write=copy_on_write, bwrap_user=self._bwrap_user
+        )
         if aliases is not None:
             # The copied host file can be read-only, as on NixOS.
             (root / "etc/hosts").unlink(missing_ok=True)
@@ -1397,6 +1425,8 @@ class LocalMachineFactory:
             image = await asyncio.shield(preparation)
             if image.user not in (None, "", "0", "0:0"):
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
+            if self._bwrap_user is not None:
+                image.root.chown(*self._bwrap_user)
             effective = replace(spec, workdir=spec.workdir or image.workdir)
             machine = LocalMachine(
                 effective,
@@ -1461,15 +1491,17 @@ def _companion_finished(task: Task, monitor: asyncio.Task[Result], closing_tasks
     reclaim.add_done_callback(_log_task_failure)
 
 
-def _machine_directories(workdir: PurePosixPath | None, *, copy_on_write: bool) -> tuple[Path, Path | None]:
+def _machine_directories(
+    workdir: PurePosixPath | None, *, copy_on_write: bool, bwrap_user: tuple[int, int] | None
+) -> tuple[Path, Path | None]:
     """A new machine's root, with ``workdir`` made in it, and its layers when its system directories are overlaid."""
     root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
     layers = None
     try:
-        _prepare_root(root, workdir)
+        _prepare_root(root, workdir, bwrap_user)
         if copy_on_write:
             layers = Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
-            _prepare_layers(layers)
+            _prepare_layers(layers, bwrap_user)
     except BaseException:
         _remove(root)
         if layers is not None:

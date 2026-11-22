@@ -22,6 +22,7 @@ from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.preemption import TERMINATION_GRACE_ENV
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
 IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
+IRIS_CONTAINER_PROFILE_ENV = "IRIS_CONTAINER_PROFILE"
 TASK_OUTPUT_FINALIZING_STATUS = "finalizing task outputs"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
@@ -236,6 +238,7 @@ def build_common_iris_env(
     bundle_id: str,
     controller_address: str | None,
     task_token: str | None,
+    container_profile: int,
     environment: job_pb2.EnvironmentConfig,
     constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
@@ -259,6 +262,7 @@ def build_common_iris_env(
     # backend.
     wire_task_id = f"{task_id}:{attempt_id}"
     env["IRIS_TASK_ID"] = wire_task_id
+    env[IRIS_CONTAINER_PROFILE_ENV] = job_pb2.ContainerProfile.Name(resolve_container_profile(container_profile))
     if attempt_uid:
         env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
     env["IRIS_NUM_TASKS"] = str(num_tasks)

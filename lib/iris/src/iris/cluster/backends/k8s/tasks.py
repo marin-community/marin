@@ -973,6 +973,7 @@ def _build_pod_manifest(
         bundle_id=run_req.bundle_id,
         controller_address=config.controller_address if isolation.include_controller_address else None,
         task_token=run_req.task_token if isolation.include_task_token else None,
+        container_profile=run_req.container_profile,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
@@ -986,12 +987,7 @@ def _build_pod_manifest(
         if storage_error:
             raise PodManifestError(storage_error)
     job_env = dict(run_req.environment.env_vars)
-    combined = {
-        **cluster_env,
-        **job_env,
-        **iris_env,
-        "IRIS_CONTAINER_PROFILE": job_pb2.ContainerProfile.Name(resolve_container_profile(run_req.container_profile)),
-    }
+    combined = {**cluster_env, **job_env, **iris_env}
     if job_secrets:
         combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
         for name, value in secret_file_environment(job_secrets).items():

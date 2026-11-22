@@ -291,6 +291,7 @@ def common_env_from_req(
         bundle_id=req.bundle_id,
         controller_address=controller_address,
         task_token=req.task_token or None,
+        container_profile=req.container_profile,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,

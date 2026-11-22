@@ -35,11 +35,74 @@ def factory() -> local.LocalMachineFactory:
         pytest.skip(str(error))
 
 
-def test_local_factory_in_iris_task_requires_bubblewrap_profile(monkeypatch):
+@pytest.mark.parametrize("profile", [None, "CONTAINER_PROFILE_DEFAULT", "CONTAINER_PROFILE_RESTRICTED"])
+def test_local_factory_in_iris_task_rejects_unsupported_profile(monkeypatch, profile):
     monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
-    monkeypatch.delenv("IRIS_CONTAINER_PROFILE", raising=False)
+    if profile is None:
+        monkeypatch.delenv("IRIS_CONTAINER_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("IRIS_CONTAINER_PROFILE", profile)
     with pytest.raises(local.ContainerProfileRequired, match="CONTAINER_PROFILE_BUBBLEWRAP"):
         local.LocalMachineFactory()
+
+
+def test_local_factory_in_iris_task_accepts_privileged_profile(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_PRIVILEGED_PROFILE)
+    monkeypatch.setattr(local, "_prepare_sandbox", lambda *args: None)
+    factory = local.LocalMachineFactory()
+    assert factory.bwrap.is_file()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap keeper to uid 65534")
+@pytest.mark.parametrize("system_directories", list(local.SystemDirectories))
+def test_iris_bubblewrap_factory_writes_to_workdir_as_sandbox_user(monkeypatch, system_directories):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_BUBBLEWRAP_PROFILE)
+    try:
+        factory = local.LocalMachineFactory(system_directories=system_directories)
+    except local.SandboxUnavailable as error:
+        pytest.skip(str(error))
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            result = await machine.run(Command(("/bin/sh", "-c", "id -u; echo written > result; cat result")))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout == f"{local.BUBBLEWRAP_UID}\nwritten\n".encode()
+            for user in ("root", "0"):
+                with pytest.raises(local.UnsupportedMachineSpec):
+                    await machine.run(Command(("id", "-u"), user=user))
+            if system_directories is local.SystemDirectories.COPY_ON_WRITE:
+                script = "echo overlaid > /usr/local/shellbox-overlay; cat /usr/local/shellbox-overlay"
+                overlay = await machine.run(Command(("/bin/sh", "-c", script)))
+                assert overlay.exit_code == 0, overlay.stderr.decode()
+                assert overlay.stdout == b"overlaid\n"
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="The privileged Iris path requires a root task")
+def test_iris_privileged_factory_keeps_root_command_identity(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_PRIVILEGED_PROFILE)
+    try:
+        factory = local.LocalMachineFactory()
+    except local.SandboxUnavailable as error:
+        pytest.skip(str(error))
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            result = await machine.run(Command(("id", "-u"), user="root"))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout == b"0\n"
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap launcher to an unprivileged uid")
