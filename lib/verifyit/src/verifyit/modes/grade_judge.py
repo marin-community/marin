@@ -339,7 +339,12 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
         ):
             raise InvalidTask("label metrics require named finite observations")
     used = set()
-    for template in (spec.system_prompt, spec.prompt_template):
+    templates = [spec.system_prompt]
+    if spec.prompt_template == "{fields_json}":
+        used.update(("reference", "candidate"))
+    else:
+        templates.append(spec.prompt_template)
+    for template in templates:
         try:
             for _, name, format_spec, conversion in string.Formatter().parse(template):
                 if name is None:
@@ -378,7 +383,12 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     messages: list[ChatCompletionMessageParam] = []
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
-    messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
+    content = (
+        json.dumps(fields, ensure_ascii=False)
+        if spec.prompt_template == "{fields_json}"
+        else spec.prompt_template.format(**fields)
+    )
+    messages.append({"role": "user", "content": content})
     budgets = _completion_budgets(spec)
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
