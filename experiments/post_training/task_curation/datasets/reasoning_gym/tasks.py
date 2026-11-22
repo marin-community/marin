@@ -340,9 +340,12 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def tasktrove_golden(task: TaskSpec) -> Reply:
+def tasktrove_golden(task: TaskSpec) -> Reply | None:
     entry = json.loads(resource_bytes(next(item for item in task.resources.verifier if item.path == "entry.json")))
-    return answer_reply(task, entry["answer"])
+    candidate = entry["answer"]
+    if candidate is None:
+        candidate = entry["metadata"].get("example_answer")
+    return answer_reply(task, candidate) if candidate is not None else None
 
 
 GENERATED_CONTROLS = Controls(golden=generated_golden)

@@ -103,6 +103,15 @@ def test_tasktrove_keeps_tasks_with_repaired_scorers(task_name):
     assert isinstance(result, TaskSpec | NormalizedTask)
 
 
+def test_tasktrove_propositional_logic_golden_uses_example_when_answer_is_null():
+    entry = reasoning_gym.create_dataset("propositional_logic", size=1, seed=42)[0]
+    assert entry["answer"] is None
+    task = converted_task(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
+    assert declarations.tasktrove_golden(task) == Reply(
+        TextMessage(role="assistant", content=entry["metadata"]["example_answer"])
+    )
+
+
 def test_generated_row_without_matching_provenance_is_a_converter_error():
     row = {**GENERATED_ROW, "generation": {**GENERATED_ROW["generation"], "task": "basic_arithmetic"}}
     result = convert_row(RECIPES["reasoning_gym_generated"], row)
