@@ -183,21 +183,27 @@ def test_commit_reference_documents_retries_a_stale_head(tmp_path: Path, hub: di
     assert reference_data.read_reference_index(index_path).revision == hub["head"] != stale
 
 
-def test_append_license_receipt_appends_a_new_part(tmp_path: Path, hub: dict):
+@pytest.mark.parametrize("prefix", ["", "campaign-v1/"])
+def test_append_license_receipt_appends_a_new_part(tmp_path: Path, hub: dict, prefix: str):
     index_path = tmp_path / "index.json"
     first = _receipt("fixture:source", "fixture/dataset", "a" * 40)
     reference_data.create_reference_index(
         index_path,
         license_binding.LICENSE_RECEIPT_REPO,
-        {"part-000.json": json.dumps({"fixture:source": first.model_dump(mode="json")}, indent=2).encode()},
+        {prefix + "part-000.json": json.dumps({"fixture:source": first.model_dump(mode="json")}, indent=2).encode()},
         message="Seed",
     )
+    if prefix:
+        hub["files"]["part-000.json"] = b"preserved historical root shard"
+    original_root = hub["files"]["part-000.json"]
     second = _receipt("fixture:other", "fixture/dataset", "b" * 40)
     revision = license_binding.append_license_receipt(index_path, second, message="Append")
     receipts = license_binding.read_license_receipts(index_path)
     assert set(receipts) == {"fixture:source", "fixture:other"}
     assert receipts["fixture:other"].revision == "b" * 40
     assert revision == hub["head"]
+    assert prefix + "part-001.json" in hub["files"]
+    assert hub["files"]["part-000.json"] == original_root
 
 
 def test_append_license_receipt_upserts_the_row_in_place(tmp_path: Path, hub: dict):

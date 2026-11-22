@@ -4671,7 +4671,8 @@ staging directory of `part-*.json` receipt shards. New or updated receipts
 must go through `license_binding.append_license_receipt`, which upserts the
 shard holding the source's key at a fresh immutable dataset revision and
 stages the committed index bump for the next landing; never edit the shards or
-the index by hand. Their shared
+the index by hand. New receipt shards stay in the indexed family's directory,
+including versioned subdirectories; historical root shards remain untouched. Their shared
 `license_publication` helper preserves the checked upstream license fields,
 original card and notices, and pinned evidence URLs. `license_source` identifies
 the checked dataset grant; `license_input` separately records the physical input

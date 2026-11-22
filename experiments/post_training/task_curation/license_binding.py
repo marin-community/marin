@@ -76,9 +76,17 @@ def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message
         rewritten = {**documents[shard], key: receipt.model_dump(mode="json")}
         payload = json.dumps(rewritten, indent=2, sort_keys=True) + "\n"
         return commit_reference_documents(index_path, {shard: payload.encode()}, message=message)
-    numbered = [int(match.group(1)) for name in documents if (match := re.fullmatch(r"part-(\d+)\.json", name))]
+    directories = {Path(name).parent for name in documents}
+    if len(directories) > 1:
+        raise ValueError("License receipt shards span multiple directories; select one complete shard family")
+    directory = next(iter(directories), Path("."))
+    numbered = [
+        int(match.group(1)) for name in documents if (match := re.fullmatch(r"part-(\d+)\.json", Path(name).name))
+    ]
     part = max(numbered, default=-1) + 1
-    return commit_reference_documents(index_path, {f"part-{part:03d}.json": row.encode()}, message=message)
+    return commit_reference_documents(
+        index_path, {str(directory / f"part-{part:03d}.json"): row.encode()}, message=message
+    )
 
 
 def bind_license_receipt[ConfigT: CatalogConfig](
