@@ -4,7 +4,7 @@ name: Law-cap Muon ball + head/late anneals
 category: Optimizers
 summary: 🤖 Posted on behalf of @WhenWen.
 source: intake
-status: running
+status: done
 track: competitive-d512
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7030639376
@@ -27,6 +27,13 @@ trials:
   commit: 17f263ecb1
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8604
+  delta:
+  - -0.0077
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: +1%
 - id: t002
   variant: law-cap Frobenius ball, s(t)^2 head, late matrix anneal
   rung: competitive-d768
