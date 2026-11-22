@@ -69,7 +69,7 @@ def epoch_inputs(tmp_path):
     recipe = {
         "data": {
             "cache_catalog": str(catalog_path),
-            "components": dict.fromkeys(counts, {}),
+            "components": {name: {} for name in counts},
             "num_validation_sequences": {},
             "train_weights": [(0, weights)],
             "mixture_block_size": 64_000,
@@ -120,8 +120,11 @@ def test_epoch_keeps_explicit_iid_reservations_out_of_the_training_quota(epoch_i
     recipe["data"]["num_validation_sequences"] = {"sft/large": 8}
     capacity["validation_reservations"] = {"sft/large": 8}
     row = capacity["sources"]["sft/large"]
-    row.update(training_sequences=row["packed_sequences"] - 8, reserved_validation_sequences=8,
-               training_tokens=row["tokens"] - 8 * 16)
+    row.update(
+        training_sequences=row["packed_sequences"] - 8,
+        reserved_validation_sequences=8,
+        training_tokens=row["tokens"] - 8 * 16,
+    )
     raw = json.dumps(capacity).encode()
     Path(pin.path).write_bytes(raw)
     bind_sft_stopping(recipe, MixtureEpochs(), FilePin(pin.path, hashlib.sha256(raw).hexdigest()))

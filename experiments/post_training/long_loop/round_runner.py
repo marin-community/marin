@@ -6,7 +6,7 @@
 A round YAML carries every value that has differed across the long-loop rounds
 plus the plausible knobs: identity (name, version, slug, prefixes), the data
 release and curriculum pools it binds, the evaluation policy, and the SFT
-knobs (updates, batch, learning rates, min LR ratio, special-token multiplier,
+knobs (stopping, batch, learning rates, min LR ratio, special-token multiplier,
 mesh and resources). Code holds the mechanism and the invariants: the plan
 template, reference resolution, whole-run annealing, the special-token rate
 default, and the final-SFT-checkpoint retention rule.

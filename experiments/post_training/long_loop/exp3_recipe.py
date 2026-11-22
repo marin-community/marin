@@ -153,7 +153,7 @@ def whole_run_lr_receipt(spec: SFTSpec, *, schedule: SftLrSchedule) -> dict:
 
 
 def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
-    """Bind a pinned candidate and required gate, trainer and budget before allocation."""
+    """Bind pinned data, evaluation gate, trainer and explicit schedule before allocation."""
     if recipe["stage_guard"] is not None:
         StageGuard(**recipe["stage_guard"])
     metadata = source_loss_metadata(recipe["source_loss_metadata"], recipe["source_loss_metadata_sha256"])

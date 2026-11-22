@@ -20,13 +20,22 @@ async def test_small_positive_source_is_not_lost_to_block_quantization():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("large_count", [47, 50])
 @pytest.mark.parametrize("first_index", [0, 14])
-async def test_native_epoch_reads_every_sft_item_once_including_store_smaller_than_block_count(large_count, first_index):
+async def test_native_epoch_reads_every_sft_item_once_including_store_smaller_than_block_count(
+    large_count, first_index
+):
     counts = {"sft/large": large_count, "sft/tiny": 1}
     plan = plan_mixture_epoch(counts, batch_size=2, replay_fraction=0.25, target_block_size=16)
     stages = epoch_weight_stages(counts, {"replay/large": 1.0, "replay/tiny": 1e-10}, plan)
     datasets = {name: ListAsyncDataset([(name, index) for index in range(count)]) for name, count in counts.items()}
     datasets.update({name: ListAsyncDataset([(name, 0)]) for name in ("replay/large", "replay/tiny")})
-    mixture = MixtureDataset(datasets, [(step * 2, weights) for step, weights in stages], plan.block_size, key=17, sequence_count=plan.run_sequences, first_index=first_index)
+    mixture = MixtureDataset(
+        datasets,
+        [(step * 2, weights) for step, weights in stages],
+        plan.block_size,
+        key=17,
+        sequence_count=plan.run_sequences,
+        first_index=first_index,
+    )
     samples = await mixture.get_batch(list(range(first_index, first_index + plan.run_sequences)))
     assert sorted(sample for sample in samples if sample[0].startswith("sft/")) == sorted(
         (name, index) for name, count in counts.items() for index in range(count)

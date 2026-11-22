@@ -159,7 +159,12 @@ def bind_sft_stopping(recipe: dict, stopping: SftStopping, capacity_pin: FilePin
     plan = plan_mixture_epoch(counts, batch_size=recipe["batch_size"], replay_fraction=fractions[0])
     weights = epoch_weight_stages(counts, replay, plan)
     receipt = epoch_exposure(
-        capacity["sources"], weights, batch_size=recipe["batch_size"], block_size=plan.block_size, count=stopping.count, sequence_count=plan.run_sequences
+        capacity["sources"],
+        weights,
+        batch_size=recipe["batch_size"],
+        block_size=plan.block_size,
+        count=stopping.count,
+        sequence_count=plan.run_sequences,
     )
     receipt.update(declared_replay_fraction=fractions[0], realized_replay_fraction=plan.replay_fraction)
     recipe["data"]["train_weights"] = weights
