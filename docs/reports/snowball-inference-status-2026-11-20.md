@@ -1029,8 +1029,11 @@ matched. The vLLM leg of this same-slice job failed during checkpoint
 loading with `Trying to resize storage that is not resizable`. It used
 `tpu-inference` at `a8fc5c9f6d`. The successful 549.46 tok/s control used
 `2f327d385a` with the same `vllm` commit `fb02daf1d7`. The same-slice
-retry uses that exact compiled control pin.
-[Native result and startup failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v40-packed-branch) · [Restored-pin retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v44-restored-vllm-pin)
+retry loaded and compiled the model with the successful pin. The
+benchmark then failed before timing because the serving session did
+not expose a metrics URL field. The TPU probe now uses vLLM's standard
+`/metrics` endpoint on the local server.
+[Native result and loader failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v40-packed-branch) · [Restored-pin startup](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v44-restored-vllm-pin) · [Metrics fix retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix)
 
 Among successful replay requests, the time-weighted p90 number of
 requests awaiting a first token was seven on native v5p-8 versus three

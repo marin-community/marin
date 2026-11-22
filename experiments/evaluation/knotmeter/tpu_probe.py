@@ -82,11 +82,7 @@ def main() -> None:
                 args.concurrency,
                 endpoint.base_url.removesuffix("/v1"),
                 output / "aiperf_artifacts",
-                metrics_url=session.metrics_url,
             )
-            if session.metrics_url is None:
-                index = command.index("--server-metrics")
-                del command[index : index + 2]
             (output / "probe.json").write_text(
                 json.dumps(
                     {
