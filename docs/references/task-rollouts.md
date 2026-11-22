@@ -130,8 +130,9 @@ SkyRL imports a raw Harbor package's `[environment.setup].command` into
 `setup_commands` for a full trial. If the declared command does not occur
 exactly once in `setup_commands` or `timeout_sec` exceeds `setup_timeout`, SkyRL
 records a failed attempt during trial preparation. The launch continues.
-`task_health` can read the published attempt record. Shellbox, native Harbor,
-and the TaskTrove and ARC archive converters refuse this table.
+`task_health` can read the published attempt record. Shellbox and native
+Harbor refuse this table. The TaskTrove and ARC converters refuse it in
+regular archived `task.toml` files.
 
 ## Harnesses
 
