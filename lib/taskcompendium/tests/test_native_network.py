@@ -78,7 +78,7 @@ def case(toml="[environment]\n", override=None, deadlines=None):
     validation = NativeNetworkCanaryValidation(
         evidence=ContentEvidenceReference(uri="s3://fixtures/20-physical-policies.json", sha256="e" * 64),
         recording_revision="e814b1b34398e27f40bf4eb877343b582c8103e4",
-        reconstruction_revision=REVISION,
+        reconstruction_revisions=(REVISION,),
         compared_task_ids=tuple(str(i) for i in range(20)),
         mismatched_task_ids=(),
     )
@@ -208,14 +208,14 @@ def test_twenty_physical_comparisons_are_recomputed_before_accepting_a_canary_se
         )
     document = {
         "recording_revision": "e814b1b34398e27f40bf4eb877343b582c8103e4",
-        "reconstruction_revision": REVISION,
+        "reconstruction_revisions": [REVISION],
         "rows": rows,
     }
     payload = json.dumps(document).encode()
     validation = NativeNetworkCanaryValidation(
         evidence=ContentEvidenceReference(uri="s3://fixtures/canary.json", sha256=hashlib.sha256(payload).hexdigest()),
         recording_revision=document["recording_revision"],
-        reconstruction_revision=REVISION,
+        reconstruction_revisions=(REVISION,),
         compared_task_ids=tuple(str(index) for index in range(20)),
         mismatched_task_ids=(),
     )
@@ -230,6 +230,10 @@ def test_twenty_physical_comparisons_are_recomputed_before_accepting_a_canary_se
     changed["rows"][7]["physical"]["reference"]["sha256"] = hashlib.sha256(encoded.encode()).hexdigest()
     with pytest.raises(ValueError, match="fresh controls"):
         NativeNetworkCanaryResult.model_validate(changed)
+    uncovered = deepcopy(document)
+    uncovered["reconstruction_revisions"].append("99f62b7e8c50ce15000e3ebed5205f53e1e6016f")
+    with pytest.raises(ValueError, match="every reconstructed implementation"):
+        NativeNetworkCanaryResult.model_validate(uncovered)
     changed = deepcopy(document)
     changed["rows"][7] = changed["rows"][6]
     with pytest.raises(ValueError, match="distinct tasks"):

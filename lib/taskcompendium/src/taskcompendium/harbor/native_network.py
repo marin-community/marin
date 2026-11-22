@@ -18,6 +18,21 @@ from taskcompendium.identity import canonical_sha256
 # These revisions use the same native allow_internet -> MachineSpec.network ->
 # _sandbox_parameters mapping. Adding another revision requires checking that path.
 NATIVE_DAYTONA_NETWORK_IMPLEMENTATIONS = {
+    "99f62b7e8c50ce15000e3ebed5205f53e1e6016f": {
+        "vendor/harbor/src/harbor_config/models/task/config.py": (
+            "a722fece73b44ded382432ab8084073bd11d934f3a25d07d498dffbce18d1bcf"
+        ),
+        "vendor/harbor/src/harbor/environments/daytona.py": (
+            "159ec1504da8c5805419c4f40b459f66de14231a63f76c10bcf32f66f7740fbe"
+        ),
+        "vendor/harbor/src/harbor/environments/factory.py": (
+            "cfea2f511cde24b0cc7a9229c9dcb38cdac771da90b2454d7709674567bd70ae"
+        ),
+        "lib/shellbox/src/shellbox/backends/daytona/machine.py": (
+            "4db013bc5f80328ca3205b996be94f8942ad18d7320a634125f16eedccd83079"
+        ),
+        "vendor/harbor/uv.lock": "0deef777f30ec9eb58a7165b40225c709c51daa704801a6f420ff9b543335aba",
+    },
     "3ba52c03e9599b98b38d4851885383043e7568cd": {
         "vendor/harbor/src/harbor_config/models/task/config.py": (
             "a722fece73b44ded382432ab8084073bd11d934f3a25d07d498dffbce18d1bcf"
@@ -169,7 +184,9 @@ class NativeNetworkCanaryResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     recording_revision: Literal["e814b1b34398e27f40bf4eb877343b582c8103e4"]
-    reconstruction_revision: Literal["3ba52c03e9599b98b38d4851885383043e7568cd"]
+    reconstruction_revisions: tuple[
+        Literal["3ba52c03e9599b98b38d4851885383043e7568cd", "99f62b7e8c50ce15000e3ebed5205f53e1e6016f"], ...
+    ] = Field(min_length=1)
     rows: tuple[NativeNetworkCanaryComparison, ...] = Field(min_length=20)
 
     @model_validator(mode="after")
@@ -181,9 +198,11 @@ class NativeNetworkCanaryResult(BaseModel):
             len(ids) != len(self.rows)
             or len(archives) != len(self.rows)
             or len(trials) != len(self.rows)
-            or any(row.inputs.implementation_revision != self.reconstruction_revision for row in self.rows)
+            or any(row.inputs.implementation_revision not in self.reconstruction_revisions for row in self.rows)
         ):
             raise ValueError("Native canary comparisons require distinct tasks under the pinned reconstruction")
+        if {row.inputs.implementation_revision for row in self.rows} != set(self.reconstruction_revisions):
+            raise ValueError("Native canary must physically compare every reconstructed implementation")
         return self
 
 
@@ -192,13 +211,17 @@ class NativeNetworkCanaryValidation(BaseModel):
 
     evidence: ContentEvidenceReference
     recording_revision: Literal["e814b1b34398e27f40bf4eb877343b582c8103e4"]
-    reconstruction_revision: Literal["3ba52c03e9599b98b38d4851885383043e7568cd"]
+    reconstruction_revisions: tuple[
+        Literal["3ba52c03e9599b98b38d4851885383043e7568cd", "99f62b7e8c50ce15000e3ebed5205f53e1e6016f"], ...
+    ] = Field(min_length=1)
     compared_task_ids: tuple[str, ...] = Field(min_length=20)
     mismatched_task_ids: tuple[str, ...] = Field(max_length=0)
 
     @model_validator(mode="after")
     def _complete_canary(self):
-        if len(set(self.compared_task_ids)) != len(self.compared_task_ids):
+        if len(set(self.compared_task_ids)) != len(self.compared_task_ids) or len(
+            set(self.reconstruction_revisions)
+        ) != len(self.reconstruction_revisions):
             raise ValueError("Native network canary must compare distinct physical trials")
         return self
 
@@ -211,7 +234,7 @@ def verify_native_network_canary(validation: NativeNetworkCanaryValidation, payl
     if (
         tuple(row.inputs.task_id for row in observed.rows) != validation.compared_task_ids
         or observed.recording_revision != validation.recording_revision
-        or observed.reconstruction_revision != validation.reconstruction_revision
+        or observed.reconstruction_revisions != validation.reconstruction_revisions
     ):
         raise ValueError("Native network canary scope differs from its validation binding")
     return observed
@@ -230,7 +253,7 @@ class ReconstructedNativeNetworkPolicy(BaseModel):
             self.inputs.task_id != task_id
             or self.inputs.trial_result_sha256 != canonical_sha256(result)
             or self.inputs.environment_config != result.get("config", {}).get("environment")
-            or self.inputs.implementation_revision != self.canary.reconstruction_revision
+            or self.inputs.implementation_revision not in self.canary.reconstruction_revisions
         ):
             raise ValueError("Native policy reconstruction belongs to another archived task/trial")
         root = PurePosixPath(self.inputs.execution_root)

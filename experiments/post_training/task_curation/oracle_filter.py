@@ -489,6 +489,33 @@ def require_retry_provenance(
             require_legacy_verifier_scope(transition.legacy_verifier_initialization, task_id, parent)
 
 
+def verify_native_network_reconstructions(proofs: Mapping[str, ReconstructedNativeNetworkPolicy]) -> None:
+    """Authenticate canary, execution and ruling evidence before native reconstruction."""
+    verified_network_canaries = set()
+    verified_network_authorities = set()
+    verified_network_executions = set()
+    for proof in proofs.values():
+        canary = proof.canary.evidence
+        canary_key = (canary.uri, canary.sha256, canonical_sha256(proof.canary.model_dump(mode="json")))
+        if canary_key not in verified_network_canaries:
+            verify_native_network_canary(proof.canary, StoragePath(canary.uri).read_bytes())
+            verified_network_canaries.add(canary_key)
+        execution = proof.inputs.execution_provenance
+        execution_key = (execution.uri, execution.sha256, proof.inputs.implementation_revision)
+        if execution_key not in verified_network_executions:
+            raw = StoragePath(execution.uri).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != execution.sha256:
+                raise ValueError("Native network execution provenance bytes changed")
+            if json.loads(raw)["source_revision"] != proof.inputs.implementation_revision:
+                raise ValueError("Native reconstruction implementation differs from its recorded execution")
+            verified_network_executions.add(execution_key)
+        authority = proof.authority
+        if (authority.uri, authority.sha256) not in verified_network_authorities:
+            if file_sha256(StoragePath(authority.uri)) != authority.sha256:
+                raise ValueError("Native network reconstruction authority bytes changed")
+            verified_network_authorities.add((authority.uri, authority.sha256))
+
+
 def filter_cohort(
     cohort: Path,
     task_map: Path,
@@ -523,29 +550,7 @@ def filter_cohort(
     decision = negative_control_policy.decision
     if file_sha256(StoragePath(decision.uri)) != decision.sha256:
         raise ValueError("Standing negative-control policy decision bytes changed")
-    verified_network_canaries = set()
-    verified_network_authorities = set()
-    verified_network_executions = set()
-    for proof in (native_network_reconstructions or {}).values():
-        canary = proof.canary.evidence
-        canary_key = (canary.uri, canary.sha256, canonical_sha256(proof.canary.model_dump(mode="json")))
-        if canary_key not in verified_network_canaries:
-            verify_native_network_canary(proof.canary, StoragePath(canary.uri).read_bytes())
-            verified_network_canaries.add(canary_key)
-        execution = proof.inputs.execution_provenance
-        execution_key = (execution.uri, execution.sha256, proof.inputs.implementation_revision)
-        if execution_key not in verified_network_executions:
-            raw = StoragePath(execution.uri).read_bytes()
-            if hashlib.sha256(raw).hexdigest() != execution.sha256:
-                raise ValueError("Native network execution provenance bytes changed")
-            if json.loads(raw)["source_revision"] != proof.inputs.implementation_revision:
-                raise ValueError("Native reconstruction implementation differs from its recorded execution")
-            verified_network_executions.add(execution_key)
-        authority = proof.authority
-        if (authority.uri, authority.sha256) not in verified_network_authorities:
-            if file_sha256(StoragePath(authority.uri)) != authority.sha256:
-                raise ValueError("Native network reconstruction authority bytes changed")
-            verified_network_authorities.add((authority.uri, authority.sha256))
+    verify_native_network_reconstructions(native_network_reconstructions or {})
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
