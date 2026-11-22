@@ -21,6 +21,10 @@ prefill with four decode steps between chunks.
 | 8× H100 | 621.18 | 593.09 | 1.01 / 1.44 s |
 
 The v6e-8 same-worker repeat reached 595.38 versus 554.00 output tok/s.
+The published branch with four-step decode rounds reached 583.52
+output tok/s and narrowed native p90 TTFT to 1.50 s. The v5p-8
+configuration with the original expert contraction order reached
+536.23 output tok/s.
 For serial raw HTTP prefill at 64,512 fresh prompt tokens, native reached
 35.1k versus 33.2k prompt tok/s on v5p-8 and 48.2k versus 43.8k on v6e-8.
 The five primed serial medians on each TPU type were within 5 ms of
@@ -1022,6 +1026,15 @@ versus 35.16 tok/s and p90 TTFT was 3.25 versus 3.19 s. All paired
 output lengths matched. The branch uses the separate gathers.
 [Fused routing trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v41-80-contexts-fused-packed-routing)
 
+On v5p-8, processing shorter suffixes first in 8,192-token chunks
+with four decode steps between unfinished chunks reached 530.23
+output tok/s. Across 369 turns paired with the unchunked 80-context
+control, active decode rose from 35.17 to 36.29 tok/s and p90 TTFT
+rose from 3.18 to 4.44 s. All 370 output lengths paired with vLLM
+matched, with zero profiling errors. The five primed serial medians
+were within 4 ms of vLLM.
+[v5p-8 chunked trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v43-short-suffix-first)
+
 The published native implementation with 80 contexts and a single
 retained window span reached 523.48 output tok/s and 3.78 s p90 TTFT.
 All 367 output lengths paired with the earlier compiled vLLM run
@@ -1255,6 +1268,17 @@ All 392 output lengths paired with compiled vLLM matched. Native
 p90 TTFT was 1.78 s overall, versus 1.31 s for vLLM. The five
 primed serial medians were 10–12 ms above vLLM.
 [Shorter suffixes first](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v34-short-suffix-first)
+
+The published branch with 32 logical contexts, 2,880 sliding-window
+pages, four-step decode rounds, and the 256-token prefill bucket
+reached 583.52 output tok/s. On 398 paired turns with the eight-step
+run, p90 TTFT fell from 1.81 to 1.50 s and active decode fell from
+41.88 to 39.37 tok/s. On all 392 turns paired with compiled vLLM,
+output lengths matched and active decode was 38.93 versus
+36.35 tok/s. Overall vLLM throughput and p90 TTFT were 554.00 tok/s
+and 1.31 s. Native fresh 64,512-token prefill took 1.351 versus
+1.472 s. The corresponding primed medians were 102 versus 85 ms.
+[Four-step unchunked replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v35-four-round-unchunked)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
