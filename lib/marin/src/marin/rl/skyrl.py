@@ -43,7 +43,7 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.curriculum import RlCurriculum, entry_payload, stage_payload
+from marin.rl.curriculum import RlCurriculum, entry_payload, stage_payload, validation_payload
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
@@ -1092,7 +1092,11 @@ def _apply_curriculum(config: dict, curriculum: RlCurriculum) -> dict:
 
 
 def _launch_curriculum(curriculum: RlCurriculum) -> dict:
-    """The launch document's curriculum section: identity, projection, and per-source provenance."""
+    """The launch document's curriculum section: identity, projection, per-source provenance, holdout.
+
+    ``validation`` records the drawn holdout — size, seed, and the held-out rows — so the launch
+    consumes the split from the fixed curriculum's metadata: the run evaluates exactly those rows,
+    and the training pools the document pins exclude them."""
     return {
         "identity": curriculum.identity,
         "mode": curriculum.mode.value,
@@ -1100,6 +1104,7 @@ def _launch_curriculum(curriculum: RlCurriculum) -> dict:
         "sampling": curriculum.sampling_config(),
         "sources": [entry_payload(entry) for entry in curriculum.entries],
         "stages": [stage_payload(stage) for stage in curriculum.stages],
+        "validation": validation_payload(curriculum.validation),
     }
 
 

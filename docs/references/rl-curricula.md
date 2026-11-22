@@ -44,10 +44,40 @@ Both modes require an explicit `seed`. The curriculum validates itself at constr
 pool, an empty stage order, and a non-positive weight or quota are errors.
 
 The curriculum's `fingerprint` hashes the canonical pool entries: each one's trainer label, pool
-artifact identity, and weight. It also hashes the mode, the stage order and quotas, and the seed.
-The same inputs fingerprint identically; changing a pool, a weight, the stage order, or the seed
-produces a different fingerprint. The curriculum's own `version` is identity, not content:
-re-badging the same mix keeps the fingerprint, as with every artifact.
+artifact identity, and weight. It also hashes the mode, the stage order and quotas, the seed, and
+the validation split. The same inputs fingerprint identically; changing a pool, a weight, the stage
+order, the seed, or the held-out rows produces a different fingerprint. The curriculum's own
+`version` is identity, not content: re-badging the same mix keeps the fingerprint, as with every
+artifact.
+
+## Validation split
+
+Fixing a curriculum fixes its validation split: a random holdout drawn from the curriculum's own
+training distribution, recorded in the curriculum's metadata, and removed from the pools the run
+trains on. The split is not a hand-composed file — the held-out signal is a random subset of what
+training samples, so its mix matches the curriculum's mixture.
+
+`weighted_curriculum` and `ordered_curriculum` therefore require an explicit `validation_size`
+(there is no default) and each pool's row identities (`pool_rows`, keyed by pool label, rows as
+`PoolRow(id, sha256)` — a `task_spec.id` plus the canonical SHA-256 of its task document). The
+draw (`draw_validation_split` in
+[curriculum.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/curriculum.py))
+partitions every pool row:
+
+- each label receives a largest-remainder allocation of `validation_size`, proportional to the
+  curriculum's own mixture (weighted mode: entry weights; ordered mode: each pool's consumed
+  prompts — its stage quotas, capped by the pool's row count);
+- within a label, rows are selected uniformly without replacement by the
+  `sha256(f"{seed}:{label}:{id}")` order, so the draw is deterministic for a seed and independent
+  of enumeration order;
+- the result is a `ValidationSplit`: the recorded `CurriculumValidation` (size, seed, and the held-out
+  `ValidationRow`s) plus the disjoint training remainder. A pool builder writes the training pools
+  from the remainder and extracts the held-out rows into the validation data, so the trainer never
+  sees them and the holdout is true.
+
+The per-label counts match the mixture exactly up to integer apportionment — a 0.7/0.3 mix with
+`validation_size=200` holds out 140/60 rows. The recorded split travels with the curriculum: the
+fingerprint covers it, so two curricula that differ only in their split are different objects.
 
 ## Launch with a curriculum
 
@@ -60,7 +90,10 @@ combines with it when the launch config is built: `kind=domain-weighted` with `d
 same key both modes resolve.
 
 The launch document records the full curriculum under `inputs.curriculum`: its identity, mode,
-seed, sampling projection, per-pool identities, and stage order.
+seed, sampling projection, per-pool identities, stage order, and the validation split (size, seed,
+held-out rows). The run's validation data is the materialization of that record — the held-out rows
+extracted from the pinned pools — and a run's best-checkpoint gating derives its expected scored
+tasks from the split's size.
 
 ## Recover a run's curriculum
 
@@ -84,7 +117,8 @@ print(launch["inputs"]["curriculum"]["sources"])
 ```
 
 The identity recovers the exact mix: rebuild the curriculum with the matching builder using the recorded
-pool identities, weights, stages, and seed, and its fingerprint must equal the recorded one. A matching
-fingerprint means the rebuilt mix samples identically. The pool identities tie the record to the
-artifact graph, so the pinned source records behind each pool — its declaration, release pin, and
-receipts — are recoverable from the run's dependency chain.
+pool identities, weights, stages, seed, and the recorded `pool_rows` and `validation_size`, and its
+fingerprint must equal the recorded one — the held-out rows must reproduce too. A matching
+fingerprint means the rebuilt mix samples identically and holds out the same prompts. The pool identities tie
+the record to the artifact graph, so the pinned source records behind each pool — its declaration, release pin,
+and receipts — are recoverable from the run's dependency chain.

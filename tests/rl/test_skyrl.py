@@ -41,7 +41,14 @@ from marin.execution.artifact import (
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_status import StatusFile
-from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode
+from marin.rl.curriculum import (
+    CurriculumEntry,
+    CurriculumStage,
+    PoolRow,
+    RlCurriculum,
+    SamplingMode,
+    draw_validation_split,
+)
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -1486,6 +1493,13 @@ def _curriculum(mode: SamplingMode, pools: tuple[str, ...] = ("tests/iceball-gsm
         if mode is SamplingMode.WEIGHTED
         else tuple(CurriculumStage(pool, 4096 if index == 0 else None) for index, pool in enumerate(pools))
     )
+    rows = {
+        pool: tuple(PoolRow(id=f"{pool}-{index}", sha256=f"{index:064x}") for index in range(1000)) for pool in pools
+    }
+    mixture = (
+        {pool: weights[pool] for pool in pools} if mode is SamplingMode.WEIGHTED else {pool: 1000.0 for pool in pools}
+    )
+    validation = draw_validation_split(mixture, rows, size=200, seed=17)
     return RlCurriculum(
         name="users/tester/curricula/math-mix",
         version="2026.11.18",
@@ -1493,6 +1507,7 @@ def _curriculum(mode: SamplingMode, pools: tuple[str, ...] = ("tests/iceball-gsm
         entries=entries,
         stages=stages,
         seed=17,
+        validation=validation.validation,
     )
 
 
@@ -1547,7 +1562,7 @@ def test_skyrl_spec_rejects_a_curriculum_that_names_a_pool_the_run_does_not_trai
 
 def test_skyrl_spec_rejects_a_curriculum_whose_entry_pins_another_pool() -> None:
     mismatched = dataclasses.replace(
-        _curriculum(SamplingMode.WEIGHTED),
+        _curriculum(SamplingMode.WEIGHTED, pools=("tests/iceball-gsm8k",)),
         entries=(CurriculumEntry(label="tests/iceball-gsm8k", identity="pools/other@1:bbbb", weight=1.0),),
     )
     with pytest.raises(ValueError, match="pins pools/other@1:bbbb"):
