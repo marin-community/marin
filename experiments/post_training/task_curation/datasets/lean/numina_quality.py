@@ -38,6 +38,13 @@ for a new run. Batch state lives beside the output in a directory ending .batch.
 After an interruption, rerun the exact command to resume its job. If submission is uncertain,
 the error identifies the state.json file to reconcile against the job in Google AI Studio.
 
+Use --golden REVIEW.csv to rebuild from a supplied reviewer CSV instead. It must have
+numina_row, uuid, golden_control, cause, and note columns. Rows are matched to the pinned
+source by row index and UUID. Only PASS verdicts are retained, regardless of cause annotations.
+The CSV hash is recorded as provenance; its unknown judge configuration is left blank.
+Add --require-golden SECOND_RESULT_FILE to require PASS in both result files. Both individual
+verdicts and notes remain in the report, with both file hashes recorded in the manifest.
+
 This script reads the parquet, disclosure labels, and golden verdicts. It applies the shared
 source exclusions, deduplication, split and eval-overlap rules, removes MCQs and word problems,
 and retains only "no" disclosure labels and PASS golden controls. It writes
@@ -87,6 +94,12 @@ FIELDS = (
     "split",
     "question_type",
     "golden_control",
+    "golden_source",
+    "golden_cause",
+    "primary_verdict",
+    "required_verdict",
+    "required_note",
+    "required_cause",
     "included",
     "cause",
     "note",
@@ -219,11 +232,6 @@ def final_manifest(rows: Iterator[dict]) -> dict:
             raise ValueError("Invalid type or disclosure decision in final selection")
         if row["golden_control"] != "PASS":
             raise ValueError(f"Unfinished quality checks for row {row['numina_row']}")
-        if not any(
-            row["judge_spec_sha256"] == spec_digest(golden_spec(row["formal"], row["reference"], tokens))
-            for tokens in (1024, 2048, auto.JUDGE_OUTPUT_TOKENS)
-        ):
-            raise ValueError("Stale golden control")
         if row["formal_sha256"] != hashlib.sha256(row["formal"].encode()).hexdigest():
             raise ValueError("Changed formal statement")
         key = row["row_key"]
@@ -238,7 +246,19 @@ def build(parquet: Path, prime_lists: Path, labels: Path, golden: Path, output_d
     """Join frozen decisions and write both quality artifacts in one invocation."""
     rows = source_rows(parquet, prime_lists, read_labels(labels))
     results = {}
-    for result in read_records(golden):
+    from_csv = golden.suffix == ".csv"
+    if from_csv:
+        locators = {(row["numina_row"], row["uuid"]): row["row_key"] for row in rows}
+        with golden.open(newline="", encoding="utf-8-sig") as stream:
+            records = []
+            for result in csv.DictReader(stream):
+                locator = (result["numina_row"], result["uuid"])
+                if locator not in locators:
+                    raise ValueError(f"Unknown golden CSV row {locator}")
+                records.append({**result, "row_key": locators[locator]})
+    else:
+        records = read_records(golden)
+    for result in records:
         key = result["row_key"]
         if key in results:
             raise ValueError(f"Duplicate golden result {key}")
@@ -252,22 +272,40 @@ def build(parquet: Path, prime_lists: Path, labels: Path, golden: Path, output_d
         result = results.get(row["row_key"])
         if result is None:
             raise ValueError(f"Missing golden result for {row['row_key']}")
-        if result["formal_sha256"] != row["formal_sha256"]:
+        if not from_csv and result["formal_sha256"] != row["formal_sha256"]:
             raise ValueError("Golden result belongs to a different formal statement")
         label = result["golden_control"]
         if label not in {"PASS", "FAIL", "MALFORMED"}:
             raise ValueError("Invalid golden verdict")
         # Check rejected results too, so a stale rubric cannot silently discard good rows.
-        if not any(
+        if not from_csv and not any(
             result["judge_spec_sha256"] == spec_digest(golden_spec(row["formal"], row["reference"], tokens))
             for tokens in (1024, 2048, auto.JUDGE_OUTPUT_TOKENS)
         ):
             raise ValueError("Stale golden control")
-        for field in ("golden_control", "note", "judge_model", "judge_spec_sha256"):
+        for field in ("golden_control", "note"):
             row[field] = result[field]
+        row["golden_source"] = "reviewer_csv" if from_csv else "gemini_batch"
+        row["golden_cause"] = result.get("cause", "")
+        if not from_csv:
+            row["judge_model"] = result["judge_model"]
+            row["judge_spec_sha256"] = result["judge_spec_sha256"]
         row["cause"] = {"PASS": "", "FAIL": "golden_failed", "MALFORMED": "judge_malformed"}[label]
         row["included"] = label == "PASS"
-    manifest = final_manifest(iter(rows))
+    metadata = dict(
+        dataset_revision=numina.NUMINA_REVISION,
+        source_sha256=SOURCE_SHA256,
+        labels_sha256=file_sha256(StoragePath(str(labels))),
+        golden_sha256=file_sha256(StoragePath(str(golden))),
+        golden_format="reviewer_csv" if from_csv else "gemini_batch",
+        judge_models=sorted({r["judge_model"] for r in results.values() if r.get("judge_model")}),
+    )
+    return write_artifacts(rows, metadata, output_dir)
+
+
+def write_artifacts(rows: list[dict], metadata: dict, output_dir: Path) -> dict:
+    """Write a validated selection and its report from the same rows."""
+    manifest = {**final_manifest(iter(rows)), **metadata}
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output_dir) as temporary:
         report = Path(temporary) / "numina_row_quality_report.csv"
@@ -275,19 +313,54 @@ def build(parquet: Path, prime_lists: Path, labels: Path, golden: Path, output_d
             writer = csv.DictWriter(stream, FIELDS)
             writer.writeheader()
             writer.writerows(rows)
-        manifest.update(
-            dataset_revision=numina.NUMINA_REVISION,
-            source_sha256=SOURCE_SHA256,
-            labels_sha256=file_sha256(StoragePath(str(labels))),
-            golden_sha256=file_sha256(StoragePath(str(golden))),
-            judge_models=sorted({r["judge_model"] for r in results.values()}),
-            report_sha256=file_sha256(StoragePath(str(report))),
-        )
+        manifest["report_sha256"] = file_sha256(StoragePath(str(report)))
         target = Path(temporary) / "numina_autoinformalization_tasks.json"
         target.write_text(json.dumps(manifest, indent=1) + "\n")
         os.replace(report, output_dir / report.name)
         os.replace(target, output_dir / target.name)
     return manifest
+
+
+def build_intersection(
+    parquet: Path, prime_lists: Path, labels: Path, primary: Path, required: Path, output_dir: Path
+) -> dict:
+    """Keep rows passed by both independently validated sets of golden results."""
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        first = build(parquet, prime_lists, labels, primary, root / "primary")
+        second = build(parquet, prime_lists, labels, required, root / "required")
+        with (root / "primary/numina_row_quality_report.csv").open(newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        with (root / "required/numina_row_quality_report.csv").open(newline="") as stream:
+            other = list(csv.DictReader(stream))
+        for row, extra in zip(rows, other, strict=True):
+            if row["row_key"] != extra["row_key"] or row["formal_sha256"] != extra["formal_sha256"]:
+                raise ValueError("Golden reports refer to different source rows")
+            if row["golden_control"] == "not_run":
+                continue
+            verdicts = (row["golden_control"], extra["golden_control"])
+            row.update(
+                primary_verdict=verdicts[0],
+                required_verdict=verdicts[1],
+                required_note=extra["note"],
+                required_cause=extra["golden_cause"],
+            )
+            label = "PASS" if verdicts == ("PASS", "PASS") else "FAIL" if "FAIL" in verdicts else "MALFORMED"
+            row.update(
+                golden_control=label,
+                golden_source="intersection",
+                included=label == "PASS",
+                cause={"PASS": "", "FAIL": "golden_failed", "MALFORMED": "judge_malformed"}[label],
+            )
+        metadata = dict(
+            dataset_revision=numina.NUMINA_REVISION,
+            source_sha256=SOURCE_SHA256,
+            labels_sha256=first["labels_sha256"],
+            golden_format="intersection",
+            golden_inputs=[dict(format=m["golden_format"], sha256=m["golden_sha256"]) for m in (first, second)],
+            judge_models=sorted(set(first["judge_models"]) | set(second["judge_models"])),
+        )
+        return write_artifacts(rows, metadata, output_dir)
 
 
 def add_source_arguments(parser: argparse.ArgumentParser) -> None:
@@ -300,9 +373,15 @@ def main() -> None:
     add_source_arguments(parser)
     parser.add_argument("--labels", type=Path, default=LABELS)
     parser.add_argument("--golden", type=Path, default=GOLDEN)
+    parser.add_argument("--require-golden", type=Path, help="Require PASS in this second set of results too")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    manifest = build(args.parquet, args.prime_lists, args.labels, args.golden, args.output_dir)
+    if args.require_golden:
+        manifest = build_intersection(
+            args.parquet, args.prime_lists, args.labels, args.golden, args.require_golden, args.output_dir
+        )
+    else:
+        manifest = build(args.parquet, args.prime_lists, args.labels, args.golden, args.output_dir)
     print(json.dumps(manifest["task_counts"]))
 
 

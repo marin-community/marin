@@ -100,3 +100,79 @@ def test_type_exclusion_precedes_the_frozen_label(monkeypatch, kind):
     monkeypatch.setattr(quality.auto, "ACCEPTED_ROWS", {quality.row_key(row)})
     assert not quality.auto.is_train_row(row, None)
     assert not quality.auto.is_eval_row(row, None)
+
+
+def test_reviewer_csv_selects_only_passes_and_preserves_provenance(tmp_path, monkeypatch):
+    rows = [report_row(str(i)) for i in range(3)]
+    monkeypatch.setattr(quality, "source_rows", lambda *_: [dict(r) for r in rows])
+    labels = tmp_path / "labels.jsonl"
+    quality.write_records(labels, [dict(row=r["row_key"], label="no") for r in rows])
+    golden = tmp_path / "review.csv"
+    fields = ("numina_row", "uuid", "golden_control", "cause", "note")
+    records = [
+        dict(
+            numina_row=r["numina_row"],
+            uuid=r["uuid"],
+            golden_control=label,
+            cause="judge_wrong" if label == "FAIL" else "",
+            note="Reviewer note",
+        )
+        for r, label in zip(rows, ("PASS", "FAIL", "MALFORMED"), strict=True)
+    ]
+
+    def write_csv():
+        with golden.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, fields)
+            writer.writeheader()
+            writer.writerows(records)
+
+    write_csv()
+    output = tmp_path / "out"
+    manifest = quality.build(tmp_path / "raw", tmp_path, labels, golden, output)
+    assert manifest["accepted"] == ["0"]
+    assert manifest["golden_format"] == "reviewer_csv"
+    assert manifest["judge_models"] == []
+    with (output / "numina_row_quality_report.csv").open(newline="") as stream:
+        report = list(csv.DictReader(stream))
+    assert report[1]["golden_cause"] == "judge_wrong"
+    assert report[1]["included"] == "False"
+    assert report[0]["judge_spec_sha256"] == ""
+    records[0]["uuid"] = "wrong-source"
+    write_csv()
+    with pytest.raises(ValueError, match="Unknown golden CSV"):
+        quality.build(tmp_path / "raw", tmp_path, labels, golden, output)
+
+
+def test_intersection_excludes_rows_rejected_by_either_control(tmp_path, monkeypatch):
+    rows = [report_row(str(i)) for i in range(4)]
+    monkeypatch.setattr(quality, "source_rows", lambda *_: [dict(r) for r in rows])
+    labels = tmp_path / "labels.jsonl"
+    quality.write_records(labels, [dict(row=r["row_key"], label="no") for r in rows])
+    files = []
+    for name, verdicts in [
+        ("first", ("PASS", "PASS", "FAIL", "PASS")),
+        ("second", ("PASS", "FAIL", "PASS", "MALFORMED")),
+    ]:
+        path = tmp_path / (name + ".csv")
+        with path.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, ("numina_row", "uuid", "golden_control", "cause", "note"))
+            writer.writeheader()
+            writer.writerows(
+                dict(numina_row=r["numina_row"], uuid=r["uuid"], golden_control=v, cause="", note=name + " explanation")
+                for r, v in zip(rows, verdicts, strict=True)
+            )
+        files.append(path)
+    output = tmp_path / "out"
+    result = quality.build_intersection(tmp_path / "raw", tmp_path, labels, *files, output)
+    assert result["accepted"] == ["0"]
+    assert len(result["golden_inputs"]) == 2
+    with (output / "numina_row_quality_report.csv").open() as stream:
+        report = list(csv.DictReader(stream))
+    assert [(r["primary_verdict"], r["required_verdict"], r["included"]) for r in report] == [
+        ("PASS", "PASS", "True"),
+        ("PASS", "FAIL", "False"),
+        ("FAIL", "PASS", "False"),
+        ("PASS", "MALFORMED", "False"),
+    ]
+    assert report[0]["note"] == "first explanation"
+    assert report[0]["required_note"] == "second explanation"
