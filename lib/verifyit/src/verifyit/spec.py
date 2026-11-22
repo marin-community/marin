@@ -325,6 +325,17 @@ class JudgeCompletionPolicy(StrEnum):
     CONTENT = "content"
 
 
+class JudgePromptFormat(StrEnum):
+    """How a label judge's user message carries its fields.
+
+    ``TEMPLATE`` formats ``prompt_template``. ``JSON`` sends the question, reference and candidate
+    as one JSON object, so candidate text cannot end a field early.
+    """
+
+    TEMPLATE = "template"
+    JSON = "json"
+
+
 @dataclass(frozen=True)
 class JudgeSpec:
     """An LLM judge over the answer file.
@@ -357,6 +368,7 @@ class JudgeSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     system_prompt: str = ""
     prompt_template: str = ""
+    prompt_format: JudgePromptFormat = field(default=JudgePromptFormat.TEMPLATE, kw_only=True)
     label_scores: dict[str, float] = field(default_factory=dict)
     label_metrics: dict[str, dict[str, float]] = field(default_factory=dict, kw_only=True)
     completion_policy: JudgeCompletionPolicy = field(default=JudgeCompletionPolicy.COMPLETED_TEXT, kw_only=True)
