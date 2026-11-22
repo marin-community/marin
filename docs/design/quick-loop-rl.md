@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 8:40 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 8:55 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first four updates and publications. | Verify the candidate's terminal receipts and compare it with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first six updates and publications. | Verify the candidate's terminal receipts and compare it with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The pinned 67B model and fused scorer passed the fixed-checkpoint H100 gate with zero PPO clip crossings across 32,768 targets. The separate live weight handoff, tool turn and fused replay job was submitted on spare regional capacity. | Verify the live gate, then run the held-learner serving comparison after the priority learner jobs. |
+| Native inventory backend | The pinned 67B model and fused scorer passed the fixed-checkpoint H100 gate with zero PPO clip crossings across 32,768 targets. The live handoff qualification is on its fourth regional launch after resolving placement and JAX launcher checks. | Verify the live gate, then run the held-learner serving comparison after the priority learner jobs. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1472,10 +1472,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   learner layout, then independently verify the typed snapshots on the
   one-host serving mesh. The staged Iris wiring starts the serving job
   only after the conversion succeeds and its immutable receipt validates.
-  Iris accepted the regional qualification coordinator on November 22.
-  The priority learner was already running and Kubernetes reported 18
-  unallocated H100 hosts. The full conversion and live swap remain
-  accelerator gates. [Native 67B qualification][iris-native-fused-gate]
+  The first coordinator requested an elevated accelerator profile that
+  Iris denied. The second used the ordinary profile but passed an
+  explicit regional peer directive to the regional controller. Iris
+  admitted four eight-H100 conversion ranks with implicit local placement
+  on the third attempt. All four failed a launcher check for a preassigned
+  JAX port before reading weights. The fourth attempt uses Iris's normal
+  rank-zero port registration and discovery, which passed three focused
+  tests. The priority learner was already running, and Kubernetes reported
+  20 unallocated eight-H100 hosts at submission. The conversion and live
+  swap remain accelerator gates. [Native 67B qualification][iris-native-fused-gate]
 
   The typed install keeps the old model and KV pool live until it verifies
   the replacement weights and allocates the new pool. A CPU probe found
@@ -1566,7 +1572,7 @@ arms. [Prior timing comparison][timing]
 [iris-matched-megatron-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-a361bc746b85
 [iris-matched-megatron-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-ab4ae1aae5e9
 [iris-matched-levanter]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af8929ab8ff2
-[iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122a
+[iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122d
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
