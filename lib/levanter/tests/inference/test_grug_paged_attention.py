@@ -239,7 +239,9 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
 
 @pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window", [None, 2048])
-@pytest.mark.parametrize("width,queries", [(4, (1,)), (16, (1, 1, 1)), (32, (1,) * 5), (512, (361, 82))])
+@pytest.mark.parametrize(
+    "width,queries", [(4, (1,)), (16, (1, 1, 1)), (32, (1,) * 5), (512, (361, 82)), (2048, (2048,))]
+)
 def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, queries):
     rng = np.random.default_rng(25)
     q = jnp.asarray(rng.normal(size=(width, 5, 4, 128)), jnp.bfloat16)

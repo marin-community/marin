@@ -668,6 +668,9 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v5p-8, 60 logical contexts and 8,192 window pages](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v13-hybrid-wide-window-pool) | 331 | 90,546 | 431.17 | 1,407 | 2,757 |
 | [v5p-8, 256-, 1,024-, and 4,096-token prefill buckets](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v14-short-prefill-buckets) | 337 | 91,497 | 435.70 | 1,264 | 3,126 |
 | [v5p-8, fused short prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v15-fused-short-prefill) | 340 | 92,225 | 439.16 | 1,382 | 2,832 |
+| [v5p-8, eight-step decode rounds](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v16-short-decode-rounds) | 329 | 90,137 | 429.22 | 918 | 3,121 |
+| [v5p-8, 80 logical contexts and fused prefill through 2,048 tokens](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v17-fused-2k-80-contexts) | 338 | 91,917 | 437.70 | 1,374 | 3,211 |
+| [v5p-8, wider full-attention decode tiles](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v18-wide-decode-tiles) | 340 | 93,092 | 443.29 | 1,411 | 3,241 |
 | [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
 | [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
 | [v6e-8, native EP8 with shared reservations and 16 decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v5-shared-pages) | 111 | 19,864 | 94.59 | 36,227 | 53,402 |
@@ -777,6 +780,25 @@ of the unfused run on all five lengths. A v6e-4 regression test checked
 both attention outputs and exact KV writes for eight cases, including
 two sequences with unequal, non-page-aligned suffixes.
 [Short-prefill correctness](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-fused-short-prefill-tests-v6e4-20261122-v2)
+
+Extending fused writes through the 2,048-token sliding window reduced
+fresh 2,048-token v5p TTFT from 111 ms to 74 ms. Compiled vLLM took 76 ms.
+Fresh 8,192-token TTFT was 251 ms versus 207 ms. This run used 80 logical
+contexts and matched output lengths for all 338 paired AgentX requests.
+The v6e-4 tests matched dense attention and checked exact cache contents
+at the 2,048-token boundary. [2,048-token correctness](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-fused-2k-prefill-tests-v6e4-20261122-v1)
+
+Eight decode steps per round reduced paired median TTFT from 1.34 s to
+0.92 s. Paired p90 rose from 2.73 s to 3.12 s and aggregate throughput fell
+to 429.22 output tok/s. Both runs produced matching output lengths for
+all 329 paired requests.
+
+Wider full-attention decode tiles reduced per-layer time from 1.423 ms
+to 1.056 ms at 22 active sequences on one v5p chip, with identical KV
+writes. The v5p-8 replay reached 443.29 output tok/s. On the 339 paired
+requests with the 16-step fused-prefill run, active decode rose from
+24.02 to 24.71 tok/s and p90 TTFT rose from 2.80 s to 3.23 s. All paired
+output lengths matched. [Tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-attention-micro-sweep-v5p8-20261122-v2)
 
 On one v6e chip, fusing KV append at 16 padded rows cut full-context
 attention plus cache update from 0.727 to 0.520 ms and sliding-window
