@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 6:39 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 6:49 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,7 +15,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The first `2026.11.20.6` child completed 17 updates before Iris preempted its CPU coordinator. All 144 receiver receipts passed. The first replacement also lost its coordinator during initialization. The third child started at step 0 and applied its first update. | Verify all 25 updates and the final fixed panel on a successful child. |
+| Megatron learner with vLLM | The first `2026.11.20.6` child completed 17 updates before Iris preempted its CPU coordinator. All 144 receiver receipts passed. The first replacement also lost its coordinator during initialization. The third child started at step 0 and reached update 5. | Verify all 25 updates and the final fixed panel on a successful child. |
 | Levanter learner with vLLM | The artifact main passed the frozen 40-H100 smoke through training, exact restart, byte-verified publication, and terminal checkpoint. | Run the 25-update Levanter arm with the same workload and evaluation panel as the Megatron control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
@@ -123,6 +123,16 @@ the artifact version, code and runtime pins, checkpoint metadata, and
 publication and generation receipts. Native terminal HF export is an open deliverable for
 consumers that require it. The RL gate uses the native checkpoint and an
 acknowledged serving installation. [Checkpoint and publication checks][learner-status]
+
+Assign each logical run attempt a stable GPU child ID before scheduling.
+Persist that ID with the source bundle and resolved launch digest. A retried
+CPU coordinator looks up the exact child and resumes observation while it
+runs. A successful child supplies the same immutable terminal record for
+validation and artifact completion. A failed child can start a new attempt
+from the last committed checkpoint with a new recorded identity. The
+coordinator uses Iris child preservation for scheduler preemption and
+leaves the GPU child running when its foreground observer exits. Explicit
+job cancellation still terminates the run.
 
 ## Binary protocol
 
@@ -757,10 +767,12 @@ arm against its own initial panel and report per-task changes on the
 common panel. [Third control child][iris-matched-megatron-third]
 
 The built-in `hub` route submits through the Marin hub and delegates the
-CPU coordinator to `cw-us-east-02a`. The frozen launcher also defaults
-in-task child submission to the parent's cluster. A hub-resident CPU
-coordinator would require an explicit regional GPU child route. Verify
-both placements before using a fallback for coordinator evictions.
+CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
+nested GPU job from a hub-resident parent. A regional coordinator can use
+Iris child preservation after the artifact launcher gains stable child IDs,
+terminal-aware attachment and passive observation. The frozen launcher
+generates a new child ID per coordinator attempt and cancels its active
+GPU child when the foreground supervisor receives SIGTERM.
 
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
@@ -829,8 +841,8 @@ a matching checkpoint receipt. The CPU probes establish two concrete
 diagnostics. A local serial Ray probe kept the creating thread and child
 alive between method calls. Revision `4a6d1e7a3e` creates the child on its
 persistent IPC thread. Its CPU restart tests covered fresh learner and
-host processes. CUDA/NCCL startup and restart remain unverified on the
-frozen H100 job.
+host processes. CUDA/NCCL startup and restart remain unverified for the
+maintained typed learner.
 
 [Exact smoke and comparison recipes][learner-status] ·
 [Frozen checkpoint validation code][frozen-worker]
