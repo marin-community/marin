@@ -833,7 +833,9 @@ def _handle_clones(
 
 
 @functools.partial(
-    jax.jit, static_argnames=("max_tokens_per_round", "max_rounds", "capture_routes"), donate_argnames=("gen_state",)
+    jax.jit,
+    static_argnames=("max_tokens_per_round", "max_rounds", "capture_routes", "replicated_single_token"),
+    donate_argnames=("gen_state",),
 )
 def _run_generation_loop(
     gen_state: GenState,
@@ -842,8 +844,18 @@ def _run_generation_loop(
     max_tokens_per_round: int,
     max_rounds: int,
     capture_routes: bool = False,
+    replicated_single_token: bool = False,
 ) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
+
+    decode_model = model
+    if replicated_single_token:
+        # The existing singleton kernels accept the same expert-sharded KV pages.
+        assert isinstance(model, SnowballLMHeadModel)
+        config = dataclasses.replace(
+            model.config, inference_decode_token_layout="replicated", inference_expert_implementation="split"
+        )
+        decode_model = SnowballLMHeadModel(model.transformer, config)
 
     def cond(state):
         _gen_state, _outputs, _routes, step = state
@@ -873,7 +885,9 @@ def _run_generation_loop(
 
         decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
-        max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
+        max_sample_indices = (
+            1 if replicated_single_token else min(decode_state.page_table.max_seqs, max_tokens_per_round)
+        )
         if isinstance(model, SnowballLMHeadModel):
             # A packed round cannot touch more sequences than it has token rows.
             binfo = binfo.with_seq_capacity(max_sample_indices)
@@ -883,6 +897,8 @@ def _run_generation_loop(
             assert isinstance(model, SnowballLMHeadModel)
             logits, cache, captured = model.decode_with_route_captures(tokens, gen_state.cache, binfo, pos_ids)
             routes = routes.append(captured, slot_ids)
+        elif replicated_single_token:
+            logits, cache = decode_model.decode(tokens, gen_state.cache, binfo, pos_ids, max_active_tokens=1)
         elif (
             isinstance(model, SnowballLMHeadModel)
             and (
@@ -1654,6 +1670,20 @@ class InferenceEngine:
                 (size for size in self.config.decode_bucket_sizes if size >= active),
                 self.config.imputed_max_tokens_per_round,
             )
+            replicated_single_token = (
+                active == 1
+                and self.config.max_seqs > 1
+                and replay is None
+                and isinstance(self.model, SnowballLMHeadModel)
+                and self.model.config.inference_attention_implementation == "gpu"
+                and self.model.config.inference_decode_implementation == "unrolled_split_cache"
+                and self.model.config.inference_kv_sharding == "expert"
+                and self.model.config.inference_decode_token_layout == "packed"
+                and self.model.config.inference_expert_implementation == "separate"
+                and self.model.config.projection_implementation == "native"
+                and self.model.config.shared_attention_implementation == "native"
+                and "H100" in jax.devices()[0].device_kind
+            )
             future_state, decode_outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
@@ -1661,6 +1691,7 @@ class InferenceEngine:
                 round_tokens,
                 self.config.max_rounds,
                 capture_routes=replay is not None,
+                replicated_single_token=replicated_single_token,
             )
             submit_done = time.time()
             self.gen_state = future_state

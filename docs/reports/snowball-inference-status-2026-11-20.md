@@ -9,10 +9,11 @@ integration remain open.
 
 The full BF16 67B checkpoint completed the matched 64K AgentX replay at
 128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
-reached 75%, 34%, and 104% of compiled vLLM's aggregate output throughput
-on those platforms. The H100 aggregate result varied across repeats. The two-replica H100 trial reached 0.95 s p90 time to
-first token versus vLLM's 1.44 s. At 64,512 fresh prompt tokens, native
-HTTP prefill reached 35.5k prompt tok/s on v5p-8 and 42.2k on v6e-8
+reached 75% and 34% of compiled vLLM's aggregate output throughput on
+v5p-8 and v6e-8. On eight H100s, two native replicas with singleton decode
+reached 616.68–621.18 output tok/s versus 590.24–593.09 for compiled vLLM.
+Native p90 time to first token was 0.96–1.01 s versus 1.43–1.44 s. At
+64,512 fresh prompt tokens, native HTTP prefill reached 35.5k prompt tok/s on v5p-8 and 42.2k on v6e-8
 versus 33.1k and 42.4k for vLLM.
 
 This publication snapshots accepted code at
@@ -450,6 +451,7 @@ mesh. Both engines enabled prefix caching.
 | Engine | Completed requests | Output tokens | Output tok/s | p50 TTFT (s) | p90 TTFT (s) |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | [Compiled vLLM](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-vllm-c128-20261122-v2) | 423 | 120,615 | 593.09 | 0.70 | 1.44 |
+| [Compiled vLLM repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-vllm-c128-20261122-v3-repeat) | 419 | 120,006 | 590.24 | 0.73 | 1.43 |
 | [Native, fixed request batches](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v2) | 47 | 10,043 | 47.82 | 55.89 | 127.39 |
 | [Native, continuous admission](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v3-continuous) | 190 | 34,494 | 164.26 | 10.91 | 21.81 |
 | [Native, per-layer KV and decode buckets](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v4-layer-kv) | 214 | 46,412 | 221.01 | 15.85 | 20.70 |
@@ -469,6 +471,7 @@ mesh. Both engines enabled prefix caching.
 | [Native, two replicas and batched KV release](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v25-replicas-batched-release) | 433 | 124,472 | 593.47 | 0.44 | 0.95 |
 | [Native, batched release repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v28-parity-repeat) | 431 | 120,142 | 572.10 | 0.43 | 0.90 |
 | [Native, two replicas with singleton decode](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v27-replicas-singleton-fastpath) | 432 | 124,385 | 616.68 | 0.45 | 0.96 |
+| [Native, singleton decode repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v29-singleton-repeat) | 431 | 124,171 | 621.18 | 0.44 | 1.01 |
 
 The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
 requests at the drain deadline. On 47 common turns, both engines emitted
@@ -602,8 +605,8 @@ TTFT. It matched all 422 paired output lengths. A 4,169-token turn from
 the vLLM run was absent from the completed native turns. Paired active
 decode remained faster at 75.58 versus 55.75 tok/s.
 
-The experimental singleton path replicated the activation when an expert
-mesh served one live sequence. On four H100s, an isolated two-layer
+The singleton path replicates the activation when an H100 expert mesh
+serves one live sequence. On four H100s, an isolated two-layer
 model matched all 129 generated tokens at both tested prompt lengths.
 At 29,000 input tokens, a 16-step decode round took 8.43 ms versus 9.09 ms
 with packing. The 67B AgentX trial completed 124,385 output tokens with
@@ -611,6 +614,13 @@ a shorter drain and reached 616.68 output tok/s at 0.962 s p90 TTFT.
 All 423 paired output lengths matched. Paired active decode was 72.94
 tok/s versus 56.91 for vLLM.
 [Singleton kernel test](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-replicated-singleton-h100-20261122-v2)
+
+The singleton repeat reached 621.18 output tok/s. The pinned vLLM repeat
+reached 590.24 output tok/s. Both completed with zero profiling errors.
+All 419 paired turns matched output lengths, with active decode of
+72.91 versus 53.97 tok/s and overall p90 TTFT of 1.006 s versus 1.430 s.
+Across the two repeated configurations, native throughput exceeded vLLM
+by 4.0% to 5.2%.
 
 Reproduce the native run in an Iris job on one eight-H100 80 GB host.
 Set the weights and replay receipt to the local CoreWeave region.
