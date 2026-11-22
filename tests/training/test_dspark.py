@@ -11,8 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from datasets.exceptions import DatasetGenerationError
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE
-from marin.training.dspark import extraction_config, gpu_device_split, validate_draft
-from marin.training.dspark_data import (
+from marin.training.dspark.data_preparation import (
     EMBEDDING,
     FINAL_NORM,
     GATE_DOWN,
@@ -26,6 +25,7 @@ from marin.training.dspark_data import (
     prepare_data,
     stage_teacher,
 )
+from marin.training.dspark.distillation import extraction_config, gpu_device_split, validate_draft
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save_file
 from tokenizers import AddedToken, Tokenizer

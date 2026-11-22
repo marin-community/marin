@@ -15,13 +15,20 @@ import draccus
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import OUT, ArtifactStep, apply, lower
 from marin.execution.step_runner import StepRunner
-from marin.training.dspark import (
+from marin.training.dspark.data_preparation import (
+    DraftRecipe,
+    GrugShape,
+    inspect_mix,
+    inspect_teacher,
+    prepare_data,
+    require_sha256,
+)
+from marin.training.dspark.distillation import (
     SPECULATORS_REVISION,
     VLLM_SOURCE_COMMIT,
     TrainingProvenance,
     train_and_export,
 )
-from marin.training.dspark_data import DraftRecipe, GrugShape, inspect_mix, inspect_teacher, prepare_data, require_sha256
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.cross_region import is_cross_region_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
