@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 9:51 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 2:21 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,9 +16,9 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child completed the 100-task baseline and the 20-update prefix audit with 168 zero-mismatch receiver checks. | Verify all 25 updates on the third child and compare with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child applied update 25 and reconciled all 208 receiver checks with zero mismatches. | Verify the committed checkpoint and final 100-task panel against the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
+| 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The frozen 25-update candidate has published policy 25. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | Ordered gather served a verified 67B live swap and returned byte-identical first, repeat and cold replies. Both serving variants completed the 32,768-target capture. Their real tool-turn fused checks passed. The full-context score gate found three crossings for ordered gather and one for scatter. | Isolate the full-context scoring discrepancy and measure the held-learner comparison. |
@@ -872,13 +872,14 @@ measures framing and decoding. Time the JAX reshard, device-to-host copy,
 pipe, GPU staging, NCCL and exact replay separately on H100 before
 estimating the end-to-end gain.
 
-Across the 19 warm updates through step 20, median step time was
-451.4 seconds for Levanter and 150.4 seconds for Megatron. They processed
-3,217 and 10,280 loss tokens per active second. Admission took 0.95 and
-0.96 seconds per group. Publication, policy training and preparation
-accounted for an average of 200.7, 79.9 and 25.6 additional seconds per
-Levanter update. All 168 receiver checks passed through Levanter version
-20 on the third child.
+Across the 23 warm updates from step 2 through 24, median step time was
+450.4 seconds for Levanter and 150.1 seconds for Megatron. They processed
+3,163 and 10,141 loss tokens per step second. Admission took 0.94 and
+0.96 seconds per group. Both admitted 2,944 groups. Publication, policy
+training and learner preparation accounted for 195.1, 80.6 and 26.1
+additional seconds per Levanter update on average. Publication made up
+65% of the total gap. The step-25 callback includes regular checkpoint
+and evaluation work, so the warm comparison stops at step 24.
 
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
@@ -1739,21 +1740,31 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
 
   The first bounded vLLM child installed policy 0, then lost its CPU
   coordinator before receiver verification completed. Kueue later
-  preempted the replacement GPU group during initialization. The
-  coordinator exhausted its failure budget. Neither attempt reached
-  the baseline evaluation. The timing-instrumented control's GPU
-  child was also preempted during setup. The executor has released
-  its lease and the checkpoint index is empty, so the control can
-  retry under the same artifact and source. The same-source native
-  arm is queued after its first CPU coordinator lost its slot.
-  Both plans use a 24,576-token serving limit and a 16,896-token request
-  limit. Native uses the cache geometry from the 67B live-swap run.
-  Hold the learner, request limits, selection and panel fixed across
-  the two runs.
+  preempted the replacement GPU group during initialization. Neither
+  attempt reached the baseline evaluation. The timing-instrumented
+  vLLM child was also preempted during setup. The regional controller
+  accepted a direct five-host retry on the same frozen source and
+  artifact at BATCH priority. Recovery confirmed terminal prior owners
+  in both controllers, closed regional task attempts, and an empty
+  checkpoint prefix with no active executor lease. A durable submission
+  claim binds the worker configuration and Iris root. After regional
+  acceptance, Kueue found zero eligible nodes because the prototype
+  added an `iris.region` selector absent from the managed nodes. The next direct dispatch must rely on the
+  already-selected regional controller for placement. Both successful
+  gang admission and terminal artifact recovery remain open.
+
+  The native coordinator lost its first slot before the GPU group was
+  admitted and its second during regional initializer streaming. The
+  third native GPU child was admitted on five H100 hosts and reached
+  checkpoint streaming. Both plans use a 24,576-token serving limit and
+  a 16,896-token request limit. Native uses the cache geometry from the
+  67B live-swap run. Use the same learner, selection and fixed panel to
+  compare the completed attempts.
   [First held vLLM coordinator][iris-held-vllm-pilot] ·
   [Preempted replacement child][iris-held-vllm-replacement] ·
-  [Held vLLM run with publication timings][iris-held-vllm-profile] ·
-  [Held native run with the same learner][iris-held-native-profile]
+  [Timing-instrumented vLLM coordinator][iris-held-vllm-profile] ·
+  [Direct held vLLM retry][iris-held-vllm-direct] ·
+  [Third held native GPU child][iris-held-native-third]
 
   [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
@@ -1761,8 +1772,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
   Require all four attempt-scoped panels at steps 0 and 2, with each task
   ID, prompt token sequence and score reconciled against the successful
-  attempts. Collect logs using the successful rank-zero attempt from each
-  exact Iris coordinator. Match the receipts and panel paths to those
+  attempts. Collect logs from the successful rank-zero attempt in each
+  exact Iris GPU job. Match the receipts and panel paths to those
   attempts, and recheck the attempt identities after collection. Compare
   step 2 separately because step 1 includes the learner
   subprocess checkpoint round trip. Both maintained arms log
@@ -1784,10 +1795,13 @@ arms. [Prior timing comparison][timing]
 
 ## Open decisions
 
-- Agree on fixed-panel reward and update time or cost margins before the
-  matched runs. Use the frozen comparison to select the learner candidate.
-  Change the default only when the maintained Levanter/vLLM build also
-  meets those margins and passes H100 recovery and weight publication.
+- Agree on fixed-panel reward and update time or cost margins for the
+  maintained Levanter/vLLM build. Use the frozen pair as the baseline.
+  Prioritize publication on the maintained H100 path. Measure export,
+  host staging and receiver replay on the original four learner hosts
+  before choosing which copy or synchronization to remove. Change the
+  learner default once the maintained build meets the margins and passes
+  H100 recovery and weight publication.
 - Keep native serving opt-in until the fixed-checkpoint shape gate and the
   five-host deployment pass. Use the fresh vLLM baseline to agree on
   sustained group throughput, update time, reward and recovery criteria
@@ -1843,7 +1857,8 @@ arms. [Prior timing comparison][timing]
 [iris-held-vllm-pilot]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-coordinator-c033eabc
 [iris-held-vllm-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-coordinator-c033eabc%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-e8ff805-in-424011b4-2026.11.22.1-ae1c053f89fb
 [iris-held-vllm-profile]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-coordinator-5490d623
-[iris-held-native-profile]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-38f335b-in-424011b4-2026.11.22.1-coordinator-eaec3017
+[iris-held-native-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-38f335b-in-424011b4-2026.11.22.1-coordinator-eaec3017%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-38f335b-in-424011b4-2026.11.22.1-a830de53136f
+[iris-held-vllm-direct]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-a028a6627d0d
 [native-full-capture-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122i%2Fnative-native-fused-20261122i-tool-fused%2F0%2F2d4106a1e0593f89%2Foutputs.tar.zst
 [native-paged-moe]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/models/snowball.py#L1932-L1943
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
