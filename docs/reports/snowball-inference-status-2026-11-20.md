@@ -322,6 +322,13 @@ native prefill was within 4% of vLLM at 32,768 tokens and above.
 | 51,840 | 1.196 / 0.106 | 1.226 / 0.081 |
 | 64,512 | 1.552 / 0.113 | 1.539 / 0.093 |
 
+A trial with separate projections and smaller expert matmul tiles improved
+all five primed medians. At 64,512 tokens it measured 96 ms, compared
+with 113 ms in the earlier native run and 93 ms for vLLM. The trial
+measured 59.62 output tokens/s overall, 163.69 active decode tokens/s
+and 830 ms p90 TTFT on the same 25 matched turns. Most of the decode
+slowdown came from four consecutive long turns. [v6e expert tile trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v4)
+
 ## H100 AgentX comparison
 
 Each run used one eight-H100 host, the pinned BF16 checkpoint, and the same
@@ -355,6 +362,18 @@ weights and KV pages improved native to 50.51 output tokens/s overall,
 14% below vLLM. On the same 26 turns and 9,092 outputs, active decode
 reached 137.29 tokens/s against 164.79 for vLLM. Streamed p90 TTFT was
 877.80 ms against 942.61 ms. [Replicated activation trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v19-replicated-activation)
+
+Run the native H100 probe with the regional checkpoint and replay receipt.
+These settings preserve the compiled prefill path and four KV contexts
+used in the H100 comparison.
+
+```bash
+uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
+  --accelerator h100x8 --attention gpu --weights "$weights" --workload "$workload" \
+  --decode-layers unrolled_split_cache --decode-experts split --decode-token-layout replicated \
+  --kv-sharding expert --kv-cache-contexts 4 --prefix-cache recent_prompts \
+  --max-unrolled-prefill-tokens 0 --prefill-buckets 4096 8192 16384 32768
+```
 
 ## What works
 

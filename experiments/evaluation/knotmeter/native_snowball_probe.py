@@ -136,6 +136,7 @@ def main() -> None:
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3", "gpu", "reference"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
+    parser.add_argument("--decode-token-layout", choices=("packed", "replicated"), default="packed")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
     parser.add_argument("--kv-cache-contexts", type=int, default=1)
@@ -198,6 +199,7 @@ def main() -> None:
             inference_attention_implementation=args.attention,
             inference_decode_implementation=args.decode_layers,
             inference_expert_implementation=args.decode_experts,
+            inference_decode_token_layout=args.decode_token_layout,
             inference_kv_sharding=args.kv_sharding,
             inference_kv_append=args.kv_append,
         )
@@ -252,6 +254,7 @@ def main() -> None:
             "attention": args.attention,
             "decode_layers": args.decode_layers,
             "decode_experts": args.decode_experts,
+            "decode_token_layout": args.decode_token_layout,
             "kv_sharding": args.kv_sharding,
             "kv_append": args.kv_append,
             "prefill_buckets": service.prefill_bucket_sizes,

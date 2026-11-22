@@ -655,17 +655,23 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh,
         max_active_tokens: int | None = None,
     ) -> Float[Array, "T D"]:
-        """Read only the experts selected in a decode batch with one token row per EP shard."""
+        """Read only selected experts for a replicated token or one packed row per rank."""
         ep_size = _mesh_axis_size(mesh, "expert")
-        if ep_size <= 1 or x.shape[0] != ep_size or self.capacity_factor < ep_size:
+        replicated_token = x.shape[0] == 1 and max_active_tokens == 1
+        if ep_size <= 1 or (x.shape[0] != ep_size and not replicated_token) or self.capacity_factor < ep_size:
             raise ValueError("Small expert decode requires one token row per EP shard and capacity for all routes")
         activation = (
             self.activation.to_jax_fn() if isinstance(self.activation, ActivationFunctionEnum) else self.activation
         )
-        token_spec = _token_spec_from_x(x, mesh)
+        token_spec = P() if replicated_token else _token_spec_from_x(x, mesh)
         expert_spec = P("expert", None, None)
         run = shard_map(
-            partial(_moe_mlp_ep_small_local, activation=activation, max_active_tokens=max_active_tokens),
+            partial(
+                _moe_mlp_ep_small_local,
+                activation=activation,
+                max_active_tokens=max_active_tokens,
+                replicated_token=replicated_token,
+            ),
             mesh=mesh,
             in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),
             out_specs=token_spec,

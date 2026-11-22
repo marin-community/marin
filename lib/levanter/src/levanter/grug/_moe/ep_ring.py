@@ -156,30 +156,32 @@ def _moe_mlp_ep_small_local(
     *,
     activation: Callable[[jax.Array], jax.Array],
     max_active_tokens: int | None = None,
+    replicated_token: bool = False,
 ) -> jax.Array:
     """Evaluate active routes in a small decode batch with capacity for every assignment."""
     width, top_k = x.shape[1], selected.shape[1]
-    # A single collective carries the activation and its routing metadata.
-    transport_dtype = jnp.result_type(x.dtype, weights.dtype, jnp.float32)
-    payload = jnp.concatenate(
-        (
-            x.astype(transport_dtype),
-            selected.astype(transport_dtype),
-            weights.astype(transport_dtype),
-            token_valid[:, None],
-        ),
-        axis=1,
-    )
     local_valid = token_valid[:, None]
-    if max_active_tokens == 1:
-        # Only one rank contributes an active row, so no rank metadata is needed.
-        payload = jax.lax.psum(jnp.where(local_valid, payload, 0), "expert")
-    else:
-        payload = jax.lax.all_gather(payload, "expert", tiled=True)
-    x = payload[:, :width].astype(x.dtype)
-    selected = payload[:, width : width + top_k].astype(selected.dtype)
-    weights = payload[:, width + top_k : width + 2 * top_k].astype(weights.dtype)
-    token_valid = payload[:, -1].astype(jnp.bool_)
+    if not replicated_token:
+        # A single collective carries the activation and its routing metadata.
+        transport_dtype = jnp.result_type(x.dtype, weights.dtype, jnp.float32)
+        payload = jnp.concatenate(
+            (
+                x.astype(transport_dtype),
+                selected.astype(transport_dtype),
+                weights.astype(transport_dtype),
+                token_valid[:, None],
+            ),
+            axis=1,
+        )
+        if max_active_tokens == 1:
+            # Only one rank contributes an active row, so no rank metadata is needed.
+            payload = jax.lax.psum(jnp.where(local_valid, payload, 0), "expert")
+        else:
+            payload = jax.lax.all_gather(payload, "expert", tiled=True)
+        x = payload[:, :width].astype(x.dtype)
+        selected = payload[:, width : width + top_k].astype(selected.dtype)
+        weights = payload[:, width + top_k : width + 2 * top_k].astype(weights.dtype)
+        token_valid = payload[:, -1].astype(jnp.bool_)
     tokens = x.shape[0]
     shard_start = jax.lax.axis_index("expert") * w_gate.shape[0]
     local_experts = selected - shard_start

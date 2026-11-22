@@ -492,6 +492,7 @@ class SnowballConfig(HFCompatConfig):
     inference_max_unrolled_prefill_tokens: int = 512
     inference_expert_implementation: SnowballDecodeExpertImplementation = "grouped"
     inference_kv_sharding: Literal["model", "expert"] = "model"
+    inference_decode_token_layout: Literal["packed", "replicated"] = "packed"
     inference_kv_append: SnowballKvAppendImplementation = "separate"
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
@@ -852,7 +853,9 @@ class SnowballAttention(eqx.Module):
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         return q * self.cfg.qk_mult, k, v
 
-    def _project_output(self, x: jax.Array, attn_out: jax.Array, v: jax.Array) -> jax.Array:
+    def _project_output(
+        self, x: jax.Array, attn_out: jax.Array, v: jax.Array, *, replicated_token: bool = False
+    ) -> jax.Array:
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
@@ -874,12 +877,14 @@ class SnowballAttention(eqx.Module):
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
-            out_sharding=_activation_spec("model"),
+            out_sharding=P(None, None, "model") if replicated_token else _activation_spec("model"),
         )
         if self.cfg.projection_implementation == "fixed_schedule":
             output = _fixed_schedule_projection(attn_out, self.w_o)
             return _match_activation_layout(output, x)
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
+        return jnp.einsum(
+            "bsh,hd->bsd", attn_out, self.w_o, out_sharding=P() if replicated_token else _activation_spec()
+        )
 
     @named_call
     def decode(
@@ -892,6 +897,7 @@ class SnowballAttention(eqx.Module):
         use_long: bool,
         kv_append: SnowballKvAppendImplementation = "separate",
         max_active_tokens: int | None = None,
+        replicated_token: bool = False,
     ) -> tuple[jax.Array, KvPageCache]:
         """Attend a flat batch of serving tokens with the June attention recipe."""
         cfg = self.cfg
@@ -899,7 +905,7 @@ class SnowballAttention(eqx.Module):
         kv_axis, kv_heads = _inference_kv_layout(cfg)
         extra_heads = kv_heads - cfg.num_kv_heads
         q, k, v = self._project_qkv(x, disable_rope=use_long, position_ids=pos_ids[:, None])
-        token_axis = batch_info.new_token_dests.axes[0]
+        token_axis = batch_info.new_token_dests.axes[0].resize(x.shape[0])
         kv_axes = (token_axis, Axis("kv_head", kv_heads), Axis("head_size", head_dim))
         cache_k, cache_v = k[:, 0], v[:, 0]
         if extra_heads:
@@ -951,10 +957,10 @@ class SnowballAttention(eqx.Module):
                 implementation=implementation,
             )
         if kv_axis == "expert":
-            # Restore token sharding before trimming the padded KV heads.
-            out = reshard(out, P(_BATCH_AXES, None, None, None))[:, : cfg.num_kv_heads]
+            output_spec = P() if replicated_token else P(_BATCH_AXES, None, None, None)
+            out = reshard(out, output_spec)[:, : cfg.num_kv_heads]
         out = out.reshape(x.shape[0], 1, cfg.num_heads, head_dim)
-        return self._project_output(x, out, v), cache
+        return self._project_output(x, out, v, replicated_token=replicated_token), cache
 
 
 def _fixed_shared_attention(
@@ -1278,7 +1284,7 @@ class DenseMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def __call__(self, x: Float[Array, "B S D"], *, replicated_token: bool = False) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if self.projection_implementation == "fixed_schedule":
@@ -1288,8 +1294,14 @@ class DenseMLP(eqx.Module):
         else:
             gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
             up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-            out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
-        return _activation_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+            out_flat = jnp.einsum(
+                "tm,md->td",
+                jax.nn.silu(gate) * up,
+                self.w_down,
+                out_sharding=P() if replicated_token else _token_spec(),
+            )
+        output = rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        return output if replicated_token else _activation_reshard(output)
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -1428,8 +1440,9 @@ class SnowballMoEMLP(eqx.Module):
             token_valid=token_valid,
             mesh=get_abstract_mesh(),
         )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = _activation_reshard(routed)
+        routed = rearrange(cast(jax.Array, routed_flat), "(b s) d -> b s d", b=b, s=s)
+        if not (expert_implementation == "split" and max_active_tokens == 1 and b * s == 1):
+            routed = _activation_reshard(routed)
         if not capture_routes:
             return routed
         capture = route_capture
@@ -2039,16 +2052,33 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             and (sample_indices is None or unroll_prefill)
             and not capture_routes
         )
-        tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
-        hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
+        expert_size = _mesh_axis_size(_current_mesh(), "expert")
+        replicated_token = (
+            self.config.inference_decode_token_layout == "replicated"
+            and self.config.inference_expert_implementation == "split"
+            and self.config.projection_implementation == "native"
+            and self.config.shared_attention_implementation == "native"
+            and max_active_tokens == 1
+            and expert_size > 1
+            and sample_indices is None
+            and not capture_routes
+        )
+        tokens = (
+            reshard(input_ids.array[:1, None], P())
+            if replicated_token
+            else reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
+        )
+        positions = reshard(pos_ids.array[:1], P()) if replicated_token else pos_ids.array
+        hidden = self.transformer.token_embed.at[tokens].get(
+            out_sharding=P() if replicated_token else _activation_spec()
+        )
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        expert_size = _mesh_axis_size(_current_mesh(), "expert")
         expert_implementation: SnowballDecodeExpertImplementation | Literal["prefill_ring"] = "grouped"
         if expert_size > 1 and not capture_routes:
             if sample_indices is not None and jax.default_backend() == "tpu":
                 expert_implementation = "prefill_ring"
-            elif sample_indices is None and tokens.shape[0] == expert_size:
+            elif sample_indices is None and (replicated_token or tokens.shape[0] == expert_size):
                 expert_implementation = self.config.inference_expert_implementation
         kv_append = (
             self.config.inference_kv_append
@@ -2076,10 +2106,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                     attn_in,
                     cache,
                     batch_info,
-                    pos_ids.array,
+                    positions,
                     use_long=True if num_layers == 1 else use_long,
                     kv_append=kv_append,
                     max_active_tokens=max_active_tokens,
+                    replicated_token=replicated_token,
                 )
             else:
                 attn_out, cache = jax.lax.cond(
@@ -2088,19 +2119,21 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                         attn_in,
                         cache,
                         batch_info,
-                        pos_ids.array,
+                        positions,
                         use_long=True,
                         kv_append=kv_append,
                         max_active_tokens=max_active_tokens,
+                        replicated_token=replicated_token,
                     ),
                     lambda _: block.attn.decode(
                         attn_in,
                         cache,
                         batch_info,
-                        pos_ids.array,
+                        positions,
                         use_long=False,
                         kv_append=kv_append,
                         max_active_tokens=max_active_tokens,
+                        replicated_token=replicated_token,
                     ),
                     operand=None,
                 )
@@ -2113,7 +2146,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                     expert_implementation=expert_implementation,
                     max_active_tokens=max_active_tokens,
                 )
-                x = x + (mlp_out + block.shared(mlp_in))
+                x = x + (mlp_out + block.shared(mlp_in, replicated_token=replicated_token))
                 return x, cache, None
             mlp_out, capture = block.mlp(mlp_in, token_valid=token_valid, capture_routes=True)
             return x + (mlp_out + block.shared(mlp_in)), cache, capture
@@ -2167,8 +2200,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             logits = _fixed_schedule_projection(hidden, self.transformer.output_proj)
         else:
             logits = jnp.einsum(
-                "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
+                "bsd,dv->bsv",
+                hidden,
+                self.transformer.output_proj,
+                out_sharding=P(None, None, "model") if replicated_token else _activation_spec("model"),
             )
+        if replicated_token:
+            logits = jnp.pad(logits, ((0, input_ids.size - 1), (0, 0), (0, 0)))
         if not capture_routes:
             return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, None
         assert stacked_captures is not None
