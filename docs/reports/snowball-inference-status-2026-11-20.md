@@ -1095,6 +1095,38 @@ These are client-observed intervals. They include any prefill, scheduling,
 and streaming work between the observed events.
 [v5p-8 same-slice pair](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix) · [v6e-8 four-step replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v35-four-round-unchunked)
 
+Native v5p-8 cache admission logs counted 12.34 million reused tokens
+across the profiling and drain interval, out of 15.32 million prompt
+tokens. The vLLM server counters measured 13.82 million reused tokens
+out of 15.61 million during its leg on the same slice. The implied
+recomputed shares were 19.4% for native and 11.4% for vLLM. The separate
+7,168-page native trial with four retained spans reused 12.24 million
+out of 15.19 million prompt tokens, for a similar recomputed share of
+19.4%.
+[Same-slice pair and server counters](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix) · [Four retained spans](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v46-four-retained-window-spans)
+
+An experimental FIFO policy emitted the first tokens for a leading
+group of requests with at most 2,048 uncached tokens before prefilling
+the next longer suffix. It split 20 profiling batches and reached
+541.14 output tok/s on another v5p-8 worker. Across all 376 turns shared
+with the native control, output lengths matched, median TTFT fell from
+995 to 890 ms, p90 fell from 3.00 to 2.94 s, and active decode was 35.58
+versus 35.45 tok/s. Across 379 turns shared with compiled vLLM, output
+lengths also matched and paired p90 was 2.93 versus 1.56 s. Both legs
+reported zero profiling errors. Fresh and primed 64,512-token TTFT
+were 1.858 s and 113 ms.
+[FIFO short-prefill trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v48-fifo-short-prefill-flush)
+
+Running eight decode steps per host round on another v5p-8 worker
+reached 536.07 output tok/s. Across 375 turns shared with the 16-step
+native run, median TTFT fell from 999 to 545 ms and p90 fell from 3.01
+to 2.44 s. Active decode fell from 35.43 to 33.39 tok/s. Compared with
+the compiled leg’s 376 shared turns, active decode was 33.41 versus
+34.25 tok/s and p90 was 2.44 versus 1.54 s. All paired output lengths
+matched and there were zero profiling errors. Fresh and primed
+64,512-token medians were 1.863 s and 112 ms.
+[Eight-step v5p-8 replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v47-clean-two-spans-eight-rounds)
+
 In a local CPU microbenchmark with 80 cached 48,000-token prompts,
 finding only the first mismatching token reduced median comparison time
 from 3.66 to 0.60 ms. The updated prompt lookup selected identical pages
