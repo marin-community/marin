@@ -332,6 +332,7 @@ rl:
           open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
           open-thoughts/TaskTrove: nonagentic
           nvidia/Llama-Nemotron-Post-Training-Dataset: nonagentic
+        eval_drain: wait
       rollout_spans: true
       step_wise_training: false
       strategy: megatron
