@@ -6,6 +6,7 @@ import os
 import shlex
 import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
@@ -27,7 +28,10 @@ from skyrl_train.workers.levanter_batch import forward_payload, policy_payload, 
 def _child_environment(
     python_executable: str, memory_fraction: float, *, require_accelerator: bool, compiler_diagnostics: bool = False,
     preallocate: bool = False,
+    allocator: str = "bfc",
 ) -> dict[str, str]:
+    if allocator not in ("bfc", "vmm") or (allocator == "vmm" and preallocate):
+        raise ValueError("Native learner requires bfc, or vmm with preallocate=false")
     environment = dict(os.environ)
     for name in (
         "CUDA_HOME", "NVRTC_HOME", "LIBRARY_PATH", "LD_LIBRARY_PATH", "LD_PRELOAD",
@@ -39,7 +43,7 @@ def _child_environment(
     environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = str(preallocate).lower()
     environment.pop("XLA_CLIENT_MEM_FRACTION", None)
     environment["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(memory_fraction)
-    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = "bfc"
+    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = allocator
     environment["TF_FORCE_UNIFIED_MEMORY"] = "false"
     # CPU coordinator defaults must not select the learner backend. CUDA comes
     # first; the runtime verifies it before loading a model. CPU supports staging.
@@ -113,6 +117,8 @@ class LevanterHostWorker:
         self.coordinator_address = None
         self.initialization_config = None
         self._checkpoint_validation_complete = False
+        self._publication_memory_recorded = False
+        self._training_memory_recorded = False
 
     def node_address(self) -> str:
         return ray.util.get_node_ip_address()
@@ -138,6 +144,7 @@ class LevanterHostWorker:
             require_accelerator=self.initialization_config["require_accelerator"],
             compiler_diagnostics=runtime.validate_checkpoint_roundtrip,
             preallocate=runtime.preallocate,
+            allocator=runtime.allocator,
         )
         if runtime.validate_checkpoint_roundtrip:
             self.initialization_config["compiler_dump_dir"] = shlex.split(environment["XLA_FLAGS"])[-3].split("=", 1)[1]
@@ -160,7 +167,57 @@ class LevanterHostWorker:
         self.pad_token_id = pad_token_id
 
     def publication(self, method: str, payload: dict):
+        if method == "next" and not self._publication_memory_recorded:
+            self._record_memory("before-first-publication-next")
+            self._publication_memory_recorded = True
         return self.child.request("publication", {"method": method, "payload": payload})
+
+    def _record_memory(self, phase: str) -> None:
+        try:
+            self._capture_memory(phase)
+        except Exception as error:
+            # Observer I/O must never replace the publication/update outcome.
+            with suppress(Exception):
+                logger.warning(
+                    "NATIVE_MEMORY_SNAPSHOT {}",
+                    json.dumps({"phase": phase, "process_id": self.process_id, "observer_error_type": type(error).__name__}),
+                )
+
+    def _capture_memory(self, phase: str) -> None:
+        receipt = {
+            "phase": phase,
+            "time_ns": time.time_ns(),
+            "process_id": self.process_id,
+            "parent_pid": os.getpid(),
+            "native": self.child.request("memory_statistics", {}),
+            "parent_torch": [],
+        }
+        for rank, device in sorted(self.sender.devices.items()):
+            row = {"rank": rank, "device_type": device.type, "local_device": device.index}
+            if device.type == "cuda":
+                try:
+                    free, total = torch.cuda.mem_get_info(device)
+                    row.update(
+                        torch_allocated_bytes=torch.cuda.memory_allocated(device),
+                        torch_reserved_bytes=torch.cuda.memory_reserved(device),
+                        driver_global_free_bytes=free,
+                        driver_global_total_bytes=total,
+                    )
+                except Exception as error:
+                    row["error_type"] = type(error).__name__
+            receipt["parent_torch"].append(row)
+        encoded = json.dumps(receipt, sort_keys=True)
+        logger.info("NATIVE_MEMORY_SNAPSHOT {}", encoded)
+        if output_dir := os.environ.get("IRIS_OUTPUT_DIR"):
+            path = Path(output_dir) / f"native-memory-{phase}-process-{self.process_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(encoded + "\n")
+
+    def train(self, payload: dict) -> dict:
+        if self.cfg.trainer.policy.levanter_config.validate_checkpoint_roundtrip and not self._training_memory_recorded:
+            self._record_memory("before-first-train")
+            self._training_memory_recorded = True
+        return self.child.request("train", payload)
 
     def forward(self, data: TrainingInputBatch) -> TrainingOutputBatch:
         result = self.child.request("forward", forward_payload(data).as_dict())
@@ -184,7 +241,7 @@ class LevanterHostWorker:
                     and not self._checkpoint_validation_complete
                 )
                 before_model = self.child.request("model_fingerprint", {}) if validate_checkpoint else None
-                status = self.child.request("train", policy_payload(batch, self.cfg.trainer.algorithm).as_dict())
+                status = self.train(policy_payload(batch, self.cfg.trainer.algorithm).as_dict())
                 if validate_checkpoint:
                     self.validate_checkpoint_roundtrip(before_model, status)
                 fingerprint = status.pop("frozen_batch_sha256")

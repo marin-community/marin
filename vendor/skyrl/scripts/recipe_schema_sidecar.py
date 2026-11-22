@@ -54,6 +54,7 @@ TYPES = MappingProxyType(
         "trainer.policy.levanter_config.validate_checkpoint_roundtrip": "bool",
         "trainer.policy.levanter_config.coordinator_port": "Annotated[int, Field(ge=1, le=65535)]",
         "trainer.policy.levanter_config.device_memory_fraction": "Annotated[int | float, Field(gt=0, le=1)]",
+        "trainer.policy.levanter_config.allocator": 'Literal["bfc", "vmm"]',
         "trainer.policy.levanter_config.projection_block_size": "PositiveInt",
         "trainer.policy.levanter_config.projection_logits_dtype": 'Literal["float32", "bfloat16"]',
         "trainer.policy.levanter_config.moe_capacity_factor": "Annotated[int | float, Field(gt=0)]",

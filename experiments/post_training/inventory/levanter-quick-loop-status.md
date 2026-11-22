@@ -435,6 +435,13 @@ JAX allocator counters do not support this pinned VMM path; the candidate
 adds explicitly labeled parent Torch and global driver-memory receipts.
 No VMM hardware run has been submitted.
 
+The VMM candidate passes three schema checks and a 22-case native CPU run.
+After isolating observer errors, three normal host continuations and the real
+blocked-output/NaN-error case pass on the final production source. Required
+lint/types, strict docs, and independent review pass. The rendered control is
+unchanged; native configuration differs from `.10` only by `allocator: vmm`
+and `preallocate: false`. These checks do not qualify GPU allocation or fit.
+
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch

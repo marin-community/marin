@@ -162,6 +162,7 @@ class PolicyLevanterConfig(Section):
     validate_checkpoint_roundtrip: bool = field(False)
     coordinator_port: Annotated[int, Field(ge=1, le=65535)] = field(29590)
     device_memory_fraction: Annotated[int | float, Field(gt=0, le=1)] = field(0.9)
+    allocator: Literal["bfc", "vmm"] = field("bfc")
     preallocate: bool = field(False)
     projection_block_size: PositiveInt = field(1024)
     projection_logits_dtype: Literal["float32", "bfloat16"] = field("float32")

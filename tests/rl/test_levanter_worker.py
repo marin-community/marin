@@ -216,7 +216,10 @@ def test_native_child_import_time_stdout_does_not_corrupt_response(tmp_path, cap
 
 
 @pytest.mark.parametrize("require_accelerator", [True, False])
-def test_native_child_backend_intent_overrides_inherited_coordinator_platform(require_accelerator, monkeypatch):
+@pytest.mark.parametrize("allocator,preallocate", [("bfc", True), ("vmm", False)])
+def test_native_child_backend_intent_overrides_inherited_coordinator_platform(
+    require_accelerator, allocator, preallocate, monkeypatch
+):
     host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
     monkeypatch.setenv("JAX_PLATFORMS", "cpu" if require_accelerator else "cuda,cpu")
     monkeypatch.setenv("JAX_PLATFORM_NAME", "cpu")
@@ -226,7 +229,7 @@ def test_native_child_backend_intent_overrides_inherited_coordinator_platform(re
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
     monkeypatch.setenv("TF_FORCE_UNIFIED_MEMORY", "true")
     environment = host_module._child_environment(
-        sys.executable, 0.9, require_accelerator=require_accelerator, preallocate=True
+        sys.executable, 0.9, require_accelerator=require_accelerator, preallocate=preallocate, allocator=allocator
     )
     result = subprocess.run(
         [
@@ -266,7 +269,7 @@ print(json.dumps(receipt))
     receipt = json.loads(result.stdout)
     assert receipt["gpu_visibility"] == "0,1,2,3,4,5,6,7"
     assert receipt["jax_platforms"] == ("cuda,cpu" if require_accelerator else "cpu")
-    assert receipt["allocation_policy"] == {"allocator": "bfc", "memory_fraction": 0.9, "preallocate": True}
+    assert receipt["allocation_policy"] == {"allocator": allocator, "memory_fraction": 0.9, "preallocate": preallocate}
     assert receipt["unified_memory"] == "false"
     if require_accelerator:
         if receipt["initialized"]:
@@ -278,24 +281,26 @@ print(json.dumps(receipt))
 
 
 @pytest.mark.parametrize(
-    "preallocate,flags,unified,expected",
+    "preallocate,flags,unified,expected,allocator",
     [
-        (True, "--xla_gpu_command_buffer_update_mode=SKIP_TEMP", "false", "requires.*ALWAYS_UPDATE"),
-        (False, "--xla_gpu_command_buffer_update_mode SKIP_TEMP", "false", "requires.*ALWAYS_UPDATE"),
-        (True, "", "true", "requires disabled TF_FORCE_UNIFIED_MEMORY"),
-        (False, "", "invalid", "requires disabled TF_FORCE_UNIFIED_MEMORY"),
-        (True, "--xla_gpu_temp_buffer_use_separate_color=true", "false", "requires disabled.*separate_color"),
-        (False, "--xla_gpu_temp_buffer_use_separate_color true", "false", "requires disabled.*separate_color"),
-        (True, "--xla_gpu_temp_buffer_use_separate_color", "false", "requires disabled.*separate_color"),
-        (False, "--xla_gpu_temp_buffer_use_separate_color=invalid", "false", "requires disabled.*separate_color"),
+        (True, "--xla_gpu_command_buffer_update_mode=SKIP_TEMP", "false", "requires.*ALWAYS_UPDATE", "bfc"),
+        (False, "--xla_gpu_command_buffer_update_mode SKIP_TEMP", "false", "requires.*ALWAYS_UPDATE", "bfc"),
+        (True, "", "true", "requires disabled TF_FORCE_UNIFIED_MEMORY", "bfc"),
+        (False, "", "invalid", "requires disabled TF_FORCE_UNIFIED_MEMORY", "bfc"),
+        (True, "--xla_gpu_temp_buffer_use_separate_color=true", "false", "requires disabled.*separate_color", "bfc"),
+        (False, "--xla_gpu_temp_buffer_use_separate_color true", "false", "requires disabled.*separate_color", "bfc"),
+        (True, "--xla_gpu_temp_buffer_use_separate_color", "false", "requires disabled.*separate_color", "bfc"),
+        (False, "--xla_gpu_temp_buffer_use_separate_color=invalid", "false", "requires disabled.*separate_color", "bfc"),
+        (True, "", "false", "requires bfc, or vmm with preallocate=false", "vmm"),
     ],
 )
-def test_native_allocation_overrides_reject_before_backend_or_model(preallocate, flags, unified, expected):
+def test_native_allocation_overrides_reject_before_backend_or_model(preallocate, flags, unified, expected, allocator):
     host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
     environment = host._child_environment(sys.executable, 0.9, require_accelerator=False, preallocate=preallocate)
     # If policy validation stops preceding initialization, this invalid backend
     # produces a different error before any model can be read.
     environment.update(JAX_PLATFORMS="allocation-policy-test-invalid-backend", TF_FORCE_UNIFIED_MEMORY=unified)
+    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = allocator
     environment["XLA_FLAGS"] = environment.get("XLA_FLAGS", "") + " " + flags
     child = LearnerProcess(sys.executable, environment=environment, timeout_seconds=30)
     try:
@@ -303,7 +308,7 @@ def test_native_allocation_overrides_reject_before_backend_or_model(preallocate,
             child.request(
                 "initialize",
                 {
-                    "runtime": {"preallocate": preallocate, "device_memory_fraction": 0.9},
+                    "runtime": {"allocator": allocator, "preallocate": preallocate, "device_memory_fraction": 0.9},
                     "distributed": {"num_processes": 1, "local_device_count": 1},
                     "require_accelerator": False,
                 },
@@ -369,7 +374,7 @@ def _same_request(children, method, payload):
 def _learner_processes(config, process_count, fast_bwd_override_rank=None):
     environment = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_CPU_COLLECTIVES_IMPLEMENTATION": "gloo"}
     environment.pop("XLA_CLIENT_MEM_FRACTION", None)
-    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = "bfc"
+    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = config["runtime"]["allocator"]
     environment["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(config["runtime"]["device_memory_fraction"])
     environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = str(config["runtime"]["preallocate"]).lower()
     environment["TF_FORCE_UNIFIED_MEMORY"] = "false"
@@ -392,6 +397,7 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
                     require_accelerator=False,
                     compiler_diagnostics=True,
                     preallocate=config["runtime"]["preallocate"],
+                    allocator=config["runtime"]["allocator"],
                 )
                 child_environment["JAX_CPU_COLLECTIVES_IMPLEMENTATION"] = "gloo"
             if rank == fast_bwd_override_rank:
@@ -415,18 +421,23 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize(
-    "process_count,host_restart,projection_dtype,fast_bwd_override_rank,compiler_failure,preallocate",
+    "process_count,host_restart,projection_dtype,fast_bwd_override_rank,compiler_failure,preallocate,allocator",
     [
-        pytest.param(1, False, "bfloat16", None, False, False, id="bf16-single"),
-        pytest.param(2, False, "bfloat16", None, False, False, marks=pytest.mark.multidevice, id="bf16-multihost"),
-        pytest.param(1, True, "bfloat16", None, False, False, id="bf16-host-restart"),
+        pytest.param(1, False, "bfloat16", None, False, False, "bfc", id="bf16-single"),
         pytest.param(
-            2, True, "bfloat16", None, False, False, marks=pytest.mark.multidevice, id="bf16-multihost-restart"
+            2, False, "bfloat16", None, False, False, "bfc", marks=pytest.mark.multidevice, id="bf16-multihost"
         ),
-        pytest.param(1, False, "float32", None, False, False, id="default-fp32"),
-        pytest.param(4, False, "bfloat16", 3, False, False, marks=pytest.mark.multidevice, id="bf16-override-rejected"),
-        pytest.param(1, False, "bfloat16", None, True, False, id="compiler-evidence-failure"),
-        pytest.param(1, False, "bfloat16", None, False, True, id="preallocated-native-continuation"),
+        pytest.param(1, True, "bfloat16", None, False, False, "bfc", id="bf16-host-restart"),
+        pytest.param(
+            2, True, "bfloat16", None, False, False, "bfc", marks=pytest.mark.multidevice, id="bf16-multihost-restart"
+        ),
+        pytest.param(1, False, "float32", None, False, False, "bfc", id="default-fp32"),
+        pytest.param(
+            4, False, "bfloat16", 3, False, False, "bfc", marks=pytest.mark.multidevice, id="bf16-override-rejected"
+        ),
+        pytest.param(1, False, "bfloat16", None, True, False, "bfc", id="compiler-evidence-failure"),
+        pytest.param(1, False, "bfloat16", None, False, True, "bfc", id="preallocated-native-continuation"),
+        pytest.param(1, True, "bfloat16", None, False, False, "vmm", id="vmm-native-continuation"),
     ],
 )
 def test_native_learner_subprocess_updates_and_resumes_exactly(
@@ -437,6 +448,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     fast_bwd_override_rank,
     compiler_failure,
     preallocate,
+    allocator,
     monkeypatch,
 ):
     host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker") if host_restart else None
@@ -448,6 +460,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     batch_size = count * 2
     config = {
         "runtime": {
+            "allocator": allocator,
             "preallocate": preallocate,
             "device_memory_fraction": 0.9,
             "validate_checkpoint_roundtrip": host_restart or compiler_failure,
@@ -509,7 +522,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
         assert all(row["backend"] == "cpu" and row["pid"] > 0 and row["global_model_parameters"] > 0 for row in receipts)
         assert all(
             row["allocation_policy"]
-            == {"allocator": "bfc", "memory_fraction": 0.9, "preallocate": preallocate, "unified_memory": False}
+            == {"allocator": allocator, "memory_fraction": 0.9, "preallocate": preallocate, "unified_memory": False}
             for row in receipts
         )
         if fast_bwd_override_rank is not None:
@@ -532,8 +545,29 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
         )
         if compiler_failure:
             arrays["advantages"].fill(np.nan)
+            host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+            observer = host.LevanterHostWorker(
+                host.OmegaConf.create(
+                    {
+                        "trainer": {
+                            "placement": {"policy_num_gpus_per_node": local_count},
+                            "policy": {"levanter_config": {"validate_checkpoint_roundtrip": True}},
+                        }
+                    }
+                ),
+                0,
+            )
+            observer.child = children[0]
+            observer.sender = host.LevanterExpertBlockSender(observer.publication)
+            observer.expert_block_rpc("inventory")
+            # This real parent-side filesystem failure must not stop publication
+            # or replace the native learner's subsequent genuine NaN failure.
+            monkeypatch.setenv("IRIS_OUTPUT_DIR", str(blocked / "attempt-output"))
+            observer.publication("begin", {"version": 0})
+            assert observer.publication("next", {})["version"] == 0
+            observer.publication("end", {})
             with pytest.raises(RuntimeError, match="Loss is NaN"):
-                children[0].request("train", payload)
+                observer.train(payload)
             stages = list((output_dir / "native-compile").iterdir())
             assert len(stages) == 1
             stage = stages[0]
@@ -591,6 +625,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                                 "python_executable": sys.executable,
                                 "device_memory_fraction": 0.9,
                                 "preallocate": preallocate,
+                                "allocator": allocator,
                                 "command_timeout_seconds": 60,
                                 "initialization_timeout_seconds": 60,
                                 "validate_checkpoint_roundtrip": True,
@@ -625,8 +660,40 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                 assert len(workers[rank].expert_block_rpc("inventory")) == local_count
                 artifact = output_dir / f"native-checkpoint-roundtrip-process-{rank}.json"
                 assert host_module.json.loads(artifact.read_text()) == row
+            for _ in range(2):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=process_count) as pool:
+                    begun = [pool.submit(worker.publication, "begin", {"version": 1}) for worker in workers]
+                    assert all(future.result()["version"] == 1 for future in begun)
+                    payloads = [pool.submit(worker.publication, "next", {}) for worker in workers]
+                    assert all(future.result()["version"] == 1 for future in payloads)
+                    ended = [pool.submit(worker.publication, "end", {}) for worker in workers]
+                    assert all(future.result()["version"] == 1 for future in ended)
+                current_memory = [
+                    (output_dir / f"native-memory-before-first-publication-next-process-{rank}.json").read_bytes()
+                    for rank in range(process_count)
+                ]
+                if _ == 0:
+                    first_memory = current_memory
+                else:
+                    assert current_memory == first_memory
         payload["global_step"] = 2
-        expected = _same_request(children, "train", payload)
+        if host_restart:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=process_count) as pool:
+                futures = [pool.submit(worker.train, payload) for worker in workers]
+                expected = [future.result() for future in futures]
+            for rank in range(process_count):
+                for phase in ("before-first-publication-next", "before-first-train"):
+                    memory = json.loads((output_dir / f"native-memory-{phase}-process-{rank}.json").read_text())
+                    assert memory["phase"] == phase
+                    assert memory["native"]["optimizer_step"] == memory["native"]["version"] == 1
+                    assert memory["native"]["allocation_policy"]["allocator"] == allocator
+                    assert memory["native"]["devices"]
+                    assert all(
+                        row["device_type"] == "cpu" and "driver_global_free_bytes" not in row
+                        for row in memory["parent_torch"]
+                    )
+        else:
+            expected = _same_request(children, "train", payload)
         expected_scores = _same_request(children, "forward", payload)[0]["output"]
         expected_state = _same_request(children, "state_fingerprints", {})
         _same_request(children, "shutdown", {})

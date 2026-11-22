@@ -541,6 +541,8 @@ def validate_levanter_cfg(cfg: DictConfig) -> None:
         raise ValueError("trainer.policy.levanter_config.device_memory_fraction must be in (0, 1]")
     if not isinstance(runtime.preallocate, bool):
         raise ValueError("trainer.policy.levanter_config.preallocate must be a boolean")
+    if runtime.allocator not in ("bfc", "vmm") or (runtime.allocator == "vmm" and runtime.preallocate):
+        raise ValueError("Native learner requires bfc, or vmm with preallocate=false")
     if (
         not isinstance(runtime.coordinator_port, int)
         or isinstance(runtime.coordinator_port, bool)

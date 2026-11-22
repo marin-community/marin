@@ -46,7 +46,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import multihost_allgather_sync
 from levanter.utils.mesh import MeshConfig
 
-from marin.rl.levanter_compile_diagnostics import capture_compile, capture_failure, scientific_xla_flags
+from marin.rl.levanter_compile_diagnostics import _memory_stats, capture_compile, capture_failure, scientific_xla_flags
 from marin.rl.levanter_publication import SnowballPublication
 from marin.rl.levanter_worker_protocol import read_frame, write_frame
 
@@ -198,13 +198,15 @@ def _validate_allocator(config: dict) -> None:
         if name == "--xla_gpu_command_buffer_update_mode":
             # SKIP_TEMP makes pinned PJRT silently replace BFC with VMM.
             if value != "ALWAYS_UPDATE":
-                raise ValueError("Native BFC learner requires xla_gpu_command_buffer_update_mode=ALWAYS_UPDATE")
+                raise ValueError("Native learner requires xla_gpu_command_buffer_update_mode=ALWAYS_UPDATE")
         elif value not in ("false", "0"):
             # This otherwise installs an uncapped CUDA-async scratch allocator.
-            raise ValueError("Native BFC learner requires disabled xla_gpu_temp_buffer_use_separate_color")
+            raise ValueError("Native learner requires disabled xla_gpu_temp_buffer_use_separate_color")
     runtime = config["runtime"]
+    if runtime["allocator"] not in ("bfc", "vmm") or (runtime["allocator"] == "vmm" and runtime["preallocate"]):
+        raise ValueError("Native learner requires bfc, or vmm with preallocate=false")
     expected = {
-        "allocator": "bfc",
+        "allocator": runtime["allocator"],
         "memory_fraction": runtime["device_memory_fraction"],
         "preallocate": runtime["preallocate"],
         "unified_memory": False,
@@ -220,8 +222,10 @@ def _allocator_limits() -> list[dict]:
         try:
             stats = device.memory_stats()
             row["bytes_limit"] = None if stats is None else stats.get("bytes_limit")
+            row["statistics_available"] = stats is not None
         except Exception as error:
             row["error_type"] = type(error).__name__
+            row["statistics_available"] = False
         rows.append(row)
     return rows
 
@@ -815,6 +819,22 @@ class NativePolicyRuntime:
             "allocator_limits": _allocator_limits(),
         }
 
+    def memory_statistics(self) -> dict:
+        try:
+            return {
+                "pid": os.getpid(),
+                "process_id": jax.process_index(),
+                "backend": jax.default_backend(),
+                "optimizer_step": int(self.state.step),
+                "version": self.version,
+                "source": self.source_identity,
+                "allocation_policy": _allocator_profile(),
+                "statistics_api": "jax.Device.memory_stats",
+                "devices": [row | {"statistics_available": row.get("stats") is not None} for row in _memory_stats()],
+            }
+        except Exception as error:
+            return {"pid": os.getpid(), "observer_error_type": type(error).__name__}
+
     def validate_model_change(self, payload: dict) -> dict:
         before, after = payload["before"], payload["after"]
         changed = before["sha256"] != after["sha256"]
@@ -863,6 +883,8 @@ class NativePolicyRuntime:
             return _state_fingerprint(self.state.model)
         if method == "runtime_identity":
             return self.runtime_identity()
+        if method == "memory_statistics":
+            return self.memory_statistics()
         if method == "validate_model_change":
             return self.validate_model_change(payload)
         if method == "publication":

@@ -172,7 +172,8 @@ def training_recipe(
                             head_gate_fp32=True,
                             xsa_fp32=True,
                             device_memory_fraction=0.90,
-                            preallocate=True,
+                            allocator="vmm",
+                            preallocate=False,
                             validate_checkpoint_roundtrip=validate_native_checkpoint,
                         )
                     ),
