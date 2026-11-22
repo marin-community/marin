@@ -9,8 +9,8 @@ integration remain open.
 
 The full BF16 67B checkpoint completed the matched 64K AgentX replay at
 128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
-reached 67%, 34%, and 94% of compiled vLLM's aggregate output throughput
-on those platforms. The two-replica H100 trial reached 0.96 s p90 time to
+reached 67%, 34%, and 100% of compiled vLLM's aggregate output throughput
+on those platforms. The two-replica H100 trial reached 0.95 s p90 time to
 first token versus vLLM's 1.44 s. At 64,512 fresh prompt tokens, native
 HTTP prefill reached 35.5k prompt tok/s on v5p-8 and 42.2k on v6e-8
 versus 33.1k and 42.4k for vLLM.
@@ -465,6 +465,8 @@ mesh. Both engines enabled prefix caching.
 | [Native, 48 KV contexts and H100 attention split tuning](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v19-48-context-tuned) | 413 | 114,525 | 545.35 | 1.11 | 2.15 |
 | [Native, 56 KV contexts with bounded prefill scratch](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v20-bounded-prefill) | 415 | 114,820 | 546.76 | 0.85 | 1.45 |
 | [Native, two four-GPU replicas](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v21-bounded-replicas) | 421 | 117,409 | 559.09 | 0.48 | 0.96 |
+| [Native, two replicas and 24-step rounds](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v23-replicas-24-rounds) | 421 | 117,409 | 559.09 | 0.66 | 1.25 |
+| [Native, two replicas and batched KV release](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v25-replicas-batched-release) | 433 | 124,472 | 593.47 | 0.44 | 0.95 |
 
 The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
 requests at the drain deadline. On 47 common turns, both engines emitted
@@ -584,6 +586,24 @@ paired turns, output lengths matched and active decode was 58.37 tok/s
 for native versus 55.72 tok/s for vLLM. Both runs reported zero profiling
 errors.
 
+Increasing the replica decode round from 16 to 24 steps produced the same
+aggregate output count and throughput, with 1.25 s p90 TTFT. The
+batched-release trial returned to 16 steps and reached 593.47 output
+tok/s versus 593.09 for vLLM. All 423 vLLM turns matched native output
+lengths, and native completed 10 additional turns. Paired active decode
+was 73.98 versus 56.91 tok/s, and paired p90 TTFT was 0.947 versus 1.443 s.
+Both backends reported zero profiling errors. The native artifacts include
+each replica's config and serving log.
+
+Reproduce the native run in an Iris job on one eight-H100 80 GB host.
+Set the weights and replay receipt to the local CoreWeave region.
+
+```bash
+JAX_PLATFORMS=cuda,cpu XLA_PYTHON_CLIENT_MEM_FRACTION=.95 \
+  uv run --no-sync python -m experiments.evaluation.knotmeter.replicated_h100_probe \
+  --weights "$weights" --workload "$workload" --concurrency 128 --max-rounds 16
+```
+
 ## AgentX at concurrency 128 on TPU
 
 The first native v5p-8 attempt with 16 full KV contexts reached decode
@@ -639,7 +659,10 @@ The H100 32-context run logged 11.15 million reused prompt tokens across
 
 vLLM's profiling counters showed cache hits for 88.6% of queried
 prompt tokens on v5p-8 and 81.6% on v6e-8. It averaged 16.0 and 16.5
-running requests in those runs.
+running requests in those runs. The compiled TPU backend reported four
+hybrid KV cache groups with 61.15 and 26.79 full 65,536-token contexts of
+capacity, respectively. Native used full-length BF16 pages for all layers
+in the matching runs above.
 
 On one v6e chip, trimming the attention metadata to the packed decode
 width reduced sliding-window attention from 0.813 to 0.242 ms for eight

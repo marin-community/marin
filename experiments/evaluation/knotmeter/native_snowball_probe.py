@@ -10,6 +10,7 @@ import logging
 import os
 import random
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -128,13 +129,14 @@ def main() -> None:
     parser.add_argument("--weights", required=True)
     benchmark = parser.add_mutually_exclusive_group(required=True)
     benchmark.add_argument("--workload")
+    benchmark.add_argument("--ready-file", type=Path)
     benchmark.add_argument("--prefill-only", action="store_true")
     parser.add_argument("--measure-prefill", action="store_true", help="Also measure prefill after AgentX")
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--max-seqs-in-prefill", type=int, default=16)
     parser.add_argument("--max-rounds", type=int, default=32)
     parser.add_argument("--max-tokens-per-round", type=int, help="Cap decode tokens independently of client concurrency")
-    parser.add_argument("--accelerator", choices=("tpu", "h100x8"), default="tpu")
+    parser.add_argument("--accelerator", choices=("tpu", "h100x4", "h100x8"), default="tpu")
     parser.add_argument("--chips", type=int, choices=(4, 8))
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3", "gpu", "reference"), default="tpu_fp32")
@@ -169,10 +171,10 @@ def main() -> None:
     series = load_series(SERIES)
     assert (series["max_context"], series["duration"]) == (65536, 180)
     devices = jax.devices()
-    if args.accelerator == "h100x8":
-        expert_shards, platform, device_kind = 8, "gpu", "H100"
+    if args.accelerator.startswith("h100x"):
+        expert_shards, platform, device_kind = int(args.accelerator[-1]), "gpu", "H100"
         if args.chips not in (None, expert_shards):
-            parser.error("--accelerator h100x8 requires eight devices")
+            parser.error("--chips must match --accelerator")
     else:
         expert_shards, platform, device_kind = args.chips or 4, "tpu", "TPU"
     if len(devices) != expert_shards or any(
@@ -347,6 +349,10 @@ def main() -> None:
                         context.engine.reset()
                     evidence["bucket_warmup_seconds"] = time.monotonic() - started - evidence["cold_completion_seconds"]
                 probe_path.write_text(json.dumps(evidence, indent=2))
+                if args.ready_file is not None:
+                    args.ready_file.write_text(url)
+                    threading.Event().wait()
+                    return
                 try:
                     if workload is not None:
                         run_logged(
