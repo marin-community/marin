@@ -1853,9 +1853,11 @@ class InferenceEngine:
             replay.append(pending_outputs.routes, self.local_map)
             pending_outputs = pending_outputs.outputs
         n = int(pending_outputs.num_tokens)
-        fins = pending_outputs.finished.array
+        finish_reasons = np.asarray(pending_outputs.finish_reasons.array)
+        fins = finish_reasons != FinishReason.RUNNING
         toks_arr = pending_outputs.tokens.array
         sids_arr = pending_outputs.slot_ids.array
+        probs_arr = pending_outputs.logprobs.array if pending_outputs.logprobs is not None else None
 
         appended = 0
         unmapped = 0
@@ -1868,10 +1870,10 @@ class InferenceEngine:
                 unmapped += 1
                 continue
             rid, cid = info
-            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
+            dr = self.results[rid][cid]
             dr.token_list.append(tok)
-            if pending_outputs.logprobs is not None:
-                dr.logprobs.append(float(pending_outputs.logprobs.array[i]))
+            if probs_arr is not None:
+                dr.logprobs.append(float(probs_arr[i]))
             dr.tokens_decoded += 1
             appended += 1
             if on_tokens is not None:
@@ -1882,15 +1884,14 @@ class InferenceEngine:
                 on_tokens(rid, cid, tokens)
 
         # Update done flags based on snapshot
-        for local_slot, is_done in enumerate(fins):
-            if not bool(is_done):
-                continue
+        finished_slots = np.flatnonzero(fins).tolist()
+        for local_slot in finished_slots:
             info = self.local_map.get(local_slot)
             if info is None:
                 continue
             rid, cid = info
-            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.finish_reason = FinishReason(int(pending_outputs.finish_reasons.array[local_slot]))
+            dr = self.results[rid][cid]
+            dr.finish_reason = FinishReason(int(finish_reasons[local_slot]))
             choices = self.results[rid].values()
             if all(choice.done for choice in choices):
                 self._page_reservations.pop(rid, None)
@@ -1910,7 +1911,7 @@ class InferenceEngine:
                         f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>"
                     )
 
-        num_finished = int(fins.sum())
+        num_finished = len(finished_slots)
         if num_finished:
             decode_state = eqx.filter_jit(DecodeState.free_pages_for_finished)(
                 self.gen_state.decode_state, jnp.asarray(fins)
