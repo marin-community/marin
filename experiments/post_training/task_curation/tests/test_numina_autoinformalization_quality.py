@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from experiments.post_training.task_curation.datasets.lean import numina_quality as quality
+from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization_quality as quality
 
 
 def report_row(key, label="no"):
@@ -57,7 +57,7 @@ def test_one_offline_command_builds_both_artifacts_and_filters_rejected_rows(tmp
         sys,
         "argv",
         [
-            "numina_quality",
+            "numina_autoinformalization_quality",
             "source.parquet",
             "--prime-lists",
             str(tmp_path),
@@ -73,15 +73,15 @@ def test_one_offline_command_builds_both_artifacts_and_filters_rejected_rows(tmp
     manifest = json.loads((out / "numina_autoinformalization_tasks.json").read_text())
     assert manifest["accepted"] == ["0"]
     assert manifest["task_counts"] == {"train": 1, "eval": 0}
-    with (out / "numina_row_quality_report.csv").open(newline="") as stream:
+    with (out / "numina_autoinformalization_row_quality_report.csv").open(newline="") as stream:
         result = list(csv.DictReader(stream))
     assert [r["included"] for r in result] == ["True", "False", "False", "False"]
     assert [r["cause"] for r in result] == ["", "golden_failed", "judge_malformed", "answer_disclosed"]
-    before = (out / "numina_row_quality_report.csv").read_bytes()
+    before = (out / "numina_autoinformalization_row_quality_report.csv").read_bytes()
     quality.write_records(golden, records[:-1])
     with pytest.raises(ValueError, match="Missing golden"):
         quality.main()
-    assert (out / "numina_row_quality_report.csv").read_bytes() == before
+    assert (out / "numina_autoinformalization_row_quality_report.csv").read_bytes() == before
     records[-1]["formal_sha256"] = "changed"
     quality.write_records(golden, records)
     with pytest.raises(ValueError, match="different formal"):
@@ -132,7 +132,7 @@ def test_reviewer_csv_selects_only_passes_and_preserves_provenance(tmp_path, mon
     assert manifest["accepted"] == ["0"]
     assert manifest["golden_format"] == "reviewer_csv"
     assert manifest["judge_models"] == []
-    with (output / "numina_row_quality_report.csv").open(newline="") as stream:
+    with (output / "numina_autoinformalization_row_quality_report.csv").open(newline="") as stream:
         report = list(csv.DictReader(stream))
     assert report[1]["golden_cause"] == "judge_wrong"
     assert report[1]["included"] == "False"
@@ -166,7 +166,7 @@ def test_intersection_excludes_rows_rejected_by_either_control(tmp_path, monkeyp
     result = quality.build_intersection(tmp_path / "raw", tmp_path, labels, *files, output)
     assert result["accepted"] == ["0"]
     assert len(result["golden_inputs"]) == 2
-    with (output / "numina_row_quality_report.csv").open() as stream:
+    with (output / "numina_autoinformalization_row_quality_report.csv").open() as stream:
         report = list(csv.DictReader(stream))
     assert [(r["primary_verdict"], r["required_verdict"], r["included"]) for r in report] == [
         ("PASS", "PASS", "True"),

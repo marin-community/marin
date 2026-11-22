@@ -18,17 +18,17 @@ Run from the repository root. To download the pinned inputs:
 The three scripts each complete their own step in one invocation:
 
     lean=experiments.post_training.task_curation.datasets.lean
-    uv run python -m "$lean.classify_answer_disclosure" numina.parquet \\
+    uv run python -m "$lean.numina_autoinformalization_classify_answer_disclosure" numina.parquet \\
         --prime-lists prime-lists \\
-        --output labels.jsonl
-    uv run python -m "$lean.numina_golden_batch" numina.parquet \\
+        --output numina_autoinformalization_answer_disclosure_labels.jsonl
+    uv run python -m "$lean.numina_autoinformalization_golden_batch" numina.parquet \\
         --prime-lists prime-lists \\
-        --labels labels.jsonl \\
-        --output golden.jsonl
-    uv run python -m "$lean.numina_quality" numina.parquet \\
+        --labels numina_autoinformalization_answer_disclosure_labels.jsonl \\
+        --output numina_autoinformalization_golden_controls.jsonl
+    uv run python -m "$lean.numina_autoinformalization_quality" numina.parquet \\
         --prime-lists prime-lists \\
-        --labels labels.jsonl \\
-        --golden golden.jsonl \\
+        --labels numina_autoinformalization_answer_disclosure_labels.jsonl \\
+        --golden numina_autoinformalization_golden_controls.jsonl \\
         --output-dir quality-output
 
 The first two commands submit paid Gemini batches using an exported GEMINI_API_KEY, wait,
@@ -48,16 +48,19 @@ verdicts and notes remain in the report, with both file hashes recorded in the m
 This script reads the parquet, disclosure labels, and golden verdicts. It applies the shared
 source exclusions, deduplication, split and eval-overlap rules, removes MCQs and word problems,
 and retains only "no" disclosure labels and PASS golden controls. It writes
-numina_row_quality_report.csv and numina_autoinformalization_tasks.json. Excluded rows have
+numina_autoinformalization_row_quality_report.csv and numina_autoinformalization_tasks.json. Excluded rows have
 included=False and a reason in cause. Missing golden results stop the build.
 
-Saved disclosure labels default to numina_answer_disclosure_labels.jsonl beside this module.
+Saved disclosure labels default to numina_autoinformalization_answer_disclosure_labels.jsonl beside this module.
 Disclosure labels, golden verdicts, and the quality CSV are generated local files.
 For the existing local run, golden results are saved under
-artifacts/numina-answer-disclosure/numina_golden_controls.jsonl. Rebuild both quality
+artifacts/numina-answer-disclosure/numina_autoinformalization_golden_controls.jsonl. Rebuild both quality
 artifacts from those saved results without another paid run:
 
-    uv run python -m "$lean.numina_quality" numina.parquet --prime-lists prime-lists --output-dir quality-output
+    uv run python -m "$lean.numina_autoinformalization_quality" numina.parquet --prime-lists prime-lists \\
+        --golden REVIEW.csv \\
+        --require-golden artifacts/numina-answer-disclosure/numina_autoinformalization_golden_controls.jsonl \\
+        --output-dir quality-output
 
 Review the output and copy numina_autoinformalization_tasks.json to
 experiments/post_training/task_curation/datasets/lean/numina_autoinformalization_tasks.json
@@ -80,12 +83,12 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation.datasets.lean import autoinformalization as auto
 from experiments.post_training.task_curation.datasets.lean import numina
+from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization as auto
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key, statement_key
 
-LABELS = Path(__file__).with_name("numina_answer_disclosure_labels.jsonl")
-GOLDEN = Path("artifacts/numina-answer-disclosure/numina_golden_controls.jsonl")
+LABELS = Path(__file__).with_name("numina_autoinformalization_answer_disclosure_labels.jsonl")
+GOLDEN = Path("artifacts/numina-answer-disclosure/numina_autoinformalization_golden_controls.jsonl")
 SOURCE_SHA256 = auto.MANIFEST["input"]["sha256"]
 
 FIELDS = (
@@ -314,7 +317,7 @@ def write_artifacts(rows: list[dict], metadata: dict, output_dir: Path) -> dict:
     manifest = {**final_manifest(iter(rows)), **metadata}
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output_dir) as temporary:
-        report = Path(temporary) / "numina_row_quality_report.csv"
+        report = Path(temporary) / "numina_autoinformalization_row_quality_report.csv"
         with report.open("w", newline="") as stream:
             writer = csv.DictWriter(stream, FIELDS)
             writer.writeheader()
@@ -335,9 +338,9 @@ def build_intersection(
         root = Path(temporary)
         first = build(parquet, prime_lists, labels, primary, root / "primary")
         second = build(parquet, prime_lists, labels, required, root / "required")
-        with (root / "primary/numina_row_quality_report.csv").open(newline="") as stream:
+        with (root / "primary/numina_autoinformalization_row_quality_report.csv").open(newline="") as stream:
             rows = list(csv.DictReader(stream))
-        with (root / "required/numina_row_quality_report.csv").open(newline="") as stream:
+        with (root / "required/numina_autoinformalization_row_quality_report.csv").open(newline="") as stream:
             other = list(csv.DictReader(stream))
         for row, extra in zip(rows, other, strict=True):
             if row["row_key"] != extra["row_key"] or row["formal_sha256"] != extra["formal_sha256"]:

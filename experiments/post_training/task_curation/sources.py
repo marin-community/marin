@@ -12,8 +12,8 @@ from experiments.post_training.task_curation.datasets import (
     unconverted,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
-from experiments.post_training.task_curation.datasets.lean import autoinformalization as lean_autoinformalization
 from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
+from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization as lean_autoinformalization
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym

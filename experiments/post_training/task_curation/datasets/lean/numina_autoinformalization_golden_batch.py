@@ -3,9 +3,10 @@
 
 """Check Numina golden controls in one paid Gemini batch invocation.
 
-    module=experiments.post_training.task_curation.datasets.lean.numina_golden_batch
-    uv run python -m "$module" PARQUET --prime-lists DIR --labels disclosure.jsonl \\
-        --output golden.jsonl
+    module=experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_golden_batch
+    uv run python -m "$module" PARQUET --prime-lists DIR \\
+        --labels numina_autoinformalization_answer_disclosure_labels.jsonl \\
+        --output numina_autoinformalization_golden_controls.jsonl
 
 Set GEMINI_API_KEY before running. This selects eligible no-disclosure rows directly from
 the pinned source, submits a batch, waits, and writes per-row golden results. Each row gets
@@ -21,8 +22,8 @@ from pathlib import Path
 
 from verifyit.modes.grade_judge import _answer_text
 
-from experiments.post_training.task_curation.datasets.lean import numina_quality as quality
-from experiments.post_training.task_curation.datasets.lean.gemini_batch import run_batch
+from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization_quality as quality
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_gemini_batch import run_batch
 
 MODEL = "gemini-4-carbon"
 

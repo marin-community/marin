@@ -259,4 +259,4 @@ experiments/evaluation/campaigns/.launch-snapshots/
 
 # Generated Numina classifier decisions stay local.
 /experiments/post_training/task_curation/datasets/lean/numina_answer_disclosure_labels.jsonl.gz
-/experiments/post_training/task_curation/datasets/lean/numina_answer_disclosure_labels.jsonl
+/experiments/post_training/task_curation/datasets/lean/numina_autoinformalization_answer_disclosure_labels.jsonl

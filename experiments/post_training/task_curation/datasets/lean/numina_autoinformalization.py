@@ -21,10 +21,6 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.spec import RUBRIC_LABELS, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.lean.autoinformalization_manifest import (
-    PROOF_TRAIN_UUIDS,
-    split_for,
-)
 from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key
 from experiments.post_training.task_curation.datasets.lean.numina import (
     NUMINA_FILE,
@@ -35,6 +31,10 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     is_human_statement_row,
     prime_list_source,
     statement_row_contract,
+)
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_manifest import (
+    PROOF_TRAIN_UUIDS,
+    split_for,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo

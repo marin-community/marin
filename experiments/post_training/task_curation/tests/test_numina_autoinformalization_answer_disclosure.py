@@ -7,7 +7,9 @@ import json
 
 import pytest
 
-from experiments.post_training.task_curation.datasets.lean import classify_answer_disclosure as classifier
+from experiments.post_training.task_curation.datasets.lean import (
+    numina_autoinformalization_classify_answer_disclosure as classifier,
+)
 
 
 @pytest.mark.parametrize(

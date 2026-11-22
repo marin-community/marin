@@ -10,18 +10,18 @@ import sys
 import pytest
 
 from experiments.post_training.task_curation.datasets.lean import (
-    classify_answer_disclosure as classifier,
+    numina_autoinformalization_classify_answer_disclosure as classifier,
 )
 from experiments.post_training.task_curation.datasets.lean import (
-    gemini_batch as batch,
+    numina_autoinformalization_gemini_batch as batch,
 )
 from experiments.post_training.task_curation.datasets.lean import (
-    numina_golden_batch as golden,
+    numina_autoinformalization_golden_batch as golden,
 )
 from experiments.post_training.task_curation.datasets.lean import (
-    numina_quality as quality,
+    numina_autoinformalization_quality as quality,
 )
-from experiments.post_training.task_curation.tests.test_numina_quality import report_row
+from experiments.post_training.task_curation.tests.test_numina_autoinformalization_quality import report_row
 
 
 def test_batch_submits_waits_collects_and_resumes_without_another_submission(tmp_path, monkeypatch):

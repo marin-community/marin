@@ -3,15 +3,16 @@
 
 """Classify Numina answer disclosure in one paid Gemini batch invocation.
 
-    module=experiments.post_training.task_curation.datasets.lean.classify_answer_disclosure
-    uv run python -m "$module" PARQUET --prime-lists DIR --output disclosure.jsonl
+    module=experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_classify_answer_disclosure
+    uv run python -m "$module" PARQUET --prime-lists DIR \\
+        --output numina_autoinformalization_answer_disclosure_labels.jsonl
 
 Set GEMINI_API_KEY before running. This reads the pinned source, filters ineligible question
 types, submits a Gemini file batch, waits, collects results, and writes per-row labels. The
 default gemini-4-carbon cap is 8,192 output tokens including thinking. No requests are retried
 automatically. An interrupted invocation resumes the recorded batch with the same arguments. Its state is in a
 sibling .batch directory containing state.json.
-Existing frozen labels can be passed directly to numina_golden_batch and numina_quality."""
+The golden-control and quality scripts also accept saved labels."""
 
 import argparse
 import json
@@ -23,8 +24,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from experiments.post_training.task_curation.datasets.lean import numina_quality as quality
-from experiments.post_training.task_curation.datasets.lean.gemini_batch import run_batch
+from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization_quality as quality
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_gemini_batch import run_batch
 
 OUTPUT_TOKENS = 768
 PILOT_MODEL = "gemini-2.5-flash"

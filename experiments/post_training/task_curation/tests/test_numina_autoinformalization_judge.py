@@ -12,7 +12,7 @@ from verifyit.grade import GradingInfraError
 from verifyit.modes import grade_judge
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation.datasets.lean import autoinformalization
+from experiments.post_training.task_curation.datasets.lean import numina_autoinformalization as auto
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.lean_rows import numina_row, prime_inputs
 
@@ -20,11 +20,9 @@ from experiments.post_training.task_curation.tests.lean_rows import numina_row, 
 @pytest.fixture
 def judge_spec(tmp_path, monkeypatch):
     row = numina_row()
-    monkeypatch.setattr(autoinformalization, "ACCEPTED_ROWS", frozenset({autoinformalization.row_key(row)}))
+    monkeypatch.setattr(auto, "ACCEPTED_ROWS", frozenset({auto.row_key(row)}))
     recipe = next(
-        source.config
-        for source in autoinformalization.sources()
-        if source.config.intended_use.value == autoinformalization.assigned_split(row)
+        source.config for source in auto.sources() if source.config.intended_use.value == auto.assigned_split(row)
     )
     task = converted_task(recipe, row, inputs=prime_inputs(tmp_path))
     spec = verifyit_spec(task.grader)

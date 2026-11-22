@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from experiments.post_training.task_curation.datasets.lean.numina_quality import read_records
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_quality import read_records
 
 API = "https://generativelanguage.googleapis.com/v1beta/"
 MAX_FILE_BYTES = 2_000_000_000

@@ -5,7 +5,7 @@
 
 This command reads the pinned source parquet, identifies removable exact duplicates, groups strong
 Lean/text near matches into the same train or evaluation split, and writes the manifest consumed by
-``autoinformalization.py``. It does not create TaskSpecs or grade model responses.
+``numina_autoinformalization.py``. It does not create TaskSpecs or grade model responses.
 
 Exact copies share a source UUID or both normalized statements. Strong near-matches require at least
 ``NEAR_THRESHOLD`` Jaccard similarity in both informal and formal five-token n-grams. Exact copies
@@ -16,7 +16,7 @@ training, because proof prompts expose the human problem alongside the Lean stat
 
 Run against the pinned NuminaMath parquet::
 
-    uv run python -m experiments.post_training.task_curation.datasets.lean.autoinformalization_manifest \
+    uv run python -m experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_manifest \
         train-00000-of-00001.parquet
 """
 

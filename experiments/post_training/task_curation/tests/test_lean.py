@@ -13,18 +13,12 @@ from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.lean import (
-    autoinformalization,
-    autoinformalization_manifest,
+    numina_autoinformalization as auto,
+)
+from experiments.post_training.task_curation.datasets.lean import (
+    numina_autoinformalization_manifest,
     proofs,
 )
-from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
-    assigned_split,
-    human_statement,
-)
-from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
-    sources as informalization_sources,
-)
-from experiments.post_training.task_curation.datasets.lean.autoinformalization_manifest import build_manifest
 from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
 from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
@@ -47,6 +41,14 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     is_human_statement_row,
 )
 from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization import (
+    assigned_split,
+    human_statement,
+)
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization import (
+    sources as informalization_sources,
+)
+from experiments.post_training.task_curation.datasets.lean.numina_autoinformalization_manifest import build_manifest
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
     NUMINA,
@@ -351,7 +353,7 @@ def test_only_rows_with_a_human_statement_and_proof_are_selected():
 
 def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monkeypatch):
     row = numina_row(ground_truth_type="statement")
-    monkeypatch.setattr(autoinformalization, "ACCEPTED_ROWS", frozenset({autoinformalization.row_key(row)}))
+    monkeypatch.setattr(auto, "ACCEPTED_ROWS", frozenset({auto.row_key(row)}))
     pipeline = INFORMALIZATION[assigned_split(row)]
     task = converted_task(pipeline, row, inputs=prime_inputs(tmp_path))
     prompt = task.context.events[0]
@@ -371,12 +373,12 @@ def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monk
 
 def test_auto_informalization_selects_only_rows_with_a_frozen_no_decision(monkeypatch):
     row = numina_row(ground_truth_type="statement")
-    monkeypatch.setattr(autoinformalization, "ACCEPTED_ROWS", frozenset({autoinformalization.row_key(row)}))
+    monkeypatch.setattr(auto, "ACCEPTED_ROWS", frozenset({auto.row_key(row)}))
     pipeline = INFORMALIZATION[assigned_split(row)]
     assert pipeline.source.select(row, None)
     changed = {**row, "problem": "Find the value of n + 0."}
-    assert not autoinformalization.is_train_row(changed, None)
-    assert not autoinformalization.is_eval_row(changed, None)
+    assert not auto.is_train_row(changed, None)
+    assert not auto.is_eval_row(changed, None)
 
 
 def test_auto_informalization_deduplication_removes_exact_copies_and_groups_near_matches():
@@ -428,8 +430,8 @@ def test_identical_formal_inputs_with_different_references_share_a_split():
 
 
 def test_proof_training_overlap_moves_the_whole_cluster_to_train(monkeypatch):
-    monkeypatch.setattr(autoinformalization_manifest, "PROOF_TRAIN_UUIDS", frozenset({"proof", "singleton"}))
-    monkeypatch.setattr(autoinformalization_manifest, "split_for", lambda key: "eval")
+    monkeypatch.setattr(numina_autoinformalization_manifest, "PROOF_TRAIN_UUIDS", frozenset({"proof", "singleton"}))
+    monkeypatch.setattr(numina_autoinformalization_manifest, "split_for", lambda key: "eval")
     proof = numina_row(uuid="proof")
     variant = numina_row(uuid="variant")
     singleton = numina_row(uuid="singleton", problem="A different problem", formal_statement="theorem t : True := by")
