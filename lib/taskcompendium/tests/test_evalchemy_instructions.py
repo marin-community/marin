@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish source instruction constraints without exposing private grader inputs, and grade IFBench responses.
+"""Publish instruction constraints without exposing private grader inputs, and grade IFBench responses.
 
 The IFBench checkers need nltk, emoji, syllapy and NLTK's punkt_tab data, which IFBench's grading environment
 provides, so their cases skip without them.
@@ -144,10 +144,39 @@ def test_instruction_publication_preserves_prompt_channel_and_private_constraint
         "profile": profile.value,
         "prompt": prompt,
     }
-    assert any(
-        path.startswith("source_grader/" + ("ifeval" if profile is InstructionProfile.HARNESS else "ifbench") + "/")
-        for path in private
-    )
+    source_checkers = [path for path in private if path.startswith("source_grader/ifbench/")]
+    assert bool(source_checkers) is (profile is InstructionProfile.IFBENCH)
+
+
+@pytest.mark.parametrize(
+    ("constraint", "passing", "failing"),
+    [
+        (
+            Constraint("length_constraints:number_paragraphs", {"num_paragraphs": 2}),
+            "First.\n***\nSecond.",
+            "First.\n\nSecond.",
+        ),
+        (
+            Constraint("detectable_format:number_bullet_lists", {"num_bullets": 2}),
+            "**Items:**\n* One\n* Two\n* * *",
+            "**Items:**\n* One\n* * *",
+        ),
+        (
+            Constraint("detectable_format:multiple_sections", {"num_sections": 2, "section_spliter": "SECTION"}),
+            "<<Guide to SECTION 1>>\nSECTION 1\nFirst body.\nSECTION 2\nSecond body.",
+            "<<Guide to SECTION 1>>\nSECTION 1\nFirst body.",
+        ),
+        (
+            Constraint("detectable_format:number_highlighted_sections", {"num_highlights": 2}),
+            "**First** and **second**.",
+            "**Only one**.",
+        ),
+    ],
+)
+def test_harness_ifeval_grades_format_regressions_and_ignored_instructions(constraint, passing, failing):
+    spec = InstructionSpec((constraint,), InstructionProfile.HARNESS, "Follow the format instruction.")
+    assert grade_source_instructions(spec, passing).detail["instruction_pass"]["strict"] == [True]
+    assert grade_source_instructions(spec, failing).detail["instruction_pass"]["strict"] == [False]
 
 
 REQUEST = "explain the context, code and theory behind the paper Identifying Candidate Spaces for Advert Implantation."
