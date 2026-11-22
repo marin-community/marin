@@ -1,0 +1,22 @@
+candidate_uri: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/normalized-v4
+data_file: validation.parquet
+rows: 140
+seed: 20261109
+agentic_selection: First20 per cohort sorted by sha256(seed:source/path), excluded
+  from training
+composition:
+  swesmith: 20
+  calibforge: 20
+  snowball-100k: 100
+files:
+- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/validation.parquet
+  sha256: 13f5d17334c8f29adbe85cd7a31c0740d698ffdb52b9169f447f9fd010b184f0
+- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/manifest.json
+  sha256: 94f21b06fedc6dce7184e783dab1349f1c14fed05fab3d47fcace61d2386701a
+admission_pending: []
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
+uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1
+runtime_qualification_pending:
+- Pass same-spec original-Harbor runtime and natural-long CP4 learner gates

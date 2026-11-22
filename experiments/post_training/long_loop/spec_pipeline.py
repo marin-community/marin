@@ -275,13 +275,16 @@ def build_spec_graph(
             (data_artifacts or {}).get(key)
             or ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
         )
-        for key in ("agentic", "nonagentic", "heldout")
+        for key in ("pools",)
     }
+    pools_dataset = datasets["pools"]
+    pool_manifest = json.loads((StoragePath(pools_dataset["uri"]) / "manifest.json").read_bytes())
     rl = resolved["rl"]
     rl_config = json.loads(json.dumps(rl["config"]))
-    routes = {source: route for route in ("agentic", "nonagentic") for source in datasets[route]["source_names"]}
-    if len(routes) != sum(len(datasets[route]["source_names"]) for route in ("agentic", "nonagentic")):
-        raise ValueError("Agentic and nonagentic source names overlap")
+    routes = pool_manifest["routes"]
+    declared_sources = set(rl_config["trainer"]["rollout_buffer"].get("source_routes") or {})
+    if declared_sources and declared_sources != set(routes):
+        raise ValueError("The pool manifest's teacher routes differ from the recipe's declared source routes")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
     rl_execution = stage_execution(rl["execution"], coordinator)
     budget = rl.get("wall_clock_budget")
@@ -322,9 +325,10 @@ def build_spec_graph(
             relative_path="" if hf_pin is not None else HANDOFF_DIR,
         ),
         train_data=tuple(
-            ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in ("agentic", "nonagentic")
+            ArtifactDataSource(adopted["pools"], relative_path=f"{label}/train.parquet")
+            for label in sorted(pool_manifest["composition"])
         ),
-        validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
+        validation_data=(ArtifactDataSource(adopted["pools"], relative_path="validation.parquet"),),
         ray_timeouts=rl["ray_timeouts"],
         curriculum=curriculum,
         config=rl_config,

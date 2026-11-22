@@ -1,0 +1,33 @@
+source_names:
+- long-loop-smartie-swesmith
+- long-loop-smartie-calibforge
+selected_sources:
+- repo: open-athena/task-trove
+  revision: 0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c
+  path: releases/smartie-continuation-20261016/swesmith
+  rows: 8045
+  tasks_parquet_sha256: 20d3d9955cf624213cdf8be40a0923aad6a7c57cd34b0cd855b5e3002e947468
+- repo: open-athena/task-trove
+  revision: 6a6429ccba098e11ea9f6297a70cb43a34670c0f
+  path: releases/smartie-continuation-20261016/calibforge
+  rows: 2205
+  tasks_parquet_sha256: 2019fe3bbe79f44214b8c7ea16b3a0005dfabf0b0d60d79bf6976e85302f7269
+candidate_manifest:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/normalized-v4/manifest.json
+  sha256: f6ef37195dc2af85adfa7dbd4d715498b20ecb9759bb9a6a5a8aebd5c2af483f
+train_rows: 10210
+validation_rows: 40
+normalization: Original Harbor task package and verifier via harbor_trial_task
+admission_pending: []
+uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1
+data_file: agentic-train.parquet
+files:
+- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/agentic-train.parquet
+  sha256: 7e658efb2a3b53544552400e0e78d6ba4dd99ab31953828d31158dc38c7cf549
+- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/manifest.json
+  sha256: 94f21b06fedc6dce7184e783dab1349f1c14fed05fab3d47fcace61d2386701a
+runtime_qualification_pending:
+- Pass same-spec original-Harbor runtime and natural-long CP4 learner gates
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872

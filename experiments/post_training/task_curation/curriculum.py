@@ -6,12 +6,27 @@
 The catalog (:func:`~experiments.post_training.task_curation.sources.runnable_sources`) owns which
 sources exist and what pins them; this module owns the policy binding: which of them a curriculum
 samples, at what weights or in what stage order. The experiment that launches the run declares
-weights, as with SFT mixture weights.
+weights, as with SFT mixture weights. Fixing a curriculum also draws its validation holdout: the
+builders require an explicit ``validation_size`` and each pool's row identities, and the drawn
+split is recorded in the curriculum's metadata. The pool builder that materializes the pools
+calls :func:`marin.rl.curriculum.draw_validation_split` itself — the same pure call, so record
+and data derive one split — and writes the training pools from its ``ValidationSplit.training``
+remainder and the validation data from its held-out rows, so the holdout is a random subset of
+the training set and disjoint from it.
 """
 
 from collections.abc import Mapping, Sequence
 
-from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode, SourcePin
+from marin.rl.curriculum import (
+    CurriculumEntry,
+    CurriculumStage,
+    CurriculumValidation,
+    PoolRow,
+    RlCurriculum,
+    SamplingMode,
+    SourcePin,
+    draw_validation_split,
+)
 
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
@@ -62,14 +77,50 @@ def weighted_curriculum(
     *,
     weights: Mapping[str, float],
     seed: int = 0,
+    validation_size: int,
+    pool_rows: Mapping[str, Sequence[PoolRow]],
     catalog: Mapping[str, RlDataSource] | None = None,
 ) -> RlCurriculum:
     """Build a weight-random curriculum over named catalog sources.
 
     ``weights`` maps a source's catalog name to its mixture weight. Every named source must exist
     in the catalog (default: :func:`runnable_sources`) and carry a pinned dataset; the source's
-    current version, pin, and pipeline identity are recorded at build time.
+    current version, pin, and pipeline identity are recorded at build time. Fixing the curriculum
+    draws its validation holdout here: ``validation_size`` is required (there is no default), and
+    ``pool_rows`` carries each label's row identities keyed by sampling label. The pools the run
+    trains on must exclude the drawn rows: the pool builder materializes them from
+    :func:`marin.rl.curriculum.draw_validation_split`'s ``ValidationSplit.training`` — the same
+    deterministic call this builder makes — so record and data cannot disagree.
     """
+    sources = runnable_sources() if catalog is None else catalog
+    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    split = draw_validation_split(dict(weights), pool_rows, size=validation_size, seed=seed)
+    return RlCurriculum(
+        name=name,
+        version=version,
+        mode=SamplingMode.WEIGHTED,
+        entries=entries,
+        stages=(),
+        seed=seed,
+        validation=split.validation,
+    )
+
+
+def curriculum_with_validation(
+    name: str,
+    version: str,
+    *,
+    weights: Mapping[str, float],
+    seed: int,
+    validation: CurriculumValidation,
+    catalog: Mapping[str, RlDataSource] | None = None,
+) -> RlCurriculum:
+    """Build a weight-random curriculum over named catalog sources with a drawn holdout.
+
+    For callers that already hold the split: a pool step that drew it and
+    recorded it, or a launch reading the record back. The validation's seed must
+    be the curriculum's, and its rows must name declared sources — ``RlCurriculum``
+    enforces both."""
     sources = runnable_sources() if catalog is None else catalog
     entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
     return RlCurriculum(
@@ -79,6 +130,7 @@ def weighted_curriculum(
         entries=entries,
         stages=(),
         seed=seed,
+        validation=validation,
     )
 
 
@@ -89,6 +141,8 @@ def ordered_curriculum(
     stages: Sequence[str],
     quotas: Mapping[str, int | None] | None = None,
     seed: int = 0,
+    validation_size: int,
+    pool_rows: Mapping[str, Sequence[PoolRow]],
     catalog: Mapping[str, RlDataSource] | None = None,
 ) -> RlCurriculum:
     """Build an ordered curriculum over named catalog sources.
@@ -97,6 +151,9 @@ def ordered_curriculum(
     stage visit in prompts (an absent quota draws the source pool's row count). Every
     named source must exist in the catalog (default: :func:`runnable_sources`) and carry a pinned
     dataset; the source's current version, pin, and pipeline identity are recorded at build time.
+    Fixing the curriculum draws its validation holdout: the per-label allocation follows each
+    pool's consumed prompts (its stage quotas, capped by the pool's row count), with
+    ``validation_size`` required and ``pool_rows`` carrying each label's row identities.
     """
     sources = runnable_sources() if catalog is None else catalog
     if not stages:
@@ -107,6 +164,16 @@ def ordered_curriculum(
         raise ValueError(f"ordered curriculum {name}@{version} sets quotas for sources no stage samples: {stray}")
     entries = tuple(_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
     declared = tuple(CurriculumStage(label=label, quota=quota_map.get(label)) for label in stages)
+    consumption: dict[str, float] = {}
+    for label in sorted(set(stages)):
+        rows = pool_rows.get(label, ())
+        draws = sum(
+            (quota_map.get(stage) if quota_map.get(stage) is not None else len(rows))
+            for stage in stages
+            if stage == label
+        )
+        consumption[label] = float(min(draws, len(rows)))
+    split = draw_validation_split(consumption, pool_rows, size=validation_size, seed=seed)
     return RlCurriculum(
         name=name,
         version=version,
@@ -114,4 +181,5 @@ def ordered_curriculum(
         entries=entries,
         stages=declared,
         seed=seed,
+        validation=split.validation,
     )

@@ -3,9 +3,11 @@
 
 """The catalog binding for RL curricula."""
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
+from marin.rl.curriculum import PoolRow
 
 from experiments.post_training.task_curation.curriculum import ordered_curriculum, weighted_curriculum
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -21,12 +23,18 @@ def _catalog() -> dict[str, RlDataSource]:
     }
 
 
+def _pool_rows(label: str, count: int) -> tuple[PoolRow, ...]:
+    return tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(count))
+
+
 def test_weighted_curriculum_records_pinned_source_identities():
     curriculum = weighted_curriculum(
         "users/tester/curricula/numbers-mix",
         "2026.11.18",
         weights={"numbers": 0.6, "letters": 0.4},
         seed=17,
+        validation_size=200,
+        pool_rows={"numbers": _pool_rows("numbers", 1000), "letters": _pool_rows("letters", 1000)},
         catalog=_catalog(),
     )
     assert curriculum.fingerprint
@@ -41,6 +49,25 @@ def test_weighted_curriculum_records_pinned_source_identities():
     )
     assert entry.recipe.endswith("numbers_pipeline.numbers_pipeline")
     assert curriculum.identity.startswith("users/tester/curricula/numbers-mix@2026.11.18:")
+    # the drawn holdout follows the declared mixture and partitions the pools
+    counts = Counter(row.label for row in curriculum.validation.rows)
+    assert counts == {"numbers": 120, "letters": 80}
+    assert curriculum.validation.seed == 17
+    assert curriculum.validation.size == 200
+
+
+def test_weighted_curriculum_derives_one_split_for_one_input():
+    """The draw is deterministic for the seed, so record and pool data derive one split."""
+    kwargs = {
+        "weights": {"numbers": 0.6, "letters": 0.4},
+        "seed": 17,
+        "validation_size": 200,
+        "pool_rows": {"numbers": _pool_rows("numbers", 1000), "letters": _pool_rows("letters", 1000)},
+        "catalog": _catalog(),
+    }
+    assert weighted_curriculum("users/tester/curricula/numbers-mix", "2026.11.18", **kwargs).validation == (
+        weighted_curriculum("users/tester/curricula/numbers-mix", "2026.11.18", **kwargs).validation
+    )
 
 
 def test_ordered_curriculum_declares_the_stage_sequence():
@@ -50,6 +77,8 @@ def test_ordered_curriculum_declares_the_stage_sequence():
         stages=("numbers", "letters", "numbers"),
         quotas={"numbers": 8},
         seed=3,
+        validation_size=10,
+        pool_rows={"numbers": _pool_rows("numbers", 20), "letters": _pool_rows("letters", 20)},
         catalog=_catalog(),
     )
     assert {entry.label for entry in curriculum.entries} == {"numbers", "letters"}
@@ -62,6 +91,8 @@ def test_ordered_curriculum_declares_the_stage_sequence():
         ],
         "seed": 3,
     }
+    # consumed prompts: numbers 8+8=16, letters 20; allocation of 10 follows 16:36 and 20:36
+    assert Counter(row.label for row in curriculum.validation.rows) == {"numbers": 4, "letters": 6}
 
 
 def test_curriculum_rejects_unknown_source():
@@ -70,6 +101,8 @@ def test_curriculum_rejects_unknown_source():
             "users/tester/curricula/broken",
             "2026.11.18",
             weights={"ghost": 1.0},
+            validation_size=10,
+            pool_rows={"ghost": _pool_rows("ghost", 100)},
             catalog=_catalog(),
         )
 
@@ -81,6 +114,8 @@ def test_curriculum_rejects_unpinned_source():
             "users/tester/curricula/unpinned",
             "2026.11.18",
             stages=("inventory",),
+            validation_size=10,
+            pool_rows={"inventory": _pool_rows("inventory", 100)},
             catalog=catalog,
         )
 
@@ -92,5 +127,20 @@ def test_ordered_curriculum_rejects_quotas_for_unstaged_sources():
             "2026.11.18",
             stages=("numbers",),
             quotas={"letters": 4},
+            validation_size=10,
+            pool_rows={"numbers": _pool_rows("numbers", 100), "letters": _pool_rows("letters", 100)},
+            catalog=_catalog(),
+        )
+
+
+def test_weighted_curriculum_rejects_pool_rows_outside_the_mixture():
+    with pytest.raises(ValueError, match="does not declare"):
+        weighted_curriculum(
+            "users/tester/curricula/stray-rows",
+            "2026.11.18",
+            weights={"numbers": 1.0},
+            seed=1,
+            validation_size=10,
+            pool_rows={"numbers": _pool_rows("numbers", 100), "letters": _pool_rows("letters", 100)},
             catalog=_catalog(),
         )

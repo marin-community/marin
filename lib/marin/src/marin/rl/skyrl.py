@@ -36,7 +36,14 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.curriculum import RlCurriculum, entry_payload, stage_payload
+from marin.rl.curriculum import (
+    RlCurriculum,
+    SamplingMode,
+    consumed_route_quotas,
+    entry_payload,
+    stage_payload,
+    validation_payload,
+)
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
@@ -478,7 +485,15 @@ class SkyRLSpec:
 
     def __post_init__(self) -> None:
         if self.curriculum is not None:
-            object.__setattr__(self, "config_yaml", _apply_curriculum(self.config_yaml, self.curriculum))
+            object.__setattr__(
+                self,
+                "config_yaml",
+                _apply_curriculum(
+                    self.config_yaml,
+                    self.curriculum,
+                    batch_groups=self.topology.role_plan.train_batch_size,
+                ),
+            )
         _validate_skyrl_recipe(self.config_yaml, self.topology)
 
 
@@ -938,13 +953,16 @@ _CURRICULUM_DATA_KIND = "parquet"
 """Curricula sample labeled prompt pools, which only the parquet data kind carries."""
 
 
-def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum) -> str:
+def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum, *, batch_groups: int) -> str:
     """Render a curriculum's sampling projection into the recipe, rejecting disagreement.
 
     The projection's ``data.sampling`` values replace any declared ones; a declared base default
     (``null`` or an empty container) is not a policy statement and never disagrees. A caller that
     set a real value must match the curriculum. ``data.kind`` is pinned to ``parquet`` because
-    curricula sample labeled prompt pools."""
+    curricula sample labeled prompt pools. A weighted curriculum is also the authority over the
+    rollout buffer's per-route window quotas: they derive from the curriculum's own mixture at
+    the run's batch size, and a recipe that declared quotas which disagree fails here — no
+    silent override. Ordered curricula carry no mixture and derive no window quotas."""
     config = _parsed_config(config_yaml)
     declared_kind = _declared_config_value(config, "data.kind")
     if declared_kind is not _MISSING_CONFIG_VALUE and declared_kind != _CURRICULUM_DATA_KIND:
@@ -958,6 +976,17 @@ def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum) -> str:
             raise ValueError(f"recipe data.sampling.{key}={declared!r} disagrees with curriculum {curriculum.identity}")
         _set_config_value(config, f"data.sampling.{key}", value)
     _set_config_value(config, "data.kind", _CURRICULUM_DATA_KIND)
+    if curriculum.mode is SamplingMode.WEIGHTED:
+        source_routes = _declared_config_value(config, "trainer.rollout_buffer.source_routes")
+        routes = {} if source_routes in (_MISSING_CONFIG_VALUE, None) else dict(source_routes)
+        quotas = consumed_route_quotas(curriculum, routes, batch_groups)
+        declared_quotas = _declared_config_value(config, "trainer.rollout_buffer.consumed_route_quotas")
+        if declared_quotas not in (_MISSING_CONFIG_VALUE, None, {}) and declared_quotas != quotas:
+            raise ValueError(
+                f"trainer.rollout_buffer.consumed_route_quotas={declared_quotas!r} disagrees with the quotas the "
+                f"curriculum {curriculum.identity} derives at {batch_groups} groups: {quotas!r}"
+            )
+        _set_config_value(config, "trainer.rollout_buffer.consumed_route_quotas", quotas)
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -970,6 +999,7 @@ def _launch_curriculum(curriculum: RlCurriculum) -> dict:
         "sampling": curriculum.sampling_config(),
         "sources": [entry_payload(entry) for entry in curriculum.entries],
         "stages": [stage_payload(stage) for stage in curriculum.stages],
+        "validation": validation_payload(curriculum.validation),
     }
 
 

@@ -29,19 +29,34 @@ curated-``nemotron_if``-pool artifacts before it can sample this curriculum.
 Seed policy: unchanged from .55. The trainer seed 20261020 seeds the sampler, as
 in the .55 run whose ``data.sampling.seed`` fell back to the trainer seed; this
 curriculum inherits the value and the policy from the Exp3 definition.
+
+Validation holdout: the curriculum owns a random 200-prompt holdout drawn from
+the stamped pools at these source shares, recorded in its metadata, removed
+from the pools the run trains on, and materialized as the launch's validation
+data. The .55 lineage's adopted 120-row validation.parquet is no longer
+consumed. The trainer seed 20261020 seeds the holdout draw too.
 """
 
 import math
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
-from marin.rl.curriculum import RlCurriculum
+from marin.rl.curriculum import (
+    CurriculumValidation,
+    PoolRow,
+    RlCurriculum,
+    ValidationRow,
+    ValidationSplit,
+    draw_validation_split,
+)
 
-from experiments.post_training.task_curation.curriculum import weighted_curriculum
+from experiments.post_training.task_curation.curriculum import curriculum_with_validation
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_RELEASE,
     AGENTIC_TRAIN_SOURCE,
     NONAGENTIC_RELEASE,
     RELEASE_SOURCE_ROUTES,
+    TEACHER_ROUTE_LABELS,
 )
 from experiments.post_training.task_curation.exp3_curriculum import SEED
 from experiments.post_training.task_curation.sources import runnable_sources
@@ -54,7 +69,13 @@ AGENTIC_SHARE = 0.35
 NEMOTRON_IF_SHARE = 0.15
 NONAGENTIC_ROUTE = "nonagentic"
 
-SOURCE_ROUTES = MappingProxyType({**RELEASE_SOURCE_ROUTES, NEMOTRON_IF_LABEL: NONAGENTIC_ROUTE})
+SOURCE_ROUTES = MappingProxyType(
+    {
+        **{TEACHER_ROUTE_LABELS[source]: route for source, route in RELEASE_SOURCE_ROUTES.items()},
+        NEMOTRON_IF_LABEL: NONAGENTIC_ROUTE,
+    }
+)
+"""Each curriculum label and the rollout route the buffer admits it through."""
 
 
 def train_source_counts() -> MappingProxyType:
@@ -77,7 +98,7 @@ _NONAGENTIC_ROWS = sum(
 
 CARRY_OVER_SHARES = MappingProxyType(
     {
-        label: 0.5 * count / _NONAGENTIC_ROWS
+        TEACHER_ROUTE_LABELS[label]: 0.5 * count / _NONAGENTIC_ROWS
         for label, count in _TRAIN_SOURCE_COUNTS.items()
         if RELEASE_SOURCE_ROUTES[label] == NONAGENTIC_ROUTE
     }
@@ -95,18 +116,43 @@ TARGET_SHARES = MappingProxyType(
 if not math.isclose(sum(TARGET_SHARES.values()), 1.0, abs_tol=1e-9):
     raise ValueError("the Exp4 target shares must sum to one")
 
+VALIDATION_SIZE = 200
 
-def exp4_rl_curriculum() -> RlCurriculum:
-    """The Exp4 task mix as a versioned weighted curriculum over the eight sources."""
+
+def exp4_validation_split(pool_rows: Mapping[str, Sequence[PoolRow]]) -> ValidationSplit:
+    """Draw the Exp4 holdout: 200 prompts apportioned over the eight source shares.
+
+    ``pool_rows`` carries every stamped pool's row identities keyed by
+    ``teacher_route``; the draw is deterministic for the seed, so record and
+    data derive one split."""
+    return draw_validation_split(dict(TARGET_SHARES), pool_rows, size=VALIDATION_SIZE, seed=SEED)
+
+
+def exp4_validation_from_manifest(payload: Mapping) -> CurriculumValidation:
+    """Rebuild the recorded holdout from a pool manifest's validation payload.
+
+    The manifest is the record of the split the pool step drew; the curriculum
+    reconstructed from it carries the same identity the manifest names."""
+    rows = tuple(ValidationRow(**row) for row in payload["rows"])
+    return CurriculumValidation(size=payload["size"], seed=payload["seed"], rows=rows)
+
+
+def exp4_rl_curriculum(validation: CurriculumValidation) -> RlCurriculum:
+    """The Exp4 task mix with its recorded holdout.
+
+    ``validation`` is the split the pool step drew and recorded — read back with
+    :func:`exp4_validation_from_manifest`, or drawn with
+    :func:`exp4_validation_split` from the stamped pools' row identities."""
     catalog = {
         AGENTIC_TRAIN_SOURCE: AGENTIC_RELEASE,
         NEMOTRON_IF_LABEL: runnable_sources()[NEMOTRON_IF_LABEL],
         **dict.fromkeys(CARRY_OVER_SHARES, NONAGENTIC_RELEASE),
     }
-    return weighted_curriculum(
+    return curriculum_with_validation(
         CURRICULUM_NAME,
         CURRICULUM_VERSION,
         weights=TARGET_SHARES,
         seed=SEED,
+        validation=validation,
         catalog=catalog,
     )

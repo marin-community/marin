@@ -15,6 +15,7 @@ from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.cli import rl_build_options
+from marin.rl.curriculum import RlCurriculum
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -41,7 +42,11 @@ from experiments.post_training.long_loop.optimizer_admission import optimizer_gr
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.shared_sft import shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
-from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES, exp4_rl_curriculum
+from experiments.post_training.task_curation.exp4_curriculum import (
+    SOURCE_ROUTES,
+    exp4_rl_curriculum,
+    exp4_validation_from_manifest,
+)
 
 OUTPUT_PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4"
 REFERENCE_URI = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/evidence/restart53/frozen51-reference.json"
@@ -148,7 +153,7 @@ def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[Dat
     return DataRelease(QUALIFIED_V7, document["training_ready"], members, evidence, data, document), admission
 
 
-def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
+def exp4_plan(release: DataRelease, source_revision: str, version: str, curriculum: RlCurriculum) -> dict:
     resolved = production_plan(release, source_revision, baseline_files(), initial_eval_inputs=REFERENCE_INPUTS)
     sft = resolved["sft"]
     sft["stop_after_steps"] = SFT_UPDATES
@@ -169,7 +174,9 @@ def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
     recipe = restart_recipe(reference)
     recipe["extra_env"]["NCCL_BUFFSIZE"] = "4194304"
     recipe["terminal_bench"]["harbor"].pop("eval_override_storage_mb", None)
-    recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {"agentic": 22, "nonagentic": 42}
+    # The curriculum derives the rollout buffer's per-route window quotas at the
+    # run's batch size; a declared value here would have to match it exactly.
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     recipe["trainer"]["rollout_buffer"]["source_routes"] = {
         **SOURCE_ROUTES,
         NEMOTRON_SOURCE: "nonagentic",
@@ -201,16 +208,13 @@ def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
         "name": "users/benfeuer/checkpoints/mochi-exp4-micro210",
         "expected_rollouts": 440,
     }
-    for route in ("agentic", "nonagentic"):
-        resolved["datasets"][route]["uri"] = prefix_join(OUTPUT_PREFIX, "long-loop-exp4", f"rl-pool-{route}", version)
-        resolved["datasets"][route]["data_file"] = "train.parquet"
     resolved["datasets"]["nonagentic"]["source_names"] = [
         *resolved["datasets"]["nonagentic"]["source_names"],
         NEMOTRON_SOURCE,
     ]
     resolved["archive"]["hf_upload"]["repo_prefix"] = "open-athena/Snowball-LongLoop-Round4"
     resolved["archive"]["evaldash"]["run_prefix"] = "long-loop-round4"
-    resolved["curriculum"] = {**asdict(exp4_rl_curriculum()), "identity": exp4_rl_curriculum().identity}
+    resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps(
             {key: value for key, value in resolved.items() if key != "resolved_sha256"},
@@ -237,27 +241,27 @@ def main(
         sft_artifact_record, sft_artifact_record_sha256, require_ready=click.get_current_context().params["do_run"]
     )
     version = resolve_version("mochi-exp4", None)
-    resolved = exp4_plan(release, source_revision, version)
-    resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     os.environ.update(MARIN_PREFIX=OUTPUT_PREFIX, MARIN_TEMP_PREFIX="s3://marin-us-east-08a/tmp")
     pool_version = "2026.11.18.71"
-    produced = pool_steps(pool_version)
-    pools = {}
-    for route, producer in produced.items():
-        path = producer.path(OUTPUT_PREFIX)
-        record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
-        producer_record = json.loads(record_bytes)
-        if producer_record["fingerprint"] != producer.fingerprint():
-            raise ValueError(f"Regional Exp4 pool producer differs: {route}")
-        manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
-        manifest = json.loads(manifest_bytes)
-        if manifest["curriculum"] != exp4_rl_curriculum().identity:
-            raise ValueError("Regional pool was prepared for another curriculum")
-        pins = [
-            {"uri": path + "/train.parquet", "sha256": manifest["sha256"]},
-            {"uri": path + "/manifest.json", "sha256": hashlib.sha256(manifest_bytes).hexdigest()},
-        ]
-        pools[route] = ArtifactStep.adopt(
+    producer = pool_steps(pool_version)["pools"]
+    path = producer.path(OUTPUT_PREFIX)
+    record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
+    producer_record = json.loads(record_bytes)
+    if producer_record["fingerprint"] != producer.fingerprint():
+        raise ValueError("Regional Exp4 pool producer differs")
+    manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    curriculum = exp4_rl_curriculum(exp4_validation_from_manifest(manifest["validation"]))
+    if manifest["curriculum"] != curriculum.identity:
+        raise ValueError("Regional pool was prepared for another curriculum")
+    resolved = exp4_plan(release, source_revision, version, curriculum)
+    resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
+    pins = [
+        {"uri": prefix_join(path, name), "sha256": sha256}
+        for name, sha256 in {**manifest["files"], "manifest.json": hashlib.sha256(manifest_bytes).hexdigest()}.items()
+    ]
+    pools = {
+        "pools": ArtifactStep.adopt(
             producer.name,
             producer.version,
             path,
@@ -267,22 +271,24 @@ def main(
                 "files": pins,
             },
         )
-        resolved["datasets"][route].update(
-            uri=path,
-            rows=manifest["rows"],
-            files=pins,
-            source_names=[NEMOTRON_SOURCE if label == "nemotron_if" else label for label in manifest["source_counts"]],
-            teacher_routes=manifest["source_counts"],
-        )
+    }
+    resolved["datasets"] = {
+        **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
+        "pools": {
+            "uri": path,
+            "rows": manifest["rows"],
+            "files": pins,
+            "composition": manifest["composition"],
+            "routes": manifest["routes"],
+        },
+    }
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps(
             {key: value for key, value in resolved.items() if key != "resolved_sha256"},
             sort_keys=True,
         ).encode()
     ).hexdigest()
-    terminal = build_spec_graph(
-        resolved, version, through="archive", data_artifacts=pools, curriculum=exp4_rl_curriculum(), sft_release=handle
-    )
+    terminal = build_spec_graph(resolved, version, through="archive", data_artifacts=pools, curriculum=curriculum, sft_release=handle)
     validation_output.mkdir(parents=True, exist_ok=True)
     (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
     (validation_output / "optimizer-groups.json").write_text(

@@ -1,0 +1,131 @@
+[
+  {
+    "stage": "long-loop/round1/inputs",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/round1/adopt-sft",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/round1/verify-handoff",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/round1/sft-handoff",
+    "status": "adopted",
+    "source": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1"
+  },
+  {
+    "stage": "long-loop/round1/verify-endpoint",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/round1/endpoint",
+    "status": "adopted",
+    "source": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/endpoint/2026.11.10.2"
+  },
+  {
+    "stage": "long-loop/round1/data-agentic",
+    "status": "adopted",
+    "source": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release"
+  },
+  {
+    "stage": "long-loop/round1/data-nonagentic",
+    "status": "adopted",
+    "source": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1"
+  },
+  {
+    "stage": "long-loop/round1/data-heldout",
+    "status": "adopted",
+    "source": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release"
+  },
+  {
+    "stage": "users/benfeuer/checkpoints/long-loop-full-rl",
+    "status": "strictly composed; future checkpoint identity unresolved",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "source_sha256": "866dc8e56b2fecae4903d36b18dd8d0ea2de1d87a89d3a4aa2e3ee70155853a9",
+    "compiled_sha256": "7bc9bae555988b24b9f2b9dd7474831c28ded3cdf6adaa75563fc5b4f1b80c2d",
+    "validator": "load_launch_config + skyrl_train.utils.utils.validate_cfg",
+    "runtime_entrypoint": "skyrl_train.entrypoints.taskcompendium",
+    "python": "3.12.15 (main, Oct 21 2026, 17:38:27) [Clang 23.1.3 ]",
+    "skyrl_lock_sha256": "b17cdcbaf0b28d8b76e288f32f290fe11c5c1e0ff54c9fc81d0878431d9cb897",
+    "command": [
+      "uv",
+      "tool",
+      "run",
+      "--from",
+      "uv==0.13.5",
+      "--python",
+      "==3.12.*",
+      "--no-python-downloads",
+      "uv",
+      "run",
+      "--project",
+      "/Users/benfeuer/Documents/marin-worktrees/long-loop-prototype/vendor/skyrl",
+      "--python",
+      "==3.12.*",
+      "--no-python-downloads",
+      "--frozen",
+      "--extra",
+      "cpu",
+      "--no-group",
+      "dev",
+      "python",
+      "-m",
+      "experiments.post_training.long_loop.validate_launch",
+      "experiments/post_training/long_loop/runtime-inputs/20261112-2/validation/2026.11.12.2/866dc8e56b2fecae4903d36b18dd8d0ea2de1d87a89d3a4aa2e3ee70155853a9/launch.yaml",
+      "experiments/post_training/long_loop/runtime-inputs/20261112-2/validation/2026.11.12.2/866dc8e56b2fecae4903d36b18dd8d0ea2de1d87a89d3a4aa2e3ee70155853a9/compiled.yaml"
+    ]
+  },
+  {
+    "stage": "long-loop/round1/eval-inputs",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/micro-full",
+    "status": "strictly composed; future checkpoint identity unresolved",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "source_sha256": "04491d52be96f9f84b3874b90781eee1c8f1325f4b886087b167331260d4fea1",
+    "compiled_sha256": "6aa488f8e72d183dc12972ed9f4918af0c44cc06a18159bda6f4fe2720ba538e",
+    "validator": "load_launch_config + skyrl_train.utils.utils.validate_cfg",
+    "runtime_entrypoint": "skyrl_train.entrypoints.main_generate",
+    "python": "3.12.15 (main, Oct 21 2026, 17:38:27) [Clang 23.1.3 ]",
+    "skyrl_lock_sha256": "b17cdcbaf0b28d8b76e288f32f290fe11c5c1e0ff54c9fc81d0878431d9cb897",
+    "command": [
+      "uv",
+      "tool",
+      "run",
+      "--from",
+      "uv==0.13.5",
+      "--python",
+      "==3.12.*",
+      "--no-python-downloads",
+      "uv",
+      "run",
+      "--project",
+      "/Users/benfeuer/Documents/marin-worktrees/long-loop-prototype/vendor/skyrl",
+      "--python",
+      "==3.12.*",
+      "--no-python-downloads",
+      "--frozen",
+      "--extra",
+      "cpu",
+      "--no-group",
+      "dev",
+      "python",
+      "-m",
+      "experiments.post_training.long_loop.validate_launch",
+      "experiments/post_training/long_loop/runtime-inputs/20261112-2/validation/2026.11.12.2/04491d52be96f9f84b3874b90781eee1c8f1325f4b886087b167331260d4fea1/launch.yaml",
+      "experiments/post_training/long_loop/runtime-inputs/20261112-2/validation/2026.11.12.2/04491d52be96f9f84b3874b90781eee1c8f1325f4b886087b167331260d4fea1/compiled.yaml"
+    ]
+  },
+  {
+    "stage": "long-loop/report",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/round1/archive",
+    "status": "constructed; not a SkyRL launch"
+  }
+]
