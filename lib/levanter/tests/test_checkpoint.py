@@ -44,7 +44,6 @@ from levanter.checkpoint import (
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
-    _collect_debug_checkpointer_state,
     load_checkpoint_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
@@ -52,9 +51,7 @@ from levanter.checkpoint import (
     latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
-    register_debug_checkpointer_state_provider,
     save_checkpoint,
-    unregister_debug_checkpointer_state_provider,
 )
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -664,19 +661,6 @@ def test_debug_checkpoint_nonprimary_serialization_failure_omits_total_telemetry
 
     checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
     assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
-
-
-def test_debug_checkpointer_state_providers_register_and_unregister():
-    provider_name = "unit-test-provider"
-    provider = lambda: {"weight_transfer": {"bytes": 123}}
-
-    try:
-        register_debug_checkpointer_state_provider(provider_name, provider)
-        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
-    finally:
-        unregister_debug_checkpointer_state_provider(provider_name)
-
-    assert provider_name not in _collect_debug_checkpointer_state()
 
 
 def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
