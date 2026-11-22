@@ -6,6 +6,15 @@ No completed full Snowball optimizer update is established. Updated-weight
 publication, subsequent generation, exact native checkpoint continuation, and
 the matched 25-update comparison remain unverified.
 
+BATCH smoke `2026.11.21.13` is running from
+`cb3fd4e7d767e52f0409ecb0b0fda5b98902e957`, configured to disable NumPy's
+hugepage advisory in native children. At 23:17 PST all five GPU tasks were
+running; both accepted bundles match all 4,583 frozen entries, including 43
+required runtime files, and the executed configuration matches the preflight.
+All five physical hosts changed, so improved loading would not isolate the
+policy's effect from placement. Effective Linux policy and full-model
+initialization, publication, updates, and resume remain pending.
+
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
 are identical to `e9fa30e8a2230a4015d8488280d2b375b81ea07d`; only this
