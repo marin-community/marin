@@ -162,6 +162,7 @@ class DifficultyGap(StrEnum):
     HOSTED_JUDGE_CANARY_INTERRUPTED = "hosted_judge_canary_interrupted"
     HOSTED_UNSERVED_RAW_ZERO_GRADES = "hosted_unserved_raw_zero_grades"
     ENVIRONMENT_ARTIFACT_MISSING = "environment_artifact_missing"
+    ENVIRONMENT_START_FAILURE = "environment_start_failure"
     UNSUPPORTED_COMPOSE_DOCUMENT = "unsupported_compose_document"
     NETWORK_POLICY_VIOLATION = "network_policy_violation"
     NO_EXECUTABLE_GRADER = "no_executable_task_spec_grader"
@@ -272,6 +273,11 @@ DIFFICULTY_GAPS: Mapping[DifficultyGap, DifficultyGapSpec] = MappingProxyType(
             "A declared environment artifact (packages lock or prepared image) exists in no storage region.",
             "The artifact is rebuilt or repointed to a regional path (exclusion candidate otherwise).",
             exclusion=ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING,
+        ),
+        DifficultyGap.ENVIRONMENT_START_FAILURE: DifficultyGapSpec(
+            DifficultyGapOwner.PIPELINE,
+            "The task machine failed to start: the declared image did not pull or the environment never finished.",
+            "The image pulls and starts (registry credential, digest or runtime fixed); the wave re-runs the attempt.",
         ),
         DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT: DifficultyGapSpec(
             DifficultyGapOwner.SOURCE,

@@ -216,6 +216,23 @@ def test_snapshot_and_factory_plans_keep_the_exact_source_population():
     assert isinstance(factory, BuildTaskSpecFactory) and factory.source.tasks == (("a", "a" * 64, 1), ("b", "b" * 64, 1))
 
 
+def test_environment_start_failure_retries_the_batch_instead_of_blocking():
+    """A machine-start failure is infrastructure: the cell plans a fresh attempt batch."""
+    pin = "ghcr.io/marin-community/rl-data-openresearcher@sha256:" + "f" * 64
+    failed = replace(
+        row("pull", outcome=Outcome.UNSCORED),
+        reason=GapReason.ENVIRONMENT_START_FAILURE,
+        artifact_uri=pin,
+    )
+    cell = cell_state([failed], SOURCE, Solver.SMALL, CoveragePolicy())
+    assert cell.state == CellStatus.NEEDS_ATTEMPTS
+    (batch,) = plan([cell], [])
+    assert isinstance(batch, AttemptBatch)
+    assert batch.sources[0].tasks == (("a", "a" * 64, 1), ("b", "b" * 64, 1))
+    mapped = legacy_gaps(f"environment_start_failure:{pin}")
+    assert mapped == (Gap(GapReason.ENVIRONMENT_START_FAILURE, artifact_uri=pin),)
+
+
 def test_data_declarative_attempts_bypass_snapshots_without_bypassing_network_policy():
     cell = replace(blocked(Gap(GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING)), source=replace(SOURCE, backend="daytona"))
     (attempt,) = plan([cell], [])

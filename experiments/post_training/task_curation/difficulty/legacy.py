@@ -37,6 +37,7 @@ LEGACY_GAPS = {
     DifficultyGap.HOSTED_JUDGE_CANARY_INTERRUPTED: GapReason.JUDGE_ROUTE_UNQUALIFIED,
     DifficultyGap.HOSTED_UNSERVED_RAW_ZERO_GRADES: GapReason.COVERAGE_SHORTFALL,
     DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING: GapReason.ENVIRONMENT_ARTIFACT_MISSING,
+    DifficultyGap.ENVIRONMENT_START_FAILURE: GapReason.ENVIRONMENT_START_FAILURE,
     DifficultyGap.GRADER_INFRASTRUCTURE_FAILURE: GapReason.GRADER_INFRASTRUCTURE_FAILURE,
     DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT: GapReason.UNSUPPORTED_COMPOSE_DOCUMENT,
     DifficultyGap.NETWORK_POLICY_VIOLATION: GapReason.NETWORK_POLICY_VIOLATION,
@@ -65,6 +66,9 @@ RAW_GAPS = {
     "provider_wait": GapReason.PROVIDER_CAPACITY_WAIT,
     "input_budget_unserved": GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED,
 }
+
+# Gap reasons whose typed detail is the machine image reference the cause names.
+IMAGE_ARTIFACT_GAPS = frozenset({GapReason.ENVIRONMENT_ARTIFACT_MISSING, GapReason.ENVIRONMENT_START_FAILURE})
 
 
 def admission_cause(capability: str) -> tuple[DifficultyGap, str | None]:
@@ -114,7 +118,7 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
                 admission_cause(f"{legacy.value}:{detail}")
             except ValueError as error:
                 raise LegacyReasonError(str(error)) from error
-        artifact_uri = detail if canonical == GapReason.ENVIRONMENT_ARTIFACT_MISSING else None
+        artifact_uri = detail if canonical in IMAGE_ARTIFACT_GAPS else None
         kind = None
         if artifact_uri == "prepared_image":
             artifact_uri, kind = None, ArtifactKind.PREPARED_IMAGE

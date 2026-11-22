@@ -119,6 +119,26 @@ def task_spec_actor_image(task: PreparedTask) -> str | None:
     return ((spec.get("environment_requirements") or {}).get("docker_image")) or None
 
 
+def actor_phase_gap_reason(task: PreparedTask, result) -> str | None:
+    """The typed cause when a trial dies before its verifier started.
+
+    A trial whose exception fired while the actor machine was still starting
+    (image pull or environment start) is an infrastructure retry keyed to the
+    declared actor image, never a coverage shortfall. A pin that cannot run its
+    source at all stays the source-image defect the repair replaces.
+    """
+    if result.exception_info is None:
+        return None
+    if result.verifier is not None and result.verifier.started_at is not None:
+        return None
+    pin = task_spec_actor_image(task)
+    if pin in DEFECTIVE_ACTOR_IMAGES:
+        return difficulty_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, pin)
+    if result.environment_setup is not None and result.environment_setup.finished_at is None:
+        return difficulty_gap_reason(DifficultyGap.ENVIRONMENT_START_FAILURE, pin)
+    return None
+
+
 def read_verdict(trial: Trial) -> dict | None:
     """The trial's structured verdict, when the verifier produced one."""
     path = trial.paths.verifier_dir / "verdict.json"
@@ -711,17 +731,8 @@ def run_task(
                 verifier_reached=result.verifier is not None and result.verifier.started_at is not None,
                 verdict=read_verdict(trial),
             )
-            if (
-                grader_infra_reason is None
-                and (result.verifier is None or result.verifier.started_at is None)
-                and result.exception_info is not None
-                and task_spec_actor_image(task) in DEFECTIVE_ACTOR_IMAGES
-            ):
-                # The actor environment died before grading under a pin that cannot run this
-                # source: the declared actor image is the missing artifact, not the grader.
-                grader_infra_reason = difficulty_gap_reason(
-                    DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, task_spec_actor_image(task)
-                )
+            if grader_infra_reason is None:
+                grader_infra_reason = actor_phase_gap_reason(task, result)
         if deadline_phase is not None:
             reason = difficulty_gap_reason(DifficultyGap.MATH_VERIFIER_DEADLINE, deadline_phase)
         elif reward is not None:

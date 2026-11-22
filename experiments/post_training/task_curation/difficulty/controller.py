@@ -40,6 +40,9 @@ CONTROLLER_SECRET_NAMES = (
     "HF_TOKEN",
     "GLM_BULK_TOKEN",
     "DAYTONA_DATA_API_KEY",
+    # Skopeo authfile JSON for the private ghcr actor images (repair-lane GHCR
+    # credential shape); LOCAL-backend attempt batches pull through it.
+    "GHCR_REGISTRY_AUTHFILE",
 )
 # Provider keys live in Google Secret Manager, not the submitter's environment:
 # the job bundle sources this reference directly, and every inheriting child

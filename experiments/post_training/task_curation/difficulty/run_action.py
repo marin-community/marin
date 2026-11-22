@@ -12,10 +12,58 @@ from pathlib import Path
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import get_secret
 
 from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, RESULTS_DIRECTORY
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_id, load_action
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
+
+REGISTRY_AUTH_SECRET = "GHCR_REGISTRY_AUTHFILE"
+"""Skopeo authfile JSON for private ghcr images; the controller bundle carries it."""
+
+
+def attempt_command(
+    action: AttemptBatch, manifest: str, ledger: str, output: str, local_root: Path, registry_auth: bool
+) -> list[str]:
+    """The runtime command for one attempt batch, with the batch's registry credential."""
+    queues = {(source.queue_uri, source.queue_sha256) for source in action.sources}
+    if len(queues) != 1:
+        raise ValueError("A batch must use one frozen panel queue")
+    uri, sha = queues.pop()
+    command = [
+        "python",
+        "-m",
+        "experiments.post_training.task_curation.difficulty.runtime",
+        "--solver",
+        action.solver.value,
+        "--sources",
+        uri,
+        "--sources-sha256",
+        sha,
+        "--output-root",
+        output,
+        "--local-root",
+        str(local_root),
+        "--workers",
+        "22",
+        "--attempts-per-task",
+        "3",
+        "--priority",
+        "interactive",
+        "--daytona-provisioning",
+        "declarative",
+        "--ledger",
+        ledger,
+        "--action-manifest",
+        manifest,
+    ]
+    for source in action.sources:
+        command.extend(["--source-id", source.source_id])
+    if registry_auth:
+        # Private actor pins (ghcr.io/marin-community) need the skopeo authfile;
+        # public pulls ignore it, so a bundle without the credential stays anonymous.
+        command.extend(["--registry-auth-secret", REGISTRY_AUTH_SECRET])
+    return command
 
 
 def main() -> None:
@@ -29,40 +77,15 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="difficulty-action-") as directory:
         local = Path(directory)
         if isinstance(action, AttemptBatch):
-            queues = {(source.queue_uri, source.queue_sha256) for source in action.sources}
-            if len(queues) != 1:
-                raise ValueError("A batch must use one frozen panel queue")
-            uri, sha = queues.pop()
             output = str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
-            command = [
-                "python",
-                "-m",
-                "experiments.post_training.task_curation.difficulty.runtime",
-                "--solver",
-                action.solver.value,
-                "--sources",
-                uri,
-                "--sources-sha256",
-                sha,
-                "--output-root",
-                output,
-                "--local-root",
-                str(local / "runtime"),
-                "--workers",
-                "22",
-                "--attempts-per-task",
-                "3",
-                "--priority",
-                "interactive",
-                "--daytona-provisioning",
-                "declarative",
-                "--ledger",
-                args.ledger,
-                "--action-manifest",
+            command = attempt_command(
+                action,
                 args.manifest,
-            ]
-            for source in action.sources:
-                command.extend(["--source-id", source.source_id])
+                args.ledger,
+                output,
+                local / "runtime",
+                registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
+            )
             subprocess.run(command, check=True)
             result = {"status": "completed", "run_root": output}
         else:
