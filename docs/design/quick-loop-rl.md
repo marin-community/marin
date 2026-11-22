@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Four H100 hosts converted both trained 67B policies. Fused replay passed the 293 sampled tokens from the real tool exchange. The serving process returned its first reply under policy 2 with the CUDA async allocator. | Verify old cache ownership is cleared and pass fused replay of four full-length policy-2 responses, then run the held-learner comparison. |
+| Native inventory backend | Four H100 hosts converted both trained 67B policies. Fused replay passed 293 sampled tokens from a real tool exchange. A live install cleared all cache ownership and served policy 2. Two identical requests returned identical tokens with different raw scores and routes. | Finish the full-length policy-2 replay, diagnose repeatability, and run the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -636,11 +636,15 @@ FP32 router slice across steps 1 and 2 within a 5 MiB chunk-read budget.
 
 #### Read only the HF weight ranges a learner host needs
 
-The frozen Levanter smoke streams roughly 125 GiB of BF16 payload across
-all 39 Hugging Face safetensors files on each learner host, then places its
-addressable tensor slices. Levanter previously prototyped direct GCS reads
+The current loader streams Hugging Face model IDs from the Hub through
+`hf://` without a local disk cache. It determines the file read ranges
+before using JAX sharding to place the addressable tensor slices. The frozen
+H100 smoke points the same safetensors reader at a regional CoreWeave copy
+of the HF export. Each learner host streams roughly 125 GiB of BF16
+payload across all 39 files. Levanter previously prototyped direct GCS reads
 per FSDP slice. The requests were small and numerous, so the merged loader
 switched to large contiguous reads on each host.
+[Direct Hub loading][hf-direct-loading] · [Current range planning][hf-current-range-planning] ·
 [Original slice reader][original-hf-slice-reader] · [Loader history][hf-loader-history]
 
 SkyRL's Megatron loader already coalesces direct reads for rank-owned HF
@@ -807,12 +811,16 @@ gap. These values describe one update in each run.
 | Verified weight publication | 3.053 | 163.769 |
 | Full step | 151.893 | 408.420 |
 
-Across updates 2–8, median step time was 151.0 seconds for Megatron and
-419.6 seconds for Levanter. Both admitted groups in about 0.98 seconds per
-group. Averaged over the seven steps, Levanter spent 159.5 additional
-seconds on publication, 81.8 on policy training and 27.0 on learner
-preparation. All 72 candidate receiver checks passed through version 8.
-These timings cover the original attempts and the same update numbers.
+Across updates 2–16, median step time was 151.0 seconds for Megatron and
+416.7 seconds for Levanter. Their mean group admission times were 0.972 and
+0.959 seconds per group, with 1,920 admitted groups each. Averaged over
+those fifteen updates, Levanter spent 159.2 additional seconds on
+publication, 80.3 on policy training and 27.1 on learner preparation.
+The expert phase accounted for about 119 seconds per Levanter publication
+and combines source export, staging and transfer. Time those components
+separately before changing the NCCL schedule or the byte-verification
+path. These timings compare the same update numbers and exclude the
+candidate interruption and any terminal checkpoint work.
 
 The first Levanter child completed 16 applied updates and 136
 zero-mismatch receiver checks through version 16. It consumed 24.61
@@ -835,6 +843,12 @@ Iris child preservation after the artifact launcher gains stable child IDs,
 terminal-aware attachment and passive observation. The frozen launcher
 generates a new child ID per coordinator attempt and cancels its active
 GPU child when the foreground supervisor receives SIGTERM.
+The direct regional GPU-root path reproduced the frozen five-host BATCH
+request and the ArtifactStep fingerprint in a local fixture. The same
+fixture interrupted an observer after the native terminal receipt and
+reattached under the ArtifactStep lease to write the typed record. Live
+admission and remote lease recovery still need verification. The current
+automatic replacement uses the ordinary coordinator.
 
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
@@ -1571,6 +1585,25 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Cache ownership and full-context run][iris-native-cache-ownership] ·
   [JAX allocator options][jax-allocator-options]
 
+  The cache-ownership run installed policy 2 on the original serving
+  process and reported zero page references, live sequence slots, active
+  request slots and retained prefixes at release. The first reply took
+  2.11 seconds. Two requests under that same policy and seed had 514
+  identical prompt tokens and four identical sampled tokens. Their first
+  sampled raw logprobs were `-2.1513` and `-1.5693`. Decode scores for the
+  other three sampled tokens differed by at most `5.35e-4`. Expert-set
+  differences appeared during prompt prefill, starting at layer 1,
+  position 244. Across the prompt, 863 layer-position rows changed expert
+  membership. The installed policy has FP32 router logits, but paged
+  serving uses the ring implementation's BF16 scatter-add at EP8. The
+  learner uses the gather-combine implementation, which sums local
+  contributions in fixed order in FP32 before casting. Compare the same
+  captured request and weights across both implementations. The repeated-request
+  difference establishes a serving reproducibility issue. Fused learner
+  parity still uses the actual tokens and routes from each individual reply.
+  [Original paged serving path][native-paged-moe] ·
+  [Cache ownership and full-context run][iris-native-cache-ownership]
+
   The typed install keeps the old model and KV pool live until it verifies
   the replacement weights and allocates the new pool. A CPU probe found
   that the old model, KV and optional prefix references dropped at the
@@ -1666,6 +1699,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-allocator-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122h
 [iris-native-cache-ownership]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122i
 [iris-native-tool-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-tool-scorer-20261122a
+[native-paged-moe]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/models/snowball.py#L1932-L1943
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
 [iris-native-conversion]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122d%2Fnative-native-fused-20261122d-convert
 [native-typed-conversion-receipt]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fnative-tool-67b%2F2026.11.22.1%2Fnative-fused-20261122d%2Fevidence%2Ftyped-snapshot-receipts.json
@@ -1698,6 +1732,8 @@ arms. [Prior timing comparison][timing]
 [h100-matched-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fquick-loop-matched-2026.11.20.15.tar.gz
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
+[hf-direct-loading]: https://github.com/marin-community/marin/pull/2348
+[hf-current-range-planning]: https://github.com/marin-community/marin/blob/main/lib/levanter/src/levanter/compat/fsspec_safetensor.py#L195-L258
 [skyrl-hf-prefetch]: https://github.com/marin-community/marin/pull/10662
 [down-rank-read-proof]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fproofs%2Fsnowball-down-rank-reads-586d56160770.tar.gz
 [native-shard-reader]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/levanter/src/levanter/tensorstore_serialization.py#L988-L1024
