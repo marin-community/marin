@@ -2,6 +2,14 @@
 
 November 21, 2026 (PST).
 
+Fresh BATCH smoke `2026.11.21.11` is running from
+`e9fa30e8a2230a4015d8488280d2b375b81ea07d`, with dynamic VMM allocation at
+the same 0.90 budget and preallocation disabled. At 21:18 PST all five GPU
+tasks were running. Both accepted bundles match all 4,583 frozen entries,
+including 43 required runtime files, and the executed configuration matches
+the preflight. Native initialization, publication, updates, and resume remain
+pending for this source.
+
 BATCH smoke `2026.11.21.10`, from
 `42a248d50564f44d6010a35591d49d2f65c0ea38`, initialized all four full-model
 learners with BFC preallocation and the same observed 0.90 limit on all 32
@@ -433,7 +441,7 @@ adds about 1.61 GiB for this recorded train program; the driver's actual
 granularity has not been measured. Fit remains uncertain. Standard
 JAX allocator counters do not support this pinned VMM path; the candidate
 adds explicitly labeled parent Torch and global driver-memory receipts.
-No VMM hardware run has been submitted.
+VMM hardware acceptance is pending in the fresh attempt below.
 
 The VMM candidate passes three schema checks and a 22-case native CPU run.
 After isolating observer errors, three normal host continuations and the real
@@ -441,6 +449,15 @@ blocked-output/NaN-error case pass on the final production source. Required
 lint/types, strict docs, and independent review pass. The rendered control is
 unchanged; native configuration differs from `.10` only by `allocator: vmm`
 and `preallocate: false`. These checks do not qualify GPU allocation or fit.
+
+Smoke `2026.11.21.11` uses coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.11-coordinator-b6cb00ac`,
+submitted at `2026-11-22T05:14:39.249Z`, with child suffix
+`users-dlwh-checkpoints-snowball-inventory-2026.11.21.11-ac3a25737ef9`.
+Both jobs have verified BATCH priority and zero automatic failure retries.
+All five child tasks are running with zero failures/preemptions in the startup
+snapshot. Source pin `e9fa30e8a2230a4015d8488280d2b375b81ea07d` is frozen;
+later status-only documentation commits are not its executed source.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
