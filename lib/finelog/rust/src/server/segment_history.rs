@@ -5,7 +5,7 @@
 //! growth of a compaction backlog can be graphed after the fact. The rows carry
 //! the same statistics `ListNamespaces` reports at that moment.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -112,33 +112,55 @@ fn table_segments_batch(
     })
 }
 
-/// Write one row per live table with its current segment statistics.
-pub fn record_table_segments(store: &Store, timestamp_ms: i64) -> Result<(), StatsError> {
-    let schema = table_segments_schema();
-    store.register_managed_table(
-        TABLE_SEGMENTS_NAMESPACE,
-        schema.clone(),
-        StoragePolicy {
-            max_age_seconds: Some(LOCAL_CACHE_MAX_AGE_SECONDS),
-            ..StoragePolicy::default()
-        },
-    )?;
-    let tables: Vec<(String, NamespaceStats)> = store
-        .list_namespaces_with_stats()?
-        .into_iter()
-        .map(|(namespace, _, stats, _)| (namespace, stats))
-        .collect();
-    let batch = table_segments_batch(&schema, timestamp_ms, &tables)?;
-    let ipc = encode_ipc(&batch.schema(), &[batch]).map_err(|error| {
-        StatsError::Internal(format!("encoding {TABLE_SEGMENTS_NAMESPACE} rows: {error}"))
-    })?;
-    store.write_ingestion_rows(TABLE_SEGMENTS_NAMESPACE, &ipc, None)?;
-    Ok(())
+/// Writes the history rows, registering the table before its first write.
+pub struct TableSegmentHistory {
+    store: Arc<Store>,
+    registered: AtomicBool,
 }
 
-async fn record_now(store: Arc<Store>) {
-    let recorded =
-        tokio::task::spawn_blocking(move || record_table_segments(&store, now_ms())).await;
+impl TableSegmentHistory {
+    pub fn new(store: Arc<Store>) -> Self {
+        Self {
+            store,
+            registered: AtomicBool::new(false),
+        }
+    }
+
+    /// Write one row per live table with its current segment statistics.
+    ///
+    /// Registration goes through the catalog's schema lock and commit, so it
+    /// runs once per process; a failed attempt is retried by the next call.
+    pub fn record(&self, timestamp_ms: i64) -> Result<(), StatsError> {
+        let schema = table_segments_schema();
+        if !self.registered.load(Ordering::SeqCst) {
+            self.store.register_managed_table(
+                TABLE_SEGMENTS_NAMESPACE,
+                schema.clone(),
+                StoragePolicy {
+                    max_age_seconds: Some(LOCAL_CACHE_MAX_AGE_SECONDS),
+                    ..StoragePolicy::default()
+                },
+            )?;
+            self.registered.store(true, Ordering::SeqCst);
+        }
+        let tables: Vec<(String, NamespaceStats)> = self
+            .store
+            .list_namespaces_with_stats()?
+            .into_iter()
+            .map(|(namespace, _, stats, _)| (namespace, stats))
+            .collect();
+        let batch = table_segments_batch(&schema, timestamp_ms, &tables)?;
+        let ipc = encode_ipc(&batch.schema(), &[batch]).map_err(|error| {
+            StatsError::Internal(format!("encoding {TABLE_SEGMENTS_NAMESPACE} rows: {error}"))
+        })?;
+        self.store
+            .write_ingestion_rows(TABLE_SEGMENTS_NAMESPACE, &ipc, None)?;
+        Ok(())
+    }
+}
+
+async fn record_now(history: Arc<TableSegmentHistory>) {
+    let recorded = tokio::task::spawn_blocking(move || history.record(now_ms())).await;
     // One failed write must not end the history for the rest of the process.
     match recorded {
         Ok(Ok(())) => {}
@@ -153,8 +175,9 @@ pub fn spawn_table_segment_history(
     stop: Arc<AtomicBool>,
     shutdown: Arc<tokio::sync::Notify>,
 ) -> JoinHandle<()> {
+    let history = Arc::new(TableSegmentHistory::new(store));
     spawn_periodic(SEGMENT_HISTORY_INTERVAL, stop, shutdown, move || {
-        record_now(Arc::clone(&store))
+        record_now(Arc::clone(&history))
     })
 }
 
@@ -232,13 +255,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_tick_records_each_table_with_its_segments_split_by_level() {
-        let store = Store::new(
-            Some(unique_dir("segment-history")),
-            String::new(),
-            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-            ServeMode::Live,
-        )
-        .unwrap();
+        let store = Arc::new(
+            Store::new(
+                Some(unique_dir("segment-history")),
+                String::new(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Live,
+            )
+            .unwrap(),
+        );
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
@@ -251,7 +276,9 @@ mod tests {
             .await
             .unwrap();
 
-        record_table_segments(&store, 1_000).unwrap();
+        TableSegmentHistory::new(Arc::clone(&store))
+            .record(1_000)
+            .unwrap();
         store
             .maintain_namespace(TABLE_SEGMENTS_NAMESPACE, false)
             .await

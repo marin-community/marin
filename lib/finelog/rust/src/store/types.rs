@@ -2,6 +2,7 @@
 //! aggregate stats, and the segment filename/key helpers shared by the flush
 //! path and the rebuild-from-disk catalog scan.
 
+use crate::errors::StatsError;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -112,17 +113,23 @@ pub struct NamespaceStats {
     pub segment_count_by_level: Vec<i32>,
 }
 
-/// Count segments per compaction level, indexed by level.
-pub fn count_by_level(levels: impl IntoIterator<Item = i32>) -> Vec<i32> {
+/// Sum `(level, segments)` pairs into counts indexed by level.
+///
+/// Nothing in the catalog schema constrains a level's sign, so a negative one
+/// is reported as an error.
+pub fn count_by_level(
+    level_counts: impl IntoIterator<Item = (i32, i32)>,
+) -> Result<Vec<i32>, StatsError> {
     let mut counts = Vec::new();
-    for level in levels {
-        let index = usize::try_from(level).expect("segment levels are nonnegative");
+    for (level, segments) in level_counts {
+        let index = usize::try_from(level)
+            .map_err(|_| StatsError::Internal(format!("segment has negative level {level}")))?;
         if counts.len() <= index {
             counts.resize(index + 1, 0);
         }
-        counts[index] += 1;
+        counts[index] += segments;
     }
-    counts
+    Ok(counts)
 }
 
 /// Aggregate in-RAM accounting across live namespaces for the diagnostics line:

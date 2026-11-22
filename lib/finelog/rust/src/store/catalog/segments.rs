@@ -346,16 +346,18 @@ impl Catalog {
     /// Single-namespace aggregate over the segments table.
     pub fn aggregate_namespace_stats(&self, name: &str) -> Result<NamespaceStats, StatsError> {
         let inner = self.inner.lock().unwrap();
-        let levels = inner
+        let level_counts = inner
             .conn
-            .prepare("SELECT level FROM segments WHERE namespace = ?1")
+            .prepare("SELECT level, COUNT(*) FROM segments WHERE namespace = ?1 GROUP BY level")
             .and_then(|mut statement| {
                 statement
-                    .query_map([name], |row| row.get::<_, i32>(0))?
+                    .query_map([name], |row| {
+                        Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?))
+                    })?
                     .collect::<Result<Vec<_>, _>>()
             })
             .map_err(sqlite_err)?;
-        let segment_count_by_level = count_by_level(levels);
+        let segment_count_by_level = count_by_level(level_counts)?;
         let stats = inner
             .conn
             .query_row(
