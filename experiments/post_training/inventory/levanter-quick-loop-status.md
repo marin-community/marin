@@ -94,9 +94,7 @@ Relevant source pins:
 [regional coordinator route, `32123524a1`](https://github.com/marin-community/marin/commit/32123524a13df6f03385f58114466c55672929b0),
 and [GPU selection / 02a storage, `fc9a60939b`](https://github.com/marin-community/marin/commit/fc9a60939b4bc40b34b4dce7ffdf3e3d33f47d70).
 Focused native, bootstrap, SkyRL, required lint/type checks, strict docs, and
-independent source review passed for these fixes. The earlier broad suite had
-17 failures: six sandbox and ten router failures reproduced on clean main;
-one nested-launcher setup failure remained unclassified.
+independent source review passed for these fixes.
 
 ## Failed smokes and reproduction
 
@@ -264,6 +262,15 @@ passes locally, as do native checkpoint/restart and default FP32 compatibility
 checks. Generic unprepared callers retain their prior behavior; this repair
 does not qualify their multihost tracing or optimized GPU kernels. The repaired
 native path still requires a new H100 acceptance run.
+
+A supplemental affected-suite run on JAX/JAXLIB `0.11.1` recorded 4,124 passes,
+468 skips, and 29 failures with a 600-second session limit. All 13 launcher
+cases pass when inherited UV environment overrides are removed. Clean-main
+controls reproduce the six Linux-only sandbox failures on macOS. The ten router
+startup/cleanup failures reproduce with clean-main router code under the same
+dependency context; the deeper router package-build stall is unresolved. This
+broader run is not green. The focused fixed-plan and native checks use the
+runtime's pinned JAX/JAXLIB `0.11.0` and pass independently.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
