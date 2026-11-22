@@ -237,7 +237,6 @@ rl:
         eval_before_train: false
       - type: best_checkpoint
         initial_model_uri: model-input
-        expected_tasks: 120
         ema_window: 5
         evaluation_interval: 3
       - type: wall_time_budget
@@ -309,22 +308,18 @@ rl:
       rollout_buffer:
         eval_drain: wait
         batch_policy: full_batch
-        consumed_route_quotas:
-          agentic: 22
-          nonagentic: 42
         max_in_flight: 1024
         max_staleness_steps: 2
         object_store_root: null
         source_routes:
-          PRIME-RL/Eurus-2-RL-Data: nonagentic
-          ? https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
-          : nonagentic
           long-loop-smartie-swesmith: agentic
+          PRIME-RL/Eurus-2-RL-Data: nonagentic
           nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
           nvidia/OpenScience: nonagentic
+          Reasoning Gym:reasoning_gym: nonagentic
           open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
           open-thoughts/TaskTrove: nonagentic
-          nvidia/Llama-Nemotron-Post-Training-Dataset: nonagentic
+          nemotron_if: nonagentic
       rollout_spans: true
       step_wise_training: false
       strategy: megatron
@@ -335,17 +330,6 @@ rl:
       use_sample_packing: true
   max_steps: 32
   selection_eligibility: covered
-  train_data:
-    agentic:
-      uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pool-agentic/2026.11.18.71
-      file: train.parquet
-      sha256: ad435c5bdd3ac7ef46be5359a8f5fa1b095e80fbc9bfbcb968f22b5fe7befae3
-    nonagentic:
-      uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pool-nonagentic/2026.11.18.71
-      file: train.parquet
-      sha256: 4cb4fd8206a113509e6fcd9c0c4b1198c6d925eb964b1622c98d12ef36151402
-  validation_data:
-    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release
-    file: validation.parquet
-    sha256: 8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838
   gpu_variant: H100
+  pools:
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pools/2026.11.22.1

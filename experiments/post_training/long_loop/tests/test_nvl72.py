@@ -58,9 +58,37 @@ def test_profile_build_preserves_native_resume_and_nvlink_roles(run_spec, tmp_pa
     assert step.runtime_args["skyrl_execution"].coordinator_name == f"mochi-{profile}-2026.11.17.1"
 
 
+def _curriculum():
+    """A small fixed curriculum so a non-smoke launch can bind its holdout."""
+    from marin.rl.curriculum import CurriculumEntry, PoolRow, RlCurriculum, SamplingMode, SourcePin, draw_validation_split
+
+    labels = ("gsm8k", "svamp")
+    rows = {label: tuple(PoolRow(id=f"{label}-{i}", sha256=f"{i:064x}") for i in range(500)) for label in labels}
+    validation = draw_validation_split({"gsm8k": 0.7, "svamp": 0.3}, rows, size=50, seed=17)
+    return RlCurriculum(
+        name="tests/nvl72-mix",
+        version="2026.11.22",
+        mode=SamplingMode.WEIGHTED,
+        entries=tuple(
+            CurriculumEntry(
+                label=label,
+                source=label,
+                version="1",
+                pin=SourcePin(name="openai/gsm8k", revision="e53f048", url="https://huggingface.co/datasets/openai/gsm8k"),
+                recipe="experiments.post_training.task_curation.pipeline.process_rows",
+                weight=w,
+            )
+            for label, w in (("gsm8k", 0.7), ("svamp", 0.3))
+        ),
+        stages=(),
+        seed=17,
+        validation=validation.validation,
+    )
+
+
 def test_normal_run_binds_distinct_training_and_heldout_data(run_spec, tmp_path):
     output = tmp_path / "launch.yaml"
-    spec = replace(run_spec, profile="one-rack", validation_data_uri=(str(tmp_path / "heldout"),))
+    spec = replace(run_spec, profile="one-rack", validation_data_uri=(str(tmp_path / "heldout"),), curriculum=_curriculum())
     with build_context(BuildContext(versions=VersionCodex(default="2026.11.17.2"))):
         run_from_spec(spec, smoke=False, config_output=output)
     launch = yaml.safe_load(output.read_text())

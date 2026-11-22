@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import math
 import subprocess
@@ -32,6 +33,8 @@ from experiments.post_training.task_curation.exp5_curriculum import (
     IFBENCH_SOURCE,
     IFBENCH_SOURCE_REVISION,
     OPENRESEARCHER_LABEL,
+    PENDING_SOURCES,
+    TARGET_SHARES,
     exp5_rl_curriculum,
 )
 
@@ -69,8 +72,20 @@ def test_hardmath_base_preserves_equation_references_across_difficulty_labels(di
     assert task.context.events[0].content == "Solve for x."
 
 
+def _exp5_validation():
+    """A synthetic full-mixture holdout: the object-level policy test needs no pools."""
+    from marin.rl.curriculum import PoolRow, draw_validation_split
+
+    labels = dict(TARGET_SHARES)
+    rows = {
+        label: tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(60))
+        for label in labels
+    }
+    return draw_validation_split(dict(labels), rows, size=200, seed=20261020).validation
+
+
 def test_exp5_policy_keeps_the_unavailable_five_percent():
-    curriculum = exp5_rl_curriculum()
+    curriculum = exp5_rl_curriculum(_exp5_validation())
     weights = curriculum.weights()
     assert math.isclose(sum(weights.values()), 1.0, rel_tol=0, abs_tol=1e-12)
     assert weights[AGENTIC_TRAIN_SOURCE] == 0.20
@@ -78,7 +93,14 @@ def test_exp5_policy_keeps_the_unavailable_five_percent():
 
 
 def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp_path):
-    prepared = prepared_curriculum().weights()
+    validation = _exp5_validation()
+    prepared = prepared_curriculum(
+        dataclasses.replace(
+            validation,
+            size=sum(1 for row in validation.rows if row.label not in PENDING_SOURCES),
+            rows=tuple(row for row in validation.rows if row.label not in PENDING_SOURCES),
+        )
+    ).weights()
     assert OPENRESEARCHER_LABEL not in prepared
     assert math.isclose(sum(prepared.values()), 0.95, rel_tol=0, abs_tol=1e-12)
     assert prepared[AGENTIC_TRAIN_SOURCE] == 0.20

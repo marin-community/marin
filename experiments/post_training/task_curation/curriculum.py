@@ -71,6 +71,18 @@ def _resolved(name: str, catalog: Mapping[str, RlDataSource]) -> RlDataSource:
     return source
 
 
+def curriculum_entries(
+    name: str,
+    version: str,
+    *,
+    weights: Mapping[str, float],
+    catalog: Mapping[str, RlDataSource] | None = None,
+) -> tuple[CurriculumEntry, ...]:
+    """The catalog-bound entries a weight-random curriculum over these sources records."""
+    sources = runnable_sources() if catalog is None else catalog
+    return tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+
+
 def weighted_curriculum(
     name: str,
     version: str,
@@ -92,8 +104,7 @@ def weighted_curriculum(
     :func:`marin.rl.curriculum.draw_validation_split`'s ``ValidationSplit.training`` — the same
     deterministic call this builder makes — so record and data cannot disagree.
     """
-    sources = runnable_sources() if catalog is None else catalog
-    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    entries = curriculum_entries(name, version, weights=weights, catalog=catalog)
     split = draw_validation_split(dict(weights), pool_rows, size=validation_size, seed=seed)
     return RlCurriculum(
         name=name,
@@ -121,8 +132,7 @@ def curriculum_with_validation(
     recorded it, or a launch reading the record back. The validation's seed must
     be the curriculum's, and its rows must name declared sources — ``RlCurriculum``
     enforces both."""
-    sources = runnable_sources() if catalog is None else catalog
-    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    entries = curriculum_entries(name, version, weights=weights, catalog=catalog)
     return RlCurriculum(
         name=name,
         version=version,

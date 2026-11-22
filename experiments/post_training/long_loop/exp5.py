@@ -21,7 +21,7 @@ import draccus
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
-from marin.rl.curriculum import RlCurriculum
+from marin.rl.curriculum import CurriculumEntry, CurriculumValidation, RlCurriculum, SamplingMode, SourcePin
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -82,9 +82,9 @@ INITIAL_EVAL_FILES = (
 PREPARATION_ROUTE_QUOTAS = {"agentic": 14, "nonagentic": 50}
 
 
-def prepared_curriculum() -> RlCurriculum:
+def prepared_curriculum(validation: CurriculumValidation) -> RlCurriculum:
     """Keep the prepared sources' absolute shares; the missing five percent stays explicit."""
-    complete = exp5_rl_curriculum()
+    complete = exp5_rl_curriculum(validation)
     return replace(
         complete,
         name="long-loop/exp5-preparation-only",

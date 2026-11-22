@@ -85,9 +85,6 @@ trainer:
     batch_policy: full_batch
     max_in_flight: 32
     object_store_root: null
-    consumed_route_quotas:
-      agentic: 16
-      nonagentic: 16
     source_routes:
       long-loop-smartie-swesmith: agentic
       PRIME-RL/Eurus-2-RL-Data: nonagentic
