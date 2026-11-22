@@ -687,6 +687,7 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v6e-8, 24 logical contexts and a FIFO window pool](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v14-hybrid-regional-control) | 198 | 43,975 | 209.40 | 17,520 | 25,980 |
 | [v6e-8, 24 logical contexts with retained window tails](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v13-hybrid-terminal-pins) | 359 | 102,751 | 509.62 | 1,379 | 3,375 |
 | [v6e-8, fused short prefill and wider full-attention decode tiles](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v15-fused-prefill-wide-decode) | 370 | 105,318 | 533.04 | 1,211 | 3,412 |
+| [v6e-8, wider decode tiles and fused prefill through 8,192 tokens](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v16-parity-prefill-8k) | 373 | 106,159 | 537.08 | 1,191 | 2,869 |
 
 The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
 v6e-8 baseline ran in `us-east1` with one disconnected request. Native
@@ -899,6 +900,19 @@ native prompt tok/s versus 43.8k for vLLM. Fresh 2,048-token TTFT was
 82 ms versus 56 ms, and fresh 8,192-token TTFT was 186 ms versus 177 ms.
 The primed 256-token suffix took 10–15 ms longer across the grid.
 
+Extending fusion through 8,192 tokens on that v6e-8 worker raised
+AgentX throughput to 537.08 tok/s, 3.1% below the 554.00 vLLM result.
+Both runs had zero profiling errors and all 373 paired output lengths
+matched. Native active decode was 34.89 versus 36.22 tok/s on those
+requests. On the 370 turns shared with the previous native build,
+active decode moved from 35.14 to 34.76 tok/s and p90 TTFT fell from
+3.41 to 2.88 s. The new run's overall p90 was 2.87 s versus 1.31 s.
+
+Fresh serial 8,192-token prefill took 150 ms versus 177 ms for vLLM.
+Fresh 2,048-token TTFT was 60 ms versus 56 ms, and the five primed
+medians were 1–9 ms slower. The longest fresh prefill reached
+48.0k versus 43.8k prompt tok/s.
+
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
 finished slots it took 0.45 ms versus 18.26 ms. Both cases used a 128-slot
@@ -912,21 +926,20 @@ Each sample issued one raw request and generated one token. Primed requests
 reused a 256-token-shorter prefix. The table shows median HTTP TTFT in
 seconds over five recorded trials per case after warmup. Effective
 fresh prefill throughput at 64,512 tokens was 35.2k versus 33.1k prompt
-tok/s on v5p-8 and 47.7k versus 43.8k prompt tok/s on v6e-8.
+tok/s on v5p-8 and 48.0k versus 43.8k prompt tok/s on v6e-8.
 
 | Prompt tokens | v5p native fresh / primed | v5p vLLM fresh / primed | v6e native fresh / primed | v6e vLLM fresh / primed |
 | ---: | ---: | ---: | ---: | ---: |
-| 2,048 | 0.0757 / 0.0473 | 0.0756 / 0.0432 | 0.0821 / 0.0424 | 0.0555 / 0.0319 |
-| 8,192 | 0.1985 / 0.0538 | 0.2066 / 0.0506 | 0.1862 / 0.0502 | 0.1774 / 0.0380 |
-| 32,768 | 0.8146 / 0.0801 | 0.8820 / 0.0796 | 0.6525 / 0.0708 | 0.7048 / 0.0590 |
-| 51,840 | 1.5560 / 0.1044 | 1.5416 / 0.1012 | 1.1271 / 0.0886 | 1.1743 / 0.0755 |
-| 64,512 | 1.8353 / 0.1212 | 1.9487 / 0.1153 | 1.3517 / 0.1002 | 1.4719 / 0.0851 |
+| 2,048 | 0.0757 / 0.0473 | 0.0756 / 0.0432 | 0.0596 / 0.0384 | 0.0555 / 0.0319 |
+| 8,192 | 0.1985 / 0.0538 | 0.2066 / 0.0506 | 0.1502 / 0.0470 | 0.1774 / 0.0380 |
+| 32,768 | 0.8146 / 0.0801 | 0.8820 / 0.0796 | 0.6452 / 0.0621 | 0.7048 / 0.0590 |
+| 51,840 | 1.5560 / 0.1044 | 1.5416 / 0.1012 | 1.1151 / 0.0801 | 1.1743 / 0.0755 |
+| 64,512 | 1.8353 / 0.1212 | 1.9487 / 0.1153 | 1.3426 / 0.0862 | 1.4719 / 0.0851 |
 
 Both native runners paused and resumed serving before these raw grids to
-clear outstanding replay work. The v5p measurements use prefill fusion
-through 8,192 tokens. The v6e measurements use fusion through 2,048
-tokens and wider full-attention decode tiles.
-[v5p native grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v22-fused-8k-prefill) · [v5p vLLM grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v3-persistent) · [v6e native grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v15-fused-prefill-wide-decode) · [v6e vLLM grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat)
+clear outstanding replay work. Both use fused prefill through 8,192 tokens.
+The v6e run also uses wider full-attention decode tiles.
+[v5p native grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v22-fused-8k-prefill) · [v5p vLLM grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v3-persistent) · [v6e native grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v16-parity-prefill-8k) · [v6e vLLM grid](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat)
 
 ## What works
 
