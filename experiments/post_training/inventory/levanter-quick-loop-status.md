@@ -110,10 +110,48 @@ Its strict resumed-versus-uninterrupted state comparison failed in both arms.
 The independent first updates already differed before teardown: the largest
 model difference was 0.001924626 and the largest Adam difference was
 0.0000163091, at this diagnostic's 0.001 learning rate. This is measured
-run-to-run divergence; its cause is not established. Control-state arrays were
-not saved, so the resumed-versus-control deviation remains unmeasured. The next
-probe will preserve those arrays and capture actual attention inputs and
-cotangents without relaxing the exact gate.
+run-to-run divergence; its cause is not established. That run did not preserve
+the control-state arrays.
+
+The subsequent eight-H100 run
+`/dlwh/native-lifecycle-replay-2026-11-22-1`, from
+`63bd1dd848a04bf33be239f69fb9340ffaa3b725`, completed with task exit zero.
+Its entire archive, source bundle and input identities were independently
+checked. Diagnostic collection succeeded; learner qualification remains failed.
+The replay job is no longer active.
+
+The original short-sequence fixture still produced non-finite raw gradients.
+Two of sixteen captured attention input-cotangent packets contain NaNs in dQ;
+the captured dK and dV tensors are finite. All captured Q/K/V, attention outputs
+and output cotangents are finite, and each input group is bit-identical across
+the callbacks. Isolated replays of those inputs passed the existing reference
+tolerances and repeated exactly. The observer can change compilation, layout
+or timing. These results keep attention backward in the investigation; they
+do not identify a failing primitive or establish that isolated replay reproduces
+the original execution context. The next attention probe will capture the
+original backward residuals, including LSE, with the returned gradients in one
+packet rather than recomputing forward residuals during replay.
+
+The aligned fixture had finite raw gradients and all four saved model/Adam
+states were finite. Restoration was exact and all three learner processes
+exited naturally with status zero. The independently initialized first updates
+already differed: maximum model deviation 0.00175555 and Adam deviation
+0.0000109030. At step two, the model deviation was 0.00287603; all 32 compared
+scores differed, with maximum absolute deviation 0.000219584. RNG, step and
+checkpoint layouts matched. Both paths' second-step Adam moments exactly
+followed the zero-new-gradient recurrence, consistent with the stale-score
+batch reaching the clipped policy objective. This does not prove that the
+underlying raw gradient was exactly zero.
+
+Comparing those independently initialized paths confounds checkpoint
+continuation with their earlier differences. A separate opt-in test is being
+prepared: save A1 once, freeze a second batch using A1 scores, then compare a
+live update with an update restored from that same A1 checkpoint. It will
+require exact state, input, score and continuation agreement, unchanged natural
+exit checks, and finite nonzero gradients recorded from the actual optimizer
+step. It tests a newly scored fixed trajectory batch, not fresh rollout
+generation. Passing it would not clear the short-sequence NaNs, the independent
+first-update divergence or full-model acceptance.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
 gates. No new 40-H100 full-model smoke or matched 25-update comparison has been
