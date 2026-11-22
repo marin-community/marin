@@ -90,6 +90,23 @@ def test_prime_factorization_bad_reference_is_an_invalid_task(tests_dir, workspa
         grade(tests_dir, workspace, dataset="prime_factorization")
 
 
+@pytest.mark.parametrize(
+    ("dataset", "index", "candidate"),
+    [
+        pytest.param("boxnet", 0, "0", id="boxnet-json-number"),
+        pytest.param("game_of_life", 0, "{}", id="game_of_life-empty-object"),
+        pytest.param("coin_flip", 0, "1e400", id="coin_flip-infinite-float"),
+        pytest.param("propositional_logic", 0, "(" * 5000 + ")" * 5000, id="propositional_logic-deep-nesting"),
+        pytest.param("calendar_arithmetic", 0, "9" * 400, id="calendar_arithmetic-400-digits"),
+        pytest.param("time_intervals", 2, "9" * 400, id="time_intervals-400-digits"),
+    ],
+)
+def test_reply_the_scorer_cannot_parse_scores_zero(dataset, index, candidate):
+    entry = json.loads(json.dumps(reasoning_gym.create_dataset(dataset, size=3, seed=42)[index]))
+    result = grade_reasoning_gym.grade_reasoning_gym_candidate(ReasoningGymSpec(dataset=dataset), entry, candidate)
+    assert (result.reward, result.status) == (0.0, Status.SCORED)
+
+
 def test_partial_credit_from_the_scorer_is_passed_through(tmp_path, workspace):
     # simple_equations keeps reasoning-gym's default scorer, which awards a fraction when the gold
     # answer is buried in a longer response.
@@ -282,6 +299,22 @@ def test_broken_external_scorer_cannot_persist_an_invalid_reward(tests_dir, work
     write_reward(logs, verdict)
     assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
     assert not (logs / "reward.json").exists()
+
+
+@pytest.mark.parametrize("score", [True, float("nan"), float("inf"), -0.1, 1.1])
+def test_invalid_reference_score_keeps_a_parse_failure_an_error(tests_dir, workspace, monkeypatch, score):
+    # The reply raises, so the entry's own answer is scored to tell a broken entry from a malformed reply.
+    def score_answer(response, entry):
+        if response == entry["answer"]:
+            return score
+        raise ValueError("unparseable reply")
+
+    monkeypatch.setattr(grade_reasoning_gym.reasoning_gym, "get_score_answer_fn", lambda name: score_answer)
+    answer(workspace, "not the answer")
+    spec_path = tests_dir / "verifier.toml"
+    spec_path.write_text(render_spec(ReasoningGymSpec(dataset="needle_haystack")))
+    verdict = run(spec_path, workspace)
+    assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
 
 
 def test_configured_decimal_precision_preserves_source_score(tests_dir, workspace):

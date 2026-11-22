@@ -58,6 +58,17 @@ eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
 
+[LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
+multiple-choice questions over contexts of 8,000 to 2 million words, with the
+upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
+prompt and answer parser. Each item is published in full and middle-truncated to
+token budgets from 8K to 894K, and a run sends the largest copy that fits the
+served context. Serve a long context, such as `qwen3.5-35b-a3b-262k` or
+`qwen3-32b-yarn-128k`. `longbench-v2` decodes greedily with thinking off and 4,096
+output tokens; `longbench-v2-thinking` samples with thinking on and 32,768 output
+tokens, which leaves less room for the prompt. A limit takes short, medium and
+long items in turn.
+
 ## Launch file-backed evaluations
 
 A selection document names benchmark protocols and experiment overrides:
@@ -106,11 +117,19 @@ continuations and have no generation output budget.
 Judge deployments belong under `run`: `judge` records a `JudgeIdentity`,
 `judge_endpoint` is a credential-free endpoint, and `judge_api_key` contains ordered
 secret references. The standard
-FinanceBench and OlympiadBench definitions use Together and record its model alias
+FinanceBench, OlympiadBench and EconEvals definitions use Together and record its model alias
 as provider-managed. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
 The [September 25 publication campaign](https://github.com/marin-community/marin/tree/main/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled)
 supplies its separately pinned hosted judge through `--policy-finalization-config`.
+
+EconEvals scores are not directly comparable with the
+[EconEvals paper](https://arxiv.org/abs/2607.19375), which judged with gpt-4.1-mini. The `econevals`
+suite uses the paper's o3-mini baseline; strong models beat it on most items, so compare them with
+the `econevals-o3` suite, which judges against o3's released answers. The `econevals-sampled` and
+`econevals-sampled-o3` suites keep six questions from each category, about a tenth of the items,
+for development runs. The judge often prefers whichever answer it reads first, and such split items
+score 0.5, so treat score differences under about 0.1 as noise.
 
 Harbor files retain Harbor's `JobConfig` schema and `--harbor-config` option.
 Harbor execution is independent of curated TaskSpec evaluation.
@@ -151,7 +170,12 @@ The selected evaluations share a `group_id`; `--run-id` sets that launch ID.
 Curated producer records
 contain launch identity, status, jobs and the raw FineStore location. Their metric
 maps stay empty. Evaldash imports the raw archive and stores its derived scores in
-its own catalog; it does not rewrite the producer's record.
+its own catalog; it does not rewrite the producer's record. The launcher prints the
+same derived coverage and scores when it waits for a launch. For a finished run:
+
+```bash
+uv run python -m experiments.evaluation.cli scores gs://marin-eval-metadata/evals/<run_id>
+```
 
 Raw stores contain protocol and manifest snapshots in `evaluation/run.json`, a
 selection ledger, append-only start/finish attempts, samples, rollouts and grading
@@ -167,7 +191,7 @@ different protocols distinct in dashboard comparisons. See
 ## Use the shared launcher in a pipeline
 
 ```python
-from marin.evaluation.records import EvaluationSelection
+from evalrecords.records import EvaluationSelection
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 

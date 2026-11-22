@@ -9,7 +9,8 @@ kernels (reference or ``xla_flash`` attention, XLA ``ragged_dot``), so the two c
 hardware that has no CUDA or TPU kernels. Every step sees fresh uniform-random tokens with no repeats, so the
 loss cannot fall below ln(vocab_size) and a lower value means something leaks the targets (``--repeat-batches``
 cycles through a small pool of batches instead, so the loss can fall, for convergence checks). No checkpoint is
-written.
+written. Like the Snowball harness, it logs the model FLOPs per example up front and ends with the median step
+time from step 2 on, tokens/s, model TFLOP/s and MFU, then each device's peak memory.
 
 Example, 8 GPUs, full 67B shape, expert parallelism over all 8, profile of steps 10-12::
 
@@ -24,6 +25,7 @@ parameters over a cross-node ``data`` axis (FSDP), and ``--expert-axis 16`` spre
 
 import argparse
 import dataclasses
+import json
 import logging
 import time
 from pathlib import Path
@@ -33,7 +35,8 @@ import jax
 import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig, XprofUploadConfig
+from levanter.callbacks._metrics import log_throughput_summary
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
@@ -46,10 +49,13 @@ from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
+from rigging.log_setup import configure_logging
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
 from experiments.june_tpu_67b_a2b.moe.train import (
+    ATTENTION_FLOPS_PER_EXAMPLE_KEY,
+    CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY,
     GrugRunConfig,
     GrugTrainerConfig,
     _compute_flops,
@@ -63,6 +69,8 @@ SNOWBALL_HIDDEN_DIM = 2560
 # The width heuristic would otherwise derive seq_len // 2 and give the medium preset a shorter window than Snowball's.
 SNOWBALL_SLIDING_WINDOW = 2048
 POOLED_WAVE_MOE_IMPL = "fixed_pooled_wave_all_to_all"
+# Steps 0 and 1 are excluded from the summary, as in the Snowball harness: step 0 compiles.
+FIRST_TIMED_STEP = 2
 
 
 def snowball_model(seq_len: int) -> GrugModelConfig:
@@ -147,6 +155,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
+    parser.add_argument(
+        "--profile-hlo",
+        action="store_true",
+        help="Save HLO protos in the profile, so trace tools can tell ragged_dot lowerings from dense GEMMs.",
+    )
     parser.add_argument("--log-dir", type=Path, default=Path("logs/june-synthetic"))
     parser.add_argument("--run-id", help="Run id under --log-dir (default: size and timestamp).")
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
@@ -192,8 +205,36 @@ def report_memory() -> None:
         )
 
 
+def log_model_flops(flops_per_example: float, flops_summary: dict[str, float]) -> None:
+    if jax.process_index() != 0:
+        return
+    logger.info(
+        "model flops per example: total=%r attention_noncausal=%r attention_causal=%r",
+        flops_per_example,
+        flops_summary[ATTENTION_FLOPS_PER_EXAMPLE_KEY],
+        flops_summary[CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY],
+    )
+
+
+class StepDurations(logging.Handler):
+    """Collects the per-step durations the training loop logs through the JSON tracker (process 0 only)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.by_step: dict[int, float] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        event = json.loads(record.getMessage())
+        duration = event.get("metrics", {}).get("throughput/duration") if event.get("event") == "log" else None
+        # Keyed by step: the loop logs the last step a second time when it re-runs its hooks after training.
+        if duration is not None and event["step"] >= FIRST_TIMED_STEP:
+            self.by_step[event["step"]] = duration
+
+
 def main() -> None:
     args = parse_args()
+    # The training loop sets up logging only once it starts; without this, the lines logged before it are dropped.
+    configure_logging(logging.INFO)
     if args.gpus_per_node is not None:
         # Before any JAX call that starts the backend, including jax.device_count() below. Without explicit device
         # ids, JAX gives each Slurm process the single GPU numbered by its local rank.
@@ -249,6 +290,7 @@ def main() -> None:
             start_step=args.profile_start,
             num_steps=args.profile_steps,
             upload=XprofUploadConfig(enabled=False),
+            profile_options=ProfileOptionsConfig(enable_hlo_proto=args.profile_hlo),
         ),
         jax_compilation_cache_dir=args.compilation_cache_dir,
         log_jaxprs=False,
@@ -287,7 +329,7 @@ def main() -> None:
         ),
         eval=None,
     )
-    flops_per_example, _ = _compute_flops(model_config=model)
+    flops_per_example, flops_summary = _compute_flops(model_config=model)
     logger.info(
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
         "expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s "
@@ -314,7 +356,23 @@ def main() -> None:
         args.watch_interval,
         flops_per_example,
     )
-    _run_grug_local(config)
+    log_model_flops(flops_per_example, flops_summary)
+    step_durations = StepDurations()
+    tracker_log = logging.getLogger(JsonLoggerConfig.logger_name)
+    tracker_log.addHandler(step_durations)
+    try:
+        _run_grug_local(config)
+    finally:
+        tracker_log.removeHandler(step_durations)
+    if step_durations.by_step:
+        log_throughput_summary(
+            list(step_durations.by_step.values()),
+            batch_size,
+            model.max_seq_len,
+            flops_per_example,
+            first_step=FIRST_TIMED_STEP,
+            last_step=args.steps - 1,
+        )
     report_memory()
 
 

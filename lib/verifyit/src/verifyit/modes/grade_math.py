@@ -22,11 +22,11 @@ import re
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from verifyit.compat import StrEnum
 from verifyit.grade import (
     GradingInfraError,
     InvalidTask,
@@ -160,30 +160,49 @@ def _is_expression(parsed: list) -> bool:
     return any(not isinstance(item, str) for item in parsed)
 
 
-def _split_members(text: str) -> list[str]:
-    """The comma-separated members of a sequence, ignoring commas nested inside brackets.
+def _scan_brackets(value: str) -> tuple[list[tuple[int, int]], int | None]:
+    """Walk ``value`` once, tracking bracket nesting.
 
-    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike.
+    Returns the spans of the comma-separated top-level members — commas inside brackets
+    never split — and the index where the bracket stack first empties again, which for a
+    ``value[0]`` that opens a bracket is exactly where its pair closes.
     """
-    value = strip_math_delimiters(text)
-    for command in SIZE_COMMANDS:
-        value = value.replace(command, "")
-    value = value.strip()
-    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]]:
-        value = value[1:-1]
-    members: list[str] = []
+    spans: list[tuple[int, int]] = []
     stack: list[str] = []
+    first_close: int | None = None
     start = 0
     for index, char in enumerate(value):
         if char in CLOSERS:
             stack.append(CLOSERS[char])
         elif stack and char == stack[-1]:
             stack.pop()
+            if not stack and first_close is None:
+                first_close = index
         elif char == "," and not stack:
-            members.append(value[start:index].strip())
+            spans.append((start, index))
             start = index + 1
-    members.append(value[start:].strip())
-    return members
+    spans.append((start, len(value)))
+    return spans, first_close
+
+
+def _split_members(text: str) -> list[str]:
+    """The comma-separated members of a sequence, ignoring commas nested inside brackets.
+
+    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike,
+    but only when the first bracket opens the whole text — its balanced close at the last
+    character: ``[1, 2], [3, 4]`` keeps both bracketed members, and ``(1,2),(3,4)`` keeps both
+    parenthesized pairs.
+    """
+    value = strip_math_delimiters(text)
+    for command in SIZE_COMMANDS:
+        value = value.replace(command, "")
+    value = value.strip()
+    spans, first_close = _scan_brackets(value)
+    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]] and first_close == len(value) - 1:
+        # The first opener encloses the whole text: the members are its interior's top level.
+        value = value[1:-1]
+        spans = _scan_brackets(value)[0]
+    return [value[start:end].strip() for start, end in spans]
 
 
 class MathMemberPolicy(StrEnum):
@@ -297,6 +316,36 @@ def _additive_constant_match(expected: list, candidate: list) -> bool:
     return False
 
 
+def _positive_symbol_match(expected: list, candidate: list, positive_symbols: tuple[str, ...]) -> bool:
+    """Prove scalar equality after applying only the contract's positive assumptions."""
+    from math_verify.utils import timeout  # noqa: PLC0415
+    from sympy import Expr, Symbol, simplify  # noqa: PLC0415
+    from sympy.matrices.expressions import MatrixExpr  # noqa: PLC0415
+
+    @timeout(_timeout())
+    def equal_under_assumptions(gold, target) -> bool:
+        replacements = {
+            symbol: Symbol(symbol.name, positive=True)
+            for symbol in gold.free_symbols | target.free_symbols
+            if symbol.name in positive_symbols
+        }
+        return simplify(gold.xreplace(replacements) - target.xreplace(replacements)) == 0
+
+    return any(
+        equal_under_assumptions(gold, target)
+        for gold in expected
+        for target in candidate
+        if isinstance(gold, Expr)
+        and isinstance(target, Expr)
+        and not isinstance(gold, MatrixExpr)
+        and not isinstance(target, MatrixExpr)
+        and gold.is_commutative
+        and target.is_commutative
+        and not _is_undefined(gold)
+        and not _is_undefined(target)
+    )
+
+
 def validate_math(spec: MathSpec) -> None:
     """Check the parsing policy; the reference itself is parsed only when grading."""
     empty_output_policy(spec)
@@ -304,6 +353,17 @@ def validate_math(spec: MathSpec) -> None:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+    if (
+        not isinstance(spec.positive_symbols, tuple)
+        or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+            for name in spec.positive_symbols
+        )
+        or len(set(spec.positive_symbols)) != len(spec.positive_symbols)
+    ):
+        raise InvalidTask("positive_symbols must contain unique symbol names")
+    if spec.positive_symbols and spec.math_type is not MathType.SCALAR:
+        raise InvalidTask("positive_symbols requires scalar math_type")
 
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
@@ -344,6 +404,8 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         raise_on_error=True,
     )
     match = bool(parsed) and _verify(expected, parsed)
+    if not match and spec.positive_symbols:
+        match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
     chosen = None
     if parsed:
         gold_strings = strings_of(expected)
@@ -380,6 +442,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
         match = bool(_verify(expected, parsed))
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
         if not match and spec.allow_additive_constant:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
@@ -396,6 +460,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         match = _members_match(expected, parsed)
     else:
         match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected[0], parsed[0], spec.positive_symbols)
     if not match and spec.allow_additive_constant and not is_list:
         match = _additive_constant_match(expected[0], parsed[0])
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)

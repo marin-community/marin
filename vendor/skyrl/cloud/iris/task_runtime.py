@@ -49,6 +49,7 @@ import huggingface_hub.constants
 from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.timing import RateLimiter
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -87,7 +88,8 @@ from marinskyrl.hf_model import (
     immutable_model_cache_key,
     validate_hf_model_weights,
 )
-from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
+from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
+from marinskyrl.model_manifest import ModelManifest
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind, is_hugging_face_commit
@@ -208,6 +210,8 @@ def _ray_bin() -> str:
 DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
+STARTUP_POLL_INTERVAL = 1.0
+RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
 # Bound the rank-0 rendezvous PutObject: unbounded fsspec/s3fs put can wedge the
@@ -811,8 +815,8 @@ def pin_socket_ifname() -> str | None:
     return iface
 
 
-def export_telemetry_environment(run_id: str | None, training_type: TrainingType | None) -> None:
-    resolved = telemetry_environment(run_id=run_id, training_type=training_type)
+def export_telemetry_environment(run_id: str | None, training_type: TrainingType | None, model: str | None) -> None:
+    resolved = telemetry_environment(run_id=run_id, training_type=training_type, model=model)
     if not resolved:
         _log("[telemetry] no telemetry environment resolved; MarinSkyRL telemetry stays inert")
         return
@@ -1095,7 +1099,7 @@ def poll_rendezvous(
             raise
         except Exception as exc:  # transient object-store hiccup
             _log(f"rendezvous poll error (will retry): {exc}")
-        time.sleep(POLL_INTERVAL)
+        time.sleep(STARTUP_POLL_INTERVAL)
     raise TimeoutError(
         f"Worker rank {_rank()} timed out after {timeout}s waiting for "
         f"rank-0 rendezvous at {uri}. Did the head task fail to start?"
@@ -1309,24 +1313,24 @@ def wait_for_nodes(
 ) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
-    ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
-    the rendezvous so its ``written_at`` stays fresh. A worker pod on a cold node can
-    start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the head wrote the rendezvous; its
-    ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
-    one-shot rendezvous as "stale" and wait forever while the head waits for that node —
-    a mutual deadlock. Rewriting each poll keeps the timestamp ahead of any late worker's
-    freshness threshold without weakening the prior-ATTEMPT protection (a stale file from
-    a dead PRIOR attempt is still never refreshed).
+    ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
+    so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
+    head wrote the rendezvous; its ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
+    one-shot rendezvous as "stale" and wait forever while the head waits for that node — a mutual deadlock. Periodic
+    rewrites keep the timestamp ahead of any late worker's freshness threshold without weakening the prior-ATTEMPT
+    protection (a stale file from a dead PRIOR attempt is still never refreshed).
     """
     import ray
 
     deadline = time.time() + timeout
+    limiter = RateLimiter(RENDEZVOUS_REWRITE_INTERVAL)
+    limiter.mark_run()
     _log(f"Waiting for {expected_nodes} Ray node(s) at {ray_address} (timeout {timeout}s)...")
     ray.init(address=ray_address, ignore_reinit_error=True)
     try:
         last_count = -1
         while time.time() < deadline:
-            if rewrite_cb is not None:
+            if rewrite_cb is not None and limiter.should_run():
                 try:
                     rewrite_cb()
                 except Exception as exc:
@@ -1339,7 +1343,7 @@ def wait_for_nodes(
             if count >= expected_nodes:
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
-            time.sleep(POLL_INTERVAL)
+            time.sleep(STARTUP_POLL_INTERVAL)
         raise TimeoutError(f"Only {last_count}/{expected_nodes} Ray nodes joined within {timeout}s.")
     finally:
         ray.shutdown()
@@ -1993,8 +1997,6 @@ def run_head(
             f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
         )
         write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        # Re-publish the rendezvous each poll so a late cold-node worker never sees it
-        # as "stale" (see wait_for_nodes docstring — prevents the freshness deadlock).
         wait_for_nodes(
             ray_address,
             num_tasks,
@@ -2174,7 +2176,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     model_identity = str(model.identity)
     train_data = [] if checkpoint_export else _container(config.inputs.train_data)
     validation_data = [] if checkpoint_export else _container(config.inputs.validation_data)
-    data_sources = train_data + validation_data
+    evaluation_data = {} if checkpoint_export else _container(config.inputs.get("evaluation_data", {}))
+    data_sources = train_data + validation_data + [source for sources in evaluation_data.values() for source in sources]
     generator = skyrl.get("generator", {})
     speculative = generator.get("speculative_decoding", {}) if isinstance(generator, DictConfig) else {}
     draft_mapping = speculative.get("model") if isinstance(speculative, DictConfig) and not checkpoint_export else None
@@ -2206,8 +2209,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         model_source_identity=model_identity if is_cloud_uri(model_uri) else "",
         runtime_profile=str(config.runtime.profile),
         rollout_model_loading=RolloutModelLoading(generator.get("model_loading", RolloutModelLoading.STREAM)),
-        policy_tokenizer=str(model.tokenizer_uri),
-        policy_tokenizer_revision=str(model.tokenizer_revision),
+        policy_tokenizer=model.tokenizer_uri,
+        policy_tokenizer_revision=model.tokenizer_revision,
         policy_chat_template=str(model.chat_template or ""),
         draft_model=draft_model,
         draft_model_cache_ttl_days=int(config.artifacts.draft_model_cache_ttl_days),
@@ -2325,7 +2328,7 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    export_telemetry_environment(args.run_id, args.training_type)
+    export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
     ensure_fr_dump_dir()

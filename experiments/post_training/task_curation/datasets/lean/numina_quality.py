@@ -210,7 +210,13 @@ def golden_spec(formal: str, reference: str, max_output_tokens: int = auto.JUDGE
 
 
 def spec_digest(spec: JudgeSpec) -> str:
-    return hashlib.sha256(json.dumps(asdict(spec), sort_keys=True).encode()).hexdigest()
+    fields = asdict(spec)
+    # The saved Numina verdicts predate the pairwise judge settings.
+    if fields["verdict_patterns"] == ():
+        del fields["verdict_patterns"]
+    if fields["label_weights"] == {}:
+        del fields["label_weights"]
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
 def eligible_for_golden(row: dict) -> bool:

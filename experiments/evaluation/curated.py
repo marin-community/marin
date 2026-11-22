@@ -8,9 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from huggingface_hub import HfApi
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
+from evalrecords.records import (
     DEFAULT_EVALUATION_CONCURRENCY,
     CuratedRef,
     CuratedSettings,
@@ -18,7 +16,11 @@ from marin.evaluation.records import (
     EvaluationSelection,
     PromptFormat,
     ResolvedEvaluationSelection,
+    TaskEvidence,
+    scoring_settings,
 )
+from huggingface_hub import HfApi
+from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep
 from rigging.secrets import is_secret_reference
 from taskcompendium.identity import canonical_sha256
@@ -41,7 +43,8 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
         revision = api.model_info(model.location, revision=revision).sha
     tokenizer = model.tokenizer or model.location
     tokenizer_revision = (
-        model.effective_tokenizer_revision or model.identity or tokenizer
+        model.effective_tokenizer_revision
+        or canonical_sha256({"tokenizer": tokenizer, "model_identity": model.identity})
         if "://" in tokenizer or Path(tokenizer).is_dir()
         else api.model_info(tokenizer, revision=model.effective_tokenizer_revision).sha
     )
@@ -114,6 +117,7 @@ def settings_for(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
+    task_evidence: TaskEvidence,
 ) -> CuratedSettings:
     """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``."""
     if model.effective_tokenizer_revision is None:
@@ -139,6 +143,7 @@ def settings_for(
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
+        task_evidence=task_evidence,
     )
 
 
@@ -153,7 +158,7 @@ def record_ref_for(
         + canonical_sha256(
             {
                 "selection": selection.model_dump(mode="json"),
-                "settings": settings.model_dump(mode="json", exclude={"concurrency"}),
+                "settings": scoring_settings(settings.model_dump(mode="json")),
             }
         ),
         curated=CuratedRef(

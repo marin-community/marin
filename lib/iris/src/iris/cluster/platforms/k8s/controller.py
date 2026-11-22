@@ -934,11 +934,11 @@ class K8sControllerProvider:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
         Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
-        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
-        scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
-        (best-effort) the IngressClass. All of these are
-        provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
-        nothing. Raises
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped scale group,
+        the configured sandbox RuntimeClass, the Kueue ClusterQueue and its
+        referenced ResourceFlavors, and (best-effort) the IngressClass.
+        Iris-owned resources are provisioned by `infra/pulumi`; the sandbox
+        RuntimeClass is CoreWeave's. This method creates nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -962,6 +962,10 @@ class K8sControllerProvider:
             missing.append(f"Role/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
         if self._kubectl.get_json(K8sResource.ROLE_BINDINGS, TASK_SECRET_ROLE_NAME) is None:
             missing.append(f"RoleBinding/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
+
+        runtime_class = config.kubernetes_provider.sandbox_runtime_class
+        if self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None:
+            missing.append(f"RuntimeClass/{runtime_class} (provided by CoreWeave, not by pulumi up)")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():

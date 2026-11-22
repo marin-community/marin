@@ -13,6 +13,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from evalrecords.lm_eval_samples import (
+    evalchemy_result_committed,
+    export_lm_eval_samples,
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+    run_artifacts,
+    sample_from_lm_eval,
+    samples_from_lm_eval,
+    summarize_native_eval_samples,
+    task_coverage,
+)
+from evalrecords.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
 from finestore.admin import set_table_metadata
 from finestore.eval import (
     Choice,
@@ -29,18 +41,6 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.lm_eval_samples import (
-    evalchemy_result_committed,
-    export_lm_eval_samples,
-    preserved_sample_sources,
-    rebuild_lm_eval_samples,
-    run_artifacts,
-    sample_from_lm_eval,
-    samples_from_lm_eval,
-    summarize_native_eval_samples,
-    task_coverage,
-)
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import (
@@ -1355,7 +1355,8 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     assert result.exit_code == 0, result.output
     assert archive_sample_count(results) == 1
     assert legacy_file.exists()
-    summary = json.loads(result.output.splitlines()[-1])
+    # Log records go to stderr, which CliRunner interleaves into `output`; the summary is the last stdout line.
+    summary = json.loads(result.stdout.splitlines()[-1])
     assert summary["migrated_runs"] == 1
     assert summary["skipped_runs"] == 1
 

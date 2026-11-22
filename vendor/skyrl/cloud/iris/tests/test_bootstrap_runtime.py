@@ -144,6 +144,7 @@ def _run_bootstrap(
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
 
 
@@ -180,6 +181,26 @@ def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_pat
     result = _run_bootstrap(environment, process_environment, "megatron-export")
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("publisher_installed", [False, True])
+def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path, publisher_installed: bool) -> None:
+    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    shutil.rmtree(site_packages / "nvidia")
+    shutil.rmtree(site_packages / "flash_attn")
+    (site_packages / "flash_attn_interface.py").unlink()
+    if publisher_installed:
+        _write_module(site_packages, "skyrl_train/hf_publisher.py", "def publish_verified_hf_export(*args): pass\n")
+
+    result = _run_bootstrap(environment, process_environment, "hub-publish")
+
+    if publisher_installed:
+        assert result.returncode == 0, result.stderr
+        assert not (environment / "lib/libcudart.so").exists()
+    else:
+        assert result.returncode != 0
+        assert "skyrl_train.hf_publisher" in result.stderr
 
 
 def test_bootstrap_uses_system_python_when_managed_pin_is_unresolvable(tmp_path: Path) -> None:
@@ -247,3 +268,34 @@ def test_bootstrap_rejects_incomplete_agentic_debug_runtime(
 
     assert result.returncode != 0
     assert expected_error in result.stderr
+
+
+def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
+    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    barrier = tmp_path / "imports-ready"
+    os.mkfifo(barrier)
+    transformer_engine = site_packages / "transformer_engine/common/__init__.py"
+    transformer_engine.write_text(
+        transformer_engine.read_text()
+        + "import select\n"
+        + f"with open(os.open({str(barrier)!r}, os.O_RDONLY | os.O_NONBLOCK), 'rb', buffering=0) as gate:\n"
+        + "    assert select.select([gate], [], [], 8)[0], 'concurrent import never started'\n"
+        + "    assert gate.read(1) == b'r'\n"
+        + "raise RuntimeError('megatron import failed')\n"
+    )
+    for module in ("flash_attn_interface.py", "flash_attn/cute/interface.py"):
+        _write_module(
+            site_packages,
+            module,
+            f"with open({str(barrier)!r}, 'wb', buffering=0) as gate:\n    gate.write(b'r')\n"
+            + "raise RuntimeError('flash-attention import failed')\n",
+        )
+    descriptor = os.open(barrier, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        result = _run_bootstrap(environment, process_environment, "megatron")
+    finally:
+        os.close(descriptor)
+    assert result.returncode != 0, result.stderr
+    assert "flash-attention import failed" in result.stderr
+    assert "megatron import failed" in result.stderr

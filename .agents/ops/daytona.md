@@ -18,7 +18,9 @@ set the callback's `daytona_api_key_env: DAYTONA_EVAL_API_KEY` and
 forward it through both the coordinator and task launcher. Do not globally
 replace the RL credential: training containers remain in the RL account.
 `DaytonaValidationError: declarative builds are not allowed` is an account/build
-permission failure, not a model failure or a zero reward.
+permission failure, not a model failure or a zero reward. Inline validation accepts
+`image_build: snapshot` and `image_build: declarative`. Select declarative mode for
+per-sandbox image builds in the eval account.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
@@ -69,6 +71,23 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Pi HTTP idle timeout
+
+Pi's HTTP idle timeout is separate from Harbor task and agent deadlines and
+provider execution deadlines. For a prepared policy that already selects Pi,
+pass the optional `http_idle_timeout` agent kwarg in seconds:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  harbor run --config prepared-policy.yaml \
+  --agent-kwarg http_idle_timeout=360
+```
+
+Harbor writes Pi's existing `httpIdleTimeoutMs` setting in milliseconds and
+preserves other settings, including compaction. Omit the kwarg to keep the
+image's setting; the pinned Pi 0.87.0 defaults to five minutes. This override
+does not extend Harbor or provider execution deadlines.
+
 ## Snapshot preflight and reclamation
 
 Shellbox identifies snapshots for all launchers. One snapshot
@@ -101,6 +120,39 @@ overrides `DAYTONA_API_URL`.
 Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
 neither is available.
+
+`shellbox-daytona-usage` reads the account's live quota, current usage and
+remaining capacity. It lists the account's sandboxes (paginated) and reports
+the usage overview with sandbox counts by state. The `/organizations` endpoint
+rejects API-key credentials with 401, so the command resolves the organization
+ID from the inventory; when the org has no sandboxes, it reads snapshots and
+then volumes instead:
+
+```bash
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
+  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8
+```
+
+`--all` reads the three known accounts in one sweep (eval =
+`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`;
+data = `DAYTONA_DATA_API_KEY`). `DAYTONA_API_KEY` is never an account
+selector here: the SDK treats it as an ambient variable, and some launchers
+load the RL key into it. `--json` emits the
+machine-readable report, including per-region rows with the provider's
+per-sandbox maxima.
+
+Size concurrency from the remaining capacity. The `max concurrency` line sizes
+against the quota row for the launch's target region and sandbox class
+(`--target`, `--sandbox-class`, default class `container`), because the
+provider enforces each row's quota separately; the summed totals above it are
+informational. The line applies the headroom (default 20%, `--headroom`) to
+that row's remaining CPU, memory and disk capacity, divides by the per-sandbox
+request from `--cpu`, `--memory-gib` and `--disk-gib`, and reports the
+minimum. The sandbox state counts show what is live. The reading moves as
+lanes start and stop, so re-read before large submissions. A
+per-sandbox request above the row's `max_cpu_per_sandbox`,
+`max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox` fails at creation;
+the command prints a warning when the profile exceeds one.
 
 1. Inventory snapshots in the intended account, including every result page:
 
@@ -244,6 +296,11 @@ reaping. [Harbor PR #109](https://github.com/marin-community/harbor/pull/109)
 added a bounded, instance-label-scoped orphan sweep on
 that cancellation path. Check the installed revision rather than assuming that
 finalized trials imply successful teardown. See [the incident and fix](https://marina.oa.dev/echo/wiki/320).
+
+Delete only sandboxes that your own run created. Use the exact sandbox IDs from
+your own logs. Do not select sandboxes by name pattern, label, state, age or an
+account-wide list. Do not convert a local time window to UTC by hand. If you
+cannot get the IDs from your own logs, do not delete. Report the candidates.
 
 Sandbox-not-found errors during queued work can indicate an overly aggressive
 idle-reap policy. Uniform setup failures point toward image, dependency, account,

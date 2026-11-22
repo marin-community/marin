@@ -45,7 +45,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.training.training import resolve_checkpointer_output_path
+from marin.training.levanter import resolve_checkpointer_output_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
@@ -207,6 +207,12 @@ class GrugModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> GrugMoeSFTConfig:
+        if spec.xla_flags:
+            raise ValueError("GrugModel does not accept SFTSpec.xla_flags")
+        if spec.per_device_parallelism != -1:
+            raise ValueError("GrugModel takes per_device_parallelism from the model source")
+        if spec.timeout is not None:
+            raise ValueError("GrugModel does not accept SFTSpec.timeout")
         if isinstance(self.init_from, ArtifactStep):
             # A chained Grug stage: init from the prior stage's saved checkpoints.
             init_from_path = prefix_join(ctx.artifact_path(self.init_from), "checkpoints")

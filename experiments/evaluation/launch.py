@@ -20,6 +20,21 @@ from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
 
+from evalrecords.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
+from evalrecords.records import (
+    CW_RECORDS_PREFIX,
+    DEFAULT_RECORDS_PREFIX,
+    EvalRef,
+    EvaluationSelection,
+    ModelConfigRef,
+    ModelRef,
+    PromptFormat,
+    RLAttemptRef,
+    RunStatus,
+    TaskEvidence,
+    list_records,
+    scoring_settings,
+)
 from fray.current_client import current_client
 from fray.types import ResourceConfig
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
@@ -30,7 +45,6 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
@@ -40,18 +54,6 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
-    CW_RECORDS_PREFIX,
-    DEFAULT_RECORDS_PREFIX,
-    EvalRef,
-    EvaluationSelection,
-    ModelConfigRef,
-    ModelRef,
-    PromptFormat,
-    RunStatus,
-    list_records,
-    scoring_settings,
-)
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,
@@ -166,6 +168,7 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -174,6 +177,7 @@ class LaunchSpec:
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
+    rl_attempt: RLAttemptRef | None = None
 
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
@@ -267,6 +271,7 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
+    task_evidence: TaskEvidence,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
@@ -287,7 +292,7 @@ def _resolve_definitions(
             protocol = resolve_selection(
                 definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
             )
-            settings = settings_for(definition, model, limit, seed, default_seed)
+            settings = settings_for(definition, model, limit, seed, default_seed, task_evidence)
             resolved.append(
                 (
                     name,
@@ -385,6 +390,8 @@ def build_evaluation_batch(
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
+    if spec.task_evidence is not TaskEvidence.EMBEDDED and not has_curated_definitions:
+        raise ValueError("--task-evidence applies only to curated evaluations")
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
             f"{spec.version} requires its historical Evalchemy checkout; curated runs need a new cohort label"
@@ -411,6 +418,7 @@ def build_evaluation_batch(
         spec.limit,
         spec.seed,
         DEFAULT_RUN_SEED if seeded else None,
+        spec.task_evidence,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
     )
@@ -536,6 +544,7 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_attempt=spec.rl_attempt,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
@@ -548,6 +557,7 @@ def build_evaluation_batch(
         max_concurrent=spec.max_concurrent,
         instances=spec.instances,
         judge=judge,
+        prepared_judges=(policy_judge,) if policy_judge is not None else (),
         secret_env=secret_env,
         egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,
