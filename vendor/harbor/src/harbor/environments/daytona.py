@@ -41,6 +41,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
+    DaytonaNetworkMode,
 )
 from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from shellbox.backends.daytona.snapshot import (
@@ -122,6 +123,7 @@ class DaytonaEnvironment(BaseEnvironment):
         policy = None
         if network_policy is not None:
             policy = DaytonaNetworkPolicy.from_config(network_policy)
+        self._network_policy = policy
         if client_factory is None:
             capabilities: HostCapabilities = kwargs.get(
                 "host_capabilities", HostCapabilities()
@@ -217,6 +219,31 @@ class DaytonaEnvironment(BaseEnvironment):
                 "Shellbox snapshots are immutable; change the prepared image or build inputs"
             )
         spec = self._machine_spec()
+        policy = None
+        if (self.environment_dir.parent / "source-runtime.json").is_file():
+            # Native Harbor alone does not require the optional TaskCompendium extra.
+            from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, read_source_runtime
+
+            source_runtime = read_source_runtime(self.environment_dir.parent)
+            assert source_runtime is not None
+            actor = source_runtime.network("task_machine")
+            verifier = source_runtime.network("verifier_machine")
+            if any(declared is not None and declared != spec.network for declared in (actor, verifier)):
+                raise UnsupportedMachineSpec("Native shared Daytona network differs from the source runtime")
+            if self._network_policy is not None:
+                expected_mode = (
+                    DaytonaNetworkMode.BLOCK_ALL if spec.network is NetworkPolicy.DENY else DaytonaNetworkMode.UNRESTRICTED
+                )
+                if self._network_policy.mode is not expected_mode:
+                    raise UnsupportedMachineSpec("Daytona network override differs from the source runtime")
+            policy = TaskNetworkPolicyReceipt(
+                source_runtime_sha256=source_runtime.runtime_sha256,
+                actor_required=True,
+                actor_declared=actor,
+                verifier_declared=verifier,
+                actor_effective=spec.network,
+                verifier_effective=spec.network,
+            )
         judge, candidate = task_model_relays(
             model_endpoint=self.model_endpoint,
             model_name=self.model_name,
@@ -232,6 +259,11 @@ class DaytonaEnvironment(BaseEnvironment):
             asyncio.create_task(self.factory.create(spec))
         )
         try:
+            if policy is not None:
+                await asyncio.to_thread(
+                    (self.trial_paths.trial_dir / "network-policy.json").write_text,
+                    policy.model_dump_json(indent=2) + "\n",
+                )
             await start_model_relays(
                 self.machine,
                 self._relay,

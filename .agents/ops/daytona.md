@@ -88,6 +88,15 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Native Harbor network evidence
+
+For a native shared-machine task with `source-runtime.json`, Daytona records
+`network-policy.json` beside the trial result after the sandbox is acquired.
+The receipt binds the original runtime digest to the network policy passed to
+Shellbox for the shared actor/verifier machine. A conflicting declared policy
+fails before creation. Preserve this file in control archives; a historical
+archive without it does not prove its declared network policy was applied.
+
 ## Sandbox ownership evidence
 
 For a single-trial subprocess started by your campaign, preserve its trial

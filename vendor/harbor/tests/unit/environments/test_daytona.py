@@ -60,6 +60,8 @@ import harbor.environments.factory as environment_factory
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
 from tests.unit.environments.transport import ChrootProcessMachine, ProcessMachine, available_port
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
+from taskcompendium.identity import canonical_sha256
 
 
 @pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="Real Linux chroot needs root")
@@ -925,7 +927,11 @@ async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_ver
     assert json.loads((exit_code.parent / "resource-usage.json").read_text())["oom_kills"] == 0
 
 
-async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(tmp_path):
+@pytest.mark.parametrize(
+    "allow_internet, declared, override",
+    [(True, "allow", None), (False, "deny", None), (False, "allow", None), (True, "allow", "block_all")],
+)
+async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(tmp_path, allow_internet, declared, override):
     class Provider:
         def __init__(self):
             self.id = "22222222-2222-4222-8222-222222222222"
@@ -958,22 +964,41 @@ async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(
             pass
 
     provider = Provider()
-    dockerfile = tmp_path / "Dockerfile"
+    task = tmp_path / "task"
+    environment_dir = task / "environment"
+    environment_dir.mkdir(parents=True)
+    runtime = {"task_machine": {"network": declared}, "verifier_machine": {"network": declared}}
+    binding = TaskSpecRuntimeBinding(task_sha256="a" * 64, runtime_sha256=canonical_sha256(runtime), runtime=runtime)
+    (task / "source-runtime.json").write_text(binding.model_dump_json())
+    paths = TrialPaths(tmp_path / "trial")
+    paths.mkdir()
+    dockerfile = environment_dir / "Dockerfile"
     dockerfile.write_text("FROM python:3.12-slim\nWORKDIR /testbed\n")
     environment = EnvironmentFactory.create_environment(
         type=EnvironmentType.DAYTONA,
-        environment_dir=tmp_path,
+        environment_dir=environment_dir,
         environment_name="eval-task",
         session_id="eval-trial",
-        trial_paths=TrialPaths(tmp_path / "trial"),
-        task_env_config=EnvironmentConfig(cpus=2, memory_mb=4096, storage_mb=10240),
+        trial_paths=paths,
+        task_env_config=EnvironmentConfig(cpus=2, memory_mb=4096, storage_mb=10240, allow_internet=allow_internet),
         provisioning="declarative",
+        network_policy={"mode": override} if override else None,
         client_factory=lambda: provider,
     )
     async with asyncio.TaskGroup() as service_tasks:
+        if allow_internet != (declared == "allow") or override is not None:
+            with pytest.raises(UnsupportedMachineSpec, match="network.*differs"):
+                await environment.start(False, service_tasks=service_tasks)
+            assert provider.created is None
+            assert not (paths.trial_dir / "network-policy.json").exists()
+            return
         await environment.start(False, service_tasks=service_tasks)
         assert isinstance(provider.created, CreateSandboxFromImageParams)
         assert provider.created.image.dockerfile() == dockerfile.read_text()
         assert provider.created.resources.cpu == 2
+        assert provider.created.network_block_all == (not allow_internet)
+        observation = TaskNetworkPolicyReceipt.model_validate_json((paths.trial_dir / "network-policy.json").read_text())
+        assert network_policy_qualified(binding, observation)
+        assert observation.actor_effective == observation.verifier_effective == NetworkPolicy(declared)
         await environment.stop(True)
     assert provider.deleted
