@@ -28,10 +28,8 @@ from scripts.ci.package_release import (
     python_compatible_version,
     reconcile_published_artifacts,
     release_plan,
-    requirement_extra,
     requirement_paths_for_packages,
     update_native_requirement,
-    validate_marker_only_change,
     validate_targeted_lock_change,
 )
 from scripts.python_libs_package import _rewrite_sibling_pins
@@ -282,20 +280,6 @@ def test_update_native_requirement_never_downgrades_floor() -> None:
     assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
 
 
-def test_requirement_extra_names_the_section_that_declares_the_floor() -> None:
-    pyproject = """\
-[project]
-name = "marin-iris"
-dependencies = ["marin-iris-native>=0.1.15"]
-
-[project.optional-dependencies]
-controller = ["kubernetes>=31.0.0", "marin_finelog_server>=0.2.67"]
-"""
-
-    assert requirement_extra(pyproject, "marin-iris-native") is None
-    assert requirement_extra(pyproject, "marin-finelog-server") == "controller"
-
-
 def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
     pyproject = Path("lib/shellbox/pyproject.toml").read_text()
     released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
@@ -445,7 +429,7 @@ source = { registry = "https://pypi.org/simple" }
         )
 
 
-def test_validate_marker_only_change_accepts_respelled_markers_only() -> None:
+def test_validate_targeted_lock_change_accepts_respelled_markers() -> None:
     # uv 0.13.9 factors shared terms out of the markers that uv 0.13.8 and earlier wrote.
     expanded = (
         "(python_full_version < '3.13' and sys_platform == 'linux') or "
@@ -454,20 +438,30 @@ def test_validate_marker_only_change_accepts_respelled_markers_only() -> None:
     factored = "python_full_version < '3.13' and (sys_platform == 'darwin' or sys_platform == 'linux')"
     lock = """\
 version = 1
-revision = {revision}
+revision = 3
 resolution-markers = ["{marker}"]
 
 [[package]]
 name = "jax"
-version = "{version}"
+version = "{jax}"
 source = {{ registry = "https://pypi.org/simple" }}
-dependencies = [{{ name = "jaxlib", marker = "{marker}" }}]
-"""
-    before = lock.format(revision=3, marker=expanded, version="0.8.0")
+dependencies = [{{ name = "marin-iris-native", marker = "{marker}" }}]
 
-    validate_marker_only_change(before, lock.format(revision=5, marker=factored, version="0.8.0"))
-    with pytest.raises(ValueError, match="beyond environment markers"):
-        validate_marker_only_change(before, lock.format(revision=5, marker=factored, version="0.8.1"))
+[[package]]
+name = "marin-iris-native"
+version = "{native}"
+source = {{ registry = "https://pypi.org/simple" }}
+"""
+    before = lock.format(marker=expanded, jax="0.8.0", native="0.1.3")
+    target = "0.1.4.dev30194118926"
+
+    validate_targeted_lock_change(
+        before, lock.format(marker=factored, jax="0.8.0", native=target), "marin-iris-native", target
+    )
+    with pytest.raises(ValueError, match="jax"):
+        validate_targeted_lock_change(
+            before, lock.format(marker=factored, jax="0.8.1", native=target), "marin-iris-native", target
+        )
 
 
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:
