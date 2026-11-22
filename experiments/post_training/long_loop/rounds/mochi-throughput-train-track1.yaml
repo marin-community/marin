@@ -20,7 +20,7 @@ rl:
     colocate_all: false
     policy_num_nodes: 12
     policy_num_gpus_per_node: 4
-    num_inference_engines: 1
+    num_inference_engines: 5
     inference_engine_tensor_parallel_size: 1
     inference_engine_pipeline_parallel_size: 1
     inference_engine_data_parallel_size: 16
@@ -181,7 +181,7 @@ rl:
       enable_chunked_prefill: true
       max_num_batched_tokens: 8192
       enforce_eager: false
-      gpu_memory_utilization: 0.85
+      gpu_memory_utilization: 0.9
       max_num_seqs: 64
       enable_http_endpoint: false
       error_handling:
@@ -247,7 +247,7 @@ rl:
         required: true
     environment:
       task_sessions:
-        max_verifier_workers: 64
+        max_verifier_workers: 256
         nemotron_ultra:
           genrm:
             max_concurrent_comparisons: 64
@@ -271,7 +271,7 @@ rl:
     trajectory_runner:
       max_concurrent_tasks: 1024
       rollout_workers:
-        num_workers: 32
+        num_workers: 16
         executor_threads: 256
         progress_timeout_seconds: 43200
         cpus_per_worker: 2
