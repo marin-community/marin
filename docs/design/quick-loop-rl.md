@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 4:00 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 4:13 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.19` applied both updates, restored step 1 exactly on four fresh learners, and verified all three policy versions on all eight receivers. It generated under both updated policies, committed step 2 and finished the final panel. The job failed in checkpoint cleanup. The cleanup-only retry `2026.11.20.20` is running. | Require a clean terminal result with the same update, restore, byte, generation, and checkpoint checks before the matched arms. |
+| 40-H100 learner smoke | Run `2026.11.20.19` applied both updates, restored step 1 exactly on four fresh learners, and verified all three policy versions on all eight receivers. It generated under both updated policies, committed step 2 and finished the final panel. The job failed in checkpoint cleanup. The cleanup-only retry `2026.11.20.20` verified version 0 on all eight receivers. | Require a clean terminal result with the same update, restore, byte, generation, and checkpoint checks before the matched arms. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -579,7 +579,10 @@ Levanter actor handles, retained step 2, and pruned the older fixture
 checkpoint. The native terminal-manifest test also passed. The live
 retry's launch matches the previous workload after normalizing run
 identities. Iris placed it on the same five H100 hosts with fresh
-checkpoint roots. The matched arms wait for the terminal result.
+checkpoint roots. It staged the full publication on four learner hosts
+and released version 0 at 12:13:18 UTC after all eight receivers matched
+the installed bytes. Initial publication took 200.626 seconds. The
+matched arms wait for the terminal result.
 [Checkpoint cleanup retry][iris-smoke-terminal-cleanup]
 
 #### Read only the HF weight ranges a learner host needs
@@ -627,6 +630,15 @@ loaded weights against the direct HF initializer. The native TensorStore
 reader loads addressable slices and can elect one reader per replicated
 shard. Snowball supports model-only restore with fresh Adam state.
 [Converter][hf-to-native-converter] · [Native shard reader][native-shard-reader] · [Model-only restore][model-only-restore]
+
+The current fresh-process restore first initializes from HF and then
+loads the native optimizer checkpoint. A two-rank CPU probe constructed
+the abstract trainer state from architecture metadata, assigned Adam's
+pinned-host layout, and restored directly into it. With the HF weight
+file absent, both fresh processes reproduced the model, Adam, RNG,
+step and averaging fingerprints and matched the next optimizer update.
+The original startup failed without that weight file. Measure the
+restart savings on H100 before using this path for the inventory job.
 
 The prior handoffs preserve the `2026.11.20.9` and `2026.11.20.8` source,
 along with the held serving comparison. The restored serving plans reproduce
@@ -1316,9 +1328,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   raw policy logprobs matched the sampled tokens exactly.
   The first request after a live policy install reused zero prefix tokens.
   Its binary replay frame matched a cold subprocess's frame byte for byte.
-  A repeat under the same policy reused 32 tokens. The 67B fixture still
-  needs two consecutive typed snapshots from a real learner update and the
-  content hashes of the pinned tokenizer.
+  A repeat under the same policy reused 32 tokens. The 67B fixture now
+  pins the hashes of the tokenizer assets staged by the H100 run. It still
+  needs two consecutive typed snapshots from a real learner update and
+  a local copy of those tokenizer assets.
 
   A CPU bridge restored the model subtree of two checkpoints written by
   the frozen learner. It reproduced the original FP32 master fingerprints,
