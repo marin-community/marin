@@ -861,6 +861,8 @@ class LmDataConfig:
     target_budget: int | None = None
     experiment_budget: int | None = None
     mixture_block_size: int = 2048
+    mixture_length: int | None = None
+    """Bound a capacity-derived epoch, allowing a complete final partial mixture block."""
     max_train_batches: dict[str, int] | None = None
     num_validation_sequences: dict[str, int] | None = None
     shuffle_before_trainval_split: bool = True
@@ -1094,6 +1096,7 @@ class LmDataConfig:
             stop_strategy=self.stop_strategy,
             key=mix_key,
             block_size=self.mixture_block_size,
+            sequence_count=self.mixture_length,
             start_offsets=start_offsets,
             first_index=(
                 0

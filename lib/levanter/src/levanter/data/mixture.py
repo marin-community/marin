@@ -4,7 +4,6 @@
 import asyncio
 import functools
 import logging
-import warnings
 from typing import List, Mapping, Sequence, Tuple, TypeVar
 
 import jax
@@ -31,6 +30,39 @@ class StopStrategy(metaclass=StringHolderEnum):
     RESTART_STRATEGY = "restart"
 
 
+def allocate_mixture_counts(
+    weights: Mapping[str, float], block_size: int, *, minimum_count: int = 1
+) -> dict[str, int]:
+    """Allocate integer slots without dropping a positive-weight source.
+
+    Integer quotas remain exact. Fractional quotas use largest remainders with
+    the requested lower bound for each positive source; impossible blocks fail.
+    """
+    names = list(weights)
+    if block_size == 0 and minimum_count == 0:
+        return {name: 0 for name in names}
+    values = np.asarray([weights[name] for name in names], dtype=np.float64)
+    if np.any(~np.isfinite(values)) or np.any(values < 0) or values.sum() <= 0:
+        raise ValueError("Mixture weights must be finite, nonnegative and have a positive total")
+    active = values > 0
+    if block_size < int(active.sum()) * minimum_count:
+        raise ValueError(f"{block_size} mixture slots cannot cover {int(active.sum())} positive-weight sources")
+    expected = values / values.sum() * block_size
+    nearest = np.rint(expected)
+    expected = np.where(np.isclose(expected, nearest, rtol=0, atol=_INTEGER_ALLOCATION_TOLERANCE), nearest, expected)
+    counts = np.where(active, np.maximum(minimum_count, expected.astype(np.int64)), 0)
+    remaining = block_size - int(counts.sum())
+    if remaining > 0:
+        order = sorted(np.flatnonzero(active), key=lambda i: (-(expected[i] - counts[i]), names[i]))
+        for index in order[:remaining]:
+            counts[index] += 1
+    while counts.sum() > block_size:
+        candidates = np.flatnonzero(counts > minimum_count)
+        index = min(candidates, key=lambda i: (-(counts[i] - expected[i]), names[i]))
+        counts[index] -= 1
+    return {name: int(counts[i]) for i, name in enumerate(names)}
+
+
 class MixtureDataset(AsyncDataset[T]):
     """
     MixtureDataset supports loading data from multiple datasets. It takes a list of datasets and yields from them
@@ -54,6 +86,8 @@ class MixtureDataset(AsyncDataset[T]):
         first_index: the global index that reads the mixture's first sequence. Earlier indices raise. Unlike
             ``start_offsets``, this moves the whole mixture, so the sequence at ``first_index + i`` depends only on
             ``i``. Requires RESTART_STRATEGY.
+        sequence_count: optional finite epoch length, including a final partial block. Requires
+            RESTART_STRATEGY. The bound counts sequences from first_index.
     """
 
     def __init__(
@@ -67,10 +101,14 @@ class MixtureDataset(AsyncDataset[T]):
         stop_strategy: str = StopStrategy.RESTART_STRATEGY,
         start_offsets: Mapping[str, int] | None = None,
         first_index: int = 0,
+        sequence_count: int | None = None,
     ):
         if first_index and stop_strategy != StopStrategy.RESTART_STRATEGY:
             raise ValueError(f"first_index requires the restart strategy, got {stop_strategy}")
         self.first_index = first_index
+        if sequence_count is not None and (sequence_count <= 0 or stop_strategy != StopStrategy.RESTART_STRATEGY):
+            raise ValueError("A bounded mixture requires a positive sequence_count and restart strategy")
+        self.sequence_count = sequence_count
         if isinstance(weights, dict):
             weight_stages = [(0, weights)]
         else:
@@ -138,6 +176,17 @@ class MixtureDataset(AsyncDataset[T]):
         self._stage_start_blocks = np.array(
             [start // self.block_size for start, _ in self.weight_stages], dtype=np.int64
         )
+        self._tail_ids = None
+        if sequence_count is not None and sequence_count % block_size:
+            tail_block = sequence_count // block_size
+            stage = self._get_stage_for_block(tail_block)
+            tail = allocate_mixture_counts(
+                {name: self.weight_stages[stage][1].get(name, 0) for name in self.dataset_index},
+                sequence_count % block_size,
+                minimum_count=0,
+            )
+            counts = np.asarray([tail[name] for name in self.dataset_index], dtype=np.int32)
+            self._tail_ids = self._compute_unpermuted_ids(counts)
         self._dataset_lengths: list[int | None] | None = None
         self._is_finite_cache: bool | None = None
         self._cached_finite_length: int | None = None
@@ -164,29 +213,8 @@ class MixtureDataset(AsyncDataset[T]):
         return counts_per_block_per_stage, counts_after_stage, unpermuted_ids_per_stage
 
     def _compute_expected_counts_per_block(self, weights: dict[str, float], block_size: int):
-        expected = np.array([weights.get(name, 0) * block_size for name in self.dataset_index])
-        # Normalizing integer allocations can put an exact count just below its
-        # integer (e.g. 1001 / 64000 * 64000). Preserve those allocations before
-        # truncating genuinely fractional counts and assigning the remainder.
-        nearest = np.rint(expected)
-        expected = np.where(
-            np.isclose(expected, nearest, rtol=0, atol=_INTEGER_ALLOCATION_TOLERANCE), nearest, expected
-        )
-        _expected_values_per_block = expected.astype(np.int32)
-
-        # handle remainder by adding to the largest dataset
-        largest_dataset = np.argmax(_expected_values_per_block)
-        _expected_values_per_block[largest_dataset] += block_size - _expected_values_per_block.sum()
-
-        # check if any dataset has 0 samples (and nonzero weight)
-        for i, dsname in enumerate(self.dataset_index):
-            if _expected_values_per_block[i] == 0 and weights.get(dsname, 0) > 0:
-                warnings.warn(
-                    f"Dataset {dsname} has 0 samples in the block, but weight of {weights[dsname]}."
-                    " Recommend increasing block size."
-                )
-
-        return _expected_values_per_block
+        counts = allocate_mixture_counts({name: weights.get(name, 0) for name in self.dataset_index}, block_size)
+        return np.asarray([counts[name] for name in self.dataset_index], dtype=np.int32)
 
     def _compute_unpermuted_ids(self, counts_per_block):
         unpermuted_ids = np.zeros(int(counts_per_block.sum()), dtype=np.int64)
@@ -214,6 +242,8 @@ class MixtureDataset(AsyncDataset[T]):
         return out_weights
 
     async def async_len(self) -> int:
+        if self.sequence_count is not None:
+            return self.first_index + self.sequence_count
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             raise ValueError("Length is infinite for restart strategy")
 
@@ -224,6 +254,8 @@ class MixtureDataset(AsyncDataset[T]):
         return finite_length
 
     def is_finite(self) -> bool:
+        if self.sequence_count is not None:
+            return True
         if self.stop_strategy == StopStrategy.RESTART_STRATEGY:
             return False
 
@@ -239,10 +271,17 @@ class MixtureDataset(AsyncDataset[T]):
     @functools.lru_cache(maxsize=32)
     def _get_block(self, index: int) -> np.ndarray:
         stage = self._get_stage_for_block(index)
+        ids = self._unpermuted_ids_per_stage[stage]
+        if (
+            self.sequence_count is not None
+            and self._tail_ids is not None
+            and index == self.sequence_count // self.block_size
+        ):
+            ids = self._tail_ids
         if not self.randomize_blocks:
-            return self._unpermuted_ids_per_stage[stage]
+            return ids
 
-        return np.array(_compute_block_assignment(self._unpermuted_ids_per_stage[stage], index, self.key))
+        return np.array(_compute_block_assignment(ids, index, self.key))
 
     def _index_into_dataset_for_id(self, id: int, block_id: int) -> tuple[int, int]:
         stage = self._get_stage_for_block(block_id)
@@ -279,6 +318,8 @@ class MixtureDataset(AsyncDataset[T]):
     def _relative_index(self, index: int) -> int:
         if index < self.first_index:
             raise ValueError(f"Mixture index {index} precedes the mixture's first index {self.first_index}")
+        if self.sequence_count is not None and index - self.first_index >= self.sequence_count:
+            raise IndexError(f"Mixture index {index} exceeds its {self.sequence_count} sequences")
         return index - self.first_index
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
