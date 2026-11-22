@@ -87,3 +87,19 @@ def test_manifest_instruction_cannot_replace_the_native_prompt():
     row = {**archive_row(), "instruction": "Changed manifest prompt"}
     with pytest.raises(ValueError, match="instruction differs"):
         decode_archive(row, CONTEXT)
+
+
+@pytest.mark.parametrize("ending", [b"\n", b"\r\n"])
+def test_manifest_without_final_newline_preserves_the_native_prompt(monkeypatch, ending):
+    native_prompt = PROMPT + ending
+    monkeypatch.setitem(FILES, "instruction.md", native_prompt)
+    row = {**archive_row(), "instruction": PROMPT.decode()}
+    decoded = decode_archive(row, CONTEXT)
+    task = sources()[0].config.convert(
+        RawRow("fixture", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), decoded),
+        CONTEXT,
+    )
+    assert isinstance(task, TaskSpec)
+    assert task.context.events[0].content.encode() == native_prompt
+    resources = (*task.resources.verifier, *task.resources.oracle)
+    assert {item.path: resource_bytes(item) for item in resources} == FILES

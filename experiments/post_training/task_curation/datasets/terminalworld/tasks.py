@@ -23,7 +23,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 DATASET = "terminalworld/TerminalWorld"
 REVISION = "364549435c0fc130eaf0ccfc047a8a698c72643c"
-VERSION = "2026.11.22.1"
+VERSION = "2026.11.22.2"
 MANIFEST = "data/full.jsonl.gz"
 MANIFEST_SHA256 = "380180fd4b2635776a69e929f4539f25df3399632f215dee3992bed1a3236e51"
 USE_RULING = Path(__file__).with_name("intended-use.json")
@@ -78,8 +78,10 @@ def decode_archive(row: dict, context: ConversionContext) -> dict:
                 entry.pax_headers["path"] = relative
             target.addfile(entry, source.extractfile(member) if member.isfile() else None)
     data = unpack_native({**row, "task_binary": normalized.getvalue()}, context)
-    if data["instruction"] != row["instruction"]:
-        raise ValueError("TerminalWorld native instruction differs from its manifest")
+    # The pinned manifest omits a final newline for some native instruction files.
+    # Compare metadata without replacing the archive's prompt or canary comments.
+    if data["instruction"].rstrip("\r\n") != row["instruction"].rstrip("\r\n"):
+        raise ValueError(f"TerminalWorld native instruction differs from its manifest: {row['task_id']}")
     return {**data, "archive_sha256": hashlib.sha256(row["task_binary"]).hexdigest()}
 
 
@@ -103,6 +105,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "The upstream config is full and its named split remains test. Verified (200) and sample (20) "
                     "are exact subsets and are not appended as separate training populations. Native prompts, "
                     "canary comments, task.toml budgets, environment, tests and original solutions remain unchanged. "
+                    "Manifest comparisons ignore only terminal CR/LF characters; native prompt bytes are retained. "
                     f"Use ruling: {USE_RULING.relative_to(Path(__file__).parents[5])}."
                 ),
             ),
