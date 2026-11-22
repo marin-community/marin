@@ -21,7 +21,6 @@ from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 _MIN_DOT_TILE = 16
-_MAX_DECODE_SPLITS = 16
 
 
 def gpu_paged_prefill(
@@ -162,6 +161,7 @@ def gpu_paged_attention(
     bounds: jax.Array,
     sm_scale: float,
     *,
+    max_splits: int,
     soft_cap: float | None = None,
     interpret: bool = False,
 ) -> jax.Array:
@@ -178,7 +178,7 @@ def gpu_paged_attention(
     if not interpret and jax.default_backend() != "gpu":
         raise ValueError("GPU paged attention requires a GPU")
     padded_groups = max(_MIN_DOT_TILE, pl.next_power_of_2(groups))
-    num_splits = min(_MAX_DECODE_SPLITS, pl.next_power_of_2(token_pages.shape[1]))
+    num_splits = min(max_splits, pl.next_power_of_2(token_pages.shape[1]))
     sm_scale = jnp.asarray(sm_scale, jnp.float32)
     out_shape = (
         jax.ShapeDtypeStruct((num_splits, tokens, heads, padded_groups, dim), jnp.float32),

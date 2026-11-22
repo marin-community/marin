@@ -103,7 +103,9 @@ def test_grug_gpu_split_decode_matches_reference_in_interpret_mode(window):
     pages = jnp.broadcast_to(jnp.maximum(args.page_indices, 0), (args.q.shape[0], args.page_indices.shape[1]))
     scale = 128**-0.5
     with jax.default_device(jax.devices("cpu")[0]):
-        actual = jax.jit(partial(gpu_paged_attention, interpret=True))(args.q, args.kv_pages, pages, bounds, scale)
+        actual = jax.jit(partial(gpu_paged_attention, max_splits=16, interpret=True))(
+            args.q, args.kv_pages, pages, bounds, scale
+        )
     expected = _dense_reference(args, window, None, scale)
     np.testing.assert_allclose(actual.astype(jnp.float32), expected.astype(np.float32), atol=1e-5, rtol=1e-5)
 

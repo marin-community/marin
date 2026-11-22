@@ -27,6 +27,8 @@ _FP32_QUERIES_PER_BLOCK = 128
 _FP32_KV_PAGES_PER_BLOCK = 8
 _V5P_VMEM_LIMIT_BYTES = 50_000 * 1024
 _GPU_PAGED_QUERY_LIMIT = 8
+_GPU_FULL_DECODE_SPLITS = 128
+_GPU_WINDOWED_DECODE_SPLITS = 16
 
 
 def ragged_paged_attention(
@@ -264,6 +266,7 @@ def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
             jnp.maximum(page_indices[metadata.sequence], 0),
             jnp.stack((lower, upper), axis=-1),
             sm_scale,
+            max_splits=_GPU_FULL_DECODE_SPLITS if sliding_window is None else _GPU_WINDOWED_DECODE_SPLITS,
             soft_cap=soft_cap,
         )
     if page_indices.shape[0] == 1 and bf16 and soft_cap is None and isinstance(sm_scale, (float, int)):
