@@ -29,12 +29,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from evalrecords.records import RLAttemptRef, read_record, record_path
+from evalrecords.records import EvaluationOverrides, RLAttemptRef, read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact, is_mutable_version
+from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
 
@@ -52,6 +53,17 @@ _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
 _INSTANCES_RUNTIME_ARG = "instances"
+
+
+def _override_fingerprint(overrides: EvaluationOverrides) -> dict[str, object]:
+    # Earlier evaluation artifacts used the fingerprint encoder's type-and-fields representation.
+    fields = vars(overrides).copy()
+    if overrides.max_attempts_per_trial is None:
+        del fields["max_attempts_per_trial"]
+    return {"__repr__": "evalrecords.records.EvaluationOverrides", "vars": fields}
+
+
+register_fingerprint(EvaluationOverrides, _override_fingerprint)
 
 
 @dataclass(frozen=True)
