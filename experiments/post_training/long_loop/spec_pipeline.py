@@ -41,6 +41,7 @@ class CompletedSft:
 
     trained: ArtifactStep
     handoff: ArtifactStep
+    model_relative_path: str = HANDOFF_DIR
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
@@ -322,7 +323,11 @@ def build_spec_graph(
             step=exported,
             tokenizer_uri=tokenizer["repo"],
             tokenizer_revision=tokenizer["revision"],
-            relative_path="" if hf_pin is not None else HANDOFF_DIR,
+            relative_path=(
+                completed_sft.model_relative_path
+                if completed_sft is not None
+                else "" if hf_pin is not None else HANDOFF_DIR
+            ),
         ),
         train_data=tuple(
             ArtifactDataSource(adopted["pools"], relative_path=f"{label}/train.parquet")

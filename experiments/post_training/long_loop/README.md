@@ -103,7 +103,9 @@ it replicated those parameters across nodes and made each local expert bank
 32 times larger per device than R1's sharding. Mesh qualification checks parameter shard shapes as well as
 token placement.
 
-Parameters and compute use BF16 after the approved pre-update OOM fallback.
+The completed production SFT uses FP32 parameters and BF16 compute. Optimizer
+updates preserve each stored parameter's dtype so updates do not change the
+compiled train-step input signature.
 The special-token multiplier remains `5.656854249492381`. Native Snowball
 recomputes each scanned layer under `jax.checkpoint` (`recompute_all`). The
 corrected hero-EP optimizer grouping (#11639) is retained: expert matrices use
@@ -141,12 +143,35 @@ be submitted. The launch hold also preserves the user's Exp4 evaluation review.
 uv run python -m experiments.post_training.long_loop.exp5 \
   --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
   --source-revision "$(git rev-parse HEAD)" \
-  --version 2026.11.20.97 \
+  --version 2026.11.21.113 --stage sft \
   --validation-output /tmp/long-loop-exp5-setup
 ```
 
-This command validates the complete graph through its archive stage, writes local
-receipts, and submits no jobs. The US-EAST-08A CPU data producer is
+This command validates the SFT graph, writes local receipts, and submits no jobs.
+After SFT finishes, continue through the same entrypoint with an explicit
+certification seal and a fresh RL version. Set `COMPLETION_SEAL_URI` to the
+published `seal.json` URI from the finalization certifier and
+`COMPLETION_SEAL_SHA256` to its reported SHA-256:
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp5 \
+  --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
+  --source-revision "$(git rev-parse HEAD)" \
+  --version 2026.11.22.114 --stage rl \
+  --completed-sft-record "$COMPLETION_SEAL_URI" \
+  --completed-sft-sha256 "$COMPLETION_SEAL_SHA256" \
+  --validation-output /tmp/long-loop-exp5-rl
+```
+
+The seal pins the native checkpoint, completion receipt and HF verification
+receipt. The graph adopts the trained SFT run and its HF handoff, resolving
+the existing `hf/step-N` export under the certified run root, where `N` is
+the sealed checkpoint step. It does not repeat SFT or copy its weights.
+Changed receipts or model metadata fail before launch. The full curriculum
+and OpenResearcher admission must also pass; a certificate does not release
+the data hold. Add `--run` only after the integrated plan is approved.
+
+The US-EAST-08A CPU data producer is
 `experiments.post_training.long_loop.exp5_data` at version `2026.11.20.1`.
 Its output prefix is `OUTPUT_PREFIX` in [the producer](exp5_data.py); its
 `long-loop-exp5/rl-pool-nonagentic/2026.11.20.1/manifest.json` pins the unchanged

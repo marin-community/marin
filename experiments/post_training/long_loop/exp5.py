@@ -47,8 +47,9 @@ from experiments.post_training.long_loop.round_runner import (
     round_plan,
     round_sft_spec,
 )
+from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.shared_sft import native_sft_step
-from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
+from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.exp5_curriculum import (
     TARGET_SHARES,
@@ -74,6 +75,61 @@ INITIAL_EVAL_FILES = (
 # This diagnostic subset remains unlaunchable while the research slot is pending.
 EXPECTED_ROUTE_QUOTAS = {"agentic": 13, "nonagentic": 51}
 """The curriculum-derived window quotas at the round's 64-group batch: 0.20 of 64 rounds to 13."""
+
+
+def certified_sft_inputs(pin: FilePin, *, name: str, version: str) -> CompletedSft:
+    """Adopt a certified final checkpoint and its existing HF export without training."""
+    seal = read_pin(pin, Path.cwd())
+    if seal["status"] != "COMPLETE":
+        raise ValueError("The SFT certification is not complete")
+    checkpoint = StoragePath(seal["native_checkpoint"])
+    root = checkpoint.parent.parent
+    step = seal["step"]
+    if (
+        seal["completed_updates"] != step + 1
+        or checkpoint != root / f"checkpoints/step-{step}"
+        or seal["hf_export"] != str(root / f"hf/step-{step}")
+        or (root.scheme == "s3" and "tmp" in root.segments)
+    ):
+        raise ValueError("The SFT certification identifies inconsistent or temporary outputs")
+    receipts = StoragePath(pin.path).parent
+    completion_pin = FilePin(seal["completion_receipt"], seal["completion_sha256"])
+    completion = read_pin(completion_pin, Path.cwd())
+    native_pin = FilePin(str(receipts / "native-checkpoint.json"), seal["native_receipt_sha256"])
+    native = read_pin(native_pin, Path.cwd())
+    hf_pin = FilePin(str(receipts / "hf-export.json"), seal["hf_receipt_sha256"])
+    hf = read_pin(hf_pin, Path.cwd())
+    if (
+        completion["checkpoint"] != str(checkpoint)
+        or completion["step"] != step
+        or completion["completed_updates"] != step + 1
+        or native["checkpoint"] != str(checkpoint)
+        or native["step"] != step
+        or native["is_temporary"]
+        or native["verdict"] != "full"
+        or hf["native_checkpoint"] != str(checkpoint)
+        or hf["source"] != seal["hf_export"]
+        or hf["step"] != step
+        or hf["verdict"] != "full_hash_and_index"
+    ):
+        raise ValueError("The native, HF and completion receipts do not certify the same SFT checkpoint")
+    files = {entry["path"]: entry for entry in hf["files"]}
+    read_pin(FilePin(str(StoragePath(hf["source"]) / "config.json"), files["config.json"]["sha256"]), Path.cwd())
+    return CompletedSft(
+        trained=ArtifactStep.adopt(
+            f"{name}/certified-sft",
+            version,
+            str(root),
+            config={"seal": asdict(pin), "completion": asdict(completion_pin), "native": asdict(native_pin)},
+        ),
+        handoff=ArtifactStep.adopt(
+            f"{name}/certified-sft-handoff",
+            version,
+            str(root),
+            config={"seal": asdict(pin), "hf": asdict(hf_pin)},
+        ),
+        model_relative_path=f"hf/step-{step}",
+    )
 
 
 def exp5_round_pools(resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurriculum]:
@@ -123,18 +179,33 @@ def exp5_round_pools(resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurricu
 @click.option("--round", "round_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--source-revision", required=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
-@click.option("--stage", type=click.Choice(["sft", "archive"]), default="archive", show_default=True)
+@click.option("--stage", type=click.Choice(["sft", "rl", "archive"]), default="archive", show_default=True)
+@click.option("--completed-sft-record", help="Pinned certification seal for an RL-only continuation.")
+@click.option("--completed-sft-sha256", help="SHA-256 of --completed-sft-record.")
 @rl_build_options
-def main(round_path: Path, source_revision: str, validation_output: Path, stage: str) -> ArtifactStep:
+def main(
+    round_path: Path,
+    source_revision: str,
+    validation_output: Path,
+    stage: str,
+    completed_sft_record: str | None,
+    completed_sft_sha256: str | None,
+) -> ArtifactStep:
     context = click.get_current_context()
-    if context.params["do_run"] and stage != "sft":
-        raise click.UsageError("Exp5 RL is on hold: OpenResearcher's 5% slot is not admitted; use --stage sft")
+    if stage == "sft" and (completed_sft_record or completed_sft_sha256):
+        raise click.UsageError("--completed-sft-record is for downstream stages, not SFT")
+    if stage != "sft" and (not completed_sft_record or not completed_sft_sha256):
+        raise click.UsageError("Downstream Exp5 requires --completed-sft-record and --completed-sft-sha256")
     configure_coreweave_s3()
     spec = load_round(round_path)
     if not isinstance(spec, RoundSpec) or spec.pools != "exp5-prepared":
         raise click.UsageError("Exp5 setup requires a training round with pools: exp5-prepared")
-    if context.params["default_version"] != spec.version:
+    version = context.params["default_version"]
+    if stage == "sft" and version != spec.version:
         raise click.UsageError("--version must equal the round's immutable version")
+    if stage != "sft" and version == spec.version:
+        raise click.UsageError("An RL continuation requires a fresh --version")
+    spec = replace(spec, version=version)
     workspace = Path(__file__).resolve().parents[3]
     if get_job_info() is None:
         require_clean_revision(workspace, source_revision)
@@ -214,6 +285,17 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
         )
     buffer["consumed_route_quotas"] = derived
     buffer["source_routes"] = dict(ROUTES)
+    completed = (
+        certified_sft_inputs(FilePin(completed_sft_record, completed_sft_sha256), name=spec.name, version=spec.version)
+        if completed_sft_record is not None and completed_sft_sha256 is not None
+        else None
+    )
+    if completed is not None:
+        resolved["continuation"] = {
+            "sft_completion": {"path": completed_sft_record, "sha256": completed_sft_sha256},
+            "model_relative_path": completed.model_relative_path,
+            "sft_replayed": False,
+        }
     require_archive_binds_final_sft_checkpoint(resolved)
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps({key: value for key, value in resolved.items() if key != "resolved_sha256"}, sort_keys=True).encode()
@@ -224,6 +306,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
         through=stage,
         data_artifacts=pools if stage != "sft" else None,
         curriculum=curriculum,
+        completed_sft=completed,
         sft_release=handle,
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, spec)),
     )
