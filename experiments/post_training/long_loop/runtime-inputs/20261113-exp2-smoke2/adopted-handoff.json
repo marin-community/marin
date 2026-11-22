@@ -1,0 +1,38 @@
+{
+  "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1",
+  "source_checkpoint": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/round1/sft/2026.11.09.12/checkpoints/step-746",
+  "files": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/.artifact.json",
+      "sha256": "f9ce567cd4f52d36981c4afda27820c0f688530fbc8b01eff00b472ec82a2fca"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/export-request.json",
+      "sha256": "8313d8eebe265297c124fe4d0b293d2eb6df1897e7e8314a96413edfc8000076"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/export-manifest.json",
+      "sha256": "6dc93d1db3b62de827d1dbf682ac62fd08261c45c14a282adcd5548363cf0bb5"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/config.json",
+      "sha256": "6b8e6b9af31c8637949bf1c7dcf58610b89f5d4732e33878dd2c3d6a1441f384"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/tokenizer.json",
+      "sha256": "6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/tokenizer_config.json",
+      "sha256": "dd3eb712bc4023da31bff868197aec661c79df35b59ee287aad4cfd17cdc9413"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/generation_config.json",
+      "sha256": "838158c033c183c9c7e254c03b289d2f86a3cfe1e0878cb9bbf3b6a0c1a18ea8"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/long-loop/round1/sft-handoff/2026.11.10.1/hf/model.safetensors.index.json",
+      "sha256": "6520ecbcc98b900bf971e0f5c713e1b33a6cab4fa70bc3099e03bb1a4c2a0923"
+    }
+  ]
+}

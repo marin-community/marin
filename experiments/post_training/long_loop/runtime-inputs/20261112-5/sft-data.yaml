@@ -1,0 +1,47 @@
+data:
+  tokenizer: s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18
+  vocab_size: null
+  cache_dir: cache/
+  cache_catalog: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24.2/cache_catalog.json
+  cache_options:
+    batch_size: 128
+  enforce_eos: true
+  auto_build_caches: false
+  chat_template: null
+  shuffle: true
+  permutation_type: feistel
+  block_cross_document_attention: true
+  stop_strategy: restart
+  target_budget: null
+  experiment_budget: null
+  mixture_block_size: 64000
+  max_train_batches: null
+  num_validation_sequences:
+    sft/source/nemotron_sft_v3/math_v3/train: 8
+    sft/source/nemotron_sft_v3/competitive_programming_v2/competitive_coding_python: 8
+    sft/source/nemotron_sft_v3/math_proofs_v1/lean: 8
+    sft/source/nemotron_sft_v3/finance_v1/train: 8
+    sft/source/nemotron_sft_v3/science_v2/vendor: 8
+    sft/source/agenttrove: 8
+    sft/source/nemotron_sft_v3/agentic_v2/interactive_agent: 8
+    sft/source/identity-data: 8
+    sft/source/nemotron_sft_v3/multilingual_v1/code_zh: 8
+    sft/source/nemotron_sft_v3/multilingual_v1/stem_ja: 8
+    sft/pooled: 8
+  shuffle_before_trainval_split: true
+  prior_context_phases: []
+files:
+- uri: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24.2/cache_catalog.json
+  sha256: 6071134b35409d7464474271344c947b8882cc1a83e6166ccf93ad8d88eeffa9
+provenance:
+  source: sft-pipe-repro production 20261027c
+  full_weight_schedule: true
+  release_source_composition: 10-05; reproduction replay substitutions retained
+  canonical_data_sha256: 98b86041b5645f52d81b170386b01890b593a0bf88378da89cb20e22a6f042be
+sections:
+  components:
+    path: sft-components.json
+    sha256: d372def486ced1418d1ad63bd9f50959f463430ecbcd83029d6db12dfe0ad493
+  train_weights:
+    path: sft-train_weights.json
+    sha256: e954bba2b54492ab3af6ff56a735e4dcaea53a6599f61c5480baae9a57d9bdcd

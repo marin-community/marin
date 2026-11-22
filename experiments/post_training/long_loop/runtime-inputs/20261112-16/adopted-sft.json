@@ -1,0 +1,15 @@
+{
+  "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/round1/sft/2026.11.09.12",
+  "version": "2026.11.09.12",
+  "step": 746,
+  "selected_sha256": "27b530bcffcf3cade7c78461470254a2acdca86751b79494ea8e8fb253a87e79",
+  "metadata_sha256": "a72f4819821eacc88bbf07b04c9eb8b2e86c51d9d64ccc827934d5edb0060e78",
+  "manifest_sha256": "a3c875b7f19237ad8422da1cc28fe9ab56a6f01a486459593509c45b246ea299",
+  "consumed_config_sha256": "e1537109e57abeaa2bb0dd5b45cc4c7ccf910c4fe53dc8390d6739b0fa91635b",
+  "lineage_uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/round1/evidence/20261110-completion/lineage.json",
+  "lineage_sha256": "41ed74397b8b1b227abed1df9c0de2213264846e0adc17a1b88463b07262cb35",
+  "payload_inventory_uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/round1/evidence/20261110-completion/payload-inventory.json",
+  "payload_inventory_sha256": "a0ee4eb1d3cbefc47cf792c069997d0d19f090b4acb758492977c38b00830181",
+  "source_revision": "9662fdba02896ffb03fd21066c1750b363e78cb6",
+  "source_job": "/benfeuer/long-loop-full-2026.11.09.12"
+}

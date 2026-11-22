@@ -1,0 +1,54 @@
+source_repository: https://github.com/marin-community/marin
+native_checkpoint_ttl: 14d
+hf_upload:
+  repo_prefix: open-athena/Snowball-LongLoop-Round1
+  local_directory: /tmp/long-loop-hf-archive
+  license_file: s3://marin-us-east-08a/marin/long-loop/archive-inputs/2026.11.09.10-hf1/LICENSE
+  workers: 8
+evaldash:
+  records_prefix: s3://marin-us-east-08a/marin/evals
+  run_prefix: long-loop-round1
+  user: benfeuer
+  model_name: Snowball long-loop selected checkpoint
+  eval_name: Micro210 supported paths (Tau3 excluded)
+  hardware:
+    platform: coreweave
+    accelerator: H100
+    region_or_cluster: cw-rno2a
+stage_files:
+  sft:
+  - {path: consumed-config.json, category: config}
+  - {path: selected.json, category: config}
+  rl:
+  - {path: resolved-launch.yaml, category: config}
+  - {path: terminal.json, category: config}
+  eval:
+  - {path: resolved-launch.yaml, category: config}
+  - {path: terminal.json, category: config}
+  eval_inputs:
+  - {path: environment.json, category: config}
+  - {path: selection.json, category: dataset}
+  - {path: rollouts.parquet, category: dataset}
+  report:
+  - {path: evaluation.json, category: eval_trace}
+  - {path: timing.md, category: timing}
+  - {path: timing-sources.json, category: timing}
+additional_evidence: []
+wandb:
+  package: git+https://github.com/Open-Athena/wandb-archive.git@2e38b721856b67e7a8ee1d7ba6f8b6dccbee7a8a
+  include:
+    histories: true
+    system_metrics: true
+    tables: true
+    media: true
+    run_files: safe
+    logged_artifacts: metadata
+    used_artifacts: references
+    code: false
+    console_logs: false
+admission_pending: []
+runtime_evidence_requirements:
+- Resolve exact SFT and RL W&B run identities from producer metadata or hash-pinned run-reference receipts; strict exporter runs only against these identities.
+- Missing strict W&B history or required evidence seals a partial archive and blocks all native checkpoint cleanup.
+- Preserve native SFT attempt archives and extracted timing journals through additional_evidence pins; stage-wall timing is not native phase coverage.
+- Retention archives are enumerated from consumed launch configs and their committed ledgers; no checkpoint payloads enter the evidence archive.

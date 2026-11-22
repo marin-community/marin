@@ -1,0 +1,22 @@
+candidate_uri: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/calibforge-shared-v2/normalized-v1
+data_file: validation.parquet
+rows: 185
+seed: 20261109
+agentic_selection: SWE20 original holdouts plus released CalibForge65 validation;
+  two former long-loop heldouts excluded from new train
+composition:
+  swesmith: 20
+  calibforge: 65
+  snowball-100k: 100
+files:
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/shared-calibforge-20261111-v1/validation.parquet
+  sha256: 42ad829b50d327885055e20df6d7affc4c07ca83cf0406a3552e1d572bcabfa6
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/shared-calibforge-20261111-v1/manifest.json
+  sha256: 2590af1f22849e03ae2fc9b837f62298f8b0d6a2f09a56d2a63ca590ab838d23
+admission_pending: []
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/calibforge-shared-v2/normalized-v1/manifest.json
+  sha256: 2590af1f22849e03ae2fc9b837f62298f8b0d6a2f09a56d2a63ca590ab838d23
+uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/shared-calibforge-20261111-v1
+runtime_qualification_pending:
+- Pass same-spec original-Harbor runtime and natural-long CP4 learner gates

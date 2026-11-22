@@ -1,0 +1,53 @@
+name: long-loop/round2
+marin_revision: b6c907efde706143d69a261da7ff960808da2bc3
+datasets:
+  sft:
+    path: sft-data.yaml
+    sha256: 006350cde6a1a7f5e9622158e2d35ef232037975512399df4e37fb8997d11bf2
+  nonagentic:
+    path: nonagentic.yaml
+    sha256: c0ed43ff6f46efb553a7fdccba9a574880d545978899d2c0cd84bbfca717b08c
+  agentic:
+    path: agentic.yaml
+    sha256: 5941f4f06b6672b57fedebda05cd77ba48b63fe85b96b26f2c93b551aeeead35
+  heldout:
+    path: heldout.yaml
+    sha256: a6bfc2d710103b838318400aa7f00176b05e0aa6ad85281951dc30b7e51e2068
+  exclusions:
+    path: exclusions.yaml
+    sha256: a519c3a9f2d245cb1accc36d436657526f60044a613f90d2a8d56e0b63b85f43
+  evaluation:
+    path: evaluation-data.yaml
+    sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
+sft:
+  path: sft.yaml
+  sha256: e0ad721f156613bafe69e57363b628211546bd29bb31ca8ada69903db656d736
+initializer:
+  path: initializer.yaml
+  sha256: e08ba272421bac7fdc72750d89d46e938ed84f212677527cdddd686ca4240ca5
+tokenizer:
+  path: tokenizer.yaml
+  sha256: cb277633176646056eb4dcf43e9d5bb88cfe321597cf3e704340335176a15bf1
+endpoint:
+  path: endpoint.yaml
+  sha256: 8368803744d250e8c2f86ca0c959214ef386876a18a8d4a598827da2f61d276d
+execution:
+  path: execution.yaml
+  sha256: 2f569a75a6de9c657a38d8a96b1ee11eabc74fe25fa9095505212f7e71bb4884
+archive:
+  path: archive.yaml
+  sha256: d77560bb6bd2f75a375f51b473981c87d22c9991a2c2736ec19e3951201ce4a0
+rl:
+  path: rl.yaml
+  sha256: e72211902aebaccdc352eb57776dfe5708b968d4706c83021369a15eff439c35
+evaluation:
+  path: evaluation.yaml
+  sha256: 63beeb89012cfd3153503e81c064084a1c8ea4ab874b9ed69a21355b668bac14
+smoke_overrides:
+  sft_steps: 5
+  rl_steps: 5
+  eval_tasks_per_benchmark: 1
+  eval_replicas: 1
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp

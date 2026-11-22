@@ -1,0 +1,62 @@
+name: long-loop/round1
+marin_revision: 282f9f370e029f6e625fd25f4d36ee4864cdea72
+datasets:
+  sft:
+    path: sft-data.yaml
+    sha256: 006350cde6a1a7f5e9622158e2d35ef232037975512399df4e37fb8997d11bf2
+  nonagentic:
+    path: nonagentic.yaml
+    sha256: 33d8cb19de3a5675ca820d2bef86cfa23854b26667937ab9f0f688f18d3ff75e
+  agentic:
+    path: agentic.yaml
+    sha256: dcdc0e65db120390e5e4a57a58a605dae3772f440d1c3cd27926ede07680d8c6
+  heldout:
+    path: heldout.yaml
+    sha256: 1ca72e283dc35ebc88dc7ee14647c6448f8980293a8a112cc9c3098aedcafd1e
+  exclusions:
+    path: exclusions.yaml
+    sha256: cdb62abf0eacea39dbea427b22d0b76547ee9b935661d23267c61eb93a1c8a32
+  evaluation:
+    path: evaluation-data.yaml
+    sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
+sft:
+  path: sft.yaml
+  sha256: 266b1acb26f79ee921c59dbe9080f51f2cf3eae9bed381baf473c6c0f33338e5
+initializer:
+  path: initializer.yaml
+  sha256: e08ba272421bac7fdc72750d89d46e938ed84f212677527cdddd686ca4240ca5
+tokenizer:
+  path: tokenizer.yaml
+  sha256: cb277633176646056eb4dcf43e9d5bb88cfe321597cf3e704340335176a15bf1
+endpoint:
+  path: endpoint.yaml
+  sha256: 8368803744d250e8c2f86ca0c959214ef386876a18a8d4a598827da2f61d276d
+execution:
+  path: execution.yaml
+  sha256: 0e06150b35acf300341985bf44877410b5c28e9fe6bfc93829295c6d0bfd9769
+archive:
+  path: archive.yaml
+  sha256: fbf7b18a38b9619cfe5196f8a66f1ac35c8cf1668ddb34dfe292abe86a87a142
+rl:
+  path: rl.yaml
+  sha256: 5bd1153f17616da5b44847dd3ef24ec7d635d627b8257e7cbe8a32ec99d71672
+evaluation:
+  path: evaluation.yaml
+  sha256: e1fccf76640875787cb5ed6a5cd19bc879fc402ab4a0a3c970ad4c4b433f5011
+smoke_overrides:
+  sft_steps: 2
+  rl_steps: 5
+  eval_tasks_per_benchmark: 1
+  eval_replicas: 1
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp
+adopted_sft:
+  path: adopted-sft.json
+  sha256: af53f2446f5f0e38909f803a60ae0aa65a4213c965d369350fae2bb56d639011
+adopted_handoff:
+  path: adopted-handoff.json
+  sha256: 1f1b3bec2ff7e94f3344d771b326d3002e115015cc86ccf47524a99c79afcafc
+adopted_endpoint:
+  path: adopted-endpoint.json
+  sha256: f27c42442dafde31671eaf1e1a9bca4d6fad9f192867d3c2f72642727e7d6086

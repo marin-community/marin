@@ -37,6 +37,7 @@ from levanter.training_budget import WallClockCooldown
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
+from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLRolePlan
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
@@ -74,7 +75,11 @@ from experiments.post_training.long_loop.recipe_bundle import require_clean_revi
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph, runtime_execution
-from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES, exp4_rl_curriculum
+from experiments.post_training.task_curation.exp4_curriculum import (
+    SOURCE_ROUTES,
+    exp4_rl_curriculum,
+    exp4_validation_from_manifest,
+)
 from experiments.sft.launcher import SFTSpec
 
 MICRO210_PLACEHOLDER_URI = "s3://unresolved/terminal"
@@ -176,8 +181,11 @@ class RoundRl:
     megatron: dict
     execution: dict
     recipe: dict
-    train_data: dict
-    validation_data: dict
+    pools: dict
+    """The regional pool artifact the round trains on: ``{uri}``. Its manifest carries
+    the fixed curriculum's identity and holdout, the per-source train files, their
+    digests, the rollout routes, and the holdout's validation.parquet — the round's
+    validation data is that materialization, never an adopted parquet."""
     max_steps: int
     selection_eligibility: str
     native_checkpoint: str | None = None
@@ -327,29 +335,17 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
         if record["fingerprint"] != pin["fingerprint"] or record["version"] != pin["version"]:
             raise ValueError(f"Recovery input completion changed: {label}")
         adopted[label] = ArtifactStep.adopt(f"{spec.name}/{suffix}", spec.version, pin["uri"], config=pin)
-    pools = {}
-    for route, producer in pool_steps(POOLS["exp4-regional"].version).items():
-        uri = plan["datasets"][route]["uri"]
-        raw = (StoragePath(uri) / ".artifact.json").read_bytes()
-        record = json.loads(raw)
-        if record["fingerprint"] != producer.fingerprint():
-            raise ValueError(f"Recovery data producer changed: {route}")
-        pools[route] = ArtifactStep.adopt(
-            producer.name,
-            producer.version,
-            uri,
-            config={
-                "producer_fingerprint": producer.fingerprint(),
-                "producer_record_sha256": hashlib.sha256(raw).hexdigest(),
-                "files": plan["datasets"][route]["files"],
-            },
-        )
+    binding = POOLS["exp4-regional"]
+    pools, curriculum, datasets = exp4_round_pools(binding.prefix, binding.version)
+    pinned = plan["datasets"]["pools"]
+    if pinned["uri"] != datasets["uri"] or pinned["composition"] != datasets["composition"]:
+        raise ValueError("Recovery data differs from the pinned plan's pools")
     return plan, build_spec_graph(
         plan,
         spec.version,
         through=through,
         data_artifacts=pools,
-        curriculum=exp4_rl_curriculum(),
+        curriculum=curriculum,
         completed_sft=CompletedSft(adopted["sft"], adopted["handoff"]),
     )
 
@@ -378,32 +374,50 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         raise ValueError("Every adopted RL round must explicitly choose rollout_buffer.eval_drain: wait or abort")
     if rl.selection_eligibility not in {"covered", "complete_window"}:
         raise ValueError("Unknown checkpoint selection eligibility")
+    adopted = ArtifactStep.adopt(
+        model.name, model.version, model.uri, kind=LevanterCheckpoint, config=dataclasses.asdict(model)
+    )
+    profile = MochiProfile(spec.name, roles, draccus.decode(MegatronGeometry, rl.megatron), execution)
+    validate_model_geometry(config, profile)
+    pools_manifest_bytes = (StoragePath(prefix_join(rl.pools["uri"], "manifest.json"))).read_bytes()
+    pools_manifest = json.loads(pools_manifest_bytes)
+    curriculum = exp4_rl_curriculum(exp4_validation_from_manifest(pools_manifest["validation"]))
+    if pools_manifest["curriculum"] != curriculum.identity:
+        raise ValueError("Round pools were prepared for another curriculum")
+    files = {
+        **pools_manifest["files"],
+        "manifest.json": hashlib.sha256(pools_manifest_bytes).hexdigest(),
+    }
+    for name, sha256 in files.items():
+        if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+            raise ValueError(f"Round pool manifest digest is not a SHA-256 pin: {name}")
+    pools = ArtifactStep.adopt(
+        f"{spec.name}/pools",
+        spec.version,
+        rl.pools["uri"],
+        config={"files": files, "curriculum": curriculum.identity},
+    )
+    training = tuple(
+        ArtifactDataSource(pools, relative_path=f"{label}/train.parquet")
+        for label in sorted(pools_manifest["composition"])
+    )
+    heldout = ArtifactDataSource(pools, relative_path="validation.parquet")
+    # The curriculum derives the rollout buffer's per-route window quotas at the
+    # run's batch size; a declared value here would have to match it exactly.
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
+    declared_routes = recipe["trainer"]["rollout_buffer"].get("source_routes") or {}
+    if set(declared_routes) != set(pools_manifest["routes"]):
+        raise ValueError("Round source routes differ from the pools manifest's teacher-route map")
+    recipe["trainer"]["rollout_buffer"]["source_routes"] = dict(pools_manifest["routes"])
     for callback in recipe["trainer"]["callbacks"]:
         if callback["type"] == "best_checkpoint":
+            callback["expected_tasks"] = curriculum.validation.size
             callback["minimum_scored_tasks"] = (
                 callback["expected_tasks"]
                 if rl.selection_eligibility == "complete_window"
                 else math.ceil(0.9 * callback["expected_tasks"])
             )
             callback["selection_eligibility"] = rl.selection_eligibility
-    adopted = ArtifactStep.adopt(
-        model.name, model.version, model.uri, kind=LevanterCheckpoint, config=dataclasses.asdict(model)
-    )
-    profile = MochiProfile(spec.name, roles, draccus.decode(MegatronGeometry, rl.megatron), execution)
-    validate_model_geometry(config, profile)
-    training = []
-    heldout = None
-    for label, pin in (*rl.train_data.items(), ("heldout", rl.validation_data)):
-        if len(pin["sha256"]) != 64 or any(c not in "0123456789abcdef" for c in pin["sha256"]):
-            raise ValueError(f"Round data requires a SHA-256 pin: {label}")
-        source = ArtifactStep.adopt(f"{spec.name}/{label}", spec.version, pin["uri"], config=pin)
-        data = ArtifactDataSource(source, relative_path=pin["file"])
-        if label == "heldout":
-            heldout = data
-        else:
-            training.append(data)
-    if not training or heldout is None:
-        raise ValueError("Adopted RL requires training and held-out data")
     resume = (
         ArtifactStep.adopt(f"{spec.name}/native-input", spec.version, rl.native_checkpoint)
         if rl.native_checkpoint
@@ -414,7 +428,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         name=spec.name,
         version=spec.version,
         model=ArtifactHfModel(adopted, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
-        train_data=tuple(training),
+        train_data=training,
         validation_data=(heldout,),
         max_steps=rl.max_steps,
         resume=resume,
@@ -426,12 +440,12 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
 
     def verified_build(context):
         if not context.is_fingerprint:
-            for pin in (*rl.train_data.values(), rl.validation_data):
-                fs, key = filesystem_for(prefix_join(pin["uri"], pin["file"]))
+            for name, sha256 in files.items():
+                fs, key = filesystem_for(prefix_join(rl.pools["uri"], name))
                 with fs.open(key, "rb") as stream:
                     actual = hashlib.file_digest(stream, "sha256").hexdigest()
-                if actual != pin["sha256"]:
-                    raise ValueError(f"Round data changed: {pin['uri']}/{pin['file']}")
+                if actual != sha256:
+                    raise ValueError(f"Round data changed: {rl.pools['uri']}/{name}")
         return original_build(context)
 
     return dataclasses.replace(step, build_config=verified_build)
@@ -628,16 +642,13 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
         "name": f"users/benfeuer/checkpoints/{round_spec.slug}-micro210",
         "expected_rollouts": EVALUATION_EXPECTED_ROLLOUTS,
     }
-    for route, producer in pool_steps(pools_binding.version).items():
-        resolved["datasets"][route]["uri"] = producer.path(pools_binding.prefix)
-        resolved["datasets"][route]["data_file"] = "train.parquet"
-    resolved["datasets"]["nonagentic"]["source_names"] = [
-        *resolved["datasets"]["nonagentic"]["source_names"],
-        NEMOTRON_SOURCE,
-    ]
+    _pools, curriculum, pool_datasets = exp4_round_pools(pools_binding.prefix, pools_binding.version)
+    resolved["datasets"] = {
+        **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
+        "pools": pool_datasets,
+    }
     resolved["archive"]["hf_upload"]["repo_prefix"] = round_spec.archive.hf_upload_repo_prefix
     resolved["archive"]["evaldash"]["run_prefix"] = round_spec.archive.evaldash_run_prefix
-    curriculum = exp4_rl_curriculum()
     resolved["curriculum"] = {**dataclasses.asdict(curriculum), "identity": curriculum.identity}
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps(
@@ -648,25 +659,28 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     return resolved
 
 
-def resolve_round_pools(round_spec: RoundSpec, resolved: dict) -> dict[str, ArtifactStep]:
-    """Verify the bound regional pools and adopt them as graph artifacts."""
-    binding = POOLS[round_spec.pools]
-    pools = {}
-    for route, producer in pool_steps(binding.version).items():
-        path = producer.path(binding.prefix)
-        record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
-        producer_record = json.loads(record_bytes)
-        if producer_record["fingerprint"] != producer.fingerprint():
-            raise ValueError(f"Regional pool producer differs: {route}")
-        manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
-        manifest = json.loads(manifest_bytes)
-        if manifest["curriculum"] != exp4_rl_curriculum().identity:
-            raise ValueError("Regional pool was prepared for another curriculum")
-        pins = [
-            {"uri": path + "/train.parquet", "sha256": manifest["sha256"]},
-            {"uri": path + "/manifest.json", "sha256": hashlib.sha256(manifest_bytes).hexdigest()},
-        ]
-        pools[route] = ArtifactStep.adopt(
+def exp4_round_pools(prefix: str, version: str) -> tuple[dict[str, ArtifactStep], RlCurriculum, dict]:
+    """The regional Exp4 pools bound for a round: the adopted artifact, its fixed curriculum, and its dataset record.
+
+    The pool step drew the curriculum's holdout and recorded the split and the
+    fixed curriculum's identity in its manifest; the curriculum reconstructed
+    from that record must match it."""
+    producer = pool_steps(version)["pools"]
+    path = producer.path(prefix)
+    record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
+    if json.loads(record_bytes)["fingerprint"] != producer.fingerprint():
+        raise ValueError("Regional Exp4 pool producer differs")
+    manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    curriculum = exp4_rl_curriculum(exp4_validation_from_manifest(manifest["validation"]))
+    if manifest["curriculum"] != curriculum.identity:
+        raise ValueError("Regional pool was prepared for another curriculum")
+    pins = [
+        {"uri": prefix_join(path, name), "sha256": sha256}
+        for name, sha256 in {**manifest["files"], "manifest.json": hashlib.sha256(manifest_bytes).hexdigest()}.items()
+    ]
+    pools = {
+        "pools": ArtifactStep.adopt(
             producer.name,
             producer.version,
             path,
@@ -676,14 +690,26 @@ def resolve_round_pools(round_spec: RoundSpec, resolved: dict) -> dict[str, Arti
                 "files": pins,
             },
         )
-        resolved["datasets"][route].update(
-            uri=path,
-            rows=manifest["rows"],
-            files=pins,
-            source_names=[NEMOTRON_SOURCE if label == "nemotron_if" else label for label in manifest["source_counts"]],
-            teacher_routes=manifest["source_counts"],
-        )
-    return pools
+    }
+    datasets = {
+        "uri": path,
+        "rows": manifest["rows"],
+        "files": pins,
+        "composition": manifest["composition"],
+        "routes": manifest["routes"],
+    }
+    return pools, curriculum, datasets
+
+
+def resolve_round_pools(round_spec: RoundSpec, resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurriculum]:
+    """Verify the bound regional pools, adopt them as graph artifacts, and return the fixed curriculum."""
+    binding = POOLS[round_spec.pools]
+    pools, curriculum, datasets = exp4_round_pools(binding.prefix, binding.version)
+    resolved["datasets"] = {
+        **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
+        "pools": datasets,
+    }
+    return pools, curriculum
 
 
 def require_permanent_round_storage(round_spec: RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound) -> None:
@@ -795,7 +821,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
     os.environ.update(
         MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
     )
-    pools = resolve_round_pools(round_spec, resolved)
+    pools, curriculum = resolve_round_pools(round_spec, resolved)
     require_archive_binds_final_sft_checkpoint(resolved)
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps(
@@ -808,7 +834,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         version,
         through=through,
         data_artifacts=pools,
-        curriculum=exp4_rl_curriculum(),
+        curriculum=curriculum,
         sft_release=handle,
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, round_spec)),
     )

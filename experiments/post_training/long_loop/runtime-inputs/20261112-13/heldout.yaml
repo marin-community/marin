@@ -1,0 +1,48 @@
+candidate_uri: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-verified-20261112-v4-sealed
+data_file: validation.parquet
+rows: 120
+seed: 20261109
+agentic_selection: Admitted original SWE heldouts retained; rejected ones replaced
+  deterministically from admitted training and removed from training
+composition:
+  swesmith: 20
+  snowball-100k: 100
+files:
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release/validation.parquet
+  sha256: 8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release/manifest.json
+  sha256: ec645c79b1d636df20dc0575db5bd7df608eaf0a06203cd63ead8e0c310860b3
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release/identities.jsonl
+  sha256: 0b9483e2f4f54850d6bea08167e3483962349a08d58f4fc677d90dcebae5d867
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release/exclusions.json
+  sha256: 38a4566f90ec98c028a7a4c77b22d2547a86e44ceb1be6b20a728131730fb941
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release/exclusion-diagnostics.json
+  sha256: 9bc2fa7314ef690b59a1d72ae4bee77c091159f167285db12e5bfd98f986a445
+admission_pending: []
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
+uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release
+execution_overlay:
+  marin_revision: 8b2a1f74b44011fe8834351a57799bd4af11f029
+  agent: pi
+  version: swe-trusted-worktree-v4
+  agent_user: longloop-agent
+  agent_uid: 10001
+  upstream_manifest_sha256: 819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b
+  admission:
+    plan_sha256: e4136a1205ef1396f3ab2666c2064e88ae7e311c572353b7f0d2f4a0b261a8c5
+    prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/admission-v7
+  dependency_policy: Publish the exact tested task package without adding setup constraints
+    after admission; retain observed pre-agent distribution inventories; each trial
+    freezes its grading interpreter before agent access. Fresh setup may resolve different
+    versions; agent packages never seed grading.
+  instructions: Upstream problem text preserved; harness owns exact checkout and declared
+    setup
+validation_replacements:
+  seed: 20261109
+  task_ids:
+  - long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23379
+  - long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02319
+  - long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13712
+  - long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24571

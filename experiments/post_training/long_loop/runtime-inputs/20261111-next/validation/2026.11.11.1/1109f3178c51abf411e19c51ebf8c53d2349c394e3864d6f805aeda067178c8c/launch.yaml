@@ -1,0 +1,213 @@
+artifacts:
+  attempts_root: <temporary_output_path>/attempts
+  checkpoint_root: <temporary_output_path>/checkpoints
+  export_root: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.11.1/exports
+  resolved_config_uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.11.1/resolved-launch.yaml
+  resume_checkpoint_count: 1
+  terminal_manifest_uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.11.1/terminal.json
+inputs:
+  data_kind: parquet
+  model:
+    chat_template: null
+    identity: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.11.1:9bd01339
+    local_path: /tmp/marinskyrl/models/long-loop-terminal
+    tokenizer_revision: <terminal-tokenizer-revision>
+    tokenizer_uri: <terminal-tokenizer>
+    uri: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.11.1:9bd01339/terminal-export
+  train_data: []
+  validation_data:
+  - identity: long-loop/round1/eval-inputs@2026.11.11.1:be496527
+    kind: directory
+    local_path: /tmp/marinskyrl/data/eval-inputs
+    relative_path: rollouts.parquet
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/round1/eval-inputs/2026.11.11.1
+iris:
+  allocation:
+    cpu: 0.0
+    disk: <runtime>
+    gpu_variant: H100
+    gpus_per_node: 8
+    memory: <runtime>
+    num_nodes: 16
+  cluster: <runtime>
+  cluster_config: <runtime>
+  job_name: long-loop-micro-full-2026.11.11.1--attempt_id
+  max_retries: 0
+  parent_cluster_config: null
+  priority: <runtime>
+  target_cluster: null
+  timeout: 0
+  wandb_entity: null
+ray:
+  cluster_join_timeout: 1800
+  driver_liveness_timeout: 9000
+  log_dir: <temporary_output_path>/attempts/ray-logs
+  rendezvous_dir: <temporary_output_path>/attempts/rendezvous
+  rendezvous_timeout: 1800
+  spill_backend: local
+  spill_dir: /tmp/skyrl-ray-spill
+run:
+  attempt_id: <attempt_id>
+  export_hf: false
+  id: long-loop/micro-full-2026.11.11.1
+  mode: train
+  seed: 20261030
+  submission: wait
+runtime:
+  entrypoint: ''
+  experiments_dir: /app/experiments
+  profile: megatron
+  task_env: &id001
+    JUDGE_BASE_URL: runtime://minimax-judge
+    OPENAI_BASE_URL: https://api.together.xyz/v1
+    TAU2_NL_ASSERTIONS_MODEL: openai/openai/gpt-oss-120b
+    TAU2_USER_MODEL: openai/openai/gpt-oss-120b
+    TAU2_USER_REASONING_EFFORT: low
+schema_version: 1
+skyrl:
+  config_groups:
+    terminal_bench_config: terminal_bench
+  context_budget:
+    max_new_tokens_per_turn: 16384
+    max_turns: 1024
+    request_window_tokens: 65536
+  data:
+    kind: parquet
+    shuffle: false
+    train_data: []
+    val_data: []
+  entrypoint: generate
+  environment:
+    task_sessions:
+      local: {}
+      remote_judge:
+        api_key_env: JUDGE_API_KEY
+        base_url: runtime://minimax-judge
+  extra_env: *id001
+  generator:
+    backend: vllm
+    chat_template:
+      name_or_path: null
+      source: name
+    chat_template_kwargs:
+      enable_thinking: true
+    enable_http_endpoint: false
+    enforce_eager: false
+    engine_init_kwargs:
+      enable_auto_tool_choice: true
+      hf_overrides:
+        max_position_embeddings: 262144
+        max_seq_len: 262144
+      tool_call_parser: hermes
+    eval_n_samples_per_prompt: 1
+    eval_sampling_params:
+      skip_special_tokens: false
+      stop_token_ids:
+      - 128001
+      - 128009
+      temperature: 0.6
+      top_p: 0.95
+    gpu_memory_utilization: 0.85
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_tensor_parallel_size: 1
+    max_num_seqs: 8
+    model_dtype: bfloat16
+    n_samples_per_prompt: 1
+    num_inference_engines: 16
+    run_engines_locally: true
+    sampling_params:
+      logprobs: 0
+      skip_special_tokens: false
+      stop_token_ids:
+      - 128001
+      - 128009
+      temperature: 0.6
+      top_p: 0.95
+    trajectory_retention:
+      always_retain_failures: false
+      always_retain_loops: false
+      always_retain_non_terminating: false
+      enabled: true
+      eval_sample_fraction: 1.0
+      max_bytes_per_run: null
+      max_bytes_per_step: null
+      model_checkpoint_step: null
+      model_path: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.11.1:9bd01339/terminal-export
+      model_source_identity: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.11.1:9bd01339
+      output_path: s3://marin-us-east-08a/marin/long-loop/traces/2026.11.09/eval
+      phases:
+      - eval
+      required: true
+      reward_above: null
+      reward_below: null
+      run_id: 2026.11.09
+      sample_count_per_step: 0
+      sample_fraction: 1.0
+  terminal_bench:
+    harbor:
+      daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      environment_type: daytona
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      eval_timeout_override_sec: 1800
+      max_retries: 0
+      n_concurrent_trials: 8
+      override_timeout_sec: 1800
+      trial_attempt_timeout_sec: 2460
+      verifier_override_timeout_sec: 300
+    installed_agent:
+      agent:
+        kwargs:
+          mcp_adapter_version: 7.0.0
+          model_info:
+            max_input_tokens: 65536
+            max_output_tokens: 16384
+          thinking: high
+          thinking_format: chat-template
+          version: 0.87.0
+        name: pi
+        override_setup_timeout_sec: 360
+      cleanup_timeout: 60
+      judge_model: MiniMaxAI/MiniMax-M3-MXFP8
+      run_timeout: 1800
+      service_shutdown_timeout: 60
+      service_startup_timeout: 60
+      setup_timeout: 360
+      trial_reward_key: reward
+  trainer:
+    algorithm:
+      use_kl_loss: false
+    eval_batch_size: 32
+    eval_interval: 1
+    evaluation_runner: task
+    logger: console
+    micro_train_batch_size_per_gpu: 1
+    placement:
+      colocate_all: true
+      colocate_policy_ref: true
+      policy_num_gpus_per_node: 8
+      policy_num_nodes: 16
+      ref_num_gpus_per_node: 8
+      ref_num_nodes: 16
+    policy:
+      megatron_config:
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        tensor_model_parallel_size: 1
+    policy_mini_batch_size: 1
+    ref:
+      megatron_config:
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        tensor_model_parallel_size: 1
+    resume_mode: none
+    seed: 20261030
+    strategy: megatron
+    train_batch_size: 1
+  trajectory_runner:
+    max_concurrent_tasks: 128

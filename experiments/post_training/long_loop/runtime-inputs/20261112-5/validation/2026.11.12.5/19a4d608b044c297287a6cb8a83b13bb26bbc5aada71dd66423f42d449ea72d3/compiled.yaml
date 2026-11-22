@@ -1,0 +1,860 @@
+schema_version: 1
+run:
+  id: long-loop/micro-full-2026.11.12.5
+  attempt_id: <attempt_id>
+  seed: 20261030
+  mode: train
+  submission: wait
+  export_hf: false
+runtime:
+  profile: megatron
+  entrypoint: skyrl_train.entrypoints.main_generate
+  training_type: null
+  experiments_dir: /app/experiments
+  task_env:
+    JUDGE_BASE_URL: runtime://minimax-judge
+    OPENAI_BASE_URL: https://api.together.xyz/v1
+    TAU2_NL_ASSERTIONS_MODEL: openai/openai/gpt-oss-120b
+    TAU2_USER_MODEL: openai/openai/gpt-oss-120b
+    TAU2_USER_REASONING_EFFORT: low
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
+iris:
+  cluster: <runtime>
+  cluster_config: <runtime>
+  job_name: long-loop-micro-full-2026.11.12.5--attempt_id
+  wandb_entity: null
+  allocation:
+    num_nodes: 16
+    gpus_per_node: 8
+    gpu_variant: H100
+    cpu: 0.0
+    memory: <runtime>
+    disk: <runtime>
+  priority: <runtime>
+  max_retries: 0
+  timeout: 0
+  target_cluster: null
+  parent_cluster_config: null
+  container_profile: null
+ray:
+  spill_backend: local
+  spill_dir: /tmp/skyrl-ray-spill
+  rendezvous_dir: <temporary_output_path>/attempts/rendezvous
+  log_dir: <temporary_output_path>/attempts/ray-logs
+  rendezvous_timeout: 259200
+  cluster_join_timeout: 259200
+  driver_liveness_timeout: 259200
+artifacts:
+  checkpoint_root: <temporary_output_path>/checkpoints
+  export_root: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.12.5/exports
+  attempts_root: <temporary_output_path>/attempts
+  resolved_config_uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.12.5/resolved-launch.yaml
+  terminal_manifest_uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.12.5/terminal.json
+  resume_checkpoint_count: 1
+  draft_model_cache_ttl_days: 14
+inputs:
+  model:
+    uri: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783/terminal-export
+    identity: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783
+    local_path: /tmp/marinskyrl/models/long-loop-terminal
+    tokenizer_uri: <terminal-tokenizer>
+    tokenizer_revision: <terminal-tokenizer-revision>
+    chat_template: null
+  hugging_face_models: []
+  data_kind: parquet
+  train_data: []
+  validation_data:
+  - identity: long-loop/round1/eval-inputs@2026.11.12.5:be496527
+    kind: directory
+    local_path: /tmp/marinskyrl/data/eval-inputs
+    relative_path: rollouts.parquet
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/round1/eval-inputs/2026.11.12.5
+skyrl:
+  data:
+    task_cache_dir: ~/.cache/marinskyrl/tasks
+    train_data: []
+    val_data:
+    - identity: long-loop/round1/eval-inputs@2026.11.12.5:be496527
+      kind: directory
+      local_path: /tmp/marinskyrl/data/eval-inputs
+      relative_path: rollouts.parquet
+      uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/round1/eval-inputs/2026.11.12.5
+    shuffle: false
+    preference_pair_format: text
+    terminal_bench_data: []
+    sampling:
+      kind: null
+      domain_weights: {}
+      decay: 0.95
+      epsilon: 0.05
+      reversion_mass: 0.0
+      instance_decay: 0.7
+      prior_alpha: 1.0
+      prior_beta: 1.0
+      grade_prior_strength: 8.0
+      grade_prior_high: 0.85
+      grade_prior_low: 0.05
+      adaptive_exploration: 0.2
+      adaptive_window: 10
+      adaptive_min_informative: 0.1
+      weighting: pass-variance
+      seed: null
+  checkpoint_export:
+    step: null
+    checkpoint_path: null
+    export_root: null
+    hf_hub_repo_id: null
+    hf_hub_private: false
+    hf_hub_revision: main
+    hf_upload_mode: latest
+  trainer:
+    hf_export_checkpoint: latest
+    evaluation_runner: task
+    trajectory_selector:
+      type: null
+    debug_mode: light
+    collective_phase_diagnostics: null
+    training_metrics: true
+    policy_train_spans: true
+    rollout_spans: true
+    distributed:
+      placement_group_timeout_seconds: 259200
+      worker_collective_timeout_seconds: 259200
+    model_load_retry:
+      max_retries: 5
+      backoff_base_seconds: 2.0
+      backoff_cap_seconds: 32.0
+    progress:
+      mode: auto
+      min_interval_seconds: 0.5
+      heartbeat_seconds: 60.0
+      percent_step: 5.0
+      count_step: 1000
+    placement:
+      colocate_all: true
+      colocate_policy_ref: true
+      policy_num_nodes: 16
+      policy_num_gpus_per_node: 8
+      critic_num_nodes: 1
+      critic_num_gpus_per_node: 4
+      ref_num_nodes: 16
+      ref_num_gpus_per_node: 8
+      policy_strict_spread_pg: false
+      policy_per_gpu_bundles: false
+      policy_force_cvd_mask: false
+      enable_numa_affinity: false
+    strategy: megatron
+    policy:
+      max_consecutive_nonfinite_steps: 3
+      host_memory_monitor:
+        enabled: true
+        interval_seconds: 60
+      grug_query_bias_update_mode: frozen
+      grug_query_bias_interpolation_weight: null
+      grug_query_bias_update_rate: null
+      model:
+        path: /tmp/marinskyrl/models/long-loop-terminal
+        revision: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783
+        tokenizer_path: /tmp/marinskyrl/models/long-loop-terminal
+        tokenizer_revision: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783
+        source_uri: null
+        source_identity: null
+        lora:
+          rank: 0
+          alpha: 16
+          dropout: 0
+          adapter_path: null
+          adapter_revision: null
+          lora_sync_path: /tmp/skyrl_lora_sync
+          target_modules: all-linear
+          exclude_modules: null
+      optimizer_config:
+        optimizer: AdamW
+        lr: 1.0e-06
+        adam_betas:
+        - 0.9
+        - 0.999
+        weight_decay: 0.01
+        max_grad_norm: 1.0
+        offload_after_step: true
+        num_warmup_steps: 0
+        lr_decay_steps: null
+        scheduler: constant_with_warmup
+        optimizer_kwargs: {}
+      sequence_parallel_size: 1
+      use_torch_compile: false
+      record_memory: false
+      nccl_buffer_size_bytes: null
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        nccl_max_channels: null
+        ddp_config:
+          grad_reduce_in_fp32: true
+          overlap_grad_reduce: false
+          overlap_param_gather: false
+          average_in_collective: true
+        model_config_kwargs: {}
+        torch_profiler_config:
+          enable: false
+          ranks: []
+          save_path: null
+        optimizer_config_kwargs:
+          overlap_cpu_optimizer_d2h_h2d: false
+          use_precision_aware_optimizer: false
+          optimizer_cpu_offload: false
+          optimizer_offload_fraction: 0.0
+        transformer_config_kwargs:
+          recompute_granularity: full
+          recompute_modules:
+          - core_attn
+          recompute_method: uniform
+          recompute_num_layers: 1
+        empty_cuda_cache: true
+        logprob_chunk_size: 1024
+        optimizer_checkpoint_sharding_type: fully_reshardable
+        check_train_eval_parity: false
+        moe_router_replay: false
+        check_dp_weight_consistency: false
+    ref:
+      nccl_buffer_size_bytes: 262144
+      model:
+        path: /tmp/marinskyrl/models/long-loop-terminal
+        revision: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783
+        tokenizer_path: /tmp/marinskyrl/models/long-loop-terminal
+        tokenizer_revision: users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783
+        source_uri: null
+        source_identity: null
+      sequence_parallel_size: 1
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        model_config_kwargs: {}
+        transformer_config_kwargs: {}
+        logprob_chunk_size: 1024
+        moe_router_replay: false
+    critic:
+      model:
+        path: null
+        lora:
+          rank: 0
+          alpha: 16
+          dropout: 0
+          target_modules: all-linear
+          exclude_modules: null
+      optimizer_config:
+        optimizer: AdamW
+        lr: 5.0e-06
+        adam_betas:
+        - 0.9
+        - 0.999
+        weight_decay: 0.01
+        max_grad_norm: 1.0
+        offload_after_step: true
+        num_warmup_steps: 0
+        lr_decay_steps: null
+        scheduler: constant_with_warmup
+        optimizer_kwargs: {}
+      sequence_parallel_size: 1
+    algorithm:
+      batch_invariant: false
+      advantage_estimator: grpo
+      group_advantage_min_size: null
+      resolved_group_advantage:
+        kind: exact_physical
+        physical_group_size: 1
+        minimum_group_size: null
+      kl_ctrl:
+        type: fixed
+        kl_target: 0.1
+        horizon: 10000
+      kl_estimator_type: k3_unbiased_gradient
+      use_kl_in_reward: false
+      use_kl_loss: false
+      kl_loss_coef: 0.001
+      use_entropy_loss: false
+      entropy_loss_coef: 0.01
+      advantage_batch_normalize: false
+      value_head_prefix: value_head
+      policy_loss_type: regular
+      ftpo: {}
+      dpo:
+        beta: 0.1
+        label_smoothing: 0.0
+      loss_reduction: token_mean
+      grpo_norm_by_std: true
+      rloo_n_filter_zero_reward_groups: true
+      lambd: 1.0
+      gamma: 1.0
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      clip_ratio_c: 3.0
+      off_policy_correction: null
+      off_policy_correction_rules: null
+      tis_splice: true
+      tis_lcs_alert_threshold: 0.005
+      enable_token_reward_channel: false
+      think_token_weight: 1.0
+      sapo:
+        tau_pos: 1.0
+        tau_neg: 1.05
+      value_clip: 0.2
+      dynamic_sampling:
+        type: null
+        max_sample_batches: 30
+        informative_on: shaped
+        min_reward_std: 0.0
+        max_mean_reward: null
+      group_admission:
+        stall_timeout: null
+      clip_cov:
+        clip_ratio: 0.0002
+        clip_cov_lb: 1.0
+        clip_cov_ub: 5.0
+      kl_cov:
+        kl_cov_frac: 0.2
+        ppo_kl_coef: 1.0
+      cispo:
+        cispo_eps_clip_low: 1.0
+        cispo_eps_clip_high: 5
+    rollout_buffer:
+      consumed_route_quotas: {}
+      source_routes: {}
+      max_staleness_steps: 0
+      batch_policy: full_batch
+      max_stale_retries: 1
+      max_in_flight: 2
+      object_store_root: null
+    teacher_scoring:
+      max_queued_per_teacher: 8
+      workers_per_teacher: 1
+    step_phase_budgets:
+      group_admission: 1800
+      batch_assembly: 600
+      training_preparation: 900
+      advantages: 300
+      policy_training: 3600
+      group_bookkeeping: 60
+      weight_sync: 600
+      step_end_bookkeeping: 60
+      checkpoint_work: 1800
+      evaluation: 1800
+      unaccounted: 5
+    gradient_checkpointing: true
+    gradient_checkpointing_use_reentrant: false
+    seed: 20261030
+    resume_mode: none
+    resume_path: null
+    restore_dataloader_state: true
+    distillation_token_budget: null
+    reset_distillation_token_count_on_resume: false
+    reset_global_step_on_resume: false
+    ckpt_path: <temporary_output_path>/checkpoints
+    max_ckpts_to_keep: 1
+    callbacks: null
+    ckpt_interval: 5
+    hf_save_interval: -1
+    export_hf_artifact: false
+    hf_upload_mode: latest
+    export_path: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/long-loop/micro-full/2026.11.12.5/exports
+    bf16: true
+    epochs: 1
+    max_steps: null
+    update_epochs_per_batch: 1
+    train_batch_size: 1
+    policy_mini_batch_size: 1
+    critic_mini_batch_size: 256
+    micro_train_batch_size_per_gpu: 1
+    micro_forward_batch_size_per_gpu: 1
+    update_ref_every_epoch: false
+    use_sample_packing: true
+    offload_optimizer_during_rollouts: false
+    eval_batch_size: 32
+    eval_num_prompts: null
+    eval_before_train: true
+    eval_interval: 1
+    preflight_gate:
+      enabled: false
+      min_reward: 0.25
+      max_reward: 0.75
+      num_trials: 256
+      on_failure: abort
+    max_prompt_length: 49152
+    flash_attn: false
+    attn_backend: auto
+    disable_fast_tokenizer: false
+    project_name: skyrl
+    run_name: long-loop-micro-full-2026.11.12.5--attempt_id
+    logger: console
+    tracker_commit_each_step: true
+    dump_training_order: false
+    dump_data_batch: false
+    dump_eval_results: true
+    log_level: INFO
+    rope_scaling: null
+    rope_theta: null
+    step_wise_training: false
+    mismatch_probe:
+      enabled: false
+      prompts:
+        count: 128
+        samples_per_prompt: 4
+      seed: null
+      archive_uri: null
+      reuse_probe: null
+      updates: 2
+      extra_trainer_modes: []
+      filtered_replay:
+        keep_fraction: null
+      rescore_prefix_cache: 'off'
+  generator:
+    model_loading: stream
+    model_name: /tmp/marinskyrl/models/long-loop-terminal
+    model_dtype: bfloat16
+    timeout_multiplier: 1.0
+    engine_init_timeout_seconds: 259200
+    run_engines_locally: true
+    num_inference_engines: 16
+    backend: vllm
+    vllm_attention_backend: null
+    weight_sync_backend: nccl
+    weight_sync_pause:
+      mode: keep
+      clear_cache: true
+    weight_sync_transport: broadcast
+    expert_block_sync:
+      timeout_seconds: 259200
+      verify: false
+    fuse_weights: false
+    r3_transport: decentral
+    r3_dispatch_put_timeout_seconds: 600
+    gdn_backend: torch
+    weight_transfer_threshold_cuda_ipc_GB: 1.0
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_expert_parallel_size: 8
+    inference_engine_data_parallel_size: 8
+    inference_engine_decode_context_parallel_size: 1
+    inference_engine_mp_backend: false
+    n_samples_per_prompt: 1
+    max_input_length: 49152
+    vllm_v1_disable_multiproc: true
+    enable_prefix_caching: true
+    enable_chunked_prefill: true
+    max_num_batched_tokens: 8192
+    enforce_eager: false
+    fully_sharded_loras: false
+    inference_stats_interval: 1
+    gpu_memory_utilization: 0.85
+    max_num_seqs: 8
+    remote_inference_engine_urls:
+    - 127.0.0.1:8001
+    enable_http_endpoint: false
+    http_endpoint_host: 127.0.0.1
+    http_endpoint_port: 8000
+    weight_sync_pause_timeout_seconds: 259200
+    max_turns: 1024
+    error_handling:
+      enable_error_classification: true
+      passthrough_exceptions: []
+      mask_exceptions: []
+      zero_exceptions: []
+      default_error_treatment: mask
+      preserve_logprobs_on_timeout: true
+    chat_template:
+      source: name
+      name_or_path: null
+    chat_template_kwargs:
+      enable_thinking: true
+    engine_init_kwargs:
+      enable_auto_tool_choice: true
+      hf_overrides:
+        max_position_embeddings: 262144
+        max_seq_len: 262144
+      tool_call_parser: hermes
+      max_model_len: 65536
+      served_model_name: long-loop-terminal
+    speculative_decoding: null
+    override_existing_update_group: disable
+    sampling_params:
+      max_generate_length: 16384
+      repetition_penalty: 1.0
+      temperature: 0.7
+      top_p: 0.95
+      min_p: 0.0
+      top_k: -1
+      logprobs: 0
+      stop: null
+      stop_token_ids:
+      - 128001
+      - 128009
+      skip_special_tokens: false
+    eval_sampling_params:
+      max_generate_length: 16384
+      repetition_penalty: 1.0
+      temperature: 0.7
+      top_p: 0.95
+      min_p: 0.0
+      top_k: -1
+      logprobs: null
+      stop: null
+      stop_token_ids:
+      - 128001
+      - 128009
+      skip_special_tokens: false
+    eval_n_samples_per_prompt: 1
+    trajectory_reward_shaping:
+      schema_version: 2
+      enabled: false
+      loop:
+        max_period_tokens: 64
+        tail_tokens: 256
+        minimum_occurrences: 4
+        advantage_penalty_per_token: 0.0
+        max_advantage_penalty: 0.2
+      passthrough:
+        penalty: 0.0
+      non_termination:
+        penalty: 0.0
+        accepted_stop_reasons:
+        - stop
+        - complete
+        - eos
+        - end_turn
+      overlong:
+        l_max: 32768
+        l_cache: 8192
+        penalty_scale: 1.0
+      successful_length:
+        free_tokens: 0
+        penalty_per_token: 0.0
+        max_penalty: 0.2
+      reasoning_span:
+        penalty: 0.0
+        target: rollout
+    trajectory_retention:
+      enabled: true
+      output_path: <temporary_output_path>/attempts/trajectories
+      run_id: 2026.11.09
+      phases:
+      - eval
+      sample_count_per_step: 0
+      sample_fraction: 1.0
+      eval_sample_fraction: 1.0
+      always_retain_failures: false
+      always_retain_non_terminating: false
+      always_retain_loops: false
+      accepted_stop_reasons:
+      - stop
+      - complete
+      - eos
+      - end_turn
+      reward_below: null
+      reward_above: null
+      max_bytes_per_step: null
+      max_bytes_per_run: null
+      required: true
+      publish_timeout_seconds: 259200
+      shutdown_timeout_seconds: 259200
+      redact_fields: []
+      model_path: /Users/benfeuer/Documents/marin-worktrees/long-loop-prototype/vendor/skyrl/users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783/terminal-export
+      model_source_identity: /Users/benfeuer/Documents/marin-worktrees/long-loop-prototype/vendor/skyrl/users/benfeuer/checkpoints/long-loop-full-rl@2026.11.12.5:2a72c783
+      model_checkpoint_step: null
+      resume_path: null
+      inference_backend: vllm
+    apply_overlong_filtering: false
+    rope_scaling: null
+    rope_theta: null
+  environment:
+    env_class: gsm8k
+    task_sessions:
+      local: {}
+      max_verifier_workers: 32
+      remote_judge:
+        api_key_env: JUDGE_API_KEY
+        base_url: runtime://minimax-judge
+      daytona: null
+      session:
+        max_turns: 1024
+        model_turn_timeout: null
+        command_timeout: 120
+        tool_turn_timeout: 600
+        total_turn_timeout: null
+        attempt_timeout: null
+        verifier_timeout: null
+        cleanup_timeout: 30
+        max_total_tokens: null
+      task_spec:
+        default_harness: shellbox
+        harness_by_dataset:
+          structure-closure: assistant_prefix
+        session:
+          max_turns: 1
+          max_total_tokens: null
+          model_turn_timeout: 1800
+          tool_turn_timeout: 90
+          total_turn_timeout: 2400
+          attempt_timeout: 3600
+          verifier_timeout: 300
+          cleanup_timeout: 60
+          command_timeout: 30
+          shell_tool: {}
+        image_verifier:
+          backend: daytona
+          cpus: 2
+          memory_mb: 4096
+          storage_mb: 10240
+          gpus: 0
+          network: allow
+          user: null
+          startup_timeout: 600
+          cleanup_timeout: 60
+        package_verifier:
+          backend: local
+          cpus: null
+          memory_mb: null
+          storage_mb: null
+          gpus: 0
+          network: allow
+          user: null
+          startup_timeout: 600
+          cleanup_timeout: 60
+      lcb:
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            network: deny
+            memory_mb: 8192
+            cpus: 1
+            storage_mb: null
+            gpus: 0
+            user: null
+            startup_timeout: 600
+            cleanup_timeout: null
+      searchcode:
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            network: deny
+            memory_mb: 8192
+            cpus: 1
+            storage_mb: null
+            gpus: 0
+            user: null
+            startup_timeout: 600
+            cleanup_timeout: null
+      text_to_sql:
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            network: deny
+            memory_mb: 8192
+            cpus: 1
+            storage_mb: null
+            gpus: 0
+            user: null
+            startup_timeout: 600
+            cleanup_timeout: null
+      gsm8k:
+        reward_method: strict
+      text2sql:
+        db_path: /home/ray/default/sql_data
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            network: deny
+            memory_mb: 8192
+            cpus: 1
+            storage_mb: null
+            gpus: 0
+            user: null
+            startup_timeout: 600
+            cleanup_timeout: null
+      llm_as_a_judge:
+        model: gpt-4o-mini
+        base_url: null
+      search:
+        log_requests: false
+        search_url: http://127.0.0.1:8000/retrieve
+        topk: 3
+        timeout: 30
+      nemotron_ultra:
+        grading: verify
+        machines:
+          ns_tools_simple_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /workspace
+            runtime:
+              backend: docker
+              network: deny
+              memory_mb: 8192
+              cpus: 1
+              storage_mb: null
+              gpus: 0
+              user: null
+              startup_timeout: 600
+              cleanup_timeout: null
+          code_gen_simple_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /workspace
+            runtime:
+              backend: docker
+              network: deny
+              memory_mb: 8192
+              cpus: 1
+              storage_mb: null
+              gpus: 0
+              user: null
+              startup_timeout: 600
+              cleanup_timeout: null
+          nvarc_inductive_simple_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /workspace
+            runtime:
+              backend: docker
+              network: deny
+              memory_mb: 8192
+              cpus: 1
+              storage_mb: null
+              gpus: 0
+              user: null
+              startup_timeout: 600
+              cleanup_timeout: null
+          math_formal_lean_refinement_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /lean4/my_project
+            runtime:
+              backend: docker
+              network: deny
+              memory_mb: 8192
+              cpus: 1
+              storage_mb: null
+              gpus: 0
+              user: null
+              startup_timeout: 600
+              cleanup_timeout: null
+        lean_timeout: 30.0
+        code_verifier:
+          per_test_timeout_seconds: 10
+          total_timeout_seconds: 300
+          max_memory_bytes: 4294967296
+        judges:
+          general:
+            base_url: http://127.0.0.1:8001/v1
+            model: general-judge
+            api_key: dummy_key
+            api_key_env: null
+            timeout_seconds: 600.0
+            response_transport: responses_metadata
+            reasoning_effort: null
+          safety:
+            base_url: http://127.0.0.1:8002/v1
+            model: safety-judge
+            api_key: dummy_key
+            api_key_env: null
+            timeout_seconds: 600.0
+            response_transport: responses_metadata
+            reasoning_effort: null
+        genrm:
+          judge:
+            base_url: http://127.0.0.1:8003/v1
+            model: genrm-judge
+            api_key: dummy_key
+            api_key_env: null
+            timeout_seconds: 600.0
+            response_transport: responses_metadata
+            reasoning_effort: null
+          max_concurrent_comparisons: 4
+          default_score: 3.0
+          max_output_tokens: 24576
+          temperature: 1.0
+          top_p: 0.95
+          genrm_parse_retries: 1
+          genrm_parse_retry_sleep_seconds: 0.2
+          reasoning_bonus: 0.5
+          answer_bonus: 0.5
+          top_percentile: 0.2
+          group_reasoning_length_penalty_coeff: 0.1
+          group_answer_length_penalty_coeff: 0.1
+      aime:
+        evaluation_token_budget: 8192
+        strict_box_verify: false
+        length_penalty_weight: 0.0
+        target_length: 768
+        truncated_penalty: -2.0
+        min_response_length: 16
+        max_gen_length: 0
+  trajectory_runner:
+    command_timeout: 120
+    cleanup_timeout: 30
+    shutdown_timeout: 45
+    max_concurrent_tasks: 128
+    rollout_workers:
+      num_workers: 4
+      cpus_per_worker: 8
+      executor_threads: 256
+      progress_timeout_seconds: 21600
+      start_interval_seconds: 2.0
+  terminal_bench_config:
+    harbor:
+      daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      environment_type: daytona
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      eval_timeout_override_sec: 1800
+      max_retries: 0
+      n_concurrent_trials: 8
+      override_timeout_sec: 1800
+      trial_attempt_timeout_sec: 2460
+      verifier_override_timeout_sec: 300
+      max_turns: 1024
+    installed_agent:
+      agent:
+        kwargs:
+          compaction_reserve_tokens: 16384
+          mcp_adapter_version: 7.0.0
+          model_info:
+            max_input_tokens: 65536
+            max_output_tokens: 16384
+          thinking: high
+          thinking_format: chat-template
+          version: 0.87.0
+        name: pi
+        override_setup_timeout_sec: 360
+      cleanup_timeout: 60
+      judge_model: MiniMaxAI/MiniMax-M3-MXFP8
+      run_timeout: 1800
+      service_shutdown_timeout: 60
+      service_startup_timeout: 60
+      setup_timeout: 360
+      trial_reward_key: reward
+      output_path: <temporary_output_path>/attempts/trajectories/installed-agents

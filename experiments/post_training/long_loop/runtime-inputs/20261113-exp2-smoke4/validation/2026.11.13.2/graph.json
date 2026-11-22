@@ -1,0 +1,10 @@
+[
+  {
+    "stage": "long-loop/round2/inputs",
+    "status": "constructed; not a SkyRL launch"
+  },
+  {
+    "stage": "long-loop/round2/sft",
+    "status": "constructed; not a SkyRL launch"
+  }
+]
