@@ -108,6 +108,17 @@ def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, st
     return {name: provider_secrets[name] for name in sorted(required)}
 
 
+def task_spec_actor_image(task: PreparedTask) -> str | None:
+    """The actor image a frozen task-spec declares, when its grader environment names one."""
+    if task.path is None or task.workload != "task_spec":
+        return None
+    spec_path = Path(task.path) / "task-spec.json"
+    if not spec_path.is_file():
+        return None
+    spec = json.loads(spec_path.read_text())
+    return ((spec.get("environment_requirements") or {}).get("docker_image")) or None
+
+
 def read_verdict(trial: Trial) -> dict | None:
     """The trial's structured verdict, when the verifier produced one."""
     path = trial.paths.verifier_dir / "verdict.json"
@@ -171,6 +182,15 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
         if declared is not None and declared == lock:
             return image_tag(DEFAULT_REPOSITORY, identity_digest(environment))
     return None
+
+
+DEFECTIVE_ACTOR_IMAGES: frozenset[str] = frozenset(
+    {"ghcr.io/marin-community/rl-data-openresearcher@sha256:6ccb79c34d3c1da34c6bd947b9a0206e852b2e00d79b671efade9af1"}
+)
+"""Actor image pins that cannot run their source: the lightweight OpenResearcher base lacks its
+retrieval index and the full-index image exceeds Daytona's snapshot limit. Attempts that die in the
+actor phase under these pins type as ENVIRONMENT_ARTIFACT_MISSING with the pin, never as grader
+failures."""
 
 
 def task_spec_grader_machine_image(task: PreparedTask) -> str | None:
@@ -674,6 +694,17 @@ def run_task(
                 verifier_reached=result.verifier is not None and result.verifier.started_at is not None,
                 verdict=read_verdict(trial),
             )
+            if (
+                grader_infra_reason is None
+                and (result.verifier is None or result.verifier.started_at is None)
+                and result.exception_info is not None
+                and task_spec_actor_image(task) in DEFECTIVE_ACTOR_IMAGES
+            ):
+                # The actor environment died before grading under a pin that cannot run this
+                # source: the declared actor image is the missing artifact, not the grader.
+                grader_infra_reason = difficulty_gap_reason(
+                    DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, task_spec_actor_image(task)
+                )
         if deadline_phase is not None:
             reason = difficulty_gap_reason(DifficultyGap.MATH_VERIFIER_DEADLINE, deadline_phase)
         elif reward is not None:
