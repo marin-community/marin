@@ -2,22 +2,19 @@
 
 November 21, 2026 (PST).
 
-Fresh BATCH smoke `2026.11.21.8` is running from
-`233030789c6afd6aa61d315a001ce65ac7436007`, with the fixed XLA coordination
-repair and unchanged recipe. At 17:23 PST its CPU coordinator was running,
-with no GPU child yet discovered. Current-source accelerator acceptance is
-pending.
+BATCH smoke `2026.11.21.8`, from
+`233030789c6afd6aa61d315a001ce65ac7436007`, initialized the full 67B Snowball
+model on all four native learner hosts and byte-verified initial publication
+to all eight vLLM receivers. The fixed XLA coordination checks completed on
+every host. The first compiled update then failed at 18:04:31 PST, requesting
+41.05 GiB in `jit__train_step`. The exact buffer cause remains unknown. Both
+jobs are failed and all five GPU pods are gone.
 
-The preceding BATCH smoke
-`2026.11.21.7`, from `8f19c196456e2f600c0e4edb21f4339c0a8d5129`, has
-initialized all four native Snowball learner hosts on the 32-H100 data4/expert8
-mesh, byte-verified initial publication to all eight vLLM receivers, and completed
-the fixed 100-task baseline evaluation. It then failed at 15:55:55 PST in the
-first `ppo_train` call: three hosts reached a cross-entropy selection barrier,
-but rank 3 did not arrive before its deadline. Why that rank did not arrive is
-under investigation. All five GPU pods are gone. Real updates, publication and
-generation after an update, and checkpoint continuation remain unverified.
-The matched comparison is gated on full smoke acceptance.
+The quick loop now reaches generation and the compiled learner update with
+the original recipe, but no completed optimizer update is established.
+Publication and generation after an update, exact checkpoint continuation,
+and the matched 25-update comparison remain unverified. No comparison arm
+has been submitted; full smoke acceptance is still required.
 
 ## Scope and fixed recipe
 
@@ -71,8 +68,8 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Earlier smokes exposed device selection, mesh validation, response framing, timeout, and import-memory failures. Smoke `2026.11.21.7` initialized all four native hosts on the expected 32-device mesh, from the frozen checkpoint and model config. | Full runtime identity/installed parameter-count receipts, scoring, and two real parameter updates with the pinned CUDA kernels. |
-| Publication and resume | Initial H100 publication at model version zero passed all eight receiver byte comparisons, followed by generation stamped 1 and the 100-task baseline evaluation. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
+| Actual H100 | Smoke `2026.11.21.8` reports all four native process identities, GPU backend, H100 80GB devices, 67,078,882,816 installed parameters, and the expected 32-device data4/expert8 mesh. Its first compiled train step failed requesting 41.05 GiB. | Diagnose the train-memory failure and complete two real parameter updates with the pinned CUDA kernels. |
+| Publication and resume | Smoke `2026.11.21.8` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. The preceding `.7` smoke completed the 100-task baseline evaluation. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
@@ -267,7 +264,8 @@ data4/expert8 geometry with a 512-row batch and 32-row execution microbatches al
 passes locally, as do native checkpoint/restart and default FP32 compatibility
 checks. Generic unprepared callers retain their prior behavior; this repair
 does not qualify their multihost tracing or optimized GPU kernels. The repaired
-native path still requires a new H100 acceptance run.
+native path completed these host checks in the subsequent H100 smoke; its
+training-memory failure still prevents update acceptance.
 
 A supplemental affected-suite run on JAX/JAXLIB `0.11.1` recorded 4,124 passes,
 468 skips, and 29 failures with a 600-second session limit. All 13 launcher
@@ -281,9 +279,37 @@ runtime's pinned JAX/JAXLIB `0.11.0` and pass independently.
 
 Smoke `2026.11.21.8` uses coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.8-coordinator-31727573`.
-Its actual priority is BATCH, and its accepted source archive matches all 4,582
-frozen entries, including 42 required runtime files. No accelerator gate for
-this new source has passed yet.
+Both coordinator and child ran at BATCH priority from frozen source
+`233030789c6afd6aa61d315a001ce65ac7436007`. After one coordinator preemption,
+the recovered child suffix was
+`users-dlwh-checkpoints-snowball-inventory-2026.11.21.8-adaad932e340`.
+Both accepted source archives match all 4,582 frozen entries, including 42
+required runtime files; the actual model, inputs, native configuration,
+allocation, and Ray settings match the freeze.
+
+All four native processes reported GPU execution on H100 80GB devices,
+67,078,882,816 installed parameters, 32 global/eight local devices, step zero,
+and policy version zero. All eight initial receivers compared 19,687,358,464
+bytes each with zero mismatches. Returned generation carried stamp 1. The
+fixed CE host checks completed for both forward and train on every host.
+
+The first compiled update failed at `2026-11-22T02:04:31.543Z` with
+`RESOURCE_EXHAUSTED`, requesting 41.05 GiB in `jit__train_step`. The error
+surfaced at `Trainer.train_step`'s loss synchronization; the allocation size
+does not identify the offending HLO buffer or measure total peak memory.
+The [original trainer exception](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D14d%2Fskyrl%2Fmarin%2Fusers%2Fdlwh%2Fcheckpoints%2Fsnowball-inventory%2F2026.11.21.8%2Fattempts%2Frendezvous%2Fdebug_artifacts%2Frank0-g73e352%2Foutcomes%2Fskyrl-trainer.g73e352.17071.1795313071543634745.exception.json)
+is preserved at
+`s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/dlwh/checkpoints/snowball-inventory/2026.11.21.8/attempts/rendezvous/debug_artifacts/rank0-g73e352/outcomes/skyrl-trainer.g73e352.17071.1795313071543634745.exception.json`.
+Both jobs are failed; all five GPU pods are absent. The child head's output
+archive is empty and its siblings report none. No completed optimizer update,
+updated-policy publication, or native checkpoint continuation is established.
+
+Small CPU compiler probes show trainer-state donation and existing layer
+checkpointing, while a publication lifetime probe releases the BF16 snapshot
+after the session. Those checks do not explain the GPU allocation: CPU and
+GPU MoE kernels differ, and GPU allocator reservations were not measured.
+The memory diagnosis therefore remains open, with recipe, numerical
+tolerances, kernels, and memory fraction unchanged.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
@@ -295,7 +321,7 @@ Comparison versions `2026.11.21.2` and `2026.11.21.3` remain unsubmitted.
 The transport repair passes five pinned JAX/JAXLIB `0.11.0` cases: native
 import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
-No successful accelerator rerun is established by this record.
+No successful accelerator update is established by this record.
 Run from the repository with the required storage, evaluation, and judge
 credentials loaded. The smoke command records the submitted attempt; use a
 fresh unused version for another attempt.
