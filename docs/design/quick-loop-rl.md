@@ -647,6 +647,16 @@ switched to large contiguous reads on each host.
 [Direct Hub loading][hf-direct-loading] · [Current range planning][hf-current-range-planning] ·
 [Original slice reader][original-hf-slice-reader] · [Loader history][hf-loader-history]
 
+The held vLLM pilot uses distributed Run:ai streaming for the same
+regional source. The eight processes on its inference host divide the
+storage reads and exchange tensors. The original rank-zero log recorded
+15.6 GiB of storage payload in 23.1 seconds and 25.6 seconds for model
+loading. A plain Hub model ID follows vLLM's cache download path before
+the streamer runs. The Levanter `hf://` path reads model weights directly
+from the Hub.
+[Held vLLM coordinator][iris-held-vllm-pilot] ·
+[Distributed streaming][runai-distributed-streaming] · [vLLM model loader][vllm-runai-loader]
+
 SkyRL's Megatron loader already coalesces direct reads for rank-owned HF
 tensors and first-axis expert slices. Its Snowball comparison reduced
 policy-worker startup from 209.9 s to 75.3 s versus per-tensor requests.
@@ -1262,8 +1272,10 @@ The diagnostic compared four scorer variants on the second run's same
 bound replay, varying matmul precision, projection dtype and expert
 accumulation. All four had zero crossings. Use the pinned inventory scorer
 for acceptance and retain signed outlier positions in follow-up probes.
-The five-host online deployment, tool turns and held-learner measurements
-remain open. [Scorer attribution run][iris-native-67b-profiles] ·
+The later ordered-gather run passed 67B tool-turn replay and exposed a
+separate full-context score discrepancy after the live swap. The
+five-host online deployment and held-learner measurements remain open.
+[Scorer attribution run][iris-native-67b-profiles] ·
 [Byte-verified successful archive][native-67b-profiles-archive]
 
 The typed serving and learner pipes passed at 8,192 and 24,576 tokens on
@@ -1706,11 +1718,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Saved-frame attention diagnostic][iris-native-attention-profiles]
 
   The held comparison measures end-to-end rollout admission and optimizer
-  timing with four learner hosts. The 128-group frozen learner's warm
-  step 2 admitted 1.62 million sampled tokens. At 22 tokens per second,
-  the observed full-context native rate, that volume corresponds to about
-  20 hours of generation. Treat this as a scale check for one long-context
-  group. A bounded dry plan uses the same 40-H100 layout, four answers per
+  timing with four learner hosts. Step 2 of the third frozen Levanter
+  run generated 1,628,026 response tokens for 512 trajectories. At the
+  22-token-per-second native rate measured on the full-context group,
+  that volume corresponds to about 20 hours of generation. This
+  extrapolation uses one long-context group. The bounded pilot uses
+  the same 40-H100 layout, four answers per
   group, 32 groups per update, a 16,384-token prompt cap and a 24,576-token
   serving window. It uses common 512-token reply caps for rollout and
   evaluation in both arms. Keep the full-context production qualification
@@ -1847,6 +1860,8 @@ arms. [Prior timing comparison][timing]
 [hf-direct-loading]: https://github.com/marin-community/marin/pull/2348
 [hf-current-range-planning]: https://github.com/marin-community/marin/blob/main/lib/levanter/src/levanter/compat/fsspec_safetensor.py#L195-L258
 [skyrl-hf-prefetch]: https://github.com/marin-community/marin/pull/10662
+[runai-distributed-streaming]: https://github.com/dsx-ai-factory/model-streamer/blob/master/docs/src/usage.md#distributed-streaming
+[vllm-runai-loader]: https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/model_loader/runai_streamer_loader.py
 [down-rank-read-proof]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fproofs%2Fsnowball-down-rank-reads-586d56160770.tar.gz
 [native-shard-reader]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/levanter/src/levanter/tensorstore_serialization.py#L988-L1024
 [hf-to-native-converter]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/marin/src/marin/experiment/checkpoints.py#L125
