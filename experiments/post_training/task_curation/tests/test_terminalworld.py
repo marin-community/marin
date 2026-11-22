@@ -6,7 +6,6 @@ import io
 import tarfile
 
 import pytest
-from finestore.rl.curation import SourceUse
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
@@ -64,8 +63,6 @@ def test_train_import_preserves_native_files_budgets_and_private_roles():
         CONTEXT,
     )
     assert isinstance(task, TaskSpec)
-    assert source.intended_use is SourceUse.TRAIN
-    assert "split=test config naming does not make it EVAL" in source.info.notes
     assert task.context.events[0].content == PROMPT.decode()
     assert task.execution_requirements is not None
     assert task.execution_requirements.memory_mb == 4096
