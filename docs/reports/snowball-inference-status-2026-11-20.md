@@ -663,7 +663,8 @@ keeps 128 offered clients and caps each device decode step at eight tokens.
 [Stacked decode failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v2-continuous) · [Per-layer decode failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v3-layer-kv) · [Capped decode trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap)
 
 Both compiled vLLM baselines enabled the prefix cache and configured
-128 scheduler sequences and 8,192 batched tokens.
+128 scheduler sequences and 8,192 batched tokens. The strongest v5p-8
+and v6e-8 controls used `tpu-inference` at `2f327d385a`.
 
 | Hardware and engine | Completed requests | Output tokens | Output tok/s | p50 TTFT (ms) | p90 TTFT (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -1013,6 +1014,23 @@ active decode was 34.91 versus 35.30 tok/s and p90 TTFT was 3.29 versus
 with zero profiling errors. The 80-context geometry remains the
 stronger measured configuration.
 [96-context replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v39-96-contexts-original-contraction)
+
+Combining the packed expert routing metadata and activations into
+one gather reached 527.51 output tok/s with 80 contexts. On 368 turns
+shared with the original-contraction control, active decode was 34.18
+versus 35.16 tok/s and p90 TTFT was 3.25 versus 3.19 s. All paired
+output lengths matched. The branch uses the separate gathers.
+[Fused routing trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v41-80-contexts-fused-packed-routing)
+
+The published native implementation with 80 contexts and a single
+retained window span reached 523.48 output tok/s and 3.78 s p90 TTFT.
+All 367 output lengths paired with the earlier compiled vLLM run
+matched. The vLLM leg of this same-slice job failed during checkpoint
+loading with `Trying to resize storage that is not resizable`. It used
+`tpu-inference` at `a8fc5c9f6d`. The successful 549.46 tok/s control used
+`2f327d385a` with the same `vllm` commit `fb02daf1d7`. The same-slice
+retry uses that exact compiled control pin.
+[Native result and startup failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v40-packed-branch) · [Restored-pin retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v44-restored-vllm-pin)
 
 Among successful replay requests, the time-weighted p90 number of
 requests awaiting a first token was seven on native v5p-8 versus three
