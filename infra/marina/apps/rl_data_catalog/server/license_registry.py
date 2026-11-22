@@ -4,7 +4,7 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.16.6",
+  "version": "2026.11.22.b-license-exclusions.1",
   "bans": [
     {
       "source_id": "FWeindel:validated-tasks/tmax11-v1.1",
@@ -548,6 +548,245 @@ LICENSE_BANS = r"""{
       ],
       "decided_at": "2026-11-15T18:11:47.896163+00:00",
       "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-python",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-python",
+      "upstream_revision": "9cd539d223f101588e2604c9de7a58f16d2f26e7",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-python/tree/9cd539d223f101588e2604c9de7a58f16d2f26e7?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-typescript",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-typescript",
+      "upstream_revision": "0befa932636d239ceeeadeea84109c460d70cec9",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-typescript/tree/0befa932636d239ceeeadeea84109c460d70cec9?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-csharp",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-csharp",
+      "upstream_revision": "d1ef4c19a8b4c6cf0893cfc8b0d8f2821da64c62",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-csharp/tree/d1ef4c19a8b4c6cf0893cfc8b0d8f2821da64c62?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-python-v2",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-python-v2",
+      "upstream_revision": "ece476da1479f738677e5de691118c002eb9b610",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-python-v2/tree/ece476da1479f738677e5de691118c002eb9b610?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-java_10k",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-java_10k",
+      "upstream_revision": "d4305a34fe45ab97a1b18fdddba6755916ae1b3b",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-java_10k/tree/d4305a34fe45ab97a1b18fdddba6755916ae1b3b?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-csharp_10k",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-csharp_10k",
+      "upstream_revision": "3c247803bdf2c06e81d29a9d1149d2db48e9c85c",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-csharp_10k/tree/3c247803bdf2c06e81d29a9d1149d2db48e9c85c?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-python-v2_10k",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-python-v2_10k",
+      "upstream_revision": "2644406f15380e8805f52806861196047fa3de37",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-python-v2_10k/tree/2644406f15380e8805f52806861196047fa3de37?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:exp_rpt_crosscodeeval-typescript_10k",
+      "upstream_id": "DCAgent/exp_rpt_crosscodeeval-typescript_10k",
+      "upstream_revision": "c93cf519ed37528f979183e5518e67ce80ae30ad",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/exp_rpt_crosscodeeval-typescript_10k/tree/c93cf519ed37528f979183e5518e67ce80ae30ad?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:a1_crosscodeeval_java",
+      "upstream_id": "DCAgent/a1_crosscodeeval_java",
+      "upstream_revision": "a32226762a9eb22eeb7ed132909af2fa5ac3c83e",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/DCAgent/a1_crosscodeeval_java/resolve/a32226762a9eb22eeb7ed132909af2fa5ac3c83e/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:a1_crosscodeeval_csharp",
+      "upstream_id": "DCAgent/a1_crosscodeeval_csharp",
+      "upstream_revision": "8267569628c25f373bd2e058821705881fa3545f",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/DCAgent/a1_crosscodeeval_csharp/resolve/8267569628c25f373bd2e058821705881fa3545f/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:a1_crosscodeeval_python",
+      "upstream_id": "DCAgent/a1_crosscodeeval_python",
+      "upstream_revision": "f3ba544b844fccc01adfa272bf4717b3fc691e7b",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/DCAgent/a1_crosscodeeval_python/resolve/f3ba544b844fccc01adfa272bf4717b3fc691e7b/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:a1_crosscodeeval_typescript",
+      "upstream_id": "DCAgent/a1_crosscodeeval_typescript",
+      "upstream_revision": "7663e75450af4ceae0c6684ff5ab183ebef5c409",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/DCAgent/a1_crosscodeeval_typescript/resolve/7663e75450af4ceae0c6684ff5ab183ebef5c409/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "DCAgent:a1_crosscodeeval",
+      "upstream_id": "DCAgent/a1_crosscodeeval",
+      "upstream_revision": "53074ddf9fdee51c8bca0fcc2ffb465c8539ceea",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "FAIL F2: no declared license; dataset banned for TRAIN/EVAL under the standing doubt rule.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/DCAgent/a1_crosscodeeval/tree/53074ddf9fdee51c8bca0fcc2ffb465c8539ceea?recursive=true",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "laion:tasktrove-bugsinpy-v4-oracle17-apptainer-v1",
+      "upstream_id": "laion/tasktrove-bugsinpy-v4-oracle17-apptainer-v1",
+      "upstream_revision": "a2f98ed57d4bf72604a79f78d0f95c3b847aa757",
+      "classification": "unknown",
+      "license_ids": [
+        "Apache-2.0",
+        "other"
+      ],
+      "reason": "E2: license:other/mixed terms leave dataset permission unresolved; doubt rule bans TRAIN/EVAL.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/laion/tasktrove-bugsinpy-v4-oracle17-apptainer-v1/resolve/a2f98ed57d4bf72604a79f78d0f95c3b847aa757/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     }
   ]
