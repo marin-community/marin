@@ -233,7 +233,7 @@ def convert(row: RawRow, context: ConversionContext, *, condition: KnowledgeCond
         environment=actor,
         package=package,
         reference_program=None,
-        importer_revision=VERSION,
+        importer_revision=row.source.importer_revision,
     )
     return task.model_copy(
         update={
