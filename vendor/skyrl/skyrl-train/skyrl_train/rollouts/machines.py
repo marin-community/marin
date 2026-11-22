@@ -6,7 +6,18 @@ from enum import StrEnum
 from pathlib import Path
 
 from loguru import logger
-from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import (
+    Backend,
+    Command,
+    ExecutionRequirements,
+    Machine,
+    MachineFactory,
+    MachineSpec,
+    ProcessMachine,
+    ProcessSession,
+    Result,
+    UnsupportedMachineSpec,
+)
 
 _PASSTHROUGH_ERRORS = (TypeError, ValueError, AttributeError, LookupError, AssertionError)
 
@@ -59,6 +70,16 @@ class _OwnedMachine:
             raise
         except Exception as error:
             raise TaskMachineError("Task-machine download failed", MachineOperation.DOWNLOAD) from error
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        if not isinstance(self.machine, ProcessMachine):
+            raise UnsupportedMachineSpec("The task machine does not support persistent process sessions")
+        try:
+            return await self.machine.open_process(command)
+        except _PASSTHROUGH_ERRORS:
+            raise
+        except Exception as error:
+            raise TaskMachineError("Task-machine process session failed", MachineOperation.RUN) from error
 
     def begin_close(self) -> asyncio.Task[None]:
         if self.closing is None:

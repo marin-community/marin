@@ -22,6 +22,8 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     PackageSpec,
+    ProcessMachine,
+    ProcessSession,
     Result,
     UnsupportedMachineSpec,
 )
@@ -187,6 +189,11 @@ class _OwnedMachine:
 
     async def download(self, source: str, target: Path) -> None:
         await self.machine.download(source, target)
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        if not isinstance(self.machine, ProcessMachine):
+            raise UnsupportedMachineSpec("The owned machine does not support persistent process sessions")
+        return await self.machine.open_process(command)
 
     async def close(self) -> None:
         pass

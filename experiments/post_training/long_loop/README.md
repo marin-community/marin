@@ -1060,6 +1060,11 @@ Shellbox relay for `search` and `get_document`. Grading uses the original script
 in its separate verifier machine. The child remains alive through the run and
 terminates during cleanup. No endpoint or credential is stored in the dataset.
 
+The Daytona verifier uses a machine-local HTTP relay for its native judge
+requests. The owning host forwards the original payload with its HTTP client;
+the upstream judge credential stays on the host. This avoids the provider's
+rejection of the native Python `urllib` client without changing grading rules.
+
 This source path does not require main runtime adoption or a consumer-gate
 profile. Message-trace source qualification and exact-token RL training are
 separate checks; a source rollout does not establish an optimizer update.
