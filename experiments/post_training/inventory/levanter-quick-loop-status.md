@@ -96,14 +96,28 @@ actual Trainer's gradient accumulation path produced finite raw gradients and
 a finite changed model/Adam state. Its CPU-reference scores differ from the GPU
 scores, so this establishes geometry/objective sanity rather than GPU parity.
 
-The next bounded GPU suite records raw gradients before clipping, checks three
-direct FA4 backward cases against the existing reference oracle/tolerances, and
-runs a D128/GQA4 tiny-model lifecycle control only if its raw gradients are
-finite. The failed tiny fixture uses an H64 MHA fallback backward path; the
-67B model uses D128/GQA4. That source-path difference is a diagnostic lead, not
-a proven numerical cause. Full-model sequence/window geometry and cross-host
-behavior remain separate gates. No new 40-H100 full-model smoke or matched
-25-update comparison has been launched.
+The eight-H100 suite `/dlwh/native-lifecycle-gradients-2026-11-22-1`, from
+`210e34760fd1885c769f4b769599abc2dbbc2e67`, completed with all task exits zero
+and its full archive was inspected. The original tiny fixture still has
+non-finite raw gradients, localized to the final block's Q/K reverse path.
+All three isolated FA4 output/backward comparisons passed the existing
+reference tolerances, including the original short-sequence shape. Those
+random-input controls do not establish the cause for actual model inputs.
+
+The aligned D128/GQA4 fixture had finite raw gradients, finite step-one model
+and Adam arrays, exact checkpoint restoration and two finite loss values.
+Its strict resumed-versus-uninterrupted state comparison failed in both arms.
+The independent first updates already differed before teardown: the largest
+model difference was 0.001924626 and the largest Adam difference was
+0.0000163091, at this diagnostic's 0.001 learning rate. This is measured
+run-to-run divergence; its cause is not established. Control-state arrays were
+not saved, so the resumed-versus-control deviation remains unmeasured. The next
+probe will preserve those arrays and capture actual attention inputs and
+cotangents without relaxing the exact gate.
+
+Full-model sequence/window geometry and cross-host behavior remain separate
+gates. No new 40-H100 full-model smoke or matched 25-update comparison has been
+launched.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
