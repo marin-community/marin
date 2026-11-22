@@ -161,6 +161,7 @@ class SourceOrigin(StrEnum):
     GRETEL = "Gretel"
     HARBOR_HUB = "Harbor Hub"
     HUGGINGFACEH4 = "HuggingFaceH4"
+    LEGO_X = "Lego-X"
     LM_EVAL = "lm-eval"
     MARCUSM117 = "marcusm117"
     MARIN = "Marin"
