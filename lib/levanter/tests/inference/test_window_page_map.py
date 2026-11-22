@@ -7,6 +7,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
@@ -14,7 +15,8 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 
-def test_window_pool_matches_full_cache_across_eviction_and_reuse():
+@pytest.mark.parametrize("window_capacity", [48, 57], ids=["minimum", "with-spare-pages"])
+def test_window_pool_matches_full_cache_across_eviction_and_reuse(window_capacity):
     config = SnowballConfig(
         vocab_size=23,
         hidden_dim=16,
@@ -62,7 +64,7 @@ def test_window_pool_matches_full_cache_across_eviction_and_reuse():
         model = SnowballLMHeadModel.init(hax.Axis("vocab", 23), config, key=jax.random.key(41))
         full = InferenceEngine.from_model_with_config(model, None, serving)
         hybrid = InferenceEngine.from_model_with_config(
-            model, None, dataclasses.replace(serving, window_cache_max_pages=57)
+            model, None, dataclasses.replace(serving, window_cache_max_pages=window_capacity)
         )
         # The histories exceed the compact pool and revisit an evicted prefix.
         for rid, batch in enumerate(((initial,), (related,), (second, third), (initial, related))):

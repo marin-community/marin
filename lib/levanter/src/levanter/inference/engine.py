@@ -1127,11 +1127,13 @@ class _PageReservation:
     shared_pages: np.ndarray | None = None
 
 
-def _window_working_set_pages(config: InferenceEngineConfig, table: PageTable, window: int) -> int:
+def _window_working_set_pages(
+    config: InferenceEngineConfig, table: PageTable, window: int, sequence_count: int
+) -> int:
     # Budget every live tail and all new pages in the largest packed prefill.
     prefill_capacity = config.max_prefill_size or table.max_len_per_seq
     return (
-        config.max_seqs * ((window + table.page_size - 1) // table.page_size + 1)
+        sequence_count * ((window + table.page_size - 1) // table.page_size + 1)
         + (prefill_capacity + table.page_size - 1) // table.page_size
         + config.max_seqs_in_prefill
     )
@@ -1169,14 +1171,11 @@ class InferenceEngine:
         self.tokenizer = tokenizer
         self.sampler = sampler
         window_pages = None
-        self._window_terminal_limit = 0
         if config.window_cache_max_pages is not None:
             assert isinstance(model, SnowballLMHeadModel)
             window_pages = WindowPageMap.init(
                 decode_state.page_table.num_pages, config.window_cache_max_pages, model.config.sliding_window
             )
-            working_set = _window_working_set_pages(config, decode_state.page_table, model.config.sliding_window)
-            self._window_terminal_limit = config.window_cache_max_pages - working_set
         self.gen_state = GenState(cache=cache, decode_state=decode_state, window_pages=window_pages)
         self._initial_decode_state = decode_state
         # Impute max_prefill_size if not set
@@ -1247,7 +1246,7 @@ class InferenceEngine:
                 or model.config.projection_implementation != "native"
             ):
                 raise ValueError("Sliding-window KV requires split per-layer Snowball buffers and native projection")
-            min_window_pages = _window_working_set_pages(config, table, model.config.sliding_window)
+            min_window_pages = _window_working_set_pages(config, table, model.config.sliding_window, config.max_seqs)
             if not min_window_pages <= window_capacity < table.num_pages:
                 raise ValueError(f"Sliding-window KV capacity must be in [{min_window_pages}, {table.num_pages})")
         if use_layer_caches:
@@ -1421,13 +1420,17 @@ class InferenceEngine:
 
     def _refresh_window_prompt_tails(self) -> None:
         window_pages = self.gen_state.window_pages
-        if window_pages is None or self._window_terminal_limit == 0:
+        if window_pages is None:
             return
 
         page_size = self.config.page_size
         retained_tail = (window_pages.window + page_size - 1) // page_size + 1
         mask = np.zeros(window_pages.logical_to_window.size, dtype=np.bool_)
-        free = self._window_terminal_limit
+        # Admission refreshes pins with all newly reserved slots before launching prefill.
+        working_set = _window_working_set_pages(
+            self.config, self.gen_state.decode_state.page_table, window_pages.window, len(self.local_map)
+        )
+        free = window_pages.window_to_logical.size - working_set
         for prompt in reversed(self._cached_prompts):
             tail = prompt.pages[-retained_tail:]
             cost = int(np.count_nonzero(~mask[tail]))

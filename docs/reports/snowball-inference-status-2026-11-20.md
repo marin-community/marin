@@ -689,6 +689,7 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v6e-8, 24 logical contexts with retained window tails](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v13-hybrid-terminal-pins) | 359 | 102,751 | 509.62 | 1,379 | 3,375 |
 | [v6e-8, fused short prefill and wider full-attention decode tiles](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v15-fused-prefill-wide-decode) | 370 | 105,318 | 533.04 | 1,211 | 3,412 |
 | [v6e-8, wider decode tiles and fused prefill through 8,192 tokens](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v16-parity-prefill-8k) | 373 | 106,159 | 537.08 | 1,191 | 2,869 |
+| [v6e-8, window tail pin budget based on live sequences](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v18-live-window-pins) | 401 | 112,762 | 592.58 | 815 | 2,201 |
 
 The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
 v6e-8 baseline ran in `us-east1` with one disconnected request. Native
@@ -925,6 +926,19 @@ Fresh serial 8,192-token prefill took 150 ms versus 177 ms for vLLM.
 Fresh 2,048-token TTFT was 60 ms versus 56 ms, and the five primed
 medians were 1–9 ms slower. The longest fresh prefill reached
 48.0k versus 43.8k prompt tok/s.
+
+Basing the terminal-window pin budget on live sequences raised
+v6e-8 AgentX throughput to 592.58 tok/s without adding KV pages.
+This run used a different v6e-8 worker, in `us-east1`. It exceeded the
+highest compiled vLLM result of 554.00 tok/s by 7.0%. All 391 paired
+output lengths matched, with zero errors. Paired active decode was
+43.65 versus 36.33 tok/s and overall p90 TTFT was 2.20 versus 1.31 s.
+On 373 common turns with the earlier native run, active decode rose
+from 34.89 to 43.68 tok/s and p90 TTFT fell from 2.87 to 2.22 s.
+Admission logs counted 12.09 million reused prompt tokens across 273
+admissions during the sending window, up from 10.15 million across
+228 admissions. Fresh serial 8,192-token TTFT remained at 150 ms and
+64,512-token prefill reached 48.0k prompt tok/s.
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
