@@ -1,0 +1,269 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Synthetic (left, right) pairs for the classifier, with exact labels for both outputs.
+
+``generic``: eval items written into host records in one of several layouts (lettered,
+numbered, Markdown, JSON, upper case, question only, a cut-off question), and negatives: the
+host alone, another item, another item with the same question, and variants of the item (a
+changed number, word or operator, or an added constraint).
+
+``context``: the item, or a variant of it, written into the text of a real stage-1 candidate of
+the same item, so positives and negatives sit in text that shares the item's rare window and topic.
+
+Labels: ``label_q`` is 1 when the right text holds the item's question; ``label_qa`` is 1 when it
+also holds the answer text after the question; ``label`` (the one-output model) is 1 when it holds
+this item, so the same question with other choices has ``label_q`` 1 and ``label`` 0.
+"""
+
+import argparse
+import io
+import json
+import logging
+import random
+import re
+from collections.abc import Iterator
+from typing import Any
+
+import pandas as pd
+import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
+from rigging.log_setup import configure_logging
+
+from experiments.datakit.decontam.encoder.text_keys import text_stream
+
+logger = logging.getLogger(__name__)
+EVALS_PER_FAMILY = 6
+MAX_QUESTION = 3000
+HOST_FILES = 12
+HOST_TEXTS = 400
+MIN_HOST = 400
+LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 4
+NUMBER = re.compile(r"\d+")
+WORD = re.compile(r"[A-Za-z]{5,}")
+OPERATORS = (
+    ("+", "-"),
+    ("-", "+"),
+    ("<", ">"),
+    (">", "<"),
+    ("increase", "decrease"),
+    ("more", "less"),
+    ("maximum", "minimum"),
+)
+
+
+def layout(item: dict[str, Any], rng: random.Random) -> str:
+    """The item as a copy could write it: one of several layouts of question, choices and answer."""
+    question, choices, answer = item["question"], list(item["choices"]), item["answer"]
+    style = rng.choice(["lettered", "parens", "numbered", "plain", "markdown", "json", "upper", "qa"])
+    if style == "json":
+        return json.dumps({"question": question, "choices": choices, "answer": answer}, ensure_ascii=rng.random() < 0.5)
+    if style == "qa" or not choices:
+        text = f"Question: {question}\nAnswer: {answer}" if rng.random() < 0.7 else question
+    elif style == "lettered":
+        text = question + "\n" + "\n".join(f"{LABELS[i]}. {c}" for i, c in enumerate(choices)) + f"\nAnswer: {answer}"
+    elif style == "parens":
+        text = question + " " + " ".join(f"({LABELS[i]}) {c}" for i, c in enumerate(choices))
+    elif style == "numbered":
+        text = question + "\n" + "\n".join(f"{i + 1}) {c}" for i, c in enumerate(choices))
+    elif style == "markdown":
+        text = f"**{question}**\n" + "\n".join(f"- {c}" for c in choices)
+    else:
+        text = question + "\n" + "\n".join(choices)
+    if style == "upper":
+        text = text.upper()
+    if item.get("passage") and rng.random() < 0.5:
+        text = item["passage"] + "\n\n" + text
+    return text
+
+
+def question_only(item: dict[str, Any], rng: random.Random) -> str:
+    style = rng.choice(["plain", "prefixed", "markdown", "upper", "json"])
+    question = item["question"]
+    if style == "prefixed":
+        return f"{rng.choice(['Q:', 'Question:', 'Problem:', '#'])} {question}"
+    if style == "markdown":
+        return f"**{question}**"
+    if style == "upper":
+        return question.upper()
+    if style == "json":
+        return json.dumps({"prompt": question}, ensure_ascii=rng.random() < 0.5)
+    return question
+
+
+def truncated(item: dict[str, Any], rng: random.Random) -> str:
+    """The question with a fifth of its words cut at the start or the end, as an excerpt edge does."""
+    words = item["question"].split()
+    cut = max(1, len(words) // 5)
+    return " ".join(words[cut:]) if rng.random() < 0.5 else " ".join(words[:-cut])
+
+
+def variant(item: dict[str, Any], others: list[dict[str, Any]], rng: random.Random) -> tuple[str, str] | None:
+    """Another problem made from this one: a changed number, word or operator, or an added constraint."""
+    question = item["question"]
+    kinds = ["number", "word", "operator", "constraint"]
+    rng.shuffle(kinds)
+    for kind in kinds:
+        if kind == "number" and (numbers := list(NUMBER.finditer(question))):
+            match = rng.choice(numbers)
+            changed = str(int(match.group()) + rng.choice([1, 2, 3, 7, 10]))
+            return kind, question[: match.start()] + changed + question[match.end() :]
+        if kind == "word":
+            words = list(WORD.finditer(question))
+            pool = [word for other in others for word in WORD.findall(other["question"])]
+            if words and pool:
+                match = rng.choice(words)
+                return kind, question[: match.start()] + rng.choice(pool) + question[match.end() :]
+        if kind == "operator" and (found := [(a, b) for a, b in OPERATORS if a in question]):
+            a, b = rng.choice(found)
+            index = rng.choice([m.start() for m in re.finditer(re.escape(a), question)])
+            return kind, question[:index] + b + question[index + len(a) :]
+        if kind == "constraint" and others:
+            sentence = re.split(r"(?<=[.?!])\s+", rng.choice(others)["question"])[0][:200]
+            return kind, question.rstrip() + " Additionally, " + sentence[:1].lower() + sentence[1:]
+    return None
+
+
+def holds_answer(item: dict[str, Any], inserted: str) -> int:
+    """1 when the inserted text holds the question and, after it, the answer text."""
+    text, question, answer = text_stream(inserted), text_stream(item["question"]), text_stream(item["answer"])
+    at = text.find(question[: max(20, len(question) // 2)]) if question else -1
+    return int(at >= 0 and bool(answer) and text.find(answer, at) >= 0)
+
+
+def _left(item: dict[str, Any]) -> str:
+    return item["question"] + ("\n" + item["answer"] if item["answer"] else "")
+
+
+def _row(item: dict[str, Any], right: str, kind: str, label: int, label_q: int, label_qa: int) -> dict[str, Any]:
+    return {
+        "eval": item["eval"],
+        "item": item.get("id", ""),
+        "left": _left(item),
+        "right": right,
+        "kind": kind,
+        "label": label,
+        "label_q": label_q,
+        "label_qa": label_qa,
+    }
+
+
+def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Random) -> Iterator[dict[str, Any]]:
+    by_question: dict[str, list[int]] = {}
+    for number, item in enumerate(items):
+        by_question.setdefault(item["question"], []).append(number)
+
+    def placed(inserted: str) -> str:
+        host = rng.choice(hosts)
+        start = rng.randrange(0, max(1, len(host) - 1200))
+        before = host[start : start + rng.randrange(0, 600)]
+        after = host[start + len(before) : start + len(before) + rng.randrange(0, 600)]
+        return before + "\n" + inserted + "\n" + after
+
+    for item in items:
+        inserted = layout(item, rng)
+        yield _row(item, placed(inserted), "copy", 1, 1, holds_answer(item, inserted))
+        yield _row(item, placed(question_only(item, rng)), "question_only", 1, 1, 0)
+        if len(item["question"].split()) >= 15 and rng.random() < 0.5:
+            yield _row(item, placed(truncated(item, rng)), "truncated", 1, 1, 0)
+        others = [items[rng.randrange(len(items))] for _ in range(3)]
+        if found := variant(item, others, rng):
+            yield _row(item, placed(layout({**item, "question": found[1]}, rng)), f"variant_{found[0]}", 0, 0, 0)
+        kind = rng.choice(["none", "other", "same_question"])
+        if kind == "same_question" and len(by_question[item["question"]]) > 1:
+            kind = "other"
+            same = [items[i] for i in by_question[item["question"]] if items[i]["answer"] != item["answer"]]
+            if same:
+                # The same question with other choices: the question is there, this item is not.
+                yield _row(item, placed(layout(rng.choice(same), rng)), "same_question", 0, 1, 0)
+                continue
+        if kind == "other":
+            yield _row(item, placed(layout(rng.choice(items), rng)), "other", 0, 0, 0)
+        else:
+            yield _row(item, placed(""), "none", 0, 0, 0)
+
+
+def context_pairs(candidates: pd.DataFrame, rng: random.Random) -> Iterator[dict[str, Any]]:
+    items = [
+        {"id": i, "eval": e, "question": q, "choices": list(c), "answer": a or "", "passage": ""}
+        for i, e, q, c, a in zip(
+            candidates["item"],
+            candidates["eval"],
+            candidates["question"],
+            candidates["choices"],
+            candidates["answer"],
+            strict=True,
+        )
+    ]
+    for item, right in zip(items, candidates["right"], strict=True):
+        cut = rng.randrange(len(right) // 3, max(len(right) // 3 + 1, 2 * len(right) // 3))
+        before, after = right[:cut], right[cut:]
+        inserted = layout(item, rng)
+        yield _row(item, before + "\n" + inserted + "\n" + after, "ctx_copy", 1, 1, holds_answer(item, inserted))
+        others = [items[rng.randrange(len(items))] for _ in range(3)]
+        if found := variant(item, others, rng):
+            changed = layout({**item, "question": found[1]}, rng)
+            yield _row(item, before + "\n" + changed + "\n" + after, f"ctx_variant_{found[0]}", 0, 0, 0)
+
+
+def read_parquet(path: str, columns: list[str] | None = None) -> pd.DataFrame:
+    with StoragePath(path).open("rb") as source:
+        return pq.read_table(io.BytesIO(source.read()), columns=columns).to_pandas()
+
+
+def main() -> None:
+    configure_logging(logging.INFO)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=["generic", "context"])
+    parser.add_argument("--items", help="generic: item table directory (items/*.parquet)")
+    parser.add_argument("--hosts", help="generic: glob of parquet files with a text column; the first 12 are used")
+    parser.add_argument("--per-eval", type=int, default=60, help="generic: items sampled per eval")
+    parser.add_argument("--candidates", help="context: scored stage-1 pairs (parquet)")
+    parser.add_argument(
+        "--exclude-items", nargs="*", default=[], help="parquet files with an item column: items kept out"
+    )
+    parser.add_argument("--size", type=int, default=12000, help="context: candidates used")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args()
+    rng = random.Random(args.seed)
+    excluded = {item for path in args.exclude_items for item in read_parquet(path, ["item"])["item"]}
+    if args.mode == "generic":
+        paths = sorted(str(path) for path in StoragePath(f"{args.items}/*.parquet").glob())
+        families: dict[str, list[str]] = {}
+        for path in paths:
+            families.setdefault(path.rsplit("/", 1)[1].split("_")[0], []).append(path)
+        chosen = [path for group in families.values() for path in rng.sample(group, min(len(group), EVALS_PER_FAMILY))]
+        frames = []
+        for path in chosen:
+            frame = read_parquet(path)
+            frame = frame[(frame["reason"] == "") & frame["question"].str.len().between(1, MAX_QUESTION - 1)]
+            frames.append(frame.sample(min(len(frame), args.per_eval), random_state=args.seed))
+        items = pd.concat(frames, ignore_index=True)
+        items = items[~items["id"].isin(excluded)].to_dict("records")
+        hosts = []
+        for path in sorted(str(path) for path in StoragePath(args.hosts).glob())[:HOST_FILES]:
+            with StoragePath(path).open("rb") as source:
+                texts = pq.ParquetFile(io.BytesIO(source.read())).read_row_group(0, columns=["text"]).column("text")
+            hosts += [text for text in texts.to_pylist()[:HOST_TEXTS] if text and len(text) > MIN_HOST]
+        rows = list(generic_pairs(items, hosts, rng))
+    else:
+        candidates = read_parquet(args.candidates)
+        candidates = candidates[~candidates["item"].isin(excluded)]
+        rows = list(context_pairs(candidates.sample(min(args.size, len(candidates)), random_state=args.seed), rng))
+    frame = pd.DataFrame(rows)
+    evals = sorted(frame["eval"].unique())
+    held_out = set(random.Random(args.seed).sample(evals, len(evals) // 5)) if args.mode == "generic" else set()
+    frame["split"] = ["test" if e in held_out else "train" for e in frame["eval"]]
+    frame["source"] = "synthetic" if args.mode == "generic" else "synthetic_ctx"
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer)
+    with StoragePath(args.output).open("wb") as sink:
+        sink.write(buffer.getvalue())
+    logger.info(
+        "%s: %d pairs; %s", args.mode, len(frame), frame.groupby(["kind", "label_q", "label_qa"]).size().to_dict()
+    )
+
+
+if __name__ == "__main__":
+    main()
