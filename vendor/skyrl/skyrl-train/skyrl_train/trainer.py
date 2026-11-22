@@ -2831,8 +2831,12 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        """Commit this step's checkpoint, reusing an already completed save."""
         await self._drain_checkpoint_upload()
+        # Evaluation's best-checkpoint callback can follow a cadence save whose
+        # commit marker was still uploading when evaluation began.
+        if self._last_saved_step == self.global_step:
+            return
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration

@@ -1,11 +1,86 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import ray
 from omegaconf import OmegaConf
 
-from skyrl_train.callbacks.base import TrainerControl, TrainerState
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.rollouts.context import TrainingContextState
+from skyrl_train.rollouts.loader import PromptLoaderState
+from skyrl_train.trainer import RayPPOTrainer
+
+
+class CheckpointPolicy:
+    """Local policy RPC boundary that rejects overwriting an existing shard."""
+
+    def async_run_ray_method(self, _dispatch, _method, *, ckpt_dir, tokenizer):
+        directory = Path(ckpt_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / "weights.pt").open("xb") as shard:
+            shard.write(b"policy weights")
+        return []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cadence_save", ["absent", "pending", "committed"])
+async def test_best_selection_reuses_cadence_checkpoint_without_overwriting_shards(tmp_path, monkeypatch, cadence_save):
+    # Keep only accelerator RPCs local; snapshot serialization, asynchronous
+    # marker publication, and best-checkpoint selection use production code.
+    monkeypatch.setattr(ray, "get", lambda result: result)
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = get_default_config()
+    trainer.cfg.trainer.ckpt_path = str(tmp_path)
+    trainer.cfg.trainer.max_ckpts_to_keep = -1
+    trainer.global_step = 2
+    trainer._last_saved_step = None
+    trainer._pending_checkpoint_upload = None
+    trainer.colocate_all = False
+    trainer.policy_model = CheckpointPolicy()
+    trainer.tokenizer = None
+    trainer.distillation_scored_tokens_total = 0
+    trainer._ftpo_stopped = False
+    trainer._domain_balancer = None
+    trainer.all_timings = {}
+    trainer.callback_handler = CallbackHandler()
+    trainer._control = TrainerControl()
+
+    async def rollout_state():
+        return TrainingContextState(PromptLoaderState({"epoch": 0, "position": 2}, []), [], None)
+
+    trainer.context = SimpleNamespace(state_dict=rollout_state)
+    state = TrainerState(2, 0, 20, 20)
+    if cadence_save != "absent":
+        await trainer._save_intermediate_checkpoint(state)
+        if cadence_save == "committed":
+            await trainer._drain_checkpoint_upload()
+
+    callback = create_callbacks_from_config(
+        OmegaConf.create({"trainer": {"callbacks": [{
+            "type": "best_checkpoint", "initial_model_uri": "base-model",
+            "expected_tasks": 40, "minimum_scored_tasks": 40,
+        }]}})
+    )[0]
+    await callback.on_evaluate_async(
+        state, TrainerControl(), trainer=trainer,
+        metrics={"eval/all/num_attempted": 40, "eval/all/num_scored": 40, "eval/all/avg_verifier_score": 0.5},
+    )
+
+    checkpoint = tmp_path / "global_step_2"
+    selected = json.loads((tmp_path / "best_checkpoint.json").read_text())
+    assert selected["model_uri"] == str(checkpoint / "policy")
+    assert selected["model_format"] == "native"
+    assert (checkpoint / "trainer_state.pt").is_file()
+    assert (checkpoint / "data.pt").is_file()
+    assert (checkpoint / "policy/weights.pt").read_bytes() == b"policy weights"
+
+    # A later optimizer step must still save its own weights.
+    trainer.global_step = 3
+    await trainer.save_checkpoints()
+    assert (tmp_path / "global_step_3/policy/weights.pt").read_bytes() == b"policy weights"
 
 
 @pytest.mark.asyncio
