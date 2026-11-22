@@ -189,7 +189,7 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
             # The LOCAL backend refuses tag references: deliver the digest-pinned image the
             # in-region build recorded, falling back to the identity tag when no record exists.
             try:
-                from marin.execution.artifact import read_record
+                from marin.execution.artifact import read_record  # noqa: PLC0415
 
                 record = read_record(
                     f"{REGIONAL_ENVIRONMENT_ROOT}/env-{identity[:IDENTITY_CHARS]}/{ENVIRONMENT_ARTIFACT_VERSION}"
