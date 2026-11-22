@@ -1,0 +1,14 @@
+experiment: X0242d1024
+track: competitive-d1024
+runs:
+  seed0:
+    seed: 0
+    variant: document n-gram count cache mixed into output
+    flags:
+    - --model-set
+    - ngram_cache_mixture=true
+  control:
+    seed: 0
+    variant: competitive-d1024 control
+    control: true
+    shared: s7n-d1024
