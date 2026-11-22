@@ -14,7 +14,10 @@ with the advisory disabled, and VMM at 0.90 with preallocation off. Both
 accepted bundles match all 4,583 frozen entries, including 43 required runtime
 files, and the executed configuration matches the preflight. All five physical
 hosts changed, so improved loading does not isolate the policy's effect from
-placement. Publication, updates, and resume remain pending at this check.
+placement. By 23:37 PST, initial model-version-zero publication was byte-exact
+on all eight vLLM receivers, generation returned nonempty stamp-1 tokens, and
+initial evaluation completed 100/100 tasks. The first compiled update was
+executing; completed optimizer updates and resume remained unverified.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
@@ -42,7 +45,8 @@ The optional native policy defaults to `None`; the quick-loop candidate selects
 tests passed fresh-process policy validation and exact continuation of model,
 Adam, RNG, step, and averaging state under both policies. Required
 checks and independent review passed. The macOS NumPy getter always returns
-false, so effective Linux policy and improved loading remain runtime gates.
+false, so those CPU tests alone cannot establish Linux policy or improved
+loading; `.13` now confirms the effective Linux setting.
 
 BATCH smoke `2026.11.21.11`, from
 `e9fa30e8a2230a4015d8488280d2b375b81ea07d`, failed at the existing
@@ -144,7 +148,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
 | Actual H100 | Smoke `2026.11.21.13` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, effective NumPy advisory disabled on Linux, and VMM at 0.90 with preallocation off. Standard JAX memory counters are unavailable for VMM; this is an observed policy, not a measured allocator cap. | Qualify memory management through publication and two real parameter updates with the pinned CUDA kernels. |
-| Publication and resume | Earlier smoke `2026.11.21.9` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. Smoke `.10` records no completed initial payload. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
+| Publication and resume | Current smoke `2026.11.21.13` passed initial model-version-zero byte comparisons on all eight receivers: 19,687,358,464 bytes each, zero mismatches, and nonempty generation stamped 1. CPU Gloo replay and fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
