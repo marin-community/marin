@@ -26,7 +26,7 @@ import tarfile
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -136,7 +136,14 @@ def _broker_executable(name: str) -> list[str]:
     ]
 
 
-def _brokered_keeper_arguments(arguments: list[str]) -> tuple[list[str], list[tuple[int, int, bool]], list[int]]:
+@dataclass
+class _BrokeredKeeperArguments:
+    program: list[str]
+    substitutions: list[tuple[int, int, bool]]
+    sources: list[int]
+
+
+def _brokered_keeper_arguments(arguments: list[str]) -> _BrokeredKeeperArguments:
     """Pin bwrap mount inputs so a peer keeper can resolve them inside its own root."""
     program = [*_broker_executable("bwrap"), *arguments[1:]]
     substitutions = []
@@ -167,7 +174,7 @@ def _brokered_keeper_arguments(arguments: list[str]) -> tuple[list[str], list[tu
         for descriptor in sources:
             os.close(descriptor)
         raise
-    return program, substitutions, sources
+    return _BrokeredKeeperArguments(program, substitutions, sources)
 
 
 class SandboxUnavailable(RuntimeError):
@@ -765,12 +772,13 @@ class LocalMachine:
             source_fds: list[int] = []
             if peer is not None and self._drop_bwrap_privileges:
                 assert peer._init_pid is not None
-                program, substitutions, source_fds = _brokered_keeper_arguments(arguments)
+                brokered = _brokered_keeper_arguments(arguments)
+                source_fds = brokered.sources
                 config = {
                     "broker": str(peer.root / BROKER_GUEST_SOCKET.lstrip("/")),
                     "broker_pid": peer._init_pid,
-                    "program": program,
-                    "program_fds": substitutions,
+                    "program": brokered.program,
+                    "program_fds": brokered.substitutions,
                     "environment": CONTROL_ENVIRONMENT,
                     "cgroup": membership,
                 }

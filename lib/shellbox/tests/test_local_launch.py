@@ -191,8 +191,15 @@ def test_keeper_launcher_accepts_current_non_root_identity(tmp_path):
     assert result.stdout.strip() == str(os.geteuid()).encode()
 
 
-@pytest.mark.parametrize("cgroup", [False, True])
-def test_keeper_broker_launches_command_from_inside_its_namespace(cgroup):
+@pytest.mark.parametrize(
+    ("command", "cgroup", "expected_output"),
+    [
+        ("printf brokered", False, b"brokered"),
+        ("printf '%s' $$", True, None),
+        ("yes | head -n 1", False, b"y\n"),
+    ],
+)
+def test_keeper_broker_launches_command_from_inside_its_namespace(command, cgroup, expected_output):
     with tempfile.TemporaryDirectory(prefix="shellbox-broker-") as directory:
         socket_path = Path(directory) / "broker.sock"
         membership = Path(directory) / "cgroup.procs"
@@ -221,7 +228,7 @@ def test_keeper_broker_launches_command_from_inside_its_namespace(cgroup):
                             "limits": [],
                             "script": local.RUN_SCRIPT,
                             "cwd": "/",
-                            "argv": ["/bin/sh", "-c", "printf '%s' $$" if cgroup else "printf brokered"],
+                            "argv": ["/bin/sh", "-c", command],
                             "environment": local.CONTROL_ENVIRONMENT,
                         }
                     ).encode()
@@ -241,7 +248,8 @@ def test_keeper_broker_launches_command_from_inside_its_namespace(cgroup):
             if cgroup:
                 assert result.stdout == membership.read_bytes()
             else:
-                assert result.stdout == b"brokered"
+                assert result.stdout == expected_output
+            assert result.stderr == b""
         finally:
             broker.kill()
             broker.wait(timeout=5)

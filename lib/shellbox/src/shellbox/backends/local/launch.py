@@ -229,6 +229,8 @@ def _broker_command(config: dict, descriptors: list[int], barrier: int) -> None:
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "Cannot set no_new_privs")
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
         os.execvpe(
             "/bin/sh",
             ("/bin/sh", "-c", config["script"], "shellbox-local", config["cwd"], *config["argv"]),
