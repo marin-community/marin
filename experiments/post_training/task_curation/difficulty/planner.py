@@ -12,7 +12,7 @@ from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
 
-from experiments.post_training.task_curation.difficulty.ledger import digest
+from experiments.post_training.task_curation.difficulty.ledger import digest, repair_verification_sources
 from experiments.post_training.task_curation.difficulty.legacy import gap_priority
 from experiments.post_training.task_curation.difficulty.state import (
     CatalogSource,
@@ -375,6 +375,7 @@ def plan(
     ledger: Sequence[LedgerRow],
     available_providers: frozenset[Solver] = frozenset(),
     available_artifacts: frozenset[str] = frozenset(),
+    ledger_root: str | None = None,
 ) -> list[Action]:
     """Return only actions whose exact evidence has not already been acted on."""
     recorded = {row.action_id for row in ledger if row.action_id}
@@ -423,9 +424,26 @@ def plan(
             if key not in recorded:
                 actions[key] = (reason, action)
     # Typed priority outranks digest order: a gap's repair verification plans before the
-    # coverage-shortfall backlog regardless of where its action id sorts.
-    ordered = sorted(actions.items(), key=lambda item: (gap_priority(item[1][0]), item[1][0], item[0]))
+    # coverage-shortfall backlog regardless of where its action id sorts. A cell linked to a
+    # recorded repair verification (its escalation landed and its repair is deployed) verifies
+    # at the front of its priority band.
+    verified = repair_verification_sources(ledger_root) if ledger_root else frozenset()
+    ordered = sorted(
+        actions.items(),
+        key=lambda item: (
+            gap_priority(item[1][0]),
+            0 if repair_verifies(item[1], verified) else 1,
+            item[1][0],
+            item[0],
+        ),
+    )
     return [action for _, (_, action) in ordered]
+
+
+def repair_verifies(linked: tuple[GapReason, Action], verified: frozenset[str]) -> bool:
+    """Whether this action verifies a recorded repair: its cell is named by the repair's linkage."""
+    _, action = linked
+    return isinstance(action, AttemptBatch) and any(source.source_id in verified for source in action.sources)
 
 
 def source_attempts_from_payload(value: dict) -> SourceAttempts:

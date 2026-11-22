@@ -19,8 +19,25 @@ IMPORTS_DIRECTORY = "imports"
 RESULTS_DIRECTORY = "results"
 ESCALATIONS_DIRECTORY = "escalations"
 PANELS_DIRECTORY = "panels"
+REPAIR_VERIFICATIONS_DIRECTORY = "repair-verifications"
 DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
 digest = json_sha256
+
+
+def repair_verification_sources(ledger: str) -> frozenset[str]:
+    """Sources a recorded repair verification covers, keyed by its typed escalation linkage."""
+    verified: set[str] = set()
+    for path in sorted(
+        (StoragePath(ledger) / LEDGER_VERSION / REPAIR_VERIFICATIONS_DIRECTORY / "*.json").glob(), key=str
+    ):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        sources = record.get("sources")
+        if isinstance(sources, list) and record.get("escalation"):
+            verified.update(str(source) for source in sources)
+    return frozenset(verified)
 
 
 def append_rows(root: str, rows: list[LedgerRow]) -> str | None:

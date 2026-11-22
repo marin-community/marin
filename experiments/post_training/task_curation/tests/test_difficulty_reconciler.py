@@ -14,7 +14,12 @@ from finestore.rl.difficulty import Solver
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.accounting import GpuAccounting
 from experiments.post_training.task_curation.difficulty.importer import import_runs, population_revision, receipt_row
-from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
+from experiments.post_training.task_curation.difficulty.ledger import (
+    LEDGER_VERSION,
+    REPAIR_VERIFICATIONS_DIRECTORY,
+    append_rows,
+    read_rows,
+)
 from experiments.post_training.task_curation.difficulty.legacy import LegacyReasonError, admission_cause, legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
     AttemptBatch,
@@ -462,3 +467,26 @@ def test_attempts_lost_to_grader_infrastructure_are_re_attempted_not_blocked():
     actions = plan([state], [])
     assert [isinstance(action, AttemptBatch) for action in actions] == [True]
     assert actions[0].n_attempts == 2
+
+
+def test_repair_verification_plans_ahead_of_the_same_priority_band(tmp_path):
+    root = tmp_path / "ledger"
+    (root / LEDGER_VERSION / REPAIR_VERIFICATIONS_DIRECTORY).mkdir(parents=True)
+    (root / LEDGER_VERSION / REPAIR_VERIFICATIONS_DIRECTORY / "lean.json").write_text(
+        json.dumps(
+            {"sources": [SOURCE.source_id], "escalation": "27f6e13d", "gap_reason": "GRADER_INFRASTRUCTURE_FAILURE"}
+        )
+    )
+    infra = replace(
+        row("lost", outcome=Outcome.UNSCORED), reason=GapReason.GRADER_INFRASTRUCTURE_FAILURE, error_identity="http_401"
+    )
+    lean_cell = cell_state([replace(infra, attempt_id="lean")], SOURCE, Solver.HOSTED, CoveragePolicy())
+    other_source = replace(SOURCE, source_id="b-source", queue_uri="queue-b")
+    other = cell_state(
+        [replace(row("task-b", "b", Outcome.UNSCORED), reason=GapReason.GRADER_INFRASTRUCTURE_FAILURE)],
+        other_source,
+        Solver.HOSTED,
+        CoveragePolicy(),
+    )
+    actions = plan([other, lean_cell], [], ledger_root=str(root))
+    assert [a.sources[0].source_id for a in actions if isinstance(a, AttemptBatch)][:1] == [SOURCE.source_id]

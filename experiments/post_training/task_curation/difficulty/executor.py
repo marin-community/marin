@@ -141,6 +141,12 @@ def execute_plan(
     slots = sum(job.slots for job in jobs if job.active)
     recorded = {row.action_id for row in rows if row.action_id}
     submitted, escalated, deferred = [], [], []
+    ended = {row.action_id for row in rows if row.outcome == Outcome.FINISHED}
+    claimed: set[tuple[str, str]] = {
+        (row.source_id, row.solver.value)
+        for row in rows
+        if row.outcome == Outcome.SUBMITTED and row.job_id and row.action_id not in ended
+    }
     spent = budget.recorded_gpu_hours(rows) if budget else 0.0
     reserved = budget.reserved_gpu_hours(rows, ledger) if budget else 0.0
     for action in actions:
@@ -166,6 +172,13 @@ def execute_plan(
         ):
             deferred.append(key)
             continue
+        if isinstance(action, AttemptBatch):
+            cells = {(source.source_id, action.solver.value) for source in action.sources}
+            if cells & claimed:
+                # One in-flight AttemptBatch per cell: concurrent batches would double the
+                # solver reservation without adding scored receipts.
+                deferred.append(key)
+                continue
         if slots + required_slots > CONCURRENT_JOB_CAP:
             deferred.append(key)
             continue
@@ -190,6 +203,8 @@ def execute_plan(
             manifest.write_text(payload)
         job_id = backend.submit(action, str(manifest))
         append_rows(ledger, action_rows(action, catalog, Outcome.SUBMITTED, job_id, datetime.now(UTC).isoformat()))
+        if isinstance(action, AttemptBatch):
+            claimed |= {(source.source_id, action.solver.value) for source in action.sources}
         LOGGER.info("DIFFICULTY_SUBMITTED %s", json.dumps({"action_id": key, "job_id": job_id}))
         submitted.append(job_id)
         slots += required_slots
@@ -228,7 +243,7 @@ def reconcile_once(
             rows += collect_finished(rows, backend.jobs(), ledger, notifications)
             budget = campaign_budget(ledger, budget_limit_gpu_hours)
             cells = cells_for_catalog(rows, catalog, policy)
-            actions = plan(cells, rows, available_providers, available_artifacts)
+            actions = plan(cells, rows, available_providers, available_artifacts, ledger_root=ledger)
             return execute_plan(actions, rows, catalog, ledger, backend, notifications, budget)
     finally:
         lease.release()

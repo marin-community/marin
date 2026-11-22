@@ -9,10 +9,12 @@ import pytest
 
 pytest.importorskip("harbor")
 
-from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason
+from finestore.rl.difficulty import DifficultyGap, Solver, difficulty_gap_reason
 
 from experiments.post_training.task_curation import difficulty_trials
 from experiments.post_training.task_curation.datasets.environments import LEAN_GRADER_PACKAGES
+from experiments.post_training.task_curation.difficulty.importer import receipt_row
+from experiments.post_training.task_curation.difficulty.state import GapReason
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_trials import (
     grader_infrastructure_reason,
@@ -173,3 +175,31 @@ def test_infra_error_verdicts_carry_their_typed_transport_identity():
     assert grader_infrastructure_reason(verifier_reached=True, verdict=graded) is None
     invalid = {"status": "invalid_task", "reward": 0.0}
     assert grader_infrastructure_reason(verifier_reached=True, verdict=invalid) is None
+
+
+def test_imported_receipts_carry_the_error_identity(tmp_path):
+    attempt = {
+        "task_id": "task",
+        "status": "infrastructure",
+        "reward": None,
+        "reason": "grader_infrastructure_failure:http_401",
+    }
+    path = tmp_path / "attempt.json"
+    path.write_text(json.dumps(attempt))
+    sample = {
+        "source_id": "source",
+        "release": {"repo": "fixture", "revision": "pin", "url": "https://fixture.invalid/pin"},
+        "converter_version": "fixture",
+        "converter_revision": "a" * 40,
+        "task_specs_sha256": "b" * 64,
+        "tasks": [{"task_id": "task", "task_sha256": "a" * 64}],
+    }
+    row = receipt_row(
+        {"uri": str(path), "sha256": __import__("hashlib").sha256(path.read_bytes()).hexdigest()},
+        sample,
+        Solver.HOSTED,
+        "run",
+        "2026-11-21T00:00:00+00:00",
+    )
+    assert row.error_identity == "http_401"
+    assert row.reason == GapReason.GRADER_INFRASTRUCTURE_FAILURE

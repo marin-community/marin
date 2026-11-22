@@ -104,6 +104,7 @@ def receipt_row(reference: dict, sample: dict, solver: Solver, run: str, recorde
         evidence_uri=str(path),
         artifact_kind=gap.artifact_kind,
         judge_temperature=gap.judge_temperature,
+        error_identity=gap.error_identity,
         secondary_gaps=gaps[1:],
     )
 
@@ -168,6 +169,7 @@ def source_rows(run: str, prepared: dict, solver: Solver, parent: str | None) ->
                     legacy_status=measurement["status"],
                     artifact_kind=gap.artifact_kind,
                     judge_temperature=gap.judge_temperature,
+                    error_identity=gap.error_identity,
                 )
             )
         inherited = 0.0
