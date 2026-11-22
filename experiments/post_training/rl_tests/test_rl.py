@@ -564,6 +564,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "371233d9",
             "2026.11.20.1": "8f532da2",
             "2026.11.20.3": "dc52613e",
+            "2026.11.22.1": "31d3c06f",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -578,6 +579,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "f8281b9d",
             "2026.11.20.1": "8b7e47c8",
             "2026.11.20.3": "dbc38bdf",
+            "2026.11.22.1": "eded19d9",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -701,6 +703,21 @@ def _assert_mochi_preset_documents(revisions, configs):
     served = gate._config_values(documents["train-long-3rack"]["skyrl"])
     for path, value in gate._config_values(yaml.safe_load(fragment)).items():
         assert served[path] == value, path
+
+
+def test_speed_short_can_disable_speculation_without_changing_the_workload(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-short"]
+    [default_run] = snowball.build_experiment(preset, table=table).runs
+    [plain_run] = snowball.build_experiment(preset, table=table, settings=("generator.speculative_decoding=null",)).runs
+    default = yaml.safe_load(materialized_config(default_run, str(tmp_path)).launch_config_yaml)
+    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
+
+    assert default_run.name != plain_run.name
+    assert default["skyrl"]["generator"].pop("speculative_decoding")["method"] == "dspark"
+    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
+    assert default["skyrl"]["generator"] == plain["skyrl"]["generator"]
+    assert default["inputs"] == plain["inputs"]
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):

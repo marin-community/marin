@@ -245,6 +245,13 @@ Placement, data bindings, retention, evaluation and measurement settings belong 
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
 
+Snowball `speed-short` and `speed-medium` use a frozen DSpark draft trained against their
+09.21 Datakit initializer. Use `--set generator.speculative_decoding=null` for a plain-decoding
+candidate. To compare another draft without changing the policy, set
+`generator.speculative_decoding.model` to a JSON object with `source_uri` and `source_identity`.
+For `hf://` sources, `source_identity` must be the full Hub commit SHA. DSpark uses probabilistic
+drafting and standard verification. Online draft training remains EAGLE3-only.
+
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
