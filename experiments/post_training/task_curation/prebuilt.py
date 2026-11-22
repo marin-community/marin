@@ -54,7 +54,7 @@ from taskcompendium.pipeline.deduplication import DROP_SCHEMA, unique_task_indic
 from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
-from taskcompendium.pipeline.static_retention import NoOracleSourceContext
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext, StaticRetainedTaskReceipt
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
@@ -453,19 +453,30 @@ def prebuilt_artifact(
             if issue := shared_integrity_issue(task):
                 raise ValueError(f"{issue}: {task.id}")
             if oracle_filter is None:
-                receipt_path = hf_hub_download(
-                    repo_id=invocation.cohort.repo,
-                    repo_type=invocation.cohort.repo_type,
-                    revision=invocation.cohort.revision,
-                    filename=ORACLE_FILTER_FILENAME,
+                receipt_path = (
+                    static.oracle_filter.uri
+                    if static is not None
+                    else hf_hub_download(
+                        repo_id=invocation.cohort.repo,
+                        repo_type=invocation.cohort.repo_type,
+                        revision=invocation.cohort.revision,
+                        filename=ORACLE_FILTER_FILENAME,
+                    )
                 )
                 oracle_filter = load_oracle_filter(
                     receipt_path,
                     source_context=source_context,
                     expected_sha256=static.oracle_filter.sha256 if static is not None else None,
                 )
+                if static is not None and (
+                    sum(isinstance(entry, StaticRetainedTaskReceipt) for entry in oracle_filter.tasks.values())
+                    != static.static_retained_count
+                    or sum(entry.has_oracle and entry.passed for entry in oracle_filter.tasks.values())
+                    != static.oracle_retained_count
+                ):
+                    raise ValueError("Static and original-oracle counts differ from their complete source receipt")
                 with (
-                    Path(receipt_path).open("rb") as source_file,
+                    StoragePath(receipt_path).open("rb") as source_file,
                     (destination / ORACLE_FILTER_FILENAME).open("wb") as output_file,
                 ):
                     shutil.copyfileobj(source_file, output_file)

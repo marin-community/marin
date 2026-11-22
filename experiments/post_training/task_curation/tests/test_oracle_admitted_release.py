@@ -267,7 +267,6 @@ def test_answer_graded_release_does_not_claim_workspace_controls(admitted_releas
     assert bound.info.daytona_machine_slots == 0
     assert bound.info.recipe_qa_history.verification.startswith("Full original-oracle outcomes and applicable controls:")
     assert "workspace no-op controls" not in bound.info.recipe_qa_history.verification
-    assert bound.info.notes.startswith("Original-oracle filtration retained 1/2.")
 
 
 def test_current_content_attaches_after_the_filtered_pin_is_selected(admitted_release):

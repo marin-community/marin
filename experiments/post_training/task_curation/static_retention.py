@@ -21,7 +21,7 @@ from taskcompendium.runtime.resources import has_oracle_solution
 
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
 from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
-from experiments.post_training.task_curation.oracle_filter import cohort_sha256, row_runtime_hash, row_task
+from experiments.post_training.task_curation.oracle_filter import cohort_sha256, row_runtime, row_runtime_hash, row_task
 
 STATIC_REASONS = {
     "grading_environment_mismatch": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
@@ -39,6 +39,110 @@ STATIC_REASONS = {
     "missing_packages_lock": OracleExclusionReason.ENVIRONMENT_CONTRACT_UNRESOLVED,
 }
 PARQUET_BATCH_ROWS = 128
+
+
+def collect_mixed_retention(
+    cohort: Path,
+    context: NoOracleSourceContext,
+    cohort_evidence: ContentEvidenceReference,
+    collected_filter: Path,
+    calibrated_tasks: Path,
+    output: Path,
+) -> OracleFilterReceipt:
+    """Combine original-oracle outcomes with unchanged static no-oracle rows."""
+    digest = cohort_sha256(cohort)
+    original = OracleFilterReceipt.model_validate_json(collected_filter.read_bytes())
+    if (
+        digest != context.input_cohort_sha256
+        or digest != cohort_evidence.sha256
+        or original.input_cohort_sha256 != digest
+        or original.input_rows != context.current_input.measured_tasks
+        or original.version != 4
+        or original.conversion_rejections
+    ):
+        raise ValueError("Mixed retention differs from its complete frozen source and oracle collection")
+    projected = {row_task(row).id: row for row in pq.read_table(calibrated_tasks).to_pylist()}
+    table = pq.read_table(cohort)
+    rows = table.to_pylist()
+    entries = {}
+    kept, excluded = [], []
+    diagnostics = {}
+    for row in rows:
+        task = row_task(row)
+        if task is None or task.id in entries or task.id not in original.tasks:
+            raise ValueError("Mixed retention requires every original task exactly once")
+        previous = original.tasks[task.id]
+        oracle = has_oracle_solution(task)
+        source_hash = (
+            previous.task_sha256 if isinstance(previous, MechanicalOracleTaskReceipt) else previous.source_task_sha256
+        )
+        if (
+            previous.has_oracle != oracle
+            or source_hash != task_spec_sha256(task)
+            or previous.runtime_sha256 != row_runtime_hash(row)
+        ):
+            raise ValueError(f"Mixed retention changed the original task or oracle presence: {task.id}")
+        if oracle:
+            entries[task.id] = previous
+            if previous.passed:
+                consumed = projected[task.id]
+                if not original.admits(row_task(consumed), row_runtime(consumed)):
+                    raise ValueError(f"Mixed retention lacks its unchanged original oracle proof: {task.id}")
+                kept.append(consumed)
+            else:
+                excluded.append(row)
+            continue
+        blockers = task_blockers(task) - {"requires_calibration_solution_and_empty_liveness"}
+        if blockers - STATIC_REASONS.keys():
+            raise ValueError(f"Unclassified static blockers for {task.id}: {sorted(blockers)}")
+        identity = {"task_sha256": task_spec_sha256(task), "runtime_sha256": row_runtime_hash(row)}
+        if blockers:
+            primary = next(reason for reason in STATIC_REASONS if reason in blockers)
+            reason = STATIC_REASONS[primary]
+            entries[task.id] = MechanicalOracleTaskReceipt(
+                **identity, has_oracle=False, exclusion_reason=reason, evidence=(cohort_evidence,)
+            )
+            diagnostics[task.id] = {"reason": reason.value, "blockers": sorted(blockers)}
+            excluded.append(row)
+            continue
+        entries[task.id] = StaticRetainedTaskReceipt(
+            **identity,
+            native_task_checksum=native_task_checksums((task,)).get(task.id),
+            input_cohort_sha256=digest,
+            policy_sha256=context.policy.sha256,
+        )
+        kept.append(row)
+    if entries.keys() != original.tasks.keys():
+        raise ValueError("Mixed retention omits tasks from its original oracle collection")
+    receipt = OracleFilterReceipt(
+        version=6,
+        negative_control_policy=original.negative_control_policy,
+        no_oracle_executability_policy=context.policy,
+        no_oracle_source=context,
+        recipe_identity=original.recipe_identity,
+        input_cohort_sha256=digest,
+        input_rows=len(entries),
+        conversion_rejections=0,
+        tasks=entries,
+    )
+    output.mkdir(parents=True, exist_ok=False)
+    pq.write_table(pa.Table.from_pylist(kept, schema=table.schema), output / "tasks.parquet")
+    pq.write_table(pa.Table.from_pylist(excluded, schema=table.schema), output / "excluded-tasks.parquet")
+    (output / "oracle-filter.json").write_text(receipt.model_dump_json(indent=2) + "\n")
+    (output / "static-exclusions.json").write_text(json.dumps(diagnostics, indent=2) + "\n")
+    summary = {
+        "input_rows": len(entries),
+        "output_rows": len(kept),
+        "static_retained_count": sum(isinstance(entry, StaticRetainedTaskReceipt) for entry in entries.values()),
+        "oracle_retained_count": sum(entry.has_oracle and entry.passed for entry in entries.values()),
+        "exclusions_by_reason": dict(
+            Counter(entry.exclusion_reason.value for entry in entries.values() if entry.exclusion_reason is not None)
+        ),
+        "static_executability": "unmeasured",
+        "original_oracle_filter_sha256": file_sha256(StoragePath(str(collected_filter))),
+    }
+    (output / "static-retention.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return receipt
 
 
 def collect_static_retention(

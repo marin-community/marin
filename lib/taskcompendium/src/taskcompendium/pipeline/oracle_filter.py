@@ -1755,7 +1755,7 @@ class RecollectionWaiver(BaseModel):
 
 class OracleFilterReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    version: Literal[2, 3, 4, 5] = 4
+    version: Literal[2, 3, 4, 5, 6] = 4
     negative_control_policy: NegativeControlPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
     no_oracle_executability_policy: NoOracleExecutabilityPolicy | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -1772,15 +1772,19 @@ class OracleFilterReceipt(BaseModel):
     def validate_population(self):
         static = self.no_oracle_source
         if static is not None and (
-            self.version != 5
+            self.version not in {5, 6}
             or self.no_oracle_executability_policy != static.policy
             or static.input_cohort_sha256 != self.input_cohort_sha256
             or static.current_input.measured_tasks != self.input_rows
-            or any(entry.has_oracle for entry in self.tasks.values())
+            or (self.version == 5 and any(entry.has_oracle for entry in self.tasks.values()))
             or self.conversion_rejections
         ):
-            raise ValueError("Static retention requires wire5, explicit policy and the complete no-oracle source")
-        if self.version in {4, 5} and static is None and self.negative_control_policy is None:
+            raise ValueError("Static retention requires a complete source context and its explicit policy")
+        if self.version == 6 and (static is None or self.negative_control_policy is None):
+            raise ValueError(
+                "Mixed retention requires both source-bound static policy and global negative-control policy"
+            )
+        if self.version in {4, 5, 6} and static is None and self.negative_control_policy is None:
             raise ValueError("Oracle filter wire version 4 requires an explicit global negative-control policy")
         if len(self.tasks) + self.conversion_rejections != self.input_rows:
             raise ValueError("Oracle filter receipt does not cover the full input population")
@@ -1792,16 +1796,16 @@ class OracleFilterReceipt(BaseModel):
                     raise ValueError(f"Static retention lacks its explicit source policy or cohort: {task_id}")
                 continue
             if isinstance(entry, MechanicalOracleTaskReceipt):
-                if self.version not in {3, 4, 5}:
+                if self.version not in {3, 4, 5, 6}:
                     raise ValueError("Mechanical outcomes require oracle filter wire version 3 or 4")
-                if static is not None:
+                if static is not None and not entry.has_oracle:
                     NoOracleStaticBlocker(entry.exclusion_reason.value)
                 continue
             if entry.network_policy_reconstructed_native is not None:
                 entry.network_policy_reconstructed_native.require_trial(
                     task_id, entry.calibration.attempts[-1].result, entry.calibration.attempts[-1].path
                 )
-            if static is not None:
+            if static is not None and not entry.has_oracle:
                 raise ValueError("Static no-oracle receipts cannot contain fabricated or calibration-only Trials")
             if entry.native_success_policy is not None and (
                 entry.native_success_policy.input_cohort_sha256 != self.input_cohort_sha256
@@ -1811,7 +1815,7 @@ class OracleFilterReceipt(BaseModel):
                 entry.legacy_role_qualification.input_cohort_sha256 != self.input_cohort_sha256
             ):
                 raise ValueError(f"Legacy role qualification belongs to another frozen cohort: {task_id}")
-            if self.version in {4, 5} and entry.has_oracle and entry.negative_control_applicability is None:
+            if self.version in {4, 5, 6} and entry.has_oracle and entry.negative_control_applicability is None:
                 raise ValueError(f"New oracle admission requires source-bound negative-control applicability: {task_id}")
             if self.version == 2:
                 continue
@@ -1835,7 +1839,7 @@ class OracleFilterReceipt(BaseModel):
         source_context: NoOracleSourceContext | None = None,
         native_task_checksum: str | None = None,
     ) -> bool:
-        if self.version not in {4, 5}:
+        if self.version not in {4, 5, 6}:
             raise ValueError("New admission requires oracle filter wire version 4; versions 2/3 are archival evidence")
         if task.id not in self.tasks:
             raise ValueError(f"Oracle filter receipt omits task {task.id}")

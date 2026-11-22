@@ -27,6 +27,7 @@ restated here. Run with CoreWeave and Hugging Face credentials exported::
 import argparse
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -49,36 +50,55 @@ FINGERPRINT_ARTIFACT = "fingerprint/source-identities.json"
 DEDUP_SUMMARY = "dedup/summary.json"
 
 
-def forge_declaration() -> tuple[str, str, str, str, int]:
+@dataclass(frozen=True)
+class ForgeDeclaration:
+    source_id: str
+    repo: str
+    revision: str
+    version: str
+    expected_rows: int
+
+
+@dataclass(frozen=True)
+class CohortDocuments:
+    column: str
+    rows: int
+    documents: list[tuple[dict, dict]]
+
+
+def forge_declaration() -> ForgeDeclaration:
     """The declared source id, cohort pin, converter version and expected rows."""
     for source in campaign_sources():
         if source.info.id == FORGE_SOURCE_ID:
             config = source.config
             dataset = source.dataset
             assert dataset is not None and config is not None
-            return source.info.id, dataset.name, dataset.revision, source.version, config.expected_rows
+            return ForgeDeclaration(source.info.id, dataset.name, dataset.revision, source.version, config.expected_rows)
     raise ValueError(f"Campaign releases do not declare {FORGE_SOURCE_ID}")
 
 
-def cohort_documents(local: Path) -> tuple[str, str, list[tuple[dict, dict]]]:
+def cohort_documents(local: Path) -> CohortDocuments:
     """The published cohort's task specs, as population input documents."""
     table = pq.read_table(local, columns=[LOWERED_TASK_SPEC_COLUMN])
-    documents = [(json.loads(row[LOWERED_TASK_SPEC_COLUMN])["task"], {}) for row in table.to_pylist()]
-    return LOWERED_TASK_SPEC_COLUMN, str(table.num_rows), documents
+    envelopes = [json.loads(row[LOWERED_TASK_SPEC_COLUMN]) for row in table.to_pylist()]
+    documents = [(envelope["task"], envelope["runtime"]) for envelope in envelopes]
+    return CohortDocuments(LOWERED_TASK_SPEC_COLUMN, table.num_rows, documents)
 
 
 def census(output_root: str, converter_revision: str) -> dict:
     """Render the population, write the dedup receipt and the fingerprint survey."""
-    source_id, repo, revision, version, expected_rows = forge_declaration()
+    declaration = forge_declaration()
+    source_id, repo, revision = declaration.source_id, declaration.repo, declaration.revision
+    version, expected_rows = declaration.version, declaration.expected_rows
     root = StoragePath(output_root)
     if (root / DEDUP_SUMMARY).exists():
         raise FileExistsError(f"Census requires a new artifact root: {output_root}")
     local = Path(hf_hub_download(repo, COHORT_FILENAME, repo_type="dataset", revision=revision))
-    column, rows, documents = cohort_documents(local)
-    if int(rows) != expected_rows:
-        raise ValueError(f"Published cohort carries {rows} rows, declaration expects {expected_rows}")
+    cohort = cohort_documents(local)
+    if cohort.rows != expected_rows:
+        raise ValueError(f"Published cohort carries {cohort.rows} rows, declaration expects {expected_rows}")
 
-    files = write_text_population(documents, str(root / "population"))
+    files = write_text_population(cohort.documents, str(root / "population"))
     if files.raw_task_count != expected_rows:
         raise ValueError(f"Population render counted {files.raw_task_count} rows, expected {expected_rows}")
     receipt = WithinSourceDedupEvidence(
@@ -105,7 +125,7 @@ def census(output_root: str, converter_revision: str) -> dict:
                     "paths": [str(local)],
                     "input_uris": [durable_input],
                     "expected_tasks": expected_rows,
-                    "column": column,
+                    "column": cohort.column,
                 }
             ],
         }

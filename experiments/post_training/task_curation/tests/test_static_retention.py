@@ -20,12 +20,20 @@ from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
-from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import (
+    MechanicalOracleTaskReceipt,
+    OracleExclusionReason,
+    OracleFilterReceipt,
+    load_oracle_filter,
+    require_oracle_filter,
+)
+from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
-from experiments.post_training.task_curation.static_retention import collect_static_retention
+from experiments.post_training.task_curation.static_retention import collect_mixed_retention, collect_static_retention
+from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 
 def no_oracle_answer(task_id):
@@ -74,6 +82,64 @@ def frozen_cohort(tmp_path, tasks, use=SourceUse.TRAIN, *, row_group_size=None):
         ),
     )
     return cohort, rows, context, ContentEvidenceReference(uri=str(cohort), sha256=digest)
+
+
+def test_mixed_retention_keeps_original_oracle_proofs_and_unchanged_no_oracle_rows(tmp_path):
+    static = no_oracle_answer("static")
+    oracle = no_oracle_answer("original").model_copy(
+        update={
+            "execution_requirements": INITIAL_REQUIREMENTS,
+            "resources": ResourceGroups(oracle=(inline_resource("solution/answer.txt", b"label"),)),
+        }
+    )
+    cohort, rows, context, evidence = frozen_cohort(tmp_path, [static, oracle])
+    original = oracle_receipt([oracle])
+    trial = original.tasks[oracle.id].model_copy(update={"runtime_sha256": canonical_sha256({"source": oracle.id})})
+    original = OracleFilterReceipt(
+        **{
+            **original.model_dump(exclude={"tasks"}),
+            "input_cohort_sha256": evidence.sha256,
+            "input_rows": 2,
+            "tasks": {
+                oracle.id: trial,
+                static.id: MechanicalOracleTaskReceipt(
+                    task_sha256=canonical_sha256(static.source_document()),
+                    runtime_sha256=canonical_sha256({"source": static.id}),
+                    has_oracle=False,
+                    exclusion_reason=OracleExclusionReason.EXECUTABILITY_PROOF_MISSING,
+                    evidence=(evidence,),
+                ),
+            },
+        }
+    )
+    collected = tmp_path / "collected.json"
+    collected.write_text(original.model_dump_json())
+    calibrated = tmp_path / "calibrated.parquet"
+    pq.write_table(pa.Table.from_pylist([rows[1]]), calibrated)
+    output = tmp_path / "mixed"
+    receipt = collect_mixed_retention(cohort, context, evidence, collected, calibrated, output)
+    loaded = load_oracle_filter(
+        str(output / "oracle-filter.json"),
+        source_context=context,
+        expected_sha256=hashlib.sha256((output / "oracle-filter.json").read_bytes()).hexdigest(),
+    )
+    assert loaded == receipt
+    assert loaded.tasks[oracle.id] == trial
+    assert loaded.tasks[static.id].outcome == "static_retained"
+    assert loaded.tasks[static.id].executability == "unmeasured"
+    assert pq.read_table(output / "tasks.parquet").to_pylist() == rows
+    for task in (static, oracle):
+        assert loaded.admits(task, {"source": task.id}, source_context=context)
+
+    forged = receipt.model_dump(mode="json")
+    forged["tasks"][oracle.id] = {
+        **receipt.tasks[static.id].model_dump(mode="json"),
+        "task_sha256": trial.task_sha256,
+        "runtime_sha256": trial.runtime_sha256,
+    }
+    substituted = OracleFilterReceipt.model_validate(forged)
+    with pytest.raises(ValueError, match="Oracle presence changed"):
+        substituted.admits(oracle, {"source": oracle.id}, source_context=context)
 
 
 def test_static_collection_preserves_task_and_runtime_rows_without_trials_or_resource_projection(tmp_path):

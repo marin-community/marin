@@ -3598,6 +3598,22 @@ TaskSpec-population digest, complete cohort SHA-256 and Use. The complete popula
 must contain no original oracle; mixed or unknown oracle presence cannot use this
 route. Old receipts and an absent policy retain their existing admission rules.
 
+Wire version 6 supports a complete mixed population. `collect_mixed_retention`
+joins a wire4 collection to the frozen original cohort and its calibrated output.
+It preserves original-oracle receipts and applicable physical NoP controls.
+Only tasks without original oracle resources receive unchanged static receipts;
+their calibration-only trials supply no execution claim. The combined receipt
+requires both policies, the complete source context, and one outcome per input ID.
+Its retained rows include calibrated original-oracle passes and unchanged static
+passes; all other original rows remain in the typed exclusion archive.
+
+For a mixed admitted release, bind `OracleAdmittedReleaseReceipt.static_retention`
+to the final pin and census. Its static evidence counts `static_retained_count`
+and `oracle_retained_count` separately. The consumer uses the externally pinned
+`oracle_filter` URI and SHA-256 from that evidence, with a context reconstructed
+from its current configuration. This lets the receipt name the immutable dataset
+revision without requiring a dataset file to contain its own future commit hash.
+
 `StaticRetainedTaskReceipt` records `outcome=static_retained` and
 `executability=unmeasured`. It carries the unchanged TaskSpec/runtime identities,
 cohort and policy hashes, and the actual original Harbor checksum for a native

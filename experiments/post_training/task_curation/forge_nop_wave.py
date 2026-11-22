@@ -154,7 +154,7 @@ def run_control(request: dict, output_root: Path, archive_root: str) -> dict:
         raise RuntimeError(f"nop control failed for {request['source']['task_id']}: {result.stderr[-800:]}")
     task_id = request["source"]["task_id"]
     task_hash = canonical_sha256(task_id)
-    archive_uri = f"{archive_root.rstrip('/')}/{task_hash}.tar.gz"
+    archive_uri = str(StoragePath(archive_root) / f"{task_hash}.tar.gz")
     buffer = io.BytesIO()
     # The archive root must be the output directory's own name: the control manifest
     # records its absolute trial result path, and the binding locates the trial by

@@ -29,6 +29,7 @@ from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import shared_integrity_issue
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import require_oracle_filter
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.content_identity import ContentIdentityReceipt
@@ -52,6 +53,7 @@ from experiments.post_training.task_curation.publication_gate import require_no_
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_binding import (
     ArchivedRetainedBinding,
+    StaticRetentionBinding,
     bind_archived_retained_release,
 )
 from experiments.post_training.task_curation.retained_grading import RetainedGrading
@@ -84,6 +86,7 @@ class OracleAdmittedReleaseReceipt(BaseModel):
     consumer: ContentEvidenceReference
     full_content: FullContentResultBinding | None = None
     archived_original: ArchivedRetainedBinding | None = Field(default=None, exclude_if=lambda value: value is None)
+    static_retention: StaticRetentionBinding | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _qualified_population(self) -> "OracleAdmittedReleaseReceipt":
@@ -110,8 +113,21 @@ class OracleAdmittedReleaseReceipt(BaseModel):
             evidence.original_release.revision,
         ):
             raise ValueError("Oracle release belongs to another original pin")
-        if evidence.admitted_count <= 0 or evidence.oracle_filter_version != 4:
+        if evidence.admitted_count <= 0 or evidence.oracle_filter_version not in {4, 6}:
             raise ValueError("Admissions require nonempty current oracle/control filtration")
+        static = self.static_retention
+        if (evidence.oracle_filter_version == 6) != (static is not None):
+            raise ValueError("Mixed oracle admission requires its current-pin static-retention binding")
+        if static is not None and (
+            static.evidence.source_id != self.source_id
+            or static.evidence.source_release != release
+            or static.evidence.current_input != actor
+            or static.evidence.intended_use != self.intended_use
+            or static.evidence.retained_cohort.sha256 != evidence.tasks_parquet.sha256
+            or static.evidence.retained_count != evidence.admitted_count
+            or static.evidence.exclusion_counts
+        ):
+            raise ValueError("Mixed oracle admission has foreign or incomplete static-retention evidence")
         if (self.source_id, release.repo, release.revision, evidence.admitted_count) != (
             self.actor.source_id,
             actor.dataset_id,
@@ -226,6 +242,8 @@ def bind_oracle_admitted_release(
         lexical_contamination=receipt.lexical,
         grading_environment=receipt.grading.evidence,
         oracle_validation=OracleValidation.EXECUTED,
+        no_oracle_executability_policy=(receipt.static_retention.policy if receipt.static_retention else None),
+        no_oracle_static_retention=(receipt.static_retention.evidence if receipt.static_retention else None),
         recipe_qa_history=RecipeQAHistoricalNotes(
             campaign=evidence.validation.uri,
             recipe_revision=receipt.actor.input.converter_revision,
@@ -246,7 +264,7 @@ def bind_oracle_admitted_release(
         daytona_run_evidence=evidence.validation.uri,
         tags=tuple(tag for tag in source.info.tags if tag not in {"excluded", "deprecated"}),
         notes=(
-            f"Original-oracle filtration retained {evidence.admitted_count}/{evidence.original_count}. "
+            f"Qualification retained {evidence.admitted_count}/{evidence.original_count}. "
             f"Typed exclusions: {dict(evidence.exclusion_counts)}. "
             "Original source and prior retention evidence remain archived in the release receipt. " + source.info.notes
         ),
@@ -382,9 +400,28 @@ def main() -> None:
             if metadata.get("full_content") is not None
             else None
         ),
+        static_retention=(
+            StaticRetentionBinding.model_validate(metadata["static_retention"])
+            if metadata.get("static_retention") is not None
+            else None
+        ),
     )
-    verified = verify_oracle_release(item.filtration, item.original_cohort, item.oracle_filter, item.output_cohort)
-    if verified.version != 4:
+    source_context = None
+    if receipt.static_retention is not None:
+        if source.info.actor_census_input is None:
+            raise ValueError("Mixed oracle admission requires the original source's complete census")
+        source_context = NoOracleSourceContext(
+            source_id=source.info.id,
+            source_release=item.filtration.original_release,
+            input_cohort_sha256=item.filtration.original_cohort.sha256,
+            current_input=source.info.actor_census_input,
+            intended_use=source.intended_use,
+            policy=receipt.static_retention.policy,
+        )
+    verified = verify_oracle_release(
+        item.filtration, item.original_cohort, item.oracle_filter, item.output_cohort, source_context=source_context
+    )
+    if verified.version not in {4, 6}:
         raise ValueError("Admitted releases require current complete oracle/control evidence")
     if receipt.full_content is not None:
         full = receipt.full_content
@@ -403,7 +440,7 @@ def main() -> None:
             require_runnable_grader(task)
             if (not is_nonagentic_task(task) and task.execution_requirements is None) or shared_integrity_issue(task):
                 raise ValueError(f"Published task lacks its required execution/integrity contract: {task.id}")
-            if not require_oracle_filter(task, verified, json.loads(row["runtime"])):
+            if not require_oracle_filter(task, verified, json.loads(row["runtime"]), source_context=source_context):
                 raise ValueError(f"Published task/runtime lacks canonical oracle admission: {task.id}")
     if bound.current_release != item.filtration.filtered_release or bound.admission_blockers:
         raise ValueError(f"Filtered source remains unqualified: {bound.admission_blockers}")

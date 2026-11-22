@@ -136,10 +136,12 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
         document = json.loads(filter_path.read_text())
         document["recipe_identity"] = "another-producer-recipe"
         filter_path.write_text(json.dumps(document))
+    foreign_filter = tmp_path / "foreign-filter.json"
+    foreign_filter.write_text('{"foreign": true}')
     monkeypatch.setattr(
         prebuilt,
         "hf_hub_download",
-        lambda **kwargs: str(cohort if kwargs["filename"] == prebuilt.TASKS_FILENAME else filter_path),
+        lambda **kwargs: str(cohort if kwargs["filename"] == prebuilt.TASKS_FILENAME else foreign_filter),
     )
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     step = prebuilt.import_taskcompendium_prebuilt(source, PipelineOptions(SourceProcessingMode.FULL, CampaignRuntime()))

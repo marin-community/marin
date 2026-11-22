@@ -920,7 +920,7 @@ def consumer_blockers(
 
 
 class NoOracleStaticRetentionEvidence(CatalogRecord):
-    """Complete no-oracle population, with one typed exclusion per blocked task."""
+    """Static no-oracle outcomes within a complete, source-bound population."""
 
     source_id: str
     source_release: DatasetRelease
@@ -929,6 +929,7 @@ class NoOracleStaticRetentionEvidence(CatalogRecord):
     retained_cohort: ContentEvidenceReference
     retained_count: int = Field(ge=0)
     static_retained_count: int = Field(ge=0)
+    oracle_retained_count: int = Field(default=0, ge=0, exclude_if=lambda value: value == 0)
     exclusion_counts: dict[NoOracleStaticBlocker, int]
     oracle_filter: ContentEvidenceReference
     policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -936,7 +937,8 @@ class NoOracleStaticRetentionEvidence(CatalogRecord):
     @model_validator(mode="after")
     def _static_partition(self):
         if any(value <= 0 for value in self.exclusion_counts.values()) or (
-            self.retained_count != self.static_retained_count + sum(self.exclusion_counts.values())
+            self.retained_count
+            != self.static_retained_count + self.oracle_retained_count + sum(self.exclusion_counts.values())
             or self.current_input.measured_tasks != self.retained_count
         ):
             raise ValueError("Static retention must partition unique retained tasks exactly once")

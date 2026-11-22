@@ -21,8 +21,10 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import task_spec_sha256
 from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext, StaticRetainedTaskReceipt
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
+from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
 from experiments.post_training.task_curation.oracle_filter import row_runtime, row_runtime_hash, row_task
 from experiments.post_training.task_curation.publication_gate import require_no_restriction_downgrade
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
@@ -80,7 +82,12 @@ class OracleFilteredReleaseReceipt(BaseModel):
 
 
 def verify_oracle_release(
-    evidence: OracleFiltrationEvidence, original_cohort: Path, oracle_filter: Path, output_cohort: Path
+    evidence: OracleFiltrationEvidence,
+    original_cohort: Path,
+    oracle_filter: Path,
+    output_cohort: Path,
+    *,
+    source_context: NoOracleSourceContext | None = None,
 ) -> OracleFilterReceipt:
     """Verify complete source IDs, canonical outcomes and exact published task/runtime bytes."""
     for path, reference in (
@@ -91,6 +98,8 @@ def verify_oracle_release(
         if file_sha256(StoragePath(str(path))) != reference.sha256:
             raise ValueError("Oracle publication evidence bytes changed")
     receipt = OracleFilterReceipt.model_validate_json(oracle_filter.read_text())
+    if receipt.no_oracle_source != source_context:
+        raise ValueError("Oracle publication differs from its independently configured static source context")
     if (receipt.version, receipt.input_cohort_sha256, receipt.input_rows, receipt.conversion_rejections) != (
         evidence.oracle_filter_version,
         evidence.original_cohort.sha256,
@@ -106,7 +115,9 @@ def verify_oracle_release(
                 raise ValueError("Original task coverage is duplicated or incomplete")
             entry = receipt.tasks[task.id]
             source_sha = (
-                entry.task_sha256 if isinstance(entry, MechanicalOracleTaskReceipt) else entry.source_task_sha256
+                entry.task_sha256
+                if isinstance(entry, (MechanicalOracleTaskReceipt, StaticRetainedTaskReceipt))
+                else entry.source_task_sha256
             )
             if source_sha != task_spec_sha256(task) or row_runtime_hash(row) != entry.runtime_sha256:
                 raise ValueError("Original task/runtime differs from canonical filtration")
@@ -117,7 +128,10 @@ def verify_oracle_release(
     for batch in pq.ParquetFile(output_cohort).iter_batches(batch_size=16):
         for row in batch.to_pylist():
             task = row_task(row)
-            if task.id in kept or not receipt.admits(task, row_runtime(row)):
+            checksum = native_task_checksums((task,)).get(task.id) if source_context is not None else None
+            if task.id in kept or not receipt.admits(
+                task, row_runtime(row), source_context=source_context, native_task_checksum=checksum
+            ):
                 raise ValueError("Published task/runtime lacks exact canonical admission")
             kept.add(task.id)
     if kept != {tid for tid, entry in receipt.tasks.items() if entry.passed} or len(kept) != evidence.admitted_count:
