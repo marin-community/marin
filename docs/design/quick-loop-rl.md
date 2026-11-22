@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The first completed 16 updates and the second was still loading weights. | Verify all 25 updates on the next complete child and compare with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child verified its initial publication and completed the 100-task baseline. | Verify all 25 updates on the third child and compare with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Four H100 hosts converted both trained 67B policies. Fused replay passed 293 sampled tokens from a real tool exchange. A live install cleared all cache ownership and served policy 2. Two identical requests returned identical tokens with different raw scores and routes. | Finish the full-length policy-2 replay, diagnose repeatability, and run the held-learner comparison. |
+| Native inventory backend | Native 67B serving cleared the cache at install and generated four full-length policy-2 responses in the original process. Fused replay passed 611 real tool-turn targets. Ordered MoE gather produced four byte-identical repeats on the short H100 probe. | Score the captured full-length responses, qualify ordered gather at full context, and run the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -833,9 +833,12 @@ all five GPU tasks. The recipe schedules its regular checkpoint at step
 this interruption. The second child started on the same frozen source
 and lost its CPU coordinator to Kueue preemption during initializer
 streaming, before any initial policy publication or evaluation.
-Iris submitted a third child. Use the first child's data for phase
-diagnosis. Compare terminal panel, timing and receiver evidence from each
-complete child.
+The third child started from step 0. Its initial publication took
+212.953 seconds, with all eight receivers verifying 157,498,867,712 bytes
+and zero mismatches. Its initial score was 0.231 over the same 100 tasks
+and prompt token hashes as the completed Megatron control. Use the
+first child's data for phase diagnosis. Compare each complete child's
+terminal metrics with its own initial panel.
 [First Levanter child][iris-matched-levanter] ·
 [Second Levanter child][iris-matched-levanter-retry] ·
 [Third Levanter child][iris-matched-levanter-third]
@@ -1603,10 +1606,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   serving uses the ring implementation's BF16 scatter-add at EP8. The
   learner uses the gather-combine implementation, which sums local
   contributions in fixed order in FP32 before casting. Compare the same
-  captured request and weights across both implementations. The repeated-request
-  difference establishes a serving reproducibility issue. Fused learner
-  parity still uses the actual tokens and routes from each individual reply.
+  captured request and weights across both implementations. A separate
+  cold policy-2 load reproduced the difference with the original ring
+  path. All four repeats diverged in their binary frames. Enabling
+  deterministic XLA with the original ring path produced four
+  byte-identical frames. The ordered gather path also produced four
+  byte-identical frames under ordinary XLA. These results cover one
+  short H100 request. Fused learner parity still uses the actual tokens
+  and routes from each individual reply.
   [Original paged serving path][native-paged-moe] ·
+  [Controlled short repeatability probe][iris-native-repeat-prefill] ·
   [Cache ownership and full-context run][iris-native-cache-ownership]
 
   The typed install keeps the old model and KV pool live until it verifies
@@ -1622,9 +1631,37 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   and scores the actual binary replay with FA4 and fused projection.
   The CPU fixture passed all 32 action targets with maximum absolute
   log-ratio `2.38e-7` and zero clip crossings. Require zero crossings
-  on all 32,768 post-swap targets on H100. The held comparison measures
-  end-to-end rollout admission and optimizer timing with four learner
-  hosts.
+  on all 32,768 post-swap targets on H100.
+
+  The original H100 process completed four 8,192-token responses under
+  policy 2 at 24,576 tokens of context. Generation took 1,492.6 seconds
+  and peaked at 59.96 GiB per H100. Independent readback verified all
+  positions, captured routes, scores and the policy identity. A fresh
+  process restored the same policy with all cache ownership counters at
+  zero. Its short request diverged from the live request on the first
+  sampled token. The original fused worker scored the 611 sampled
+  policy-1 tool targets with zero PPO crossings, then stopped before
+  scoring policy 2 because a reader still required an identical cold
+  reply. The replay-only scorer uses the exact saved policy-2 bytes and
+  the same FA4 and fused projection configuration. The first replay-only
+  worker read the archived bytes and stopped on a missing `zstd` command.
+  The replacement uses the task's locked Python Zstandard reader. The CPU
+  fixture retains its byte-equality check.
+  [Full-context run][iris-native-cache-ownership] ·
+  [Archived exact-task source][native-full-capture-archive] ·
+  [Replay-only scorer][iris-native-b-scorer]
+
+  The held comparison measures end-to-end rollout admission and optimizer
+  timing with four learner hosts. The 128-group frozen learner's warm
+  step 2 admitted 1.62 million sampled tokens. At 22 tokens per second,
+  the observed full-context native rate, that volume corresponds to about
+  20 hours of generation. Treat this as a scale check for one long-context
+  group. A bounded dry plan uses the same 40-H100 layout, four answers per
+  group, 32 groups per update, a 16,384-token prompt cap and a 24,576-token
+  serving window. It uses common 512-token reply caps for rollout and
+  evaluation in both arms. Keep the full-context production qualification
+  alongside the bounded end-to-end timing and report the cap when
+  interpreting panel rewards.
 
   [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
@@ -1705,6 +1742,9 @@ arms. [Prior timing comparison][timing]
 [iris-native-allocator-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122h
 [iris-native-cache-ownership]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122i
 [iris-native-tool-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-tool-scorer-20261122a
+[iris-native-repeat-prefill]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-repeat-prefill-20261122a
+[iris-native-b-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-b-scorer-20261122b
+[native-full-capture-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122i%2Fnative-native-fused-20261122i-tool-fused%2F0%2F2d4106a1e0593f89%2Foutputs.tar.zst
 [native-paged-moe]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/models/snowball.py#L1932-L1943
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
 [iris-native-conversion]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122d%2Fnative-native-fused-20261122d-convert
