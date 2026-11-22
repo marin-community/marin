@@ -490,10 +490,10 @@ the original artifact roots with a repository-local Git tree abbreviation.
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
 
-Both 25-update recipes passed offline preflight on `f1ea01e18d` with the
-regional task selection pinned. The Megatron recipe matches the previous
-preflight. The Levanter recipe adds the same pinned-host optimizer placement
-as the smoke.
+Both 25-update recipes passed offline preflight on `9e8664df3b` with the
+regional task selection pinned. The Megatron fingerprint is `ef11bf85`.
+The Levanter fingerprint is `07afabcc` and uses pinned-host optimizer state
+with the same 80% learner allocator cap as `.15`.
 After the smoke passes its receipt and weight-change audits, submit the
 Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
 Use the same regional route and publication verification for both. The
@@ -502,6 +502,7 @@ policy configuration.
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
 ID and the trainer can resume from an existing checkpoint.
+[Frozen launch and audit package][h100-matched-handoff]
 
 For each arm, collect Finelog rows for the successful child and its task attempts.
 Match the `WANDB_MIRROR` metrics by optimizer step with rollout and update
@@ -1090,6 +1091,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   training tasks and evaluation settings. Only the dedicated native serving
   subprocess preallocates 90% GPU memory. Submit after the priority learner
   smoke and matched 25-update comparison.
+  Use the archived pair as the serving configuration reference. Port the
+  qualified learner's loading, optimizer placement, readiness and recovery
+  changes into the common typed learner before submitting either arm.
+  Retain the binary frames and native snapshot install, then qualify the
+  ported learner with vLLM. The archived preset uses one turn per episode.
+  Use a separate 67B tool-turn fixture to test continuation and stale KV
+  and prefix rejection across a weight install. [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
   Parquet has SHA-256
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
@@ -1166,6 +1174,7 @@ arms. [Prior timing comparison][timing]
 [h100-shutdown-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.14%2Fh100-shutdown-retry.tar.zst
 [h100-nccl-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.14%2Fobserved-failure.json
 [h100-nccl-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fh100-nccl-headroom-retry.tar.zst
+[h100-matched-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fquick-loop-matched-2026.11.20.15.tar.gz
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
 [skyrl-hf-prefetch]: https://github.com/marin-community/marin/pull/10662
