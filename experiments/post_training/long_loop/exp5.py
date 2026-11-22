@@ -21,7 +21,7 @@ import draccus
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
-from marin.rl.curriculum import CurriculumValidation, RlCurriculum
+from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -34,12 +34,7 @@ from experiments.post_training.long_loop.exp3_recipe import (
 )
 from experiments.post_training.long_loop.exp4 import release_artifact
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE
-from experiments.post_training.long_loop.exp5_data import (
-    AGENTIC_MANIFEST_SHA256,
-    OUTPUT_PREFIX,
-    base_pool,
-    pool_step,
-)
+from experiments.post_training.long_loop.exp5_data import OUTPUT_PREFIX, ROUTES, pool_steps
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.round_runner import (
@@ -54,18 +49,23 @@ from experiments.post_training.long_loop.round_runner import (
 )
 from experiments.post_training.long_loop.shared_sft import native_sft_step
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
+from marin.rl.skyrl import SkyRLRolePlan
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES
 from experiments.post_training.task_curation.exp5_curriculum import (
     HARDMATH_LABEL,
     HARDMATH_REPO,
     IFBENCH_LABEL,
     IFBENCH_SOURCE,
-    PENDING_SOURCES,
+    OPENRESEARCHER_LABEL,
     TARGET_SHARES,
     exp5_rl_curriculum,
+    exp5_validation_from_manifest,
 )
+from experiments.post_training.task_curation.images.build import environment_artifact
 
-DATA_VERSION = "2026.11.20.1"
+# The Exp5 pools artifact the round binds: published at the build's run-wide version.
+EXP5_POOLS_VERSION = "2026.11.22.1"
 INITIAL_EVAL_INPUTS = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5/setup/2026.11.20.2/initial-eval"
 INITIAL_EVAL_FILES = (
     StoragePin(
@@ -79,59 +79,51 @@ INITIAL_EVAL_FILES = (
 )
 # The inherited 64-group window apportions the prepared 0.95 to 14 SWE groups.
 # This diagnostic subset remains unlaunchable while the research slot is pending.
-PREPARATION_ROUTE_QUOTAS = {"agentic": 14, "nonagentic": 50}
+EXPECTED_ROUTE_QUOTAS = {"agentic": 13, "nonagentic": 51}
+"""The curriculum-derived window quotas at the round's 64-group batch: 0.20 of 64 rounds to 13."""
 
 
-def prepared_curriculum(validation: CurriculumValidation) -> RlCurriculum:
-    """Keep the prepared sources' absolute shares; the missing five percent stays explicit."""
-    complete = exp5_rl_curriculum(validation)
-    return replace(
-        complete,
-        name="long-loop/exp5-preparation-only",
-        entries=tuple(entry for entry in complete.entries if entry.label not in PENDING_SOURCES),
-    )
-
-
-def prepared_pools(resolved: dict) -> dict[str, ArtifactStep]:
-    """Pin the preserved SWE pool and the verified Exp5 nonagentic producer."""
-    producer = pool_step(DATA_VERSION)
-    paths = {"agentic": base_pool("agentic"), "nonagentic": producer.path(OUTPUT_PREFIX)}
-    adopted = {}
-    for route, path in paths.items():
-        manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
-        manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
-        manifest = json.loads(manifest_bytes)
-        record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
-        if route == "agentic":
-            if manifest_sha != AGENTIC_MANIFEST_SHA256:
-                raise ValueError("Exp4 SWE pool manifest changed")
-        elif (
-            json.loads(record_bytes)["fingerprint"] != producer.fingerprint()
-            or manifest["curriculum"] != exp5_rl_curriculum().identity
-            or manifest["pending_sources"] != dict(PENDING_SOURCES)
-        ):
-            raise ValueError("Exp5 prepared pool does not match the held curriculum")
-        files = [
-            {"uri": prefix_join(path, "train.parquet"), "sha256": manifest["sha256"]},
-            {"uri": prefix_join(path, "manifest.json"), "sha256": manifest_sha},
-        ]
-        adopted[route] = ArtifactStep.adopt(
-            f"long-loop-exp5/prepared-{route}",
-            DATA_VERSION,
+def exp5_round_pools(resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurriculum]:
+    """Adopt the published Exp5 pools, verify them against the producer, and return the fixed curriculum."""
+    producer = pool_steps(EXP5_POOLS_VERSION, grader_environment=environment_artifact(GRADER_PACKAGES))["pools"]
+    path = producer.path(OUTPUT_PREFIX)
+    record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
+    if json.loads(record_bytes)["fingerprint"] != producer.fingerprint():
+        raise ValueError("Regional Exp5 pool producer differs")
+    manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    curriculum = exp5_rl_curriculum(exp5_validation_from_manifest(manifest["validation"]))
+    if manifest["curriculum"] != curriculum.identity:
+        raise ValueError("Regional Exp5 pools were prepared for another curriculum")
+    if not manifest.get("training_ready"):
+        raise ValueError("The Exp5 pools are not training-ready")
+    pins = [
+        {"uri": prefix_join(path, name), "sha256": sha256}
+        for name, sha256 in {**manifest["files"], "manifest.json": hashlib.sha256(manifest_bytes).hexdigest()}.items()
+    ]
+    pools = {
+        "pools": ArtifactStep.adopt(
+            producer.name,
+            producer.version,
             path,
-            config={"files": files, "producer_record_sha256": hashlib.sha256(record_bytes).hexdigest()},
+            config={
+                "producer_fingerprint": producer.fingerprint(),
+                "producer_record_sha256": hashlib.sha256(record_bytes).hexdigest(),
+                "files": pins,
+            },
         )
-        sources = manifest["source_counts"]
-        provenance = {"nemotron_if": NEMOTRON_SOURCE, IFBENCH_LABEL: IFBENCH_SOURCE, HARDMATH_LABEL: HARDMATH_REPO}
-        resolved["datasets"][route].update(
-            uri=path,
-            data_file="train.parquet",
-            rows=manifest["rows"],
-            files=files,
-            source_names=[provenance.get(label, label) for label in sources],
-            teacher_routes=sources,
-        )
-    return adopted
+    }
+    resolved["datasets"] = {
+        **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
+        "pools": {
+            "uri": path,
+            "rows": manifest["rows"],
+            "files": pins,
+            "composition": manifest["composition"],
+            "routes": manifest["routes"],
+        },
+    }
+    return pools, curriculum
 
 
 @click.command(help=__doc__)
@@ -167,20 +159,23 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
     )
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     resolved["sft"]["special_token_lr_multiplier"] = spec.sft.special_token_lr_multiplier
-    curriculum = prepared_curriculum()
-    resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     resolved["exp5_admission"] = {
         "launch_ready": stage == "sft",
         "terminal_stage": stage,
-        "launch_hold": None if stage == "sft" else "Unresolved OpenResearcher runtime",
+        "launch_hold": None if stage == "sft" else "RL launches after the certified SFT handoff",
         "target_shares": dict(TARGET_SHARES),
-        "prepared_absolute_share": sum(curriculum.weights().values()),
-        "reserved_share": sum(TARGET_SHARES[label] for label in PENDING_SOURCES),
-        "pending_sources": dict(PENDING_SOURCES),
+        "prepared_absolute_share": 1.0,
+        "reserved_share": 0,
+        "pending_sources": {},
         "sampling_scope": (
-            "SFT creates no RL sampler. Downstream submission remains blocked so the "
-            "prepared 0.95 cannot redistribute the reserved 0.05."
+            "All eleven sources are training-ready in the pools; OpenResearcher rides the thin-image plus "
+            "hosted-retrieval service track, so no share stays reserved and none can redistribute."
         ),
+        "openresearcher": {
+            "track": "thin-image + hosted retrieval service (pin 0c4f3958, 10/10 native grades)",
+            "runtime": "Daytona actor with the frozen BM25 retrieval service; the full 55 GB image is not a "
+            "Daytona snapshot",
+        },
         "science": "Reuse the exact qualified V7 science components; existing checked repairs are already present",
         "sft_ruling": {
             "reference": "9662fdba:experiments/post_training/long_loop/specs/sft.yaml",
@@ -212,18 +207,19 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
     harbor = resolved["rl"]["config"]["terminal_bench"]["harbor"]
     harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
     harbor["eval_daytona_image_build"] = harbor.pop("eval_daytona_provisioning")
-    buffer = resolved["rl"]["config"]["trainer"]["rollout_buffer"]
-    buffer["consumed_route_quotas"] = dict(PREPARATION_ROUTE_QUOTAS)
-    buffer["source_routes"] = {
-        **SOURCE_ROUTES,
-        NEMOTRON_SOURCE: "nonagentic",
-        IFBENCH_LABEL: "nonagentic",
-        IFBENCH_SOURCE: "nonagentic",
-        HARDMATH_LABEL: "nonagentic",
-        HARDMATH_REPO: "nonagentic",
-    }
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
-    pools = prepared_pools(resolved)
+    pools, curriculum = exp5_round_pools(resolved)
+    resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
+    buffer = resolved["rl"]["config"]["trainer"]["rollout_buffer"]
+    roles = draccus.decode(SkyRLRolePlan, resolved["rl"]["role_plan"])
+    derived = consumed_route_quotas(curriculum, ROUTES, roles.train_batch_size)
+    if roles.train_batch_size == 64 and derived != EXPECTED_ROUTE_QUOTAS:
+        raise ValueError(
+            f"The curriculum derives {derived!r} at batch {roles.train_batch_size}; "
+            f"the recorded expectation is {EXPECTED_ROUTE_QUOTAS!r}"
+        )
+    buffer["consumed_route_quotas"] = derived
+    buffer["source_routes"] = dict(ROUTES)
     require_archive_binds_final_sft_checkpoint(resolved)
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps({key: value for key, value in resolved.items() if key != "resolved_sha256"}, sort_keys=True).encode()

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from marin.rl.curriculum import PoolRow, draw_validation_split
+from marin.rl.curriculum import PoolRow, consumed_route_quotas, draw_validation_split
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import (
     AnswerType,
@@ -24,7 +24,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 
-from experiments.post_training.long_loop.exp5 import main, prepared_curriculum, prepared_pools
+from experiments.post_training.long_loop.exp5 import EXPECTED_ROUTE_QUOTAS, main, exp5_round_pools
 from experiments.post_training.long_loop.exp5_data import hardmath_task, ifbench_row
 from experiments.post_training.long_loop.round_runner import load_round
 from experiments.post_training.task_curation.exp5_curriculum import (
@@ -34,7 +34,6 @@ from experiments.post_training.task_curation.exp5_curriculum import (
     IFBENCH_SOURCE,
     IFBENCH_SOURCE_REVISION,
     OPENRESEARCHER_LABEL,
-    PENDING_SOURCES,
     TARGET_SHARES,
     exp5_rl_curriculum,
 )
@@ -82,42 +81,24 @@ def _exp5_validation():
     return draw_validation_split(dict(labels), rows, size=200, seed=20261020).validation
 
 
-def test_exp5_policy_keeps_the_unavailable_five_percent():
+def test_exp5_policy_covers_the_full_eleven_source_mix():
     curriculum = exp5_rl_curriculum(_exp5_validation())
     weights = curriculum.weights()
     assert math.isclose(sum(weights.values()), 1.0, rel_tol=0, abs_tol=1e-12)
     assert weights[AGENTIC_TRAIN_SOURCE] == 0.20
     assert weights[IFBENCH_LABEL] == weights[OPENRESEARCHER_LABEL] == weights[HARDMATH_LABEL] == 0.05
+    assert len(weights) == 11
+    assert curriculum.validation.size == 200
 
 
-def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp_path):
-    validation = _exp5_validation()
-    prepared = prepared_curriculum(
-        dataclasses.replace(
-            validation,
-            size=sum(1 for row in validation.rows if row.label not in PENDING_SOURCES),
-            rows=tuple(row for row in validation.rows if row.label not in PENDING_SOURCES),
-        )
-    ).weights()
-    assert OPENRESEARCHER_LABEL not in prepared
-    assert math.isclose(sum(prepared.values()), 0.95, rel_tol=0, abs_tol=1e-12)
-    assert prepared[AGENTIC_TRAIN_SOURCE] == 0.20
-    result = CliRunner().invoke(
-        main,
-        [
-            "--round",
-            str(Path(__file__).parents[1] / "rounds/exp5-setup.yaml"),
-            "--source-revision",
-            "0" * 40,
-            "--validation-output",
-            str(tmp_path),
-            "--version",
-            "2026.11.20.97",
-            "--run",
-        ],
-    )
-    assert result.exit_code == 2
-    assert not list(tmp_path.iterdir())
+def test_exp5_derived_route_quotas_match_the_recorded_expectation():
+    curriculum = exp5_rl_curriculum(_exp5_validation())
+    routes = {
+        AGENTIC_TRAIN_SOURCE: "agentic",
+        **{label: "nonagentic" for label in curriculum.weights() if label != AGENTIC_TRAIN_SOURCE},
+    }
+    derived = consumed_route_quotas(curriculum, routes, 64)
+    assert derived == EXPECTED_ROUTE_QUOTAS == {"agentic": 13, "nonagentic": 51}
 
 
 @pytest.mark.integration
@@ -149,17 +130,7 @@ def test_exp5_sft_stage_constructs_only_training_and_its_inputs(tmp_path):
     )
     resolved = json.loads((tmp_path / "resolved-plan.json").read_text())
     assert resolved["exp5_admission"]["launch_ready"]
-    assert resolved["exp5_admission"]["pending_sources"]
-    assert math.isclose(resolved["exp5_admission"]["reserved_share"], 0.05)
+    assert resolved["exp5_admission"]["pending_sources"] == {}
+    assert resolved["exp5_admission"]["reserved_share"] == 0
+    assert resolved["exp5_admission"]["prepared_absolute_share"] == 1.0
     assert resolved["execution"]["coordinator"]["priority"] == "production"
-
-
-def test_exp5_refuses_a_different_swe_population_before_constructing_training_inputs(monkeypatch):
-    def substituted_bytes(path):
-        if str(path).endswith("manifest.json"):
-            return b'{"rows":5608,"source_counts":{"clone-only":5608}}'
-        return b"{}"
-
-    monkeypatch.setattr(StoragePath, "read_bytes", substituted_bytes)
-    with pytest.raises(ValueError, match="Exp4 SWE pool manifest changed"):
-        prepared_pools({})

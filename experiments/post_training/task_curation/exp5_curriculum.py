@@ -8,10 +8,21 @@ runtime or permit its five percent to be redistributed to another source.
 """
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
 
-from marin.rl.curriculum import CurriculumEntry, CurriculumValidation, RlCurriculum, SamplingMode, SourcePin
+from marin.rl.curriculum import (
+    CurriculumEntry,
+    CurriculumValidation,
+    PoolRow,
+    RlCurriculum,
+    SamplingMode,
+    SourcePin,
+    ValidationRow,
+    ValidationSplit,
+    draw_validation_split,
+)
 
 from experiments.post_training.task_curation.curriculum import curriculum_entries
 from experiments.post_training.task_curation.exp4_curriculum import (
@@ -20,6 +31,7 @@ from experiments.post_training.task_curation.exp4_curriculum import (
     EXP4_CATALOG,
     NEMOTRON_IF_LABEL,
     SEED,
+    VALIDATION_SIZE,
 )
 from experiments.post_training.task_curation.exp4_curriculum import TARGET_SHARES as EXP4_TARGET_SHARES
 
@@ -58,9 +70,20 @@ TARGET_SHARES = MappingProxyType(
 if not math.isclose(sum(TARGET_SHARES.values()), 1.0, rel_tol=0, abs_tol=1e-12):
     raise ValueError("The complete Exp5 target shares must sum to one")
 
-PENDING_SOURCES = MappingProxyType(
-    {OPENRESEARCHER_LABEL: "TaskSpec/JudgeSpec schema alignment and openresearcher-bm25:v1 provider admission"}
-)
+
+def exp5_validation_split(pool_rows: Mapping[str, Sequence[PoolRow]]) -> ValidationSplit:
+    """Draw the Exp5 holdout: 200 prompts apportioned over the eleven source shares.
+
+    ``pool_rows`` carries every stamped pool's row identities keyed by
+    ``teacher_route``; the draw is deterministic for the seed, so record and
+    data derive one split."""
+    return draw_validation_split(dict(TARGET_SHARES), pool_rows, size=VALIDATION_SIZE, seed=SEED)
+
+
+def exp5_validation_from_manifest(payload: Mapping) -> CurriculumValidation:
+    """Rebuild the recorded holdout from a pool manifest's validation payload."""
+    rows = tuple(ValidationRow(**row) for row in payload["rows"])
+    return CurriculumValidation(size=payload["size"], seed=payload["seed"], rows=rows)
 
 
 def exp5_rl_curriculum(validation: CurriculumValidation) -> RlCurriculum:

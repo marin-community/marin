@@ -54,7 +54,6 @@ from experiments.post_training.task_curation.datasets.reasoning_gym.tasks import
     GENERATOR_VERSION,
     PYTHON_HASH_SEED,
     convert_generated,
-    generated_row_count,
     generated_rows,
 )
 from experiments.post_training.task_curation.datasets.skyrl.ifeval import convert_nemotron_if
@@ -78,6 +77,7 @@ NEMOTRON_IF_RECIPE_VERSION = "2"
 NEMOTRON_IF_LABEL = "nemotron_if"
 GENERATOR_RECIPE_NAME = "reasoning_gym_generated"
 GENERATED_ROW_COUNT = 20_800
+GENERATED_V3_FULL_RUN_ROWS = 104_000
 EXPECTED_COMPOSITION = {
     AGENTIC_TRAIN_SOURCE: 5608,
     "PRIME-RL/Eurus-2-RL-Data": 10_317,
@@ -164,14 +164,12 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
     if get_job_info() is None:
         raise RuntimeError("Regenerate the Reasoning Gym label inside the regional Iris CPU job")
     wheel = StoragePath(GENERATOR_URL)
-    expected_count = generated_row_count(wheel, EXCLUDED_GENERATORS, PYTHON_HASH_SEED)
-    if expected_count != GENERATED_ROW_COUNT:
-        raise ValueError(f"The generator's row count changed: {expected_count} != {GENERATED_ROW_COUNT}")
+    adopted_indices = sorted(old_rows)
     rejections: list[dict] = []
     regenerated: dict[int, str] = {}
 
     def regenerate_part(part: int) -> list[tuple[int, str]]:
-        """One generator part's rows, converted with the repaired pipeline."""
+        """The adopted label's rows this part owns, regenerated with the repaired pipeline."""
         context = ConversionContext(
             inputs={},
             grader_environment=EnvironmentRequirements(
@@ -179,9 +177,12 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
                 packages_lock=packages_lock,
             ),
         )
+        part_indices = frozenset(index for index in adopted_indices if index % GENERATOR_PARTS == part)
+        if not part_indices:
+            return []
         converted = []
         for index, data in generated_rows(
-            wheel, GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, part, GENERATOR_PARTS, None
+            wheel, GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, part, GENERATOR_PARTS, part_indices
         ):
             if index not in old_rows:
                 raise ValueError(f"Regenerated cycle index {index} is absent from the adopted label")
@@ -227,6 +228,8 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
         "generator_version": GENERATOR_VERSION,
         "generated_version": "3",
         "row_count": len(regenerated),
+        "regenerated_indices": "the adopted label's exact cycle indices (the full v3 run yields "
+        f"{GENERATED_V3_FULL_RUN_ROWS}; the pools keep the adopted 20,800 composition)",
         "prompts_unchanged": True,
         "shared_grade_script": (
             "every row's embedded reasoning_gym_grade.py is regenerated: the cross-day entry comparison "
@@ -395,9 +398,12 @@ def prepare_pool(*, output: str, agentic: str, blend: str, nemotron: str, grader
                         "version": "smartie-mixed-20261110-v1 adopted composition",
                     },
                     TEACHER_ROUTE_LABELS[GENERATOR_URL]: {
-                        "provisioned": "full",
-                        "upstream_admitted_count": GENERATED_ROW_COUNT,
-                        "version": "reasoning_gym-0.1.25 generated v3 (the deterministic full run)",
+                        "provisioned": "subsample",
+                        "upstream_admitted_count": GENERATED_V3_FULL_RUN_ROWS,
+                        "version": (
+                            "reasoning_gym-0.1.25 generated v3 at the adopted 20,800 cycle indices (the full "
+                            "v3 run yields 104,000; the pools keep the adopted composition)"
+                        ),
                     },
                     "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": {
                         "provisioned": "subsample",
