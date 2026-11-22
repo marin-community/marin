@@ -2,13 +2,22 @@
 
 November 21, 2026 (PST).
 
-Fresh BATCH smoke `2026.11.21.11` is running from
-`e9fa30e8a2230a4015d8488280d2b375b81ea07d`, with dynamic VMM allocation at
-the same 0.90 budget and preallocation disabled. At 21:18 PST all five GPU
-tasks were running. Both accepted bundles match all 4,583 frozen entries,
-including 43 required runtime files, and the executed configuration matches
-the preflight. Native initialization, publication, updates, and resume remain
-pending for this source.
+BATCH smoke `2026.11.21.11`, from
+`e9fa30e8a2230a4015d8488280d2b375b81ea07d`, failed at the existing
+3,600-second model-initialization deadline. Three learner hosts finished
+reading the weights; one remained in HF import. A nonblocking Python stack
+sample caught its fsspec event-loop thread converting tensor dtypes. The slow
+container recorded a 66.66% one-minute average for memory-pressure stalls,
+while using 29.30 GiB of its 1,800-GiB limit, with no limit/OOM events, swapping,
+or CPU throttling. The underlying stall cause remains unproven.
+
+This run did not qualify dynamic VMM, publication, updates, or resume. Both
+accepted bundles match all 4,583 frozen entries, including 43 required runtime
+files, and the executed configuration matches the preflight. One fresh BATCH
+allocation with identical runtime source, recipe, and timeout is planned after
+terminal cleanup. Its worker placement and stall condition must be checked
+before calling it a recovery. VMM retains the same 0.90 budget with
+preallocation disabled.
 
 BATCH smoke `2026.11.21.10`, from
 `42a248d50564f44d6010a35591d49d2f65c0ea38`, initialized all four full-model
@@ -16,7 +25,7 @@ learners with BFC preallocation and the same observed 0.90 limit on all 32
 H100s. Initial publication then failed: a new JAX NCCL communicator could not
 allocate 2 MiB of CUDA memory on any learner host. Receiver timeouts and actor
 termination followed. No completed publication payload or train step is
-established for this source. The next memory-policy candidate is under review.
+established for this source. The subsequent `.11` smoke attempted dynamic VMM.
 
 Diagnostic BATCH smoke `2026.11.21.9`, from
 `a7c751443ffbc55ca5e8b3603d0e41c09af17d3d`, initialized all four full-model
@@ -24,8 +33,8 @@ H100 learners, byte-verified initial publication, and saved GPU compiler and
 allocator evidence before its first update. That update failed requesting a
 41.05-GiB temporary arena per device. Each allocator had enough aggregate headroom but
 could provide no free block larger than 32 GiB. The evidence supports
-fragmentation of the growing BFC pool as the immediate blocker. A remedy is
-under review; no completed optimizer update is established.
+fragmentation of the growing BFC pool as the immediate blocker. The subsequent
+smokes test allocator remedies; no completed optimizer update is established.
 
 BATCH smoke `2026.11.21.8`, from
 `233030789c6afd6aa61d315a001ce65ac7436007`, initialized the full 67B Snowball
