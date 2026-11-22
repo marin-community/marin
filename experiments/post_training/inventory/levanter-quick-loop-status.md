@@ -2,6 +2,13 @@
 
 November 21, 2026 (PST).
 
+Fresh BATCH smoke `2026.11.21.10` is submitted from
+`42a248d50564f44d6010a35591d49d2f65c0ea38`, enabling BFC preallocation at the
+same 0.90 limit. At 19:55 PST its CPU coordinator was running; no GPU child
+had yet been discovered. The accepted bundle matches all 4,583 frozen entries,
+including 43 required runtime files. Accelerator acceptance for this source is
+pending. The hardware evidence below covers the preceding `.9` source.
+
 Diagnostic BATCH smoke `2026.11.21.9`, from
 `a7c751443ffbc55ca5e8b3603d0e41c09af17d3d`, initialized all four full-model
 H100 learners, byte-verified initial publication, and saved GPU compiler and
@@ -379,7 +386,7 @@ setting to address the measured pool fragmentation. It changes no training
 math, kernels, precision, geometry, or numerical tolerance. A fresh H100 run
 must still prove that the resulting pool can serve the update and subsequent
 operations; eliminating this blocker alone does not qualify the full loop.
-No such run has been submitted.
+The fresh acceptance attempt is recorded below.
 
 The candidate passes 13 focused real-process CPU cases, including rejection of
 the pinned allocator overrides before backend creation and one/two-process
@@ -388,6 +395,15 @@ and types, strict docs, and independent source review pass. The rendered
 Megatron control is unchanged; the native runtime configuration differs from
 smoke `.9` only by `preallocate: true`. These checks qualify the startup
 boundary and preserve local state semantics; they do not establish H100 fit.
+
+Smoke `2026.11.21.10` uses coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.10-coordinator-ddb628ca`,
+submitted at `2026-11-22T03:55:21.099Z`. Its actual priority is BATCH, with zero
+automatic failure retries. Its CPU task is running; no GPU execution is yet
+established by the startup snapshot. Root source, configured priority, retry
+budgets, and all frozen bundle contents were verified. The source pin is
+`42a248d50564f44d6010a35591d49d2f65c0ea38`; later status-only documentation
+commits are not its executed source.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
