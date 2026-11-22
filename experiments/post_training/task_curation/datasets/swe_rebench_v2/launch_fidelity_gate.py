@@ -27,7 +27,7 @@ DATASET_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/v2-1-d
 DRIVER_URI = (
     "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/gate/2026.11.20.2/swe_rebench_fidelity_driver.py"
 )
-DRIVER_SHA256 = "de34871f3a9ea0e93370279f92b437a991633ee62328dc9b055e0826f92cabbc"
+DRIVER_SHA256 = "e34cf327925379d1c94fa780cf213478ab93078e92ae4f6c2fc297c3fb9a7ee3"
 JOB_NAME = "swe-repair-swe-rebench-wave-v11"
 
 

@@ -391,6 +391,7 @@ def test_transient_daytona_classification_retries_infra_and_never_grading():
         RuntimeError("Failed to create sandbox: Total CPU limit exceeded. Maximum allowed: 2500.")
     )
     assert transient_daytona_error(RuntimeError("DaytonaConnectionError: connection reset"))
+    assert transient_daytona_error(RuntimeError("Machine is closed"))
     assert transient_daytona_error(RuntimeError("DaytonaTimeoutError: sandbox start timed out"))
     # grading verdicts and config errors are never retried
     assert not transient_daytona_error(AssertionError("assert 0.0 == 1.0"))

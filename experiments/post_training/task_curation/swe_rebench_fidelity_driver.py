@@ -446,6 +446,7 @@ def transient_daytona_text(text: str) -> bool:
     """Classify the retryable Daytona infrastructure failures."""
     return (
         "Daytona environment is not running" in text
+        or "Machine is closed" in text
         or "Total CPU limit exceeded" in text
         or "DaytonaConnectionError" in text
         or "DaytonaTimeoutError" in text
