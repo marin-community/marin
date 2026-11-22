@@ -10,6 +10,7 @@ import logging
 import shutil
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorTrainingConfig
@@ -29,8 +30,15 @@ from experiments.post_training.mochi_eagle3 import TARGET_IDENTITY, initialize_d
 logger = logging.getLogger(__name__)
 
 
-def train(spec: dict, directory: Path) -> None:
-    """Rebuild the training-fold vocabulary and publish a validated draft candidate."""
+@dataclass(frozen=True)
+class PreparedDraftTraining:
+    job: OnlineEagleTrainingJob
+    seed: Path
+    fold: dict
+
+
+def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraining:
+    """Bind immutable captured features to a vocabulary selected from the training fold."""
     captures = directory / "ranks"
     io.download_directory(spec["captures"], str(captures))
     merged = directory / "training-capture"
@@ -100,15 +108,12 @@ def train(spec: dict, directory: Path) -> None:
         seed=spec["seed"],
         training=training,
     )
-    runtime = OnlineEagleTrainerRuntime(job, merged)
-    result = runtime.update(job)
-    receipt = {"training": result.to_mapping(), "fold": split}
-    (StoragePath(spec["output"]) / "result.json").write_text(json.dumps(receipt, indent=2))
-    if not result.accepted:
-        raise ValueError(f"Draft failed same-holdout improvement gate: {result.to_mapping()}")
-    candidate = Path(job.output_dir)
-    io.upload_directory(str(candidate), prefix_join(spec["output"], "trainer-checkpoint"))
-    bundle = directory / "serving-draft"
+    return PreparedDraftTraining(job, seed, split)
+
+
+def publish_serving_draft(candidate: Path, seed: Path, output: str, receipt: dict) -> None:
+    """Publish trainable weights, vocabulary maps, and the frozen projected Mochi head."""
+    bundle = candidate.parent / "serving-draft"
     bundle.mkdir()
     shutil.copyfile(candidate / "config.json", bundle / "config.json")
     weights = load_file(candidate / "model.safetensors")
@@ -118,7 +123,22 @@ def train(spec: dict, directory: Path) -> None:
         raise ValueError("Standalone draft is missing its vocabulary maps or projected target head")
     save_file(weights, bundle / "model.safetensors", metadata={"format": "pt"})
     (bundle / "lineage.json").write_text(json.dumps(receipt, indent=2))
-    io.upload_directory(str(bundle), prefix_join(spec["output"], "serving-draft"))
+    io.upload_directory(str(bundle), prefix_join(output, "serving-draft"))
+
+
+def train(spec: dict, directory: Path) -> None:
+    """Run and gate one offline draft update before publishing its serving bundle."""
+    prepared = prepare_training_capture(spec, directory)
+    job = prepared.job
+    runtime = OnlineEagleTrainerRuntime(job, Path(job.capture_dir))
+    result = runtime.update(job)
+    receipt = {"training": result.to_mapping(), "fold": prepared.fold}
+    (StoragePath(spec["output"]) / "result.json").write_text(json.dumps(receipt, indent=2))
+    if not result.accepted:
+        raise ValueError(f"Draft failed same-holdout improvement gate: {result.to_mapping()}")
+    candidate = Path(job.output_dir)
+    io.upload_directory(str(candidate), prefix_join(spec["output"], "trainer-checkpoint"))
+    publish_serving_draft(candidate, prepared.seed, spec["output"], receipt)
     logger.info("Published trained draft: %s", json.dumps(result.to_mapping()))
 
 

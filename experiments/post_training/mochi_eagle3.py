@@ -46,7 +46,7 @@ BOOTSTRAP_ARCHIVES = (
 )
 DRAFT_VOCAB_SIZE = 32000
 MAX_PROMPT_TOKENS = 90112
-AUXILIARY_LAYERS = [3, 24, 45]
+AUXILIARY_LAYERS = (3, 24, 45)
 AGENTIC_SOURCE = "long-loop-smartie-swesmith"
 
 
@@ -199,7 +199,7 @@ def initialize_draft(directory: Path, frequencies: Counter[int], seed: int) -> d
     config = Eagle3SpeculatorConfig(
         transformer_layer_config=layer,
         draft_vocab_size=DRAFT_VOCAB_SIZE,
-        eagle_aux_hidden_state_layer_ids=AUXILIARY_LAYERS,
+        eagle_aux_hidden_state_layer_ids=list(AUXILIARY_LAYERS),
         norm_before_fc=True,
         norm_before_residual=True,
         norm_output=True,

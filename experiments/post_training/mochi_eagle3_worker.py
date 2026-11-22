@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from rigging.filesystem.storage_path import prefix_join
+from safetensors import safe_open
 from skyrl_train.inference_engines.base import request_group_from_id
 from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     capture_rank_directory,
@@ -51,6 +52,10 @@ class MochiCaptureWorker:
                 # Native completions prepend cmpl-, while SkyRL's shared grouping
                 # helper handles the chatcmpl- prefix used by rollout engines.
                 window["group_id"] = request_group_from_id(window["request_id"].removeprefix("cmpl-"))
+                with safe_open(directory / window["path"], framework="pt") as tensors:
+                    positions = tensors.get_tensor("position_ids")
+                    window["first_position"] = int(positions[0])
+                    window["last_position"] = int(positions[-1])
             manifest_path.write_text(json.dumps(manifest, indent=2))
             io.upload_directory(str(directory), rank_destination)
         return {**result, "path": rank_destination}

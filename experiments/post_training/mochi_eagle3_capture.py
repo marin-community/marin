@@ -26,6 +26,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from safetensors.torch import load_file
 from skyrl_train.inference_engines.base import request_id_for_session
 from skyrl_train.io import io
+from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
 
 from experiments.post_training.long_loop.throughput import graph_capture_observed, write_json
 from experiments.post_training.mochi_eagle3 import (
@@ -48,7 +49,7 @@ def qualify_windows(spec: dict, results: list[dict]) -> list[dict]:
         for rank in range(spec["geometry"]["data_parallel_size"]):
             directory = root / f"rank-{rank:05d}"
             manifest = json.loads((directory / "manifest.json").read_text())
-            if manifest["target_revision"] != TARGET_IDENTITY or manifest["aux_layer_ids"] != AUXILIARY_LAYERS:
+            if manifest["target_revision"] != TARGET_IDENTITY or tuple(manifest["aux_layer_ids"]) != AUXILIARY_LAYERS:
                 raise ValueError(f"Capture rank {rank} target or auxiliary slots changed")
             if manifest["head_input_semantics"] != "post_final_norm_target_lm_head_input":
                 raise ValueError("Training requires the post-final-norm target head input")
@@ -105,18 +106,27 @@ async def generate(base_url: str, spec: dict) -> None:
                         "seed": spec["seed"] + index,
                         "stop_token_ids": [128001, 128009],
                         "return_token_ids": True,
+                        "routed_experts_prompt_start": len(row["prompt_token_ids"]) - 1,
                     },
                 )
                 response.raise_for_status()
                 choice = response.json()["choices"][0]
                 if not choice["token_ids"]:
                     raise ValueError(f"Empty continuation for {row['identity']}")
+                # The final prompt row predicts the first generated token.
+                routes = normalize_routed_experts(
+                    choice["routed_experts"], row["prompt_token_ids"][-1:], choice["token_ids"]
+                )
+                if routes.shape[1:] != (48, 8) or routes.max() >= 384:
+                    raise ValueError("Mochi expert routes changed shape or expert identity range")
                 result = {
                     **row,
                     "request_id": request_id,
                     "output_token_ids": choice["token_ids"],
                     "finish_reason": choice["finish_reason"],
                     "target_identity": TARGET_IDENTITY,
+                    "routed_experts": choice["routed_experts"],
+                    "routed_experts_shape": list(routes.shape),
                 }
                 artifact_name = f"continuations/{index:06d}.json"
                 write_json(spec["output"], artifact_name, result)
@@ -154,10 +164,27 @@ async def generate(base_url: str, spec: dict) -> None:
         )
         sealed.raise_for_status()
         checked = await asyncio.to_thread(qualify_windows, spec, results)
+        root = StoragePath(spec["output"]) / "captures"
+        windows = [
+            window
+            for rank in range(spec["geometry"]["data_parallel_size"])
+            for window in json.loads((root / f"rank-{rank:05d}/manifest.json").read_text())["windows"]
+        ]
         write_json(
             spec["output"],
             "generation.json",
-            {"spec": spec, "requests": results, "seal": sealed.json(), "qualified_windows": checked},
+            {
+                "spec": spec,
+                "requests": results,
+                "seal": sealed.json(),
+                "qualified_windows": checked,
+                "generated_tokens": sum(row["tokens"] for row in results),
+                "captured_supervised_tokens": sum(window["supervised_tokens"] for window in windows),
+                "windows_reaching_context_tokens": {
+                    str(bound): sum(window["last_position"] + 1 >= bound for window in windows)
+                    for bound in (8192, 32768, 65536, 98304)
+                },
+            },
         )
 
 
@@ -193,10 +220,20 @@ def run(spec: dict) -> None:
         draft = Path(scratch) / "draft"
         io.download_directory(spec["seed_draft"], str(draft))
         engine = VllmEngineConfig(
+            startup_timeout_seconds=7200,
             max_num_seqs=64,
             max_num_batched_tokens=8192,
             extra_args=(
                 "--enable-expert-parallel",
+                "--attention-backend",
+                "FLASH_ATTN",
+                "--moe-backend",
+                "triton",
+                "--enable-return-routed-experts",
+                "--load-format",
+                "runai_streamer",
+                "--model-loader-extra-config",
+                json.dumps({"distributed": False, "concurrency": 4, "memory_limit": 8589934592}),
                 "--gpu-memory-utilization",
                 "0.85",
                 "--no-enable-prefix-caching",
