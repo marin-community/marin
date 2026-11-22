@@ -11,7 +11,7 @@ import pytest
 
 from experiments.datakit.decontam.encoder import rarest_key
 from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
-from experiments.datakit.decontam.encoder.synthetic import generic_pairs
+from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
 from experiments.datakit.decontam.encoder.text_keys import (
     WINDOW,
     hit_indices,
@@ -188,3 +188,45 @@ def test_missing_answer_words_stay_out_of_the_question_hint():
     assert left.endswith("\n[missing] none\n[answer missing] check candidate assert")
     stem_only = pair_left("What is the GDP deflator?", ["A price index", "A tax"], "", "What is the GDP deflator?")
     assert "[choices] A price index | A tax" in stem_only and "[missing] a price index tax" in stem_only
+
+
+def _items(count: int) -> list[dict]:
+    return [
+        {
+            "id": f"i{n}",
+            "eval": "e",
+            "question": f"Which planet number {n} has the most moons orbiting it today?",
+            "choices": ["Mars", "Saturn"],
+            "answer": "Saturn",
+            "passage": "",
+        }
+        for n in range(count)
+    ]
+
+
+def test_a_copy_that_only_lists_the_choices_does_not_show_the_answer():
+    rows = pd.DataFrame(list(generic_pairs(_items(60), ["host text " * 80], random.Random(0))))
+    copies = rows[rows["kind"] == "copy"]
+    marked = copies["right"].str.contains('Answer:|"answer": "Saturn', case=False)
+    assert (copies["label_qa"] == marked.astype(int)).all()
+    # Every copy lists "Saturn" among its choices, yet only the marked ones show the answer.
+    assert copies["label_qa"].sum() < len(copies)
+
+
+def test_context_variants_skip_candidates_that_already_hold_the_item():
+    items = _items(2)
+    candidates = pd.DataFrame(
+        [
+            {
+                **items[0],
+                "item": "i0",
+                "right": "notes " * 40 + items[0]["question"] + " more " * 40,
+                "question_in_record": True,
+            },
+            {**items[1], "item": "i1", "right": "unrelated words " * 60, "question_in_record": False},
+        ]
+    )
+    rows = pd.DataFrame(list(context_pairs(candidates, random.Random(0))))
+    variants = rows[rows["kind"].str.startswith("ctx_variant")]
+    assert set(variants["item"]) == {"i1"}
+    assert set(rows.loc[rows["kind"] == "ctx_copy", "item"]) == {"i0", "i1"}

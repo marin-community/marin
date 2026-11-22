@@ -242,10 +242,10 @@ def make_measure(output: str):
                 for name, items in (("first", first), ("key1", items1), ("either", either)):
                     stats[f"{name}_records"] += bool(items)
                     stats[f"{name}_pairs"] += len(items)
-                for item in either:
-                    # Reservoir sample of candidate rows for the classifier data.
-                    row = {"id": str(record["id"]), "item": str(item), "via": "key1" if item in items1 else "key2"}
-                    seen = stats["either_pairs"]
+                for item in items1:
+                    # Reservoir sample of stage-1 (key 1) candidate rows for the classifier data.
+                    row = {"id": str(record["id"]), "item": str(item), "via": "key1"}
+                    seen = stats["key1_pairs"]
                     if len(sample) < SAMPLE_ROWS_PER_SHARD:
                         sample.append(row)
                     elif rng.random() < SAMPLE_ROWS_PER_SHARD / seen:
