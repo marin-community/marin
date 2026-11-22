@@ -91,6 +91,26 @@ def test_ifeval_rewards_the_fraction_of_constraints_a_reply_meets(reply, reward,
 @pytest.mark.parametrize(
     ("reply", "reward"),
     [
+        ("First paragraph.\n* One\n* Two\n\n***\n\nSecond paragraph.", 1.0),
+        ("First paragraph.\n* One\n* Two\n\nSecond paragraph.", 0.5),
+    ],
+)
+def test_nemotron_paragraphs_follow_the_prompts_markdown_divider(reply, reward, machines):
+    """Nemotron prompts separate paragraphs with ``***``; the divider line is no bullet point."""
+    row = {
+        **ROWS["nemotron_if"],
+        "args": {
+            "instruction_id_list": ["length_constraints:number_paragraphs", "detectable_format:number_bullet_lists"],
+            "instruction_kwargs": [{"num_paragraphs": 2}, {"num_bullets": 2}],
+        },
+    }
+    result = grade(converted_task(RECIPES["nemotron_if"], row), reply, machines)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [
         (NOISY_ADD, 1.0),
         ("```python\ndef add(a, b):\n    raise SystemExit(0)\n```", 0.0),
     ],
