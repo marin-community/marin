@@ -18,6 +18,7 @@ import signal
 import socket
 import struct
 import sys
+import time
 import traceback
 from array import array
 
@@ -31,6 +32,8 @@ LINUX_CAPABILITY_VERSION_3 = 0x20080522
 SETUP_ERROR_LIMIT_BYTES = 512
 """At most POSIX's minimum PIPE_BUF, so reporting cannot block before the host reads."""
 BROKER_FD_COUNT = 5
+BROKER_CONNECT_TIMEOUT = 30
+BROKER_CONNECT_RETRY_INTERVAL = 0.01
 
 
 def execute_in_namespaces(configuration_fd: int) -> None:
@@ -133,7 +136,17 @@ def execute_via_broker(configuration_fd: int) -> None:
         config = json.load(configuration)
     os.lseek(configuration_fd, 0, os.SEEK_SET)
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
-        connection.connect(config["broker"])
+        # The first command can start as soon as bwrap releases its block FD,
+        # before the keeper has bound its broker socket.
+        deadline = time.monotonic() + BROKER_CONNECT_TIMEOUT
+        while True:
+            try:
+                connection.connect(config["broker"])
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(BROKER_CONNECT_RETRY_INTERVAL)
         peer_pid, _, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         if peer_pid != config["broker_pid"]:
             raise RuntimeError("Bubblewrap command broker identity changed")
