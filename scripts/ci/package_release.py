@@ -634,8 +634,9 @@ def validate_targeted_lock_change(
 
     Environment markers are not compared; `lock_changed_outside` reports a marker change.
     """
-    before_metadata, before_packages = _canonical_package_entries(before, LOCK_FORMAT_KEYS | LOCK_MARKER_KEYS)
-    after_metadata, after_packages = _canonical_package_entries(after, LOCK_FORMAT_KEYS | LOCK_MARKER_KEYS)
+    ignored_keys = LOCK_FORMAT_KEYS | LOCK_MARKER_KEYS
+    before_metadata, before_packages = _canonical_package_entries(before, ignored_keys)
+    after_metadata, after_packages = _canonical_package_entries(after, ignored_keys)
     if before_metadata != after_metadata:
         raise ValueError("Targeted native lock update changed lockfile metadata")
 

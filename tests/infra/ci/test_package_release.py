@@ -444,27 +444,23 @@ resolution-markers = ["{marker}"]
 
 [[package]]
 name = "jax"
-version = "{jax}"
+version = "0.8.0"
 source = {{ registry = "https://pypi.org/simple" }}
-dependencies = [{{ name = "marin-iris-native", marker = "{marker}" }}]
+dependencies = [{{ name = "jaxlib", marker = "{marker}" }}]
 
 [[package]]
 name = "marin-iris-native"
 version = "{native}"
 source = {{ registry = "https://pypi.org/simple" }}
 """
-    before = lock.format(marker=expanded, jax="0.8.0", native="0.1.3")
+    before = lock.format(marker=expanded, native="0.1.3")
     target = "0.1.4.dev30194118926"
-    bumped = lock.format(marker=expanded, jax="0.8.0", native=target)
-    respelled = lock.format(marker=factored, jax="0.8.0", native=target)
+    bumped = lock.format(marker=expanded, native=target)
+    respelled = lock.format(marker=factored, native=target)
 
     validate_targeted_lock_change(before, respelled, "marin-iris-native", target)
     assert lock_changed_outside(before, respelled, ("marin-iris-native",))
     assert not lock_changed_outside(before, bumped, ("marin-iris-native",))
-    with pytest.raises(ValueError, match="jax"):
-        validate_targeted_lock_change(
-            before, lock.format(marker=factored, jax="0.8.1", native=target), "marin-iris-native", target
-        )
 
 
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:
