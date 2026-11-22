@@ -409,10 +409,15 @@ def run(spec: dict) -> None:
             if arm["draft"] is not None:
                 draft = Path(scratch) / arm["name"]
                 io.download_directory(arm["draft"], str(draft))
-            engine = mochi_engine_config(geometry, draft)
+            engine = mochi_engine_config(
+                geometry,
+                draft,
+                max_model_len=spec["max_model_len"],
+                gpu_memory_utilization=spec["gpu_memory_utilization"],
+            )
             with iris_vllm_launch(geometry, instance_name=f"vllm-{arm['name']}") as launch:
                 with VllmBackend(engine).start(
-                    mochi_model_spec(),
+                    mochi_model_spec(spec["max_model_len"]),
                     extra_args=launch.extra_cli_args,
                     subprocess_env={**launch.subprocess_env, "VLLM_USE_V2_MODEL_RUNNER": "0"},
                 ) as environment:

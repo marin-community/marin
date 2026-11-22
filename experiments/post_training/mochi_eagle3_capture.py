@@ -198,7 +198,7 @@ async def generate(environment: VllmEnvironment, spec: dict) -> None:
         )
 
 
-def mochi_model_spec() -> ModelSpec:
+def mochi_model_spec(max_model_len: int) -> ModelSpec:
     """Pin the adopted TP1/BF16 Mochi verifier and its tokenizer."""
     return ModelSpec(
         weights=TARGET_URI,
@@ -206,14 +206,16 @@ def mochi_model_spec() -> ModelSpec:
         num_chips=None,
         tensor_parallel_size=None,
         dtype="bfloat16",
-        max_model_len=98304,
+        max_model_len=max_model_len,
         chat_template_content=None,
         tokenizer=TOKENIZER,
         tokenizer_revision=TOKENIZER_REVISION,
     )
 
 
-def mochi_engine_config(geometry: ServingGeometry, draft: Path | None) -> VllmEngineConfig:
+def mochi_engine_config(
+    geometry: ServingGeometry, draft: Path | None, *, max_model_len: int, gpu_memory_utilization: float
+) -> VllmEngineConfig:
     """Use matched native settings for capture and target/draft evaluation arms."""
     # The GPU-only package is optional in the CPU coordinator environment.
     from vllm.config import CompilationConfig  # noqa: PLC0415
@@ -234,7 +236,7 @@ def mochi_engine_config(geometry: ServingGeometry, draft: Path | None) -> VllmEn
         "--model-loader-extra-config",
         json.dumps({"distributed": False, "concurrency": 4, "memory_limit": 8589934592}),
         "--gpu-memory-utilization",
-        "0.85",
+        str(gpu_memory_utilization),
         "--no-enable-prefix-caching",
         "--mamba-cache-mode",
         "none",
@@ -258,7 +260,7 @@ def mochi_engine_config(geometry: ServingGeometry, draft: Path | None) -> VllmEn
                     "method": "eagle3",
                     "model": str(draft),
                     "num_speculative_tokens": 3,
-                    "max_model_len": 98304,
+                    "max_model_len": max_model_len,
                 }
             ),
         )
@@ -290,11 +292,11 @@ def run(spec: dict) -> None:
     if (StoragePath(spec["output"]) / "generation.json").exists():
         raise FileExistsError("Completed capture output already exists")
     geometry = ServingGeometry(**spec["geometry"])
-    model = mochi_model_spec()
+    model = mochi_model_spec(98304)
     with tempfile.TemporaryDirectory(prefix="mochi-eagle3-seed-") as scratch:
         draft = Path(scratch) / "draft"
         io.download_directory(spec["seed_draft"], str(draft))
-        engine = mochi_engine_config(geometry, draft)
+        engine = mochi_engine_config(geometry, draft, max_model_len=98304, gpu_memory_utilization=0.85)
         with iris_vllm_launch(geometry) as launch:
             # Bounded verifier-feature capture is implemented in the V1 runner.
             environment_variables = {
