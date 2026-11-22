@@ -20,7 +20,12 @@ def test_finite_cohort_preserves_each_prompt_seed_and_natural_stops():
     sent = []
     artifacts = []
     metadata = {
-        identity: {"split": "train", "assistant_prefix": "", "answer_type": "text", "answer_format": {"kind": "plain_text"}}
+        identity: {
+            "split": "train",
+            "assistant_prefix": "",
+            "answer_type": "text",
+            "answer_format": {"kind": "plain_text"},
+        }
         for identity in ("a", "b")
     }
 
@@ -97,7 +102,9 @@ def test_streamed_tool_fragments_reconstruct_parseable_answer_and_exact_ids():
         {"choices": [{"token_ids": [3], "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"42"}'}}]}}]}
     )
     result = response_signals(
-        capture, {"assistant_prefix": "", "answer_type": "text", "answer_format": {"kind": "answer_call"}}, output_tokens=3
+        capture,
+        {"assistant_prefix": "", "answer_type": "text", "answer_format": {"kind": "answer_call"}},
+        output_tokens=3,
     )
     assert capture.message("")["tool_calls"][0]["function"]["arguments"] == '{"answer":"42"}'
     assert result["source_submission_parseable"] and result["explicit_final_marker"]
