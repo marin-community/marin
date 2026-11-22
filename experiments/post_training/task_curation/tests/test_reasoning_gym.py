@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+from experiments.post_training.task_curation.tests.time_intervals_entries import time_intervals_entry
 
 RECIPES = {source.name: cast(CurationRecipe, source.config) for source in declarations.sources()}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
@@ -110,6 +111,22 @@ def test_generator_transport_keeps_symbolic_integers_exact():
     transported = generate.encoded(entry)
     assert type(transported["metadata"]["output_data"]) is int
     assert dataset.score_answer(entry["answer"], transported) == dataset.score_answer(entry["answer"], entry) == 1.0
+
+
+def test_time_only_entry_matches_its_record_from_another_day():
+    # dateutil dates the two times of a time-only question with the day the generator runs.
+    regenerated = time_intervals_entry(2)
+    assert regenerated["question"].startswith("A meeting started at 01:01:14 and ended at 06:10:42.")
+    recorded = time_intervals_entry(2, day="2026-11-04")
+    assert recorded != regenerated
+    assert generate.without_generation_day(recorded) == generate.without_generation_day(regenerated)
+
+
+def test_dated_entry_differs_from_a_record_with_another_start():
+    regenerated = time_intervals_entry(0)
+    assert regenerated["metadata"]["start_time"] == "2154-08-08 18:44:00"
+    recorded = time_intervals_entry(0, day="2154-08-07")
+    assert generate.without_generation_day(recorded) != generate.without_generation_day(regenerated)
 
 
 @pytest.fixture

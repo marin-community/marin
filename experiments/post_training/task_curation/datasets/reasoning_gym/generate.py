@@ -21,7 +21,8 @@ same rows when entries depend only on their task's seed and index. Entries that 
 reads or on process state can differ between runs; the grader cannot reproduce them either, which is
 what the fresh-dataset check records.
 
-The grader imports this module from ``/tests`` for the seeds and the JSON encoding.
+The grader imports this module from ``/tests`` for the seeds, the JSON encoding and the comparison of a
+regenerated entry with the recorded one.
 """
 
 import argparse
@@ -67,6 +68,20 @@ def json_value(value: object) -> object:
 def encoded(value: object) -> Any:
     """``value`` as it reads back from a JSONL row."""
     return json.loads(json.dumps(value, default=json_value))
+
+
+def without_generation_day(entry: dict[str, Any]) -> dict[str, Any]:
+    """An encoded entry without the metadata that records the day its generator ran.
+
+    ``time_intervals`` parses the two times of a time-only question with ``dateutil``, which fills in
+    the current date, and stores the results as ``start_time`` and ``end_time``. The question holds
+    both times, so the remaining fields still identify the entry.
+    """
+    metadata = entry["metadata"]
+    if metadata["source_dataset"] != "time_intervals" or not metadata["task_type"].startswith("time"):
+        return entry
+    kept = {key: value for key, value in metadata.items() if key not in ("start_time", "end_time")}
+    return {**entry, "metadata": kept}
 
 
 def task_seed(name: str) -> int:
@@ -147,7 +162,7 @@ def generated_rows(
             index * len(names) + position,
             {
                 "entry": encoded(entry),
-                "reproducible": encoded(fresh) == encoded(entry),
+                "reproducible": without_generation_day(encoded(fresh)) == without_generation_day(encoded(entry)),
                 "generation": {
                     "task": name,
                     "seed": task_seed(name),
