@@ -177,7 +177,9 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
                 packages_lock=packages_lock,
             ),
         )
-        part_indices = frozenset(index for index in adopted_indices if index % GENERATOR_PARTS == part)
+        # Parts own tasks, not cycle-index strata: each part prints the requested rows its own
+        # tasks produce, so every part filters against the full adopted index set.
+        part_indices = frozenset(adopted_indices)
         if not part_indices:
             return []
         converted = []
