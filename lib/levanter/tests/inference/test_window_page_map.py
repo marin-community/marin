@@ -15,8 +15,12 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 
-@pytest.mark.parametrize("window_capacity", [48, 57], ids=["minimum", "with-spare-pages"])
-def test_window_pool_matches_full_cache_across_eviction_and_reuse(window_capacity):
+@pytest.mark.parametrize(
+    "window_capacity,retained_spans",
+    [(48, 1), (57, 1), (57, 2)],
+    ids=["minimum", "with-spare-pages", "two-retained-spans"],
+)
+def test_window_pool_matches_full_cache_across_eviction_and_reuse(window_capacity, retained_spans):
     config = SnowballConfig(
         vocab_size=23,
         hidden_dim=16,
@@ -64,7 +68,11 @@ def test_window_pool_matches_full_cache_across_eviction_and_reuse(window_capacit
         model = SnowballLMHeadModel.init(hax.Axis("vocab", 23), config, key=jax.random.key(41))
         full = InferenceEngine.from_model_with_config(model, None, serving)
         hybrid = InferenceEngine.from_model_with_config(
-            model, None, dataclasses.replace(serving, window_cache_max_pages=window_capacity)
+            model,
+            None,
+            dataclasses.replace(
+                serving, window_cache_max_pages=window_capacity, window_cache_retained_spans=retained_spans
+            ),
         )
         # The histories exceed the compact pool and revisit an evicted prefix.
         for rid, batch in enumerate(((initial,), (related,), (second, third), (initial, related))):

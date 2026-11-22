@@ -94,6 +94,9 @@ class InferenceEngineConfig:
     window_cache_max_pages: int | None = None
     """Separate page capacity for Snowball sliding-window layers, in the configured KV dtype."""
 
+    window_cache_retained_spans: int = 1
+    """Sliding-window spans to retain per cached prompt, within the available page budget."""
+
     compute_dtype: jnp.dtype = jnp.bfloat16
     """KV cache dtype. Default bfloat16 for performance/accuracy balance."""
 
@@ -149,6 +152,8 @@ class InferenceEngineConfig:
             raise ValueError("prefill_bucket_sizes must be below max_prefill_size")
         if self.prefix_cache == "last_prompt" and self.max_seqs != 1:
             raise ValueError("last_prompt requires max_seqs=1")
+        if self.window_cache_retained_spans < 1:
+            raise ValueError("window_cache_retained_spans must be positive")
         if self.decode_bucket_sizes != tuple(sorted(set(self.decode_bucket_sizes))) or any(
             not 0 < size < self.imputed_max_tokens_per_round for size in self.decode_bucket_sizes
         ):
@@ -1431,13 +1436,19 @@ class InferenceEngine:
             self.config, self.gen_state.decode_state.page_table, window_pages.window, len(self.local_map)
         )
         free = window_pages.window_to_logical.size - working_set
-        for prompt in reversed(self._cached_prompts):
-            tail = prompt.pages[-retained_tail:]
-            cost = int(np.count_nonzero(~mask[tail]))
-            if cost > free:
-                break
-            mask[tail] = True
-            free -= cost
+        # Give recent prompts their terminal window before retaining earlier spans.
+        for distance in range(0, self.config.window_cache_retained_spans * retained_tail, retained_tail):
+            start = -(distance + retained_tail)
+            stop = -distance if distance else None
+            for prompt in reversed(self._cached_prompts):
+                if distance and not np.all(mask[prompt.pages[-retained_tail:]]):
+                    break
+                span = prompt.pages[start:stop]
+                cost = int(np.count_nonzero(~mask[span]))
+                if cost > free:
+                    break
+                mask[span] = True
+                free -= cost
         pins = jax.device_put(mask, window_pages.terminal_pins.sharding)
         window_pages = dataclasses.replace(window_pages, terminal_pins=pins)
         self.gen_state = dataclasses.replace(self.gen_state, window_pages=window_pages)

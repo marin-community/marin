@@ -24,12 +24,12 @@ The v6e-8 same-worker repeat reached 595.38 versus 554.00 output tok/s.
 The published branch with four-step decode rounds reached 583.52
 output tok/s and narrowed native p90 TTFT to 1.50 s. The v5p-8
 configuration with the original expert contraction order reached
-536.23 output tok/s.
+537.39 output tok/s versus 536.72 for compiled vLLM on the same slice.
 For serial raw HTTP prefill at 64,512 fresh prompt tokens, native reached
 35.1k versus 33.2k prompt tok/s on v5p-8 and 48.2k versus 43.8k on v6e-8.
 The five primed serial medians on each TPU type were within 5 ms of
-compiled vLLM. Loaded TPU TTFT and v5p-8 AgentX throughput still trail
-compiled vLLM.
+compiled vLLM. Loaded TTFT remains higher on both TPUs. The native
+v5p-8 rate was 2.2% below the strongest compiled repeat on a different slice.
 
 The initial publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -1035,6 +1035,13 @@ matched, with zero profiling errors. The five primed serial medians
 were within 4 ms of vLLM.
 [v5p-8 chunked trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v43-short-suffix-first)
 
+Retaining four spans in a 7,168-page sliding-window pool reached
+534.02 output tok/s at 80 logical contexts. On 372 turns paired with
+the two-span control, p90 TTFT was 3.23 versus 3.25 s and active
+decode was 35.14 versus 35.29 tok/s. All paired output lengths
+matched and the four-span run reported zero profiling errors.
+[Four retained spans](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v46-four-retained-window-spans)
+
 The published native implementation with 80 contexts and a single
 retained window span reached 523.48 output tok/s and 3.78 s p90 TTFT.
 All 367 output lengths paired with the earlier compiled vLLM run
@@ -1047,6 +1054,26 @@ benchmark then failed before timing because the serving session did
 not expose a metrics URL field. The TPU probe now uses vLLM's standard
 `/metrics` endpoint on the local server.
 [Native result and loader failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v40-packed-branch) · [Restored-pin startup](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v44-restored-vllm-pin) · [Metrics fix retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix)
+
+The repaired pair ran sequentially on one `us-central1-a` v5p-8,
+with compiled vLLM TP4 first and native EP4 second. Native used
+80 logical contexts, a 4,096-page sliding-window pool, and two
+retained spans per cached prompt. It reached 537.39 output tok/s
+versus 536.72 for vLLM. Both runs reported zero profiling errors,
+and all 376 paired output lengths matched. On those turns native
+active decode was 35.45 versus 34.27 tok/s. Overall p90 TTFT was
+3.00 versus 1.54 s. The previous 549.46 tok/s vLLM repeat on another
+v5p-8 remains the highest compiled result.
+
+On the paired worker, a fresh 64,512-token prompt took 1.859 s on
+native versus 1.985 s on vLLM, or 34.7k versus 32.5k prompt tok/s.
+With 64,256 tokens cached, medians were 116 versus 115 ms. Across
+all five primed lengths, native was at most 1.1 ms slower and up to
+8.5 ms faster. Reproduce the native configuration using
+`--kv-cache-contexts 80 --window-cache-pages 4096
+--window-cache-retained-spans 2 --layerwise-load --pack-expert-weights`
+with the v5p-8 settings above.
+[Same-slice AgentX and prefill pair](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix)
 
 Among successful replay requests, the time-weighted p90 number of
 requests awaiting a first token was seven on native v5p-8 versus three
@@ -1259,6 +1286,15 @@ vLLM matched, with zero profiling errors. Compiled vLLM reached
 554.00 output tok/s and 1.31 s p90 TTFT.
 [One-step chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v32-live-prefill-chunks-one-decode-step)
 
+The same one-step schedule with 28 logical contexts completed on
+a replacement `us-east1` v6e-8 worker after three worker failures.
+It reached 576.97 output tok/s and 1.60 s p90 TTFT. Across 411 turns
+shared with the 24-context run, paired p90 fell from 2.05 to 1.60 s
+and active decode rose from 47.99 to 52.85 tok/s. All 392 lengths
+paired with compiled vLLM matched. Paired active decode was 51.30
+versus 36.35 tok/s. There were zero profiling errors.
+[28-context one-step replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v33-28-contexts-one-decode-step)
+
 On the same v6e-8 worker, ordering already-admitted prompts by the
 number of uncached tokens let shorter suffixes finish before longer
 ones. On 411 paired turns, p90 TTFT fell from 2.05 to 1.79 s and
@@ -1279,6 +1315,14 @@ output lengths matched and active decode was 38.93 versus
 and 1.31 s. Native fresh 64,512-token prefill took 1.351 versus
 1.472 s. The corresponding primed medians were 102 versus 85 ms.
 [Four-step unchunked replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v35-four-round-unchunked)
+
+Using two decode steps on that same worker reached 562.32 output
+tok/s. On 390 turns paired with four steps, median TTFT fell from
+369 to 337 ms, p90 rose from 1.49 to 1.54 s, and active decode
+fell from 38.96 to 35.46 tok/s. The same compiled vLLM profile
+reached 36.35 active decode tok/s on 389 shared turns. All paired
+output lengths matched and both native runs reported zero errors.
+[Two-step unchunked replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v36-two-round-unchunked)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
