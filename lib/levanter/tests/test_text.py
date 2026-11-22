@@ -4,6 +4,7 @@
 import json
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -20,6 +21,7 @@ from levanter.data.text.datasets import (
     ChatDataset,
     DatasetComponent,
     LmDataConfig,
+    PackedTokenDataset,
     UrlDatasetSourceConfig,
     count_corpus_sizes,
     dataset_for_component,
@@ -480,14 +482,38 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     assert isinstance(named_example, LmExample)
 
 
-def test_dataset_for_component_rejects_lookahead_on_prebuilt_format():
-    # Prebuilt examples bypass the packer even when pack=True; the window must not be ignored.
-    component = DatasetComponent(format=PrebuiltLmDatasetFormat(), pack=True, pack_lookahead_window=8)
-    with pytest.raises(ValueError):
+def test_dataset_for_component_applies_lookahead_on_packed_prebuilt_format(tmp_path):
+    # The long-loop initializer runs Exp3's bounded lookahead over prebuilt
+    # packed caches. Lookahead still requires packing: an unpacked component
+    # must keep rejecting the window.
+    records = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [1, 2, 3]}]
+    data_path = tmp_path / "prebuilt_train.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    packed_component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+        pack=True,
+        pack_lookahead_window=2,
+        cache_dir=str(tmp_path / "packed"),
+    )
+    config = LmDataConfig(components={"prebuilt": packed_component}, tokenizer="passthrough", vocab_size=16)
+    cache = config.build_caches("train")["prebuilt"]
+    dataset = dataset_for_component(
+        packed_component, hax.Axis("position", 4), cache, eos_id=None, block_cross_document_attention=True
+    )
+    assert isinstance(dataset, PackedTokenDataset)
+    assert dataset.packed.lookahead_window == 2
+
+    unpacked_component = replace(packed_component, pack=False, cache_dir=str(tmp_path / "unpacked"))
+    unpacked_config = LmDataConfig(components={"prebuilt": unpacked_component}, tokenizer="passthrough", vocab_size=16)
+    with pytest.raises(ValueError, match="pack_lookahead_window"):
         dataset_for_component(
-            component,
-            hax.Axis("position", 8),
-            None,  # type: ignore[arg-type]
+            unpacked_component,
+            hax.Axis("position", 4),
+            unpacked_config.build_caches("train")["prebuilt"],
             eos_id=None,
             block_cross_document_attention=True,
         )

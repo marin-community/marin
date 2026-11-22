@@ -20,7 +20,7 @@ def test_finite_cohort_preserves_each_prompt_seed_and_natural_stops():
     sent = []
     artifacts = []
     metadata = {
-        identity: {"split": "train", "assistant_prefix": "", "answer_format": {"kind": "plain_text"}}
+        identity: {"split": "train", "assistant_prefix": "", "answer_type": "text", "answer_format": {"kind": "plain_text"}}
         for identity in ("a", "b")
     }
 
@@ -97,7 +97,7 @@ def test_streamed_tool_fragments_reconstruct_parseable_answer_and_exact_ids():
         {"choices": [{"token_ids": [3], "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"42"}'}}]}}]}
     )
     result = response_signals(
-        capture, {"assistant_prefix": "", "answer_format": {"kind": "answer_call"}}, output_tokens=3
+        capture, {"assistant_prefix": "", "answer_type": "text", "answer_format": {"kind": "answer_call"}}, output_tokens=3
     )
     assert capture.message("")["tool_calls"][0]["function"]["arguments"] == '{"answer":"42"}'
     assert result["source_submission_parseable"] and result["explicit_final_marker"]
@@ -107,7 +107,7 @@ def test_streamed_tool_fragments_reconstruct_parseable_answer_and_exact_ids():
 def test_loop_coverage_and_boxed_fallback_are_not_claimed_as_final_answers():
     capture = ResponseCapture()
     capture.add({"choices": [{"token_ids": [1, 2] * 8, "delta": {"content": "still reasoning"}}]})
-    metadata = {"assistant_prefix": "", "answer_format": {"kind": "boxed"}}
+    metadata = {"assistant_prefix": "", "answer_type": "text", "answer_format": {"kind": "boxed"}}
     observed = response_signals(capture, metadata, output_tokens=16)
     assert observed["source_submission_parseable"]  # Normal Boxed extraction accepts raw text.
     assert not observed["explicit_final_marker"]

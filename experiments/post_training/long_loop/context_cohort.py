@@ -20,7 +20,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.telemetry.prometheus import PrometheusScraper
 from rolloutengine.repetition import detect_tail_loop
 from taskcompendium.chat import assistant_message
-from taskcompendium.models import AnswerFormat, ConversationTrace, GradingAttempt, TextMessage
+from taskcompendium.models import AnswerFormat, AnswerType, ConversationTrace, GradingAttempt, TextMessage
 from taskcompendium.submission import extract_submission
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,12 @@ def response_signals(capture: ResponseCapture, metadata: dict, output_tokens: in
                 events=(TextMessage(role="user", content="Source context retained in request inventory"), event)
             )
         )
-        extract_submission(ANSWER_FORMAT.validate_python(metadata["answer_format"]), attempt, context_length=1)
+        extract_submission(
+            ANSWER_FORMAT.validate_python(metadata["answer_format"]),
+            attempt,
+            answer_type=AnswerType(metadata["answer_type"]),
+            context_length=1,
+        )
         parseable = True
         parse_error = None
     except ValueError as exc:

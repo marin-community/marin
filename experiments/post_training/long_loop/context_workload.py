@@ -111,6 +111,7 @@ def prepare(output_uri: str, repeats: int) -> dict:
                 "source_sha256": digest,
                 "row_index": index,
                 "source": task.source.model_dump(),
+                "answer_type": task.answer_type.value,
                 "answer_format": task.answer_format.model_dump(mode="json"),
                 "assistant_prefix": prefix,
                 "prompt_tokens": length,
