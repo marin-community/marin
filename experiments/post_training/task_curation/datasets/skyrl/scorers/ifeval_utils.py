@@ -1,10 +1,12 @@
 # IFEval constraint checkers for RLVR-style instruction-following rewards.
 #
-# The constraint functions below are vendored verbatim from allenai/open-instruct
-# (`open_instruct/if_functions.py`, IF_FUNCTIONS_MAP), which is the canonical verifier
-# for the `allenai/RLVR-IFeval` dataset. They cover the 25 IFEval-taxonomy constraints;
-# the dataset's `ground_truth` is a JSON blob carrying `func_name` plus the kwargs each
-# function expects. Source: https://github.com/allenai/open-instruct (Apache-2.0).
+# The constraint functions below originate from allenai/open-instruct
+# (`open_instruct/if_functions.py`, IF_FUNCTIONS_MAP), the canonical verifier
+# for the `allenai/RLVR-IFeval` dataset. Four format checks also follow Nemotron
+# prompt wording for dividers, bullets, sections, and highlights. They cover the
+# 25 IFEval-taxonomy constraints; the dataset's `ground_truth` is a JSON blob
+# carrying `func_name` plus the kwargs each function expects.
+# Source: https://github.com/allenai/open-instruct (Apache-2.0).
 #
 # `validate_response_language` needs the optional `langdetect` dependency; its import is
 # deferred so this module imports cleanly without it (that func_name does not appear in
@@ -75,15 +77,15 @@ def validate_response_language(text, language):
     return detected_language == language
 
 
-# Number Paragraphs: separated by the markdown divider '* * *'.
+# Number Paragraphs: separated by the markdown divider '***' or '* * *'.
 def verify_paragraph_count(text: str, N: int) -> bool:
-    """Verify the text contains exactly N paragraphs separated by '* * *'."""
+    """Verify exactly N nonempty paragraphs separated by a markdown divider."""
 
     def clean_text(t: str) -> str:
         return "\n".join(line.strip() for line in t.splitlines()).strip()
 
     text = clean_text(text)
-    paragraphs = text.split("* * *")
+    paragraphs = re.split(r"(?m)^(?:\*\*\*|\* \* \*)$", text)
     actual_count = len(paragraphs)
     valid_paragraphs = [p.strip() for p in paragraphs if p.strip()]
     if len(valid_paragraphs) != actual_count:
@@ -160,9 +162,10 @@ def validate_placeholders(text: str, N: int) -> bool:
 # Number Bullets: exactly {N} markdown bullet points (* or -).
 def verify_bullet_points(text: str, N: int) -> bool:
     """Verify the text contains exactly N markdown bullet points."""
-    lines = text.split("\n")
-    bullet_points = [line.strip() for line in lines if line.strip().startswith(("*", "-"))]
-    return len(bullet_points) == N
+    return sum(
+        line.strip() not in {"***", "* * *"} and bool(re.match(r"^[ \t]*[-*][ \t]+\S", line))
+        for line in text.splitlines()
+    ) == N
 
 
 # Title: must contain a title wrapped in double angular brackets, e.g. <<poem of joy>>.
@@ -181,19 +184,18 @@ def validate_choice(text: str, options: list) -> bool:
 
 # Minimum Highlighted Sections: at least {N} *highlighted* sections.
 def validate_highlighted_sections(text: str, N: int) -> bool:
-    """Validate the text contains at least N *highlighted* sections."""
-    pattern = r"\*(.*?)\*"
-    matches = re.findall(pattern, text)
-    return len(matches) >= N
+    """Validate the text contains at least N italic or bold markdown spans."""
+    pattern = r"(?<!\*)(\*{1,2})(?!\*)([^*\n]+?)\1(?!\*)"
+    return sum(bool(match.group(2).strip()) for match in re.finditer(pattern, text)) >= N
 
 
 # Multiple Sections: {N} sections, each beginning with {section splitter} X.
 def validate_sections(text: str, N: int, section_splitter: str) -> bool:
-    """Validate the text splits into exactly N sections by the splitter."""
-    sections = text.split(section_splitter)
-    if sections[0] == "":
-        sections.pop(0)
-    return len(sections) == N
+    """Validate exactly N sections beginning with the splitter, ignoring a preamble."""
+    if not section_splitter:
+        return False
+    marker = re.compile(r"^[ \t]*" + re.escape(section_splitter) + r"[ \t]*\d+\b", re.MULTILINE | re.IGNORECASE)
+    return len(marker.findall(text)) == N
 
 
 # JSON Format: entire output wrapped in JSON.
