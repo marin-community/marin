@@ -1005,6 +1005,15 @@ wide-tile combination on those same turns, p90 TTFT fell from
 The primed serial medians were within 4 ms of compiled vLLM.
 [Original-contraction replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v38-80-contexts-packed-experts-standard-contraction)
 
+Increasing the same configuration to 96 logical contexts fit on v5p-8
+after Iris retried three worker failures. It reached 534.37 output
+tok/s and 3.29 s p90 TTFT. Over 372 turns shared with the 80-context run,
+active decode was 34.91 versus 35.30 tok/s and p90 TTFT was 3.29 versus
+3.25 s. All 372 output lengths paired with compiled vLLM matched,
+with zero profiling errors. The 80-context geometry remains the
+stronger measured configuration.
+[96-context replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v39-96-contexts-original-contraction)
+
 Among successful replay requests, the time-weighted p90 number of
 requests awaiting a first token was seven on native v5p-8 versus three
 on compiled vLLM. The native v6e-8 run with the lowest measured p90 TTFT
@@ -1215,6 +1224,16 @@ in the same zone. All 392 output lengths paired with compiled
 vLLM matched, with zero profiling errors. Compiled vLLM reached
 554.00 output tok/s and 1.31 s p90 TTFT.
 [One-step chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v32-live-prefill-chunks-one-decode-step)
+
+On the same v6e-8 worker, ordering already-admitted prompts by the
+number of uncached tokens let shorter suffixes finish before longer
+ones. On 411 paired turns, p90 TTFT fell from 2.05 to 1.79 s and
+active decode rose from 47.99 to 50.56 tok/s. Overall throughput
+was 568.33 tok/s, with 413 completions and zero profiling errors.
+All 392 output lengths paired with compiled vLLM matched. Native
+p90 TTFT was 1.78 s overall, versus 1.31 s for vLLM. The five
+primed serial medians were 10–12 ms above vLLM.
+[Shorter suffixes first](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v34-short-suffix-first)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
