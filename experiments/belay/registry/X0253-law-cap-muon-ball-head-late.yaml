@@ -48,6 +48,13 @@ trials:
   commit: 14a2b18879
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.6015
+  delta:
+  - -0.0106
+  steps: 30389
+  baseline: s7n-d768 2.6121 (same commit, seed 0)
+  step_time_change: 0%
 - id: t003
   variant: law-cap Frobenius ball, s(t)^2 head, late matrix anneal
   rung: competitive-d1024
