@@ -2,7 +2,6 @@
 
 import contextlib
 from collections.abc import Mapping
-from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -80,17 +79,6 @@ def write_generation_config(directory: str, config: Mapping[str, Any]) -> Path:
     path = Path(directory) / GENERATION_CONFIG_NAME
     path.write_text(json.dumps(dict(config), indent=2, sort_keys=True) + "\n")
     return path
-
-
-@dataclass(frozen=True)
-class HuggingFaceModelCache:
-    """CPU mirror bound to an immutable commit and its requested ref alias."""
-
-    model_id: str
-    revision: str
-    uri: str
-    identity: str
-    resolved_revision: str
 
 
 def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_json: bool, source: str) -> bytes:

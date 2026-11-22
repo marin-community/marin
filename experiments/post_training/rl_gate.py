@@ -41,7 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
-from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
@@ -460,9 +460,6 @@ def _normalize_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
             # Staging resolves the revision into the path, so the worker no longer needs it.
             set_path(config, revision_path, recorded.model_identity)
         set_path(config, path, "<model-staging>")
-    engine_name_path = "skyrl.generator.engine_init_kwargs.served_model_name"
-    if get_path(config, engine_name_path) in [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases]:
-        set_path(config, engine_name_path, "<served-model-name>")
 
 
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
@@ -527,6 +524,11 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                 )
 
     _normalize_model_bindings(config, recorded)
+    replace_alias(
+        "skyrl.generator.engine_init_kwargs.served_model_name",
+        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in (recorded.model_uri, recorded.model_local_path)],
+        "<served-model-name>",
+    )
     for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
         config["artifacts"][field] = f"<output:{field}>"
     for path, field, suffix in (
@@ -586,16 +588,16 @@ def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
         return
     mirrors = config["inputs"].get("hugging_face_models", [])
     matches = [
-        mirror
-        for mirror in mirrors
-        if mirror["uri"] == draft["source_uri"]
-        and mirror["identity"] == draft["source_identity"]
-        and mirror["model_id"] == expected["source_uri"].removeprefix("hf://")
-        and mirror["revision"] == mirror["resolved_revision"] == expected["source_identity"]
+        index
+        for index, mirror in enumerate(HuggingFaceModelCache(**row) for row in mirrors)
+        if mirror.uri == draft["source_uri"]
+        and mirror.identity == draft["source_identity"]
+        and mirror.model_id == expected["source_uri"].removeprefix("hf://")
+        and mirror.revision == mirror.resolved_revision == expected["source_identity"]
     ]
     if len(matches) == 1:
         draft.update(source_uri=expected["source_uri"], source_identity=expected["source_identity"])
-        config["inputs"]["hugging_face_models"] = [mirror for mirror in mirrors if mirror is not matches[0]]
+        del mirrors[matches[0]]
 
 
 def _gate_config(

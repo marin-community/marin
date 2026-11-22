@@ -1,12 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic paths for launch-time policy and tokenizer metadata."""
+"""Model staging paths and Hub mirror records shared by SkyRL launch and comparison."""
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 DEFAULT_TOKENIZER_REVISION = "main"
+
+
+@dataclass(frozen=True)
+class HuggingFaceModelCache:
+    """CPU mirror bound to an immutable commit and its requested ref."""
+
+    model_id: str
+    revision: str
+    uri: str
+    identity: str
+    resolved_revision: str
 
 
 def immutable_model_cache_key(source: str, identity: str) -> str:

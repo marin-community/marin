@@ -50,7 +50,7 @@ from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
-from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -85,7 +85,6 @@ from marinskyrl.environment_contract import (
 )
 from marinskyrl.hf_model import (
     MODEL_CACHE_SUFFIXES,
-    HuggingFaceModelCache,
     validate_hf_model_weights,
 )
 from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
