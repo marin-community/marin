@@ -43,7 +43,14 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.curriculum import RlCurriculum, entry_payload, stage_payload, validation_payload
+from marin.rl.curriculum import (
+    RlCurriculum,
+    SamplingMode,
+    consumed_route_quotas,
+    entry_payload,
+    stage_payload,
+    validation_payload,
+)
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
@@ -1079,15 +1086,30 @@ def _validate_curriculum_train_data(
             )
 
 
-def _apply_curriculum(config: dict, curriculum: RlCurriculum) -> dict:
+def _apply_curriculum(config: dict, curriculum: RlCurriculum, *, batch_groups: int) -> dict:
     """Render a curriculum's sampling projection into the launch recipe copy.
 
     Called when the launch config is built, never on the input recipe: the projection's
     ``data.sampling`` values replace any declared ones, and ``data.kind`` is pinned to ``parquet``
-    because curricula sample labeled prompt pools."""
+    because curricula sample labeled prompt pools. A weighted curriculum is also the authority
+    over the rollout buffer's per-route window quotas: they derive from the curriculum's own
+    mixture at the run's batch size, and a recipe that declared quotas which disagree fails here —
+    no silent override. Ordered curricula carry no mixture and derive no window quotas."""
     for key, value in curriculum.sampling_config().items():
         _set_config_value(config, f"data.sampling.{key}", value)
     _set_config_value(config, "data.kind", _CURRICULUM_DATA_KIND)
+    if curriculum.mode is not SamplingMode.WEIGHTED:
+        return config
+    source_routes = _declared_config_value(config, "trainer.rollout_buffer.source_routes")
+    routes = {} if source_routes in (_MISSING_CONFIG_VALUE, None) else dict(source_routes)
+    quotas = consumed_route_quotas(curriculum, routes, batch_groups)
+    declared = _declared_config_value(config, "trainer.rollout_buffer.consumed_route_quotas")
+    if declared not in (_MISSING_CONFIG_VALUE, None, {}) and declared != quotas:
+        raise ValueError(
+            f"trainer.rollout_buffer.consumed_route_quotas={declared!r} disagrees with the quotas the "
+            f"curriculum {curriculum.identity} derives at {batch_groups} groups: {quotas!r}"
+        )
+    _set_config_value(config, "trainer.rollout_buffer.consumed_route_quotas", quotas)
     return config
 
 
@@ -1128,7 +1150,7 @@ def _launch_config_yaml(
     if spec.curriculum is not None:
         # The curriculum is the authority over the sampling settings; the input recipe keeps its
         # declared values and the launch document carries the projection.
-        recipe = _apply_curriculum(recipe, spec.curriculum)
+        recipe = _apply_curriculum(recipe, spec.curriculum, batch_groups=spec.topology.role_plan.train_batch_size)
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:

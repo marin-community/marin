@@ -1574,3 +1574,24 @@ def test_skyrl_spec_rejects_task_kind_with_a_curriculum() -> None:
     recipe["data"] = {"kind": "tasks"}
     with pytest.raises(ValueError, match=r"requires data\.kind=parquet"):
         dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe), curriculum=_curriculum(SamplingMode.WEIGHTED))
+
+
+def test_skyrl_launch_derives_the_buffer_quotas_from_the_curriculum() -> None:
+    """The curriculum's mixture sets the rollout buffer's per-route window quotas."""
+    spec = _spec_with_curriculum(SamplingMode.WEIGHTED)
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    recipe = yaml.safe_load(config.launch_config_yaml)["skyrl"]
+    assert recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] == {
+        "tests/iceball-gsm8k": 11,
+        "tests/iceball-svamp": 5,
+    }
+
+
+def test_skyrl_launch_rejects_quotas_that_disagree_with_the_curriculum() -> None:
+    """A declared quota that contradicts the curriculum's own apportionment fails preflight."""
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["rollout_buffer"] = {"consumed_route_quotas": {"tests/iceball-gsm8k": 8, "tests/iceball-svamp": 8}}
+    spec = dataclasses.replace(_spec_with_curriculum(SamplingMode.WEIGHTED), config_yaml=yaml.safe_dump(recipe))
+    with pytest.raises(ValueError, match="disagrees with the quotas"):
+        skyrl_step(spec, _execution())

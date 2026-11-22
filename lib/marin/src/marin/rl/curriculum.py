@@ -346,3 +346,39 @@ def entry_payload(entry: CurriculumEntry) -> dict:
 def stage_payload(stage: CurriculumStage) -> dict:
     """The canonical record of one ordered stage: its source label and draw quota."""
     return {"source": stage.label, "quota": stage.quota}
+
+
+def consumed_route_quotas(
+    curriculum: RlCurriculum, source_routes: Mapping[str, str], batch_groups: int
+) -> dict[str, int]:
+    """Derive the rollout buffer's per-route window quotas from a curriculum's own mixture.
+
+    The curriculum's entry weights aggregate over the run's ``source_routes`` —
+    a label with no mapping is its own route — and ``batch_groups`` apportions
+    over the route shares by the same largest remainder the validation split
+    uses, remainder ties breaking by sorted route order. Every admitted route
+    draws at least one group per window: a route the apportionment starves takes
+    its seat from the route with the largest allocation, so the realized window
+    never drops an admitted source and always sums to the batch. Ordered
+    curricula carry no weights and derive no window quotas."""
+    if curriculum.mode is not SamplingMode.WEIGHTED:
+        raise ValueError(
+            f"{curriculum.identity} is an ordered curriculum; its stages, not window quotas, bound its draws"
+        )
+    if batch_groups <= 0:
+        raise ValueError(f"batch groups must be positive, got {batch_groups}")
+    shares: dict[str, float] = {}
+    for entry in curriculum.entries:
+        route = source_routes.get(entry.label, entry.label)
+        # __post_init__ leaves no None weight in weighted mode.
+        shares[route] = shares.get(route, 0.0) + float(entry.weight or 0.0)
+    if batch_groups < len(shares):
+        raise ValueError(f"a batch of {batch_groups} groups cannot admit {len(shares)} routes at one group each")
+    quotas = _apportion(batch_groups, shares)
+    for route in sorted(quotas):
+        if quotas[route] != 0:
+            continue
+        quotas[route] = 1
+        donor = sorted(quotas, key=lambda name: (-quotas[name], name))[0]
+        quotas[donor] -= 1
+    return dict(sorted(quotas.items()))

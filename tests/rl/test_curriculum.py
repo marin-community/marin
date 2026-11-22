@@ -13,6 +13,7 @@ from marin.rl.curriculum import (
     PoolRow,
     RlCurriculum,
     SamplingMode,
+    consumed_route_quotas,
     draw_validation_split,
 )
 
@@ -280,3 +281,54 @@ def test_ordered_curriculum_draws_from_consumed_prompts():
     counts = Counter(row.label for row in curriculum.validation.rows)
     # consumption: gsm8k quota 4096 (pool 4096), svamp None -> 1000; shares 4096/5096 and 1000/5096
     assert counts == {"gsm8k": 16, "svamp": 4}
+
+
+def _quota_curriculum(weights: dict[str, float]) -> RlCurriculum:
+    """A small weighted curriculum over arbitrary labels, for the quota derivations."""
+    entries = tuple(_entry(label, weight=weight) for label, weight in weights.items())
+    validation = draw_validation_split(weights, _rows_by_label({label: 500 for label in weights}), size=50, seed=17)
+    return RlCurriculum(
+        name="post-training/quotas",
+        version="2026.11.18",
+        mode=SamplingMode.WEIGHTED,
+        entries=entries,
+        stages=(),
+        seed=17,
+        validation=validation.validation,
+    )
+
+
+def test_consumed_route_quotas_derive_from_the_curriculum_mixture():
+    """The buffer's window quotas are the mixture's apportionment at the batch size."""
+    curriculum = _quota_curriculum({"gsm8k": 0.7, "svamp": 0.3})
+    assert consumed_route_quotas(curriculum, {}, 16) == {"gsm8k": 11, "svamp": 5}
+    assert consumed_route_quotas(curriculum, {}, 32) == {"gsm8k": 22, "svamp": 10}
+    assert consumed_route_quotas(curriculum, {}, 64) == {"gsm8k": 45, "svamp": 19}
+
+
+def test_consumed_route_quotas_aggregate_over_source_routes():
+    """Per-source weights aggregate over the run's route mapping before apportioning."""
+    curriculum = _quota_curriculum({"src/gsm8k": 0.35, "src/svamp": 0.15, "src/web": 0.5})
+    quotas = consumed_route_quotas(curriculum, {"src/gsm8k": "math", "src/svamp": "math", "src/web": "web"}, 64)
+    assert quotas == {"math": 32, "web": 32}
+    assert consumed_route_quotas(curriculum, {"src/gsm8k": "math", "src/svamp": "math", "src/web": "web"}, 32) == {
+        "math": 16,
+        "web": 16,
+    }
+
+
+def test_consumed_route_quotas_never_starve_an_admitted_route():
+    """A route the apportionment would zero takes its seat from the largest allocation."""
+    curriculum = _quota_curriculum({"big": 0.98, "tiny": 0.02})
+    quotas = consumed_route_quotas(curriculum, {}, 10)
+    assert quotas == {"big": 9, "tiny": 1}
+    assert sum(quotas.values()) == 10
+
+
+def test_consumed_route_quotas_reject_impossible_batches():
+    with pytest.raises(ValueError, match="ordered curriculum"):
+        consumed_route_quotas(_ordered(), {}, 32)
+    with pytest.raises(ValueError, match="cannot admit"):
+        consumed_route_quotas(_quota_curriculum({"gsm8k": 0.7, "svamp": 0.3}), {}, 1)
+    with pytest.raises(ValueError, match="must be positive"):
+        consumed_route_quotas(_quota_curriculum({"gsm8k": 0.7, "svamp": 0.3}), {}, 0)
