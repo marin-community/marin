@@ -77,7 +77,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
-    parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
+    parser.add_argument("--accelerator", choices=("v5p-8", "h100x8"), default="v5p-8")
+    parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3", "gpu", "reference"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
@@ -92,14 +93,17 @@ def main() -> None:
     series = load_series(SERIES)
     assert (series["max_context"], series["duration"]) == (65536, 180)
     devices = jax.devices()
-    if len(devices) != 4 or any(device.platform != "tpu" for device in devices):
-        raise RuntimeError(f"The v5p-8 probe requires four TPU devices, got {devices}")
+    expert_shards, platform, device_kind = (8, "gpu", "H100") if args.accelerator == "h100x8" else (4, "tpu", "TPU")
+    if len(devices) != expert_shards or any(
+        device.platform != platform or device_kind not in device.device_kind for device in devices
+    ):
+        raise RuntimeError(f"Expected {args.accelerator}, got {devices}")
 
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     workload = read_record(args.workload)
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bf16,c=bf16"),
-        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": 4, "context": 1}),
+        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": expert_shards, "context": 1}),
         use_explicit_mesh_axes=True,
     )
     service = InferenceEngineConfig(
@@ -107,7 +111,7 @@ def main() -> None:
         max_seqs=1,
         max_seqs_in_prefill=1,
         max_queued_tokens=32,
-        max_tokens_per_round=4,  # Pad the one active decode token to the four-way expert mesh.
+        max_tokens_per_round=expert_shards,  # Pad the one active decode token for expert sharding.
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         prefix_cache=args.prefix_cache,
     )
@@ -158,7 +162,7 @@ def main() -> None:
             "workload_uri": args.workload,
             "workload_sha256": workload["archive_sha256"],
             "devices": [device.device_kind for device in devices],
-            "mesh": {"model": 1, "expert": 4},
+            "mesh": {"model": 1, "expert": expert_shards},
             "max_pages": service.max_pages,
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,
