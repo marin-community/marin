@@ -10,8 +10,8 @@ generates only its sampled rows. Its grader
 Python values, and rows whose entry a fresh dataset does not reproduce are rejected. So are rows whose
 scorer gave the recorded wrong answer the full reward, and the rows of ``CONSTANT_REPLY_TASKS``.
 ``tasktrove-reasoning-gym`` uses ``ReasoningGymSpec`` to preserve upstream fractional reward. Both
-run with the grader packages (``GRADER_PACKAGES``).
-The Nemotron Ultra ``reasoning_gym`` component is declared with the other Ultra components.
+run with the grader packages (``GRADER_PACKAGES``). TaskTrove and Nemotron Ultra rows from known
+constant-reward task families are rejected at conversion too.
 """
 
 import json
@@ -57,6 +57,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import DEFAULT_OUTPUT, ReasoningGymSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.reasoning_gym.scorer_defects import CONSTANT_REPLY_TASKS
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
     TaskTroveConverter,
@@ -85,16 +86,6 @@ EXCLUDED_GENERATORS = (
         "worker and the grader's environment",
     ),
 )
-CONSTANT_REPLY_TASKS = (
-    ("coin_flip", "The reply 0 earns the full reward on every entry whose answer is below 1"),
-    ("complex_arithmetic", "The reply NaN earns the full reward on every entry"),
-    ("propositional_logic", "A disjunction that names a premise earns the full reward on most entries"),
-    ("puzzle24", "The scorer does not read the entry's numbers: 1*2*3*4 earns the full reward on every entry"),
-)
-"""Tasks whose scorer gives one reply the full reward on most entries while the recorded wrong answer scores less.
-
-Their rows are rejected at conversion, which records the reason. Excluding the generators instead would
-renumber the rows of every other task."""
 PYTHON_HASH_SEED = 0
 GENERATOR_PARTS = 32
 """Parts of the task registry generated on separate workers; the slowest task bounds each part."""
@@ -276,7 +267,7 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
             "wrong_answer_scores_full",
             f"The {task_name} scorer gave the wrong answer {recorded.negative.candidate!r} the full reward",
         )
-    constant_reply_defect = dict(CONSTANT_REPLY_TASKS).get(task_name)
+    constant_reply_defect = CONSTANT_REPLY_TASKS.get(task_name)
     if constant_reply_defect is not None:
         return source_defect("constant_reply_scores_full", constant_reply_defect)
     contract = {
@@ -332,6 +323,8 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
     if not isinstance(dataset, str) or not dataset:
         return unsupported("missing_scorer", "metadata.source_dataset is required")
+    if defect := CONSTANT_REPLY_TASKS.get(dataset):
+        return source_defect("constant_reply_scores_full", defect)
     if not isinstance(data.get("answer"), str) or not data["answer"].strip():
         return source_defect("invalid_entry", "Entry answer must be a string")
     package = verifyit_package(
@@ -383,7 +376,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
                 ),
                 convert=convert_generated,
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
@@ -399,14 +392,14 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 family="reasoning-gym",
                 tags=("agentic", "multi-turn"),
                 count=14259,
-                notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
+                notes="Preserve upstream fractional scoring while rejecting known constant-reward task families.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
-                version="4",
+                version="5",
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,

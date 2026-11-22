@@ -92,6 +92,17 @@ def test_tasktrove_rejects_rows_without_an_entry_or_grader(row, kind, reason):
     assert (result.kind, result.reason) == (kind, reason)
 
 
+@pytest.mark.parametrize(
+    "task_name",
+    ["coin_flip", "complex_arithmetic", "game_of_life_halting", "propositional_logic", "puzzle24"],
+)
+def test_tasktrove_rejects_tasks_with_constant_full_reward(task_name):
+    entry = {**TASKTROVE_ENTRY, "metadata": {"source_dataset": task_name}}
+    result = convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "constant_reply_scores_full")
+
+
 def test_generated_row_without_matching_provenance_is_a_converter_error():
     row = {**GENERATED_ROW, "generation": {**GENERATED_ROW["generation"], "task": "basic_arithmetic"}}
     result = convert_row(RECIPES["reasoning_gym_generated"], row)
@@ -121,12 +132,21 @@ def test_generated_row_whose_scorer_pays_the_recorded_wrong_answer_is_rejected()
     assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "wrong_answer_scores_full")
 
 
-def test_generated_row_of_a_task_that_pays_a_constant_reply_is_rejected():
-    # The recorded wrong answer scores 0.0 here; the constant NaN makes the scorer's distance NaN.
-    row = generated_row("complex_arithmetic", 0)
-    assert row["recorded_pinned_generator_controls"]["negative"]["reward"] == 0.0
-    score = cast(generate.Scorer, reasoning_gym.get_score_answer_fn("complex_arithmetic"))
-    assert score("NaN", row["entry"]) == 1.0
+@pytest.mark.parametrize(
+    ("task_name", "constant_reply"),
+    [
+        ("coin_flip", "0"),
+        ("complex_arithmetic", "NaN"),
+        ("propositional_logic", "P \u2228 Q"),
+        ("puzzle24", "1*2*3*4"),
+    ],
+)
+def test_generated_row_of_a_task_that_pays_a_constant_reply_is_rejected(task_name, constant_reply):
+    row = generated_row(task_name, 0)
+    assert row["recorded_pinned_generator_controls"]["negative"]["reward"] != 1.0
+    assert constant_reply != row["entry"]["answer"]
+    score = cast(generate.Scorer, reasoning_gym.get_score_answer_fn(task_name))
+    assert score(constant_reply, row["entry"]) == 1.0
     result = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "constant_reply_scores_full")
