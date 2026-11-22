@@ -225,7 +225,18 @@ def _tpu_v3(
     active = jnp.arange(kv_lens.shape[0]) < num_seqs
     decode = jnp.where(jnp.all((jnp.diff(cu_q_lens) == 1) | ~active), num_seqs, 0)
     pages = jnp.where((page_indices >= 0) & (page_indices < kv_pages.shape[0]), page_indices, 0)
+    chip = pltpu.get_tpu_info().chip_version
     decode_block = (512 if sliding_window is not None else 1024) if append else 2048
+    decode_compute_block = 512
+    # This tile was tuned for one Snowball KV head per v6e chip.
+    if (
+        chip == pltpu.ChipVersion.TPU_V6E
+        and append
+        and sliding_window is None
+        and q.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS
+        and q.shape[1:3] == (1, 4)
+    ):
+        decode_block, decode_compute_block = 4096, 2048
     output, updated = tpu_ragged_paged_attention_v3(
         q.reshape(q.shape[0], -1, q.shape[-1]),
         dummy_kv if k is None else k,
@@ -240,9 +251,9 @@ def _tpu_v3(
         soft_cap=soft_cap,
         sliding_window=sliding_window,
         out_dtype=jnp.float32,
-        d_block_sizes=(1, decode_block, 1, 512),
+        d_block_sizes=(1, decode_block, 1, decode_compute_block),
         m_block_sizes=(min(q.shape[0], 128), 1024, min(q.shape[0], 64), 512),
-        vmem_limit_bytes=_RPA_V3_VMEM_LIMIT_BYTES[pltpu.get_tpu_info().chip_version],
+        vmem_limit_bytes=_RPA_V3_VMEM_LIMIT_BYTES[chip],
     )
     valid = jnp.arange(q.shape[0]) < cu_q_lens[num_seqs]
     return jnp.where(valid[:, None, None, None], output.reshape(q.shape), 0), updated.reshape(kv_pages.shape)

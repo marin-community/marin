@@ -240,19 +240,28 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
 @pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window", [None, 2048])
 @pytest.mark.parametrize(
-    "width,queries", [(4, (1,)), (16, (1, 1, 1)), (32, (1,) * 5), (512, (361, 82)), (2048, (2048,))]
+    "width,queries,heads",
+    [
+        (4, (1,), 5),
+        (16, (1, 1, 1), 5),
+        (32, (1,) * 5, 5),
+        (512, (361, 82), 5),
+        (2048, (2048,), 5),
+        pytest.param(16, (1, 1, 1), 1, id="single-kv-head"),
+    ],
 )
-def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, queries):
+def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, queries, heads):
     rng = np.random.default_rng(25)
-    q = jnp.asarray(rng.normal(size=(width, 5, 4, 128)), jnp.bfloat16)
-    k = jnp.asarray(rng.normal(size=(width, 5, 128)), jnp.bfloat16)
-    v = jnp.asarray(rng.normal(size=(width, 5, 128)), jnp.bfloat16)
-    page_size, pages_per_seq = 128, 32
+    q = jnp.asarray(rng.normal(size=(width, heads, 4, 128)), jnp.bfloat16)
+    k = jnp.asarray(rng.normal(size=(width, heads, 128)), jnp.bfloat16)
+    v = jnp.asarray(rng.normal(size=(width, heads, 128)), jnp.bfloat16)
+    page_size = 128
+    pages_per_seq, first_length = (64, 6208) if heads == 1 else (32, 2208)
     active = len(queries)
     num_pages = active * pages_per_seq
-    pages = jnp.asarray(rng.normal(size=(num_pages, page_size, 10, 128)), jnp.bfloat16)
+    pages = jnp.asarray(rng.normal(size=(num_pages, page_size, 2 * heads, 128)), jnp.bfloat16)
     indices = jnp.asarray(rng.permutation(num_pages).reshape(active, pages_per_seq), jnp.int32)
-    lengths = 2208 + 31 * jnp.arange(active, dtype=jnp.int32)
+    lengths = first_length + 31 * jnp.arange(active, dtype=jnp.int32)
     offsets = jnp.asarray(np.cumsum((0, *queries)), jnp.int32)
     num_seqs = jnp.array(active, jnp.int32)
     scale = 128**-0.5
