@@ -802,6 +802,13 @@ def _run_generation_loop(
             assert isinstance(model, SnowballLMHeadModel)
             logits, cache, captured = model.decode_with_route_captures(tokens, gen_state.cache, binfo, pos_ids)
             routes = routes.append(captured, slot_ids)
+        elif (
+            isinstance(model, SnowballLMHeadModel)
+            and model.config.inference_attention_implementation == "gpu"
+            and decode_state.max_seqs == 1
+        ):
+            # The generation queue holds at most one sampled token per active sequence.
+            logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, max_active_tokens=1)
         else:
             logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
         logits_at_samples = _gather_logits(logits, sample_indices)

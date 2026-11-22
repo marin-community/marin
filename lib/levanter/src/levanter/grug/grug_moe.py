@@ -610,6 +610,7 @@ class MoEExpertMlp(eqx.Module):
         *,
         token_valid: Bool[Array, "T"],
         mesh: jax.sharding.AbstractMesh,
+        max_active_tokens: int | None = None,
     ) -> Float[Array, "T D"]:
         """Read only the experts selected in a decode batch with one token row per EP shard."""
         ep_size = _mesh_axis_size(mesh, "expert")
@@ -621,7 +622,7 @@ class MoEExpertMlp(eqx.Module):
         token_spec = _token_spec_from_x(x, mesh)
         expert_spec = P("expert", None, None)
         run = shard_map(
-            partial(_moe_mlp_ep_small_local, activation=activation),
+            partial(_moe_mlp_ep_small_local, activation=activation, max_active_tokens=max_active_tokens),
             mesh=mesh,
             in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),
             out_specs=token_spec,

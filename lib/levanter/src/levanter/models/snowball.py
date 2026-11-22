@@ -1353,6 +1353,7 @@ class SnowballMoEMLP(eqx.Module):
         route_capture: PreparedMoERouteCapture | None = None,
         capture_routes: bool = False,
         expert_implementation: SnowballDecodeExpertImplementation = "grouped",
+        max_active_tokens: int | None = None,
     ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -1405,7 +1406,11 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        expert_mlp = self.expert_mlp.decode_small_ep if expert_implementation == "split" else self.expert_mlp
+        expert_mlp = (
+            partial(self.expert_mlp.decode_small_ep, max_active_tokens=max_active_tokens)
+            if expert_implementation == "split"
+            else self.expert_mlp
+        )
         routed_flat = expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
@@ -1939,9 +1944,21 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray,
         *,
         key=None,
+        max_active_tokens: int | None = None,
     ) -> tuple[NamedArray, SnowballDecodeCache]:
-        """Prefill or decode using the existing two-value generation protocol."""
-        logits, caches, _ = self._decode(input_ids, kv_cache, batch_info, pos_ids, key=key, capture_routes=False)
+        """Prefill or decode using the existing two-value generation protocol.
+
+        `max_active_tokens` is a static bound on the number of valid packed rows.
+        """
+        logits, caches, _ = self._decode(
+            input_ids,
+            kv_cache,
+            batch_info,
+            pos_ids,
+            key=key,
+            capture_routes=False,
+            max_active_tokens=max_active_tokens,
+        )
         return logits, caches
 
     def decode_with_route_captures(
@@ -1987,6 +2004,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         capture_routes: bool,
         sample_indices: NamedArray | None = None,
+        max_active_tokens: int | None = None,
     ) -> tuple[NamedArray, SnowballDecodeCache, SnowballDecodeRouteCaptureBatch | None]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
@@ -2047,17 +2065,32 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 attn_out, cache = jax.lax.cond(
                     use_long,
                     lambda _: block.attn.decode(
-                        attn_in, cache, batch_info, pos_ids.array, use_long=True, kv_append=kv_append
+                        attn_in,
+                        cache,
+                        batch_info,
+                        pos_ids.array,
+                        use_long=True,
+                        kv_append=kv_append,
                     ),
                     lambda _: block.attn.decode(
-                        attn_in, cache, batch_info, pos_ids.array, use_long=False, kv_append=kv_append
+                        attn_in,
+                        cache,
+                        batch_info,
+                        pos_ids.array,
+                        use_long=False,
+                        kv_append=kv_append,
                     ),
                     operand=None,
                 )
             x = x + attn_out
             mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
             if not capture_routes:
-                mlp_out = block.mlp(mlp_in, token_valid=token_valid, expert_implementation=expert_implementation)
+                mlp_out = block.mlp(
+                    mlp_in,
+                    token_valid=token_valid,
+                    expert_implementation=expert_implementation,
+                    max_active_tokens=max_active_tokens,
+                )
                 x = x + (mlp_out + block.shared(mlp_in))
                 return x, cache, None
             mlp_out, capture = block.mlp(mlp_in, token_valid=token_valid, capture_routes=True)

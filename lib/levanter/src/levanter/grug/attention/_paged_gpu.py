@@ -179,7 +179,7 @@ def gpu_paged_attention(
         raise ValueError("GPU paged attention requires a GPU")
     padded_groups = max(_MIN_DOT_TILE, pl.next_power_of_2(groups))
     num_splits = min(max_splits, pl.next_power_of_2(token_pages.shape[1]))
-    sm_scale = jnp.asarray(sm_scale, jnp.float32)
+    scale = jnp.asarray(sm_scale, jnp.float32)
     out_shape = (
         jax.ShapeDtypeStruct((num_splits, tokens, heads, padded_groups, dim), jnp.float32),
         jax.ShapeDtypeStruct((num_splits, tokens, heads, padded_groups), jnp.float32),
@@ -204,7 +204,7 @@ def gpu_paged_attention(
         bytes_accessed=0,
     )
     cost = with_io_bytes_accessed(
-        body_cost, kernel_inputs_specs=(q, kv_pages, token_pages, bounds, sm_scale), kernel_outputs_specs=out_shape
+        body_cost, kernel_inputs_specs=(q, kv_pages, token_pages, bounds, scale), kernel_outputs_specs=out_shape
     )
     output, denominator, maximum = pl.pallas_call(
         partial(
@@ -232,7 +232,7 @@ def gpu_paged_attention(
         interpret=interpret,
         cost_estimate=cost,
         name="grug_paged_decode",
-    )(q, kv_pages, token_pages, bounds, sm_scale)
+    )(q, kv_pages, token_pages, bounds, scale)
     result_shape = jax.ShapeDtypeStruct(q.shape, q.dtype)
     combine_cost = with_io_bytes_accessed(
         pl.CostEstimate(
