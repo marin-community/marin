@@ -112,3 +112,10 @@ projection:
   - t004
   basis: Belay Ckpt Oct 20 2026 (s7n) fit of 2026-11-01, on s7n-d512, s7n-d768, s7n-d1024 and s7n-d1280L16
   date: '2026-11-22'
+potential:
+  score: 6
+  rationale: Ladder win on all 4 rungs (−0.0073 to −0.0106), projected −0.0058 at hero; equal-time and hero-mfu not run →
+    6
+  model: claude-opus-5-5
+  date: '2026-11-22'
+  inputs_digest: 46671d56d192
