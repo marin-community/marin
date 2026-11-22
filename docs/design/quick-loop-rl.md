@@ -435,11 +435,12 @@ and XLA collective buffers in this mode. They allocate from opposite
 ends and share the space between them. This tests whether providing one
 range from startup accommodates the first gradient while retaining device
 headroom for direct NCCL allocations after restore. The frozen launch
-preview matched `.15` after normalizing preallocation and run identities.
+preview and live resolved configuration matched `.15` after normalizing
+preallocation and run identities.
 Fifteen CPU learner and recipe tests passed, including fresh-process
 checkpoint continuation on JAX 0.11.0. The GPU acceptance criteria require
 both phases in the same attempt.
-[Preallocated learner coordinator][iris-smoke-preallocated] · [Frozen source and checks][h100-preallocated-handoff] · [Pinned XLA allocator][xla-learner-allocator] · [Pinned XLA defaults][xla-learner-allocator-defaults]
+[Preallocated learner attempt][iris-smoke-preallocated-child] · [Frozen source and checks][h100-preallocated-handoff] · [Pinned XLA allocator][xla-learner-allocator] · [Pinned XLA defaults][xla-learner-allocator-defaults]
 
 #### Read only the HF weight ranges a learner host needs
 
@@ -459,7 +460,10 @@ whole-tensor reads where the mesh would otherwise generate many tiny
 requests. On the smoke mesh, the four-way data split gives each host a
 contiguous span per routed down-projection expert. Reading those spans
 alone would reduce logical weight bytes from about 125 to 94.5 GiB per
-host. The gate and up projections split the innermost HF axis, which
+host. Each learner would read 256 contiguous ranges per layer, one per
+expert. Across 26 layers and four learners, the down-projection reads
+would fall from 162.5 to 40.625 GiB across 26,624 logical range requests.
+The gate and up projections split the innermost HF axis, which
 would produce about 17 million 1,280-byte spans per host if requested
 individually. These estimates use the pinned tensor shapes and mesh and
 exclude request coalescing and read amplification. Compare actual object
@@ -467,6 +471,14 @@ bytes and GET counts per host, cold time to learner readiness, and bitwise
 equality of the loaded model against the smoke loader. Use the same pinned
 BF16 export for both readers.
 [SkyRL range prefetch][skyrl-hf-prefetch] · [Pinned export record][pinned-hf-export]
+
+A synthetic safetensors fixture read 131,072 BF16 down-projection bytes in
+64 local ranges on the 32-device CPU mesh. The shard-local FP32 arrays
+matched the frozen whole-tensor loader bit for bit across all 65,536 BF16
+bit patterns. Split whole-tensor coalescing at selectively read tensors
+so it cannot fetch those bytes again. The proof uses local files.
+Regional object-store throughput and cold-start latency remain open.
+[Reproducible range-read proof][down-rank-read-proof]
 
 A regional native checkpoint is also an option for repeated cold starts.
 Convert the pinned export, including its finalized router biases, to a
@@ -1107,12 +1119,19 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   inputs for artifact version `2026.11.21.2`. The held pair at `07bddc836e`
   uses artifact version `2026.11.21.5` and the exact bounded-page kernel
   from the successful H100 probe. It keeps the same learner, checkpoint,
-  training tasks and evaluation settings. Only the dedicated native serving
-  subprocess preallocates 90% GPU memory. Submit after the priority learner
-  smoke and matched 25-update comparison.
+  training tasks and evaluation settings. The dedicated native serving
+  subprocess in that pair preallocates 90% GPU memory. Submit after the
+  priority learner smoke and matched 25-update comparison.
   Use the archived pair as the serving configuration reference. Port the
   qualified learner's loading, optimizer placement, readiness and recovery
   changes into the common typed learner before submitting either arm.
+  A CPU port of the final-layout loader, readiness barrier, and checkpoint
+  and shutdown deadlines matched 15 typed receipts from the deadline-only
+  control on two JAX 0.11.0 learner processes. The receipts cover forward
+  scores, three update calls, model, optimizer, RNG and layout fingerprints,
+  and exact fresh checkpoint restore. The loader preserves legacy placement
+  for unpartitioned source tensors. Pinned-host Adam, the learner allocator
+  choice, and the full-model GPU run remain open.
   Retain the binary frames and native snapshot install, then qualify the
   ported learner with vLLM. The archived preset uses one turn per episode.
   Use a separate 67B tool-turn fixture to test continuation and stale KV
@@ -1178,7 +1197,7 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-shutdown]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-coordinator-93324d26
 [iris-smoke-shutdown-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-coordinator-93324d26%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.14-ae0b645fbb4e
 [iris-smoke-nccl-headroom-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-coordinator-69a6cbbb%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.15-a453f4b331ee
-[iris-smoke-preallocated]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-coordinator-317129fa
+[iris-smoke-preallocated-child]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-coordinator-317129fa%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.16-ac3d40727bb4
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
@@ -1202,6 +1221,7 @@ arms. [Prior timing comparison][timing]
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
 [skyrl-hf-prefetch]: https://github.com/marin-community/marin/pull/10662
+[down-rank-read-proof]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fproofs%2Fsnowball-down-rank-reads-586d56160770.tar.gz
 [native-shard-reader]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/levanter/src/levanter/tensorstore_serialization.py#L988-L1024
 [hf-to-native-converter]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/marin/src/marin/experiment/checkpoints.py#L125
 [model-only-restore]: https://github.com/marin-community/marin/pull/9475
