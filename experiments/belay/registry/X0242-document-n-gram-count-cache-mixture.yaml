@@ -47,6 +47,19 @@ trials:
   commit: 5fffa9df7b
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t003
+  variant: document n-gram count cache mixed into output
+  rung: competitive-d768
+  protocol: equal_steps
+  batch: X0242
+  date: '2026-11-22'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0242
+  wandb: []
+  settings:
+    ngram_cache_mixture: 'true'
+  commit: 72e4fce9c4
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0212 at equal time (step time within 1%); ladder and MFU not run → 7
