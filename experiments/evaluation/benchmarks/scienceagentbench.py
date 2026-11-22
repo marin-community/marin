@@ -40,7 +40,7 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.harbor import harbor_protocol
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RowSelector, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 NAME = "scienceagentbench-verified-66-knowledge-off"
@@ -113,6 +113,10 @@ def pilot_row(data, _context: ConversionContext) -> bool:
 
 def panel_row(data, _context: ConversionContext) -> bool:
     return data["instance_id"] not in UNRUN_TASK_IDS
+
+
+def deterministic_row(data, context: ConversionContext) -> bool:
+    return panel_row(data, context) and not published_evaluator(VerifiedAnnotation.model_validate(data)).visual
 
 
 def software_image(directory: Path) -> DockerBuildContext:
@@ -268,7 +272,9 @@ def item(task: TaskSpec) -> EvaluationItem:
     )
 
 
-def benchmark_source(name: str, condition: KnowledgeCondition, count: int) -> RlDataSource[EvaluationCorpusRecipe]:
+def benchmark_source(
+    name: str, condition: KnowledgeCondition, count: int, *, select: RowSelector = panel_row
+) -> RlDataSource[EvaluationCorpusRecipe]:
     version = PILOT_VERSION if name == NAME else PANEL_VERSION
     recipe = CurationRecipe(
         name=name,
@@ -283,7 +289,7 @@ def benchmark_source(name: str, condition: KnowledgeCondition, count: int) -> Rl
             (ANNOTATION_FILE,),
             SourceFormat.PARQUET,
             read=read_verified_annotations,
-            select=pilot_row if name == NAME else panel_row,
+            select=select,
         ),
         inputs={
             **({**BASEMAP_SOURCES, **GLACIER_SOURCES} if name != NAME else {}),
@@ -296,7 +302,9 @@ def benchmark_source(name: str, condition: KnowledgeCondition, count: int) -> Rl
             ),
         },
     )
-    protocol = harbor_protocol(name, version, count, max_output_tokens=16384, requires_judge=True, trials=1)
+    protocol = harbor_protocol(
+        name, version, count, max_output_tokens=16384, requires_judge=select is not deterministic_row, trials=1
+    )
     return RlDataSource(
         info=SourceInfo(
             id=name,
@@ -314,9 +322,18 @@ def benchmark_source(name: str, condition: KnowledgeCondition, count: int) -> Rl
 def benchmarks() -> list[EvaluationBenchmark]:
     return fixed_benchmarks(
         [
-            benchmark_source(NAME, KnowledgeCondition.OFF, 1),
+            benchmark_source(NAME, KnowledgeCondition.OFF, 1, select=pilot_row),
             *(
                 benchmark_source(f"scienceagentbench-verified-{condition.value}", condition, 102 - len(UNRUN_TASK_IDS))
+                for condition in KnowledgeCondition
+            ),
+            *(
+                benchmark_source(
+                    f"scienceagentbench-verified-deterministic-{condition.value}",
+                    condition,
+                    37,
+                    select=deterministic_row,
+                )
                 for condition in KnowledgeCondition
             ),
         ]
