@@ -1025,3 +1025,40 @@ its own commit hash. Use a fresh job name and output URI for every arm. Stop a
 measured arm with `iris-cancel-own` if it is still running after publishing its
 window. Compare generated tokens/s per engine and GPU, and request decode rate
 at actual concurrency. Do not infer serving capacity from consumed training tokens.
+
+### OpenResearcher with hosted retrieval
+
+The full-index OpenResearcher admission pin runs on LOCAL/Iris. Daytona RL uses
+`open-athena/openresearcher-openresearcher-dataset-service-20261121-v1` at
+`0c4f39584d7f0121e97f6ad4f4761749add56fef`. This private variant requires the
+frozen BM25 service. It retains all 283 tasks and the native grader; only its
+actor image and importer revision differ from the full-index pin.
+
+A one-source NVL72 run spec selects the private variant with these input fields:
+
+```yaml
+data_uri: []
+data_sha256: 346e892a7052d1f93ee31ae208100adccee06ff1918344efe2974fabc331226c
+openresearcher_service:
+  dataset_id: open-athena/openresearcher-openresearcher-dataset-service-20261121-v1
+  dataset_revision: 0c4f39584d7f0121e97f6ad4f4761749add56fef
+  parquet_sha256: 346e892a7052d1f93ee31ae208100adccee06ff1918344efe2974fabc331226c
+  index_uri: s3://marin-us-east-08a/marin/rl-data/openresearcher/bm25-index/2026.11.15.1
+```
+
+Keep the other model, tokenizer, artifact-version and role-plan fields explicit.
+The input builder downloads the immutable private pin as an artifact dependency.
+Its Parquet digest is checked before launch. Set the index URI to the run's own
+region; the service refuses a bucket in another region.
+
+The coordinator starts one Iris CPU child per run attempt with 8 CPUs, 32 GB RAM
+and 128 GB disk. It verifies every frozen index file before private discovery.
+The ready endpoint enters `environment.task_sessions.retrieval_service` at
+launch. Each thin actor keeps external networking denied and uses a private
+Shellbox relay for `search` and `get_document`. Grading uses the original script
+in its separate verifier machine. The child remains alive through the run and
+terminates during cleanup. No endpoint or credential is stored in the dataset.
+
+This source path does not require main runtime adoption or a consumer-gate
+profile. Message-trace source qualification and exact-token RL training are
+separate checks; a source rollout does not establish an optimizer update.

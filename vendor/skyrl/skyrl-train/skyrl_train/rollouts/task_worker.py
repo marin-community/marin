@@ -437,11 +437,13 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        retrieval_service: str | None = None,
         eval_factories: Mapping[str, MachineFactory] | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
         self.judge_connection = judge_connection
+        self.retrieval_service = retrieval_service
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
         self.eval_factories = {
             name: OwnedMachineFactory(factory, name) for name, factory in (eval_factories or {}).items()
@@ -507,7 +509,7 @@ class TaskRolloutWorker:
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
             harnesses[lowered.harness] = AssistantPrefixHarness()
         elif is_shell_harness(lowered.harness):
-            harnesses[lowered.harness] = shell_harness(lowered.harness)
+            harnesses[lowered.harness] = shell_harness(lowered.harness, retrieval_service=self.retrieval_service)
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
@@ -833,5 +835,6 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            retrieval_service=self.config.environment.task_sessions.get("retrieval_service"),
             eval_factories=eval_factories,
         )

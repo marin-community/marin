@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
+from marin.execution.lazy import materialized_config
 
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
+from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService, service_data
 
 
 @pytest.fixture
@@ -128,3 +130,35 @@ def test_snowball_cp4_rejects_invalid_sliding_window_transport_before_allocation
         kwargs["cp_comm_type"] = communication
     with pytest.raises(ValueError, match=r"sliding-window|divisible by CP"):
         validate_launch(yaml.safe_dump(document), tmp_path / "invalid", model_config=model_config)
+
+
+def test_service_recipe_selects_private_variant_and_keeps_admission_pin_separate(run_spec, tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    source = OpenResearcherService(
+        dataset_id="open-athena/openresearcher-service-fixture",
+        dataset_revision="c" * 40,
+        index_uri="s3://marin-us-east-08a/marin/rl-data/openresearcher/bm25-index/2026.11.15.1",
+        parquet_sha256=run_spec.data_sha256,
+    )
+    download = materialized_config(
+        service_data(source, version=run_spec.input_version).step, str(tmp_path / "artifacts")
+    )
+    data_path = Path(download.gcs_output_path) / "train.parquet"
+    data_path.parent.mkdir(parents=True)
+    data_path.write_bytes((Path(run_spec.data_uri[0]) / "train.parquet").read_bytes())
+    spec = replace(run_spec, data_uri=(), data_sha256=source.parquet_sha256, openresearcher_service=source)
+    with build_context(BuildContext(versions=VersionCodex(default="2026.11.21.301"))):
+        run_from_spec(spec, smoke=True, config_output=tmp_path / "service.yaml")
+    launch = yaml.safe_load((tmp_path / "service.yaml").read_text())
+    inputs = launch["inputs"]["train_data"]
+    assert len(inputs) == 1 and source.dataset_revision in inputs[0]["uri"]
+    sessions = launch["skyrl"]["environment"]["task_sessions"]
+    assert (
+        sessions["task_spec"]["task_machine_by_dataset"]["OpenResearcher/OpenResearcher-Dataset"]["backend"] == "daytona"
+    )
+    assert sessions["task_spec"]["image_verifier"]["cpus"] == 1
+    assert launch["skyrl"]["trainer"]["rollout_buffer"]["consumed_route_quotas"] == {}
+    assert (
+        "retrieval_service" not in launch["skyrl"]["environment"]["task_sessions"]
+        or launch["skyrl"]["environment"]["task_sessions"]["retrieval_service"] is None
+    )

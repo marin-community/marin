@@ -373,12 +373,12 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
-    context = "é" * (grade_judge.CONTEXT_LIMIT - 4) + "TAIL" + "excluded"
+    context = "é" * 16 + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)
     fake_judge.replies = ["SCORE: 1"]
-    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
+    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt", context_char_limit=20)
     grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
-    assert context[: grade_judge.CONTEXT_LIMIT] in fake_judge.prompts[0]
+    assert context[:20] in fake_judge.prompts[0]
     assert "excluded" not in fake_judge.prompts[0]
 
 
@@ -1135,3 +1135,19 @@ def test_judge_reply_never_returns_an_incomplete_or_refused_reply(fake_judge, fa
     spec = JudgeSpec(references=("document",), exact_gate=False)
     with pytest.raises(GradingInfraError):
         grade_judge.judge_reply(spec, [{"role": "user", "content": "Check this."}])
+
+
+def test_source_judge_settings_control_requests_and_parse_attempts(tmp_path, fake_judge):
+    fake_judge.replies = ["no verdict", "still no verdict", "SCORE: 1"]
+    spec = JudgeSpec(
+        references=(REFERENCE,),
+        exact_gate=False,
+        temperature=0.7,
+        parse_attempts=3,
+        chat_template_kwargs={"enable_thinking": "false"},
+    )
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a different answer"))
+    assert reward.reward == 1.0
+    assert len(fake_judge.requests) == 3
+    assert all(request["temperature"] == 0.7 for request in fake_judge.requests)
+    assert all(request["chat_template_kwargs"] == {"enable_thinking": "false"} for request in fake_judge.requests)

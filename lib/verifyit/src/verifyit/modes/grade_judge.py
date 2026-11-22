@@ -71,9 +71,7 @@ BASE_URL_ENV = "VERIFYIT_JUDGE_BASE_URL"
 API_KEY_ENV = "VERIFYIT_JUDGE_API_KEY"
 MODEL_ENV = "VERIFYIT_JUDGE_MODEL"
 
-ATTEMPTS = 2
 REASONING_LIMIT = 400
-CONTEXT_LIMIT = 60_000
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _TransportResult = TypeVar("_TransportResult")
 
@@ -176,6 +174,20 @@ def grade(
 
 
 def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
+    if type(spec.context_char_limit) is not int or spec.context_char_limit < 1:
+        raise InvalidTask("judge context character limit must be positive")
+    if type(spec.max_turns) is not int or spec.max_turns != 1:
+        raise InvalidTask("the judge harness supports exactly one conversation turn")
+    if spec.parse_attempts is not None and (type(spec.parse_attempts) is not int or spec.parse_attempts < 1):
+        raise InvalidTask("judge parse attempts must be positive")
+    if spec.temperature is not None and (
+        isinstance(spec.temperature, bool)
+        or not isinstance(spec.temperature, (int, float))
+        or not 0 <= spec.temperature <= 2
+    ):
+        raise InvalidTask("judge temperature must be finite and between zero and two")
+    if spec.chat_template_kwargs and spec.api != "chat_completions":
+        raise InvalidTask("chat template options require Chat Completions")
     if not isinstance(spec.completion_policy, JudgeCompletionPolicy):
         raise InvalidTask("Unknown judge completion policy")
     if type(spec.transport_attempts) is not int or spec.transport_attempts < 1:
@@ -308,7 +320,7 @@ def grade_judge_candidate(
     candidate = _answer_text(candidate, spec.strip_candidate_reasoning_blocks, strip_outer=False)
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
-    context = context[:CONTEXT_LIMIT]
+    context = context[: spec.context_char_limit]
     failed = [
         constraint.name for constraint, check in validated.checks if not _passes(check, candidate, constraint.params)
     ]
@@ -428,42 +440,52 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
         label.upper() if spec.label_case == "upper" else label: values for label, values in spec.label_metrics.items()
     }
     for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget)
-        detail: dict[str, Any] = {
-            "model": model,
-            "requested_model": model,
-            "response_model": completion.response_model,
-            "response_id": completion.response_id,
-            "finish_reason": completion.finish_reason,
-            "transport_attempts": completion.transport_attempts,
-            "completion": completion.text,
-            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget, "temperature": 0.0},
-        }
-        if completion.incomplete:
-            if index + 1 < len(budgets):
-                continue
-            raise GradingInfraError("judge completion is incomplete", **detail)
-        content = completion.text
-        answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
-        if spec.label_case == "upper":
-            answer = answer.upper()
-        if spec.label_scan == "whole":
-            final = answer
-            observed = {answer}
-        else:
-            final = answer.rsplit("\n", 1)[-1].strip()
-            completed_lines = {line.strip() for line in answer.splitlines()}
-            observed = {
-                label
-                for label in labels
-                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+        for parse_attempt in range(spec.parse_attempts or 1):
+            completion = _label_completion(spec, client, model, messages, budget)
+            detail: dict[str, Any] = {
+                "model": model,
+                "requested_model": model,
+                "response_model": completion.response_model,
+                "response_id": completion.response_id,
+                "finish_reason": completion.finish_reason,
+                "transport_attempts": completion.transport_attempts,
+                "completion": completion.text,
+                "judge_request": {
+                    "model": model,
+                    "messages": messages,
+                    "max_completion_tokens": budget,
+                    **_chat_options(spec),
+                },
             }
-        if final not in labels or observed != {final}:
-            raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
-        detail.update(verdict=final, reasoning=_reasoning(answer))
-        if label_metrics:
-            detail["metrics"] = label_metrics[final]
-        return scored(float(labels[final]), **detail)
+            if completion.incomplete:
+                if index + 1 < len(budgets):
+                    break
+                raise GradingInfraError("judge completion is incomplete", **detail)
+            content = completion.text
+            answer = _answer_text(
+                content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
+            )
+            if spec.label_case == "upper":
+                answer = answer.upper()
+            if spec.label_scan == "whole":
+                final = answer
+                observed = {answer}
+            else:
+                final = answer.rsplit("\n", 1)[-1].strip()
+                completed_lines = {line.strip() for line in answer.splitlines()}
+                observed = {
+                    label
+                    for label in labels
+                    if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+                }
+            if final not in labels or observed != {final}:
+                if parse_attempt + 1 < (spec.parse_attempts or 1):
+                    continue
+                raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
+            detail.update(verdict=final, reasoning=_reasoning(answer))
+            if label_metrics:
+                detail["metrics"] = label_metrics[final]
+            return scored(float(labels[final]), **detail)
     raise RuntimeError("judge exhausted completion budgets")
 
 
@@ -471,8 +493,7 @@ def _label_completion(
     spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
 ) -> _LabelCompletion:
     if spec.api == "chat_completions":
-        options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
+        request = {"model": model, "messages": messages, "max_completion_tokens": budget, **_chat_options(spec)}
         response, attempts = _judge_transport(
             spec,
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
@@ -506,7 +527,9 @@ def _label_completion(
         return _LabelCompletion(
             _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts, usage
         )
-    options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
+    options: dict[str, Any] = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
+    if spec.temperature is not None:
+        options["temperature"] = spec.temperature
     request = {
         "model": model,
         "input": messages if spec.system_prompt else messages[0]["content"],
@@ -629,7 +652,7 @@ def _context(spec: JudgeSpec, tests_dir: Path) -> str:
     path = tests_dir / spec.context
     if not path.is_file():
         raise InvalidTask(f"judge context {spec.context!r} is not in the tests directory")
-    return read_text(path, characters=CONTEXT_LIMIT, errors="replace")
+    return read_text(path, characters=spec.context_char_limit, errors="replace")
 
 
 def _passes(check: Check, candidate: str, params: dict) -> bool:
@@ -731,7 +754,7 @@ def _ask(
     """Parse a final SCORE, retrying truncated replies with the larger budget."""
     attempts: list[_CompletionAttempt] = []
     budgets = _completion_budgets(spec)
-    for attempt in range(1, ATTEMPTS + 1):
+    for attempt in range(1, (spec.parse_attempts or 2) + 1):
         for index, budget in enumerate(budgets):
             response = _complete(spec, client, model, prompt, budget)
             choice = _completion_choice(response)
@@ -755,7 +778,7 @@ def _ask(
             logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
             break
     raise GradingInfraError(
-        f"judge {model!r} returned no valid SCORE after {ATTEMPTS} attempts", **_attempt_detail(attempts)
+        f"judge {model!r} returned no valid SCORE after {spec.parse_attempts or 2} attempts", **_attempt_detail(attempts)
     )
 
 
@@ -770,16 +793,23 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
 
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
-    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
     return _chat_completion(
         client,
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
         timeout=spec.request_timeout,
         max_completion_tokens=budget,
-        **options,
+        **_chat_options(spec),
     )
+
+
+def _chat_options(spec: JudgeSpec) -> dict[str, Any]:
+    options: dict[str, Any] = {"temperature": 0.0 if spec.temperature is None else spec.temperature}
+    if spec.reasoning_effort:
+        options["reasoning_effort"] = spec.reasoning_effort
+    if spec.chat_template_kwargs:
+        options["extra_body"] = {"chat_template_kwargs": spec.chat_template_kwargs}
+    return options
 
 
 def _chat_completion(client: openai.OpenAI, **options: Any) -> ChatCompletion:

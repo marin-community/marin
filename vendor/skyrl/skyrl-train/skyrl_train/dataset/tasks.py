@@ -216,7 +216,7 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if (
         isinstance(grader, ScriptGrader | VerifyitGrader)
         and grader.environment is not None
-        and not grades_with_judge(grader)
+        and not (isinstance(grader, VerifyitGrader) and grades_with_judge(grader))
     ):
         machine = (
             config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]

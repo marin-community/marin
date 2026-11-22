@@ -5,13 +5,15 @@
 
 from collections.abc import Mapping
 
-from shellbox.machine import MachineFactory
+from shellbox.machine import MachineFactory, NetworkPolicy
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
+    EXECUTION_RESOURCE_FIELDS,
     AnswerType,
     CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
+    ProviderNetworkAccess,
     ScriptGrader,
     TaskSpec,
     VerifyitGrader,
@@ -52,6 +54,27 @@ def task_machine_reason(task: TaskSpec) -> str | None:
 def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader."""
     task = spec.task
+    if any(
+        requirement.network_access is ProviderNetworkAccess.SERVICE_ONLY
+        for requirement in task.environment_requirements.tool_providers.values()
+    ):
+        if spec.task_machine is not None and spec.task_machine.network is not NetworkPolicy.DENY:
+            raise ValueError("Service-only task tools require a network-denied actor and a private relay")
+    for runtime, declared in (
+        (spec.task_machine, task.execution_requirements),
+        (spec.verifier_machine, task.verifier_execution_requirements),
+    ):
+        if (
+            runtime is not None
+            and declared is not None
+            and any((getattr(runtime, name) or 0) < getattr(declared, name) for name in EXECUTION_RESOURCE_FIELDS)
+        ):
+            raise ValueError("Selected machine is smaller than the task's declared allocation")
+    if task.execution_requirements is not None and (
+        spec.limits.total_turn_timeout is None
+        or spec.limits.total_turn_timeout > task.execution_requirements.agent_timeout_sec
+    ):
+        raise ValueError("Rollout actor limit must honor the task's declared deadline")
     grader = task.grader
     judge = grades_with_judge(grader)
     host_judge = judge and isinstance(grader, VerifyitGrader)

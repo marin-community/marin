@@ -362,6 +362,11 @@ class JudgeSpec:
     label_scan: str = "literal"
     label_case: str = "sensitive"
     api: str = "chat_completions"
+    context_char_limit: int = field(default=60_000, kw_only=True)
+    max_turns: int = field(default=1, kw_only=True)
+    temperature: float | None = field(default=None, kw_only=True)
+    parse_attempts: int | None = field(default=None, kw_only=True)
+    chat_template_kwargs: dict[str, str] = field(default_factory=dict, kw_only=True)
 
 
 class JudgeRuntimeSource(StrEnum):

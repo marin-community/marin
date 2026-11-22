@@ -6,6 +6,7 @@
 import hashlib
 import math
 from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 
@@ -37,6 +38,15 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.locality import RoleTopologyMode
+
+from experiments.post_training.long_loop.openresearcher_service import (
+    OpenResearcherService,
+    retrieval_launch,
+    run_with_retrieval,
+    service_data,
+    service_execution,
+    service_recipe,
+)
 
 RECIPE_PATH = Path(__file__).with_name("nvl72-rl.yaml")
 DEFAULT_MAX_NEW_TOKENS = 16384
@@ -261,6 +271,7 @@ def build_run(
     data_sha256: str | None = None,
     execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
+    openresearcher_service: OpenResearcherService | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Build an RL training artifact from model, data and optional native checkpoint handles.
 
@@ -277,6 +288,8 @@ def build_run(
         raise ValueError(f"{profile.output_name} requires data_sha256")
     if data_sha256 is not None and len(train_data) != 1:
         raise ValueError("data_sha256 requires exactly one training data source")
+    if openresearcher_service is not None and data_sha256 != openresearcher_service.parquet_sha256:
+        raise ValueError("Service-backed OpenResearcher data must match the pinned variant Parquet digest")
     geometry = profile.megatron
     policy_data_parallel_size = (profile.role_plan.policy_num_nodes * profile.role_plan.policy_num_gpus_per_node) // (
         geometry.tensor_model_parallel_size * geometry.pipeline_model_parallel_size * geometry.context_parallel_size
@@ -291,6 +304,9 @@ def build_run(
     recipe = SkyRLRecipe.from_document(
         recipe_document if recipe_document is not None else yaml.safe_load(recipe_path.read_text())
     ).merge(profile.patch)
+    if openresearcher_service is not None:
+        recipe = recipe.merge(service_recipe())
+        execution = service_execution(execution or profile.execution)
     eval_interval = recipe.trainer.eval_interval if eval_interval is None else eval_interval
     checkpoint_interval = (
         checkpoint_interval if checkpoint_interval is not None else 1 if smoke else recipe.trainer.ckpt_interval
@@ -353,6 +369,9 @@ def build_run(
             ),
         )
     )
+    if openresearcher_service is not None:
+        buffer = recipe.trainer.rollout_buffer.replace(consumed_route_quotas={}, source_routes={})
+        recipe = recipe.replace(trainer=recipe.trainer.replace(rollout_buffer=buffer))
     step = skyrl_step(
         SkyRLSpec(
             name=name,
@@ -374,6 +393,9 @@ def build_run(
         execution or profile.execution,
         export_hf=False,
     )
+    if openresearcher_service is not None:
+        launch = retrieval_launch(openresearcher_service, execution or profile.execution)
+        step = replace(step, run=partial(run_with_retrieval, launch=launch))
     if data_sha256 is None:
         return step
     original_build_config = step.build_config
@@ -414,6 +436,7 @@ def profile_run(
     batch_groups: int | None = None,
     eval_interval: int | None = None,
     checkpoint_interval: int | None = None,
+    openresearcher_service: OpenResearcherService | None = None,
     validation_data_uri: tuple[str, ...] = (),
     validation_data_file: str = "validation.parquet",
 ) -> ArtifactStep[SkyRLRun]:
@@ -422,7 +445,7 @@ def profile_run(
         raise click.UsageError("--validation-data-uri is required for normal RL; select --smoke to omit evaluation")
     if selected.data_namespace is not None and data_sha256 is None:
         raise click.UsageError(f"--data-sha256 is required for {profile}")
-    if data_sha256 is not None and len(data_uri) != 1:
+    if data_sha256 is not None and len(data_uri) != 1 and openresearcher_service is None:
         raise click.UsageError("--data-sha256 requires exactly one --data-uri")
     name = user_owned_name(name or selected.output_name)
     job_timeout_hours = job_timeout_hours or selected.execution.job_timeout_seconds // 3600
@@ -448,6 +471,10 @@ def profile_run(
         )
         for index, uri in enumerate(data_uri)
     )
+    if openresearcher_service is not None:
+        if data_uri:
+            raise ValueError("The OpenResearcher service recipe selects its private HF pin; data_uri must be empty")
+        train_data = (service_data(openresearcher_service, version=input_version),)
     resume = ArtifactStep.adopt(f"{name}/inputs/resume", version, source=resume_uri) if resume_uri is not None else None
     validation_data = tuple(
         ArtifactDataSource(
@@ -458,6 +485,7 @@ def profile_run(
     )
     step = build_run(
         profile=selected,
+        openresearcher_service=openresearcher_service,
         name=name,
         version=version,
         model=model,
@@ -511,6 +539,7 @@ class NVL72RunSpec:
     checkpoint_interval: int | None = None
     validation_data_uri: tuple[str, ...] = ()
     validation_data_file: str = "validation.parquet"
+    openresearcher_service: OpenResearcherService | None = None
 
 
 def run_from_spec(spec: NVL72RunSpec, *, smoke: bool, config_output: Path) -> ArtifactStep[SkyRLRun]:
@@ -524,6 +553,7 @@ def run_from_spec(spec: NVL72RunSpec, *, smoke: bool, config_output: Path) -> Ar
     if len(spec.data_sha256) != 64 or any(c not in "0123456789abcdef" for c in spec.data_sha256):
         raise ValueError("data_sha256 must be a SHA-256 digest")
     args = asdict(spec)
+    args["openresearcher_service"] = spec.openresearcher_service
     for key in ("format", "marin_revision", "output_prefix"):
         args.pop(key)
     return profile_run(**args, smoke=smoke, config_output=config_output)
