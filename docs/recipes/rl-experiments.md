@@ -248,6 +248,8 @@ Data presets require `--tasks` and refuse `--set`.
 Snowball presets using the pinned 09.21 Datakit initializer load the frozen Dr. Doom DSpark draft.
 DSpark uses probabilistic drafting and standard verification. Use
 `--set generator.speculative_decoding=null` for plain decoding on presets that accept settings.
+The `speed-short` burst preset uses four proposals and a 0.80 vLLM GPU memory fraction.
+The other Snowball presets use eight proposals.
 To compare another draft against the same policy, set `generator.speculative_decoding.model` to a
 JSON object with `source_uri` and `source_identity`. For `hf://` sources, use the full Hub commit SHA.
 With an alternate initializer, set the complete `generator.speculative_decoding` block to use its

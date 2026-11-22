@@ -566,6 +566,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "dc52613e",
             "2026.11.22.1": "31d3c06f",
             "2026.11.22.2": "dce24258",
+            "2026.11.22.3": "74aaaaf9",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",

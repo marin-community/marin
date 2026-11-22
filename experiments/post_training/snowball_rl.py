@@ -408,8 +408,14 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
+        revision="2026.11.22.3",
         checkpoints="none",
-        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
+        recipe=replace(
+            _GENERATING,
+            fixed_reply_tokens=4096,
+            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+        ),
+        default_speculative_decoding=_DSPARK.replace(num_speculative_tokens=4),
         updates=0,
         measured=range(1),
         control_preset="speed-short",
