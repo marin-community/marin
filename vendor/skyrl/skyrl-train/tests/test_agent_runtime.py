@@ -22,7 +22,7 @@ from rolloutengine.models import GradedRolloutInterrupted
 from shellbox.machine import ExitReason, Result
 from taskcompendium.models import Source
 
-from skyrl_train.dataset.harbor_import import harbor_trial_task
+from skyrl_train.dataset.harbor_import import harbor_trial_task, restore_harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
@@ -245,23 +245,41 @@ async def test_original_trial_runs_setup_before_installation_and_retains_failure
     )
     monkeypatch.setattr(AgentFactory, "create_agent_from_config", lambda *args, **kwargs: agent)
     monkeypatch.setattr(EnvironmentFactory, "create_environment_from_config", lambda **kwargs: environment)
+    command = f'printf "%s" "$VISIBLE" >> prepared; printf first; printf diagnostic >&2; exit {exit_code}'
+    original = harbor_package / "task.toml"
+    with original.open("a") as file:
+        file.write(f"[environment.setup]\ncommand = {json.dumps(command)}\ntimeout_sec = 1\n")
+    original.chmod(0o444)
+    task = harbor_trial_task(harbor_package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
+    requirements = task.environment_requirements
+    requirements = requirements.model_copy(
+        update={
+            "setup_commands": (
+                *requirements.setup_commands,
+                'read value < prepared; test "$value" = task-value && printf second',
+            )
+        }
+    )
+    task = task.model_copy(update={"environment_requirements": requirements})
+    restored = tmp_path / "restored"
+    restore_harbor_trial_task(task, restored, setup_budget=5)
+    config = restored / "task.toml"
+    assert config.stat().st_mode == original.stat().st_mode
+    assert config.stat().st_mtime_ns == original.stat().st_mtime_ns
+
     trial = await Trial.create(
         TrialConfig(
-            task=TaskConfig(path=harbor_package),
+            task=TaskConfig(path=restored),
             trials_dir=str(tmp_path / "trials"),
             agent=AgentConfig(name="pi"),
             verifier={"disable": True},
         )
     )
-    commands = (
-        f'printf "%s" "$VISIBLE" > prepared; printf first; printf diagnostic >&2; exit {exit_code}',
-        'read value < prepared; test "$value" = task-value && printf second',
-    )
     evidence = tmp_path / "setup-evidence"
     backend = AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder())
     result = await run_harbor_trial(
         trial, backend, unexpected_model_request, evidence,
-        setup_commands=commands, setup_cwd=str(tmp_path), setup_timeout=5,
+        setup_commands=requirements.setup_commands, setup_cwd=str(tmp_path), setup_timeout=5,
     )
     assert (tmp_path / "prepared").read_text() == "task-value"
     evidence = evidence / "task-setup"

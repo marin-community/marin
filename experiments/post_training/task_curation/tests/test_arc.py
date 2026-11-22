@@ -37,15 +37,17 @@ ARCHIVE_FILES = {
 }
 
 
-def archive(instruction: str, verifier_data: dict, *, setup: bytes = b"") -> dict:
-    return tasktrove_row(
-        {
-            "instruction.md": instruction.encode(),
-            "tests/verifier_data.json": json.dumps(verifier_data).encode(),
-            **ARCHIVE_FILES,
-            "task.toml": ARCHIVE_FILES["task.toml"] + setup,
-        }
-    )
+def archive(instruction: str, verifier_data: dict, *, setup: bytes = b"", link_config: bool = False) -> dict:
+    files = {
+        "instruction.md": instruction.encode(),
+        "tests/verifier_data.json": json.dumps(verifier_data).encode(),
+        **ARCHIVE_FILES,
+        "task.toml": ARCHIVE_FILES["task.toml"] + setup,
+    }
+    if link_config:
+        files["config.toml"] = files.pop("task.toml")
+        return tasktrove_row(files, symlinks={"task.toml": "config.toml"})
+    return tasktrove_row(files)
 
 
 ROWS: dict[str, dict] = {
@@ -89,6 +91,22 @@ def test_tasktrove_transductive_preserves_the_release_grid_comparison(answer, re
             ImportFailureKind.SOURCE_DEFECT,
             "reference_conflict",
         ),
+        pytest.param(
+            "tasktrove-arc_transductive",
+            archive("Solve.", {"expected_output": GRID}, setup=b'[environment.setup]\ncommand = "true"\n'),
+            ImportFailureKind.UNSUPPORTED,
+            "harbor_setup",
+            id="harbor-setup",
+        ),
+        pytest.param(
+            "tasktrove-arc_transductive",
+            archive(
+                "Solve.", {"expected_output": GRID}, setup=b'[environment.setup]\ncommand = "true"\n', link_config=True
+            ),
+            ImportFailureKind.UNSUPPORTED,
+            "unsupported_archive_links",
+            id="linked-harbor-setup",
+        ),
         (
             "tasktrove-arc_inductive",
             archive("Solve.", {"test_cases": [{"input": GRID, "output": [[1], [1, 2]]}]}),
@@ -113,14 +131,6 @@ def test_tasktrove_arc_rejects_rows_nvarc_cannot_score(name, row, kind, reason):
     result = convert_row(RECIPES[name], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
-
-
-def test_tasktrove_arc_refuses_declared_environment_setup():
-    row = archive("Solve.", {"expected_output": GRID}, setup=b'[environment.setup]\ncommand = "true"\n')
-    result = convert_row(RECIPES["tasktrove-arc_transductive"], row)
-    assert isinstance(result, ImportRejection)
-    assert result.kind == ImportFailureKind.UNSUPPORTED
-    assert "[environment.setup]" in result.detail
 
 
 def ultra_row(agent: str, **fields) -> RawRow:

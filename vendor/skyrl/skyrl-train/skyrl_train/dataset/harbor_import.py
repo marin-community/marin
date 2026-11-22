@@ -175,27 +175,31 @@ def restore_harbor_trial_task(task: TaskSpec, directory: Path, *, setup_budget: 
     for resource in task.resources.verifier:
         path = directory / resource.path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(resource_bytes(resource))
+        contents = resource_bytes(resource)
+        if path == directory / "task.toml":
+            contents = _trial_config_contents(contents, task, setup_budget)
+        path.write_bytes(contents)
         if resource.mode is not None:
             path.chmod(int(resource.mode, 8))
         if resource.mtime_ns is not None:
             os.utime(path, ns=(resource.mtime_ns, resource.mtime_ns))
 
-    config_path = directory / "task.toml"
-    contents = config_path.read_text()
-    setup = read_harbor_setup(tomllib.loads(contents), source=task.id)
+
+def _trial_config_contents(contents: bytes, task: TaskSpec, setup_budget: float) -> bytes:
+    text = contents.decode()
+    setup = read_harbor_setup(tomllib.loads(text), source=task.id)
     if setup is None:
-        return
-    if task.environment_requirements.setup_commands != (setup.command,):
-        raise ValueError(f"{task.id}: environment.setup.command must match the trial's setup_commands")
+        return contents
+    if task.environment_requirements.setup_commands.count(setup.command) != 1:
+        raise ValueError(f"{task.id}: environment.setup.command must occur once in the trial's setup_commands")
     if setup.timeout_sec is not None and setup.timeout_sec > setup_budget:
         raise ValueError(f"{task.id}: environment.setup.timeout_sec exceeds launch setup budget of {setup_budget}s")
     # Native Harbor receives its own configuration. The trial hook consumes the typed command.
-    config = tomlkit.parse(contents)
+    config = tomlkit.parse(text)
     environment = config["environment"]
     assert isinstance(environment, MutableMapping)
     del environment["setup"]
-    config_path.write_text(tomlkit.dumps(config))
+    return tomlkit.dumps(config).encode()
 
 
 def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
