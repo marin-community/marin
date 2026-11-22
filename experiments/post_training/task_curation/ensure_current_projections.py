@@ -130,6 +130,7 @@ class ProjectionWaivers(BaseModel):
     reason: Literal[
         "preview projection lag; declaration drift 0; ruling 2026-11-19",
         "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
+        "admitted; awaiting r39 serving (curriculum embeddings in progress); ruling 2026-11-22",
     ]
     source_ids: tuple[str, ...] = ()
     """Ruling 68: the exact declared source IDs the post-seal waiver covers; empty for the
