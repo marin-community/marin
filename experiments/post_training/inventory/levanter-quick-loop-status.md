@@ -381,6 +381,14 @@ must still prove that the resulting pool can serve the update and subsequent
 operations; eliminating this blocker alone does not qualify the full loop.
 No such run has been submitted.
 
+The candidate passes 13 focused real-process CPU cases, including rejection of
+the pinned allocator overrides before backend creation and one/two-process
+update/checkpoint continuation. Three schema round-trip checks, required lint
+and types, strict docs, and independent source review pass. The rendered
+Megatron control is unchanged; the native runtime configuration differs from
+smoke `.9` only by `preallocate: true`. These checks qualify the startup
+boundary and preserve local state semantics; they do not establish H100 fit.
+
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
 the outer deadline can expire slightly earlier because it includes dispatch

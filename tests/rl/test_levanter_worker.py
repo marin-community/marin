@@ -222,7 +222,12 @@ def test_native_child_backend_intent_overrides_inherited_coordinator_platform(re
     monkeypatch.setenv("JAX_PLATFORM_NAME", "cpu")
     monkeypatch.setenv("JAX_CUDA_VISIBLE_DEVICES", "7")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
-    environment = host_module._child_environment(sys.executable, 0.9, require_accelerator=require_accelerator)
+    monkeypatch.setenv("XLA_CLIENT_MEM_FRACTION", "0.1")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.setenv("TF_FORCE_UNIFIED_MEMORY", "true")
+    environment = host_module._child_environment(
+        sys.executable, 0.9, require_accelerator=require_accelerator, preallocate=True
+    )
     result = subprocess.run(
         [
             sys.executable,
@@ -230,6 +235,7 @@ def test_native_child_backend_intent_overrides_inherited_coordinator_platform(re
             """
 import json, os, sys
 import jax
+from jaxlib.xla_client import generate_pjrt_gpu_plugin_options
 from marin.rl.levanter_worker_runtime import _initialize_distributed
 try:
     count = jax.local_device_count()
@@ -244,6 +250,9 @@ else:
     receipt = {"initialized": True, "backend": backend}
 receipt["gpu_visibility"] = os.environ.get("CUDA_VISIBLE_DEVICES")
 receipt["jax_platforms"] = os.environ.get("JAX_PLATFORMS")
+options = generate_pjrt_gpu_plugin_options()
+receipt["allocation_policy"] = {key: options[key] for key in ("allocator", "memory_fraction", "preallocate")}
+receipt["unified_memory"] = os.environ.get("TF_FORCE_UNIFIED_MEMORY")
 print(json.dumps(receipt))
 """,
             str(require_accelerator).lower(),
@@ -257,6 +266,8 @@ print(json.dumps(receipt))
     receipt = json.loads(result.stdout)
     assert receipt["gpu_visibility"] == "0,1,2,3,4,5,6,7"
     assert receipt["jax_platforms"] == ("cuda,cpu" if require_accelerator else "cpu")
+    assert receipt["allocation_policy"] == {"allocator": "bfc", "memory_fraction": 0.9, "preallocate": True}
+    assert receipt["unified_memory"] == "false"
     if require_accelerator:
         if receipt["initialized"]:
             assert receipt["backend"] == "gpu"
@@ -264,6 +275,42 @@ print(json.dumps(receipt))
             assert "cuda" in receipt["error"].lower()
     else:
         assert receipt["initialized"] and receipt["backend"] == "cpu"
+
+
+@pytest.mark.parametrize(
+    "preallocate,flags,unified,expected",
+    [
+        (True, "--xla_gpu_command_buffer_update_mode=SKIP_TEMP", "false", "requires.*ALWAYS_UPDATE"),
+        (False, "--xla_gpu_command_buffer_update_mode SKIP_TEMP", "false", "requires.*ALWAYS_UPDATE"),
+        (True, "", "true", "requires disabled TF_FORCE_UNIFIED_MEMORY"),
+        (False, "", "invalid", "requires disabled TF_FORCE_UNIFIED_MEMORY"),
+        (True, "--xla_gpu_temp_buffer_use_separate_color=true", "false", "requires disabled.*separate_color"),
+        (False, "--xla_gpu_temp_buffer_use_separate_color true", "false", "requires disabled.*separate_color"),
+        (True, "--xla_gpu_temp_buffer_use_separate_color", "false", "requires disabled.*separate_color"),
+        (False, "--xla_gpu_temp_buffer_use_separate_color=invalid", "false", "requires disabled.*separate_color"),
+    ],
+)
+def test_native_allocation_overrides_reject_before_backend_or_model(preallocate, flags, unified, expected):
+    host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    environment = host._child_environment(sys.executable, 0.9, require_accelerator=False, preallocate=preallocate)
+    # If policy validation stops preceding initialization, this invalid backend
+    # produces a different error before any model can be read.
+    environment.update(JAX_PLATFORMS="allocation-policy-test-invalid-backend", TF_FORCE_UNIFIED_MEMORY=unified)
+    environment["XLA_FLAGS"] = environment.get("XLA_FLAGS", "") + " " + flags
+    child = LearnerProcess(sys.executable, environment=environment, timeout_seconds=30)
+    try:
+        with pytest.raises(RuntimeError, match=expected):
+            child.request(
+                "initialize",
+                {
+                    "runtime": {"preallocate": preallocate, "device_memory_fraction": 0.9},
+                    "distributed": {"num_processes": 1, "local_device_count": 1},
+                    "require_accelerator": False,
+                },
+            )
+        assert child.process.wait(timeout=5) != 0
+    finally:
+        child.close()
 
 
 def _hf_initializer(path):
@@ -321,6 +368,13 @@ def _same_request(children, method, payload):
 @contextmanager
 def _learner_processes(config, process_count, fast_bwd_override_rank=None):
     environment = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_CPU_COLLECTIVES_IMPLEMENTATION": "gloo"}
+    environment.pop("XLA_CLIENT_MEM_FRACTION", None)
+    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = "bfc"
+    environment["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(config["runtime"]["device_memory_fraction"])
+    environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = str(config["runtime"]["preallocate"]).lower()
+    environment["TF_FORCE_UNIFIED_MEMORY"] = "false"
+    if config["runtime"]["preallocate"]:
+        environment["XLA_FLAGS"] = environment.get("XLA_FLAGS", "") + " --xla_gpu_temp_buffer_use_separate_color=false"
     environment.pop("LEVANTER_CE_XLA_FAST_BWD", None)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -333,7 +387,11 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
             if config["runtime"].get("validate_checkpoint_roundtrip", False):
                 host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
                 child_environment = host._child_environment(
-                    sys.executable, 0.9, require_accelerator=False, compiler_diagnostics=True
+                    sys.executable,
+                    0.9,
+                    require_accelerator=False,
+                    compiler_diagnostics=True,
+                    preallocate=config["runtime"]["preallocate"],
                 )
                 child_environment["JAX_CPU_COLLECTIVES_IMPLEMENTATION"] = "gloo"
             if rank == fast_bwd_override_rank:
@@ -357,19 +415,29 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize(
-    "process_count,host_restart,projection_dtype,fast_bwd_override_rank,compiler_failure",
+    "process_count,host_restart,projection_dtype,fast_bwd_override_rank,compiler_failure,preallocate",
     [
-        pytest.param(1, False, "bfloat16", None, False, id="bf16-single"),
-        pytest.param(2, False, "bfloat16", None, False, marks=pytest.mark.multidevice, id="bf16-multihost"),
-        pytest.param(1, True, "bfloat16", None, False, id="bf16-host-restart"),
-        pytest.param(2, True, "bfloat16", None, False, marks=pytest.mark.multidevice, id="bf16-multihost-restart"),
-        pytest.param(1, False, "float32", None, False, id="default-fp32"),
-        pytest.param(4, False, "bfloat16", 3, False, marks=pytest.mark.multidevice, id="bf16-override-rejected"),
-        pytest.param(1, False, "bfloat16", None, True, id="compiler-evidence-failure"),
+        pytest.param(1, False, "bfloat16", None, False, False, id="bf16-single"),
+        pytest.param(2, False, "bfloat16", None, False, False, marks=pytest.mark.multidevice, id="bf16-multihost"),
+        pytest.param(1, True, "bfloat16", None, False, False, id="bf16-host-restart"),
+        pytest.param(
+            2, True, "bfloat16", None, False, False, marks=pytest.mark.multidevice, id="bf16-multihost-restart"
+        ),
+        pytest.param(1, False, "float32", None, False, False, id="default-fp32"),
+        pytest.param(4, False, "bfloat16", 3, False, False, marks=pytest.mark.multidevice, id="bf16-override-rejected"),
+        pytest.param(1, False, "bfloat16", None, True, False, id="compiler-evidence-failure"),
+        pytest.param(1, False, "bfloat16", None, False, True, id="preallocated-native-continuation"),
     ],
 )
 def test_native_learner_subprocess_updates_and_resumes_exactly(
-    tmp_path, process_count, host_restart, projection_dtype, fast_bwd_override_rank, compiler_failure, monkeypatch
+    tmp_path,
+    process_count,
+    host_restart,
+    projection_dtype,
+    fast_bwd_override_rank,
+    compiler_failure,
+    preallocate,
+    monkeypatch,
 ):
     host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker") if host_restart else None
     initializer = tmp_path / "initializer"
@@ -380,6 +448,8 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     batch_size = count * 2
     config = {
         "runtime": {
+            "preallocate": preallocate,
+            "device_memory_fraction": 0.9,
             "validate_checkpoint_roundtrip": host_restart or compiler_failure,
             "mesh_axes": {"replica_dcn": 1, "replica": 1, "data": count, "expert": 1, "model": 1, "context": 1},
             "checkpoint_dir": str(tmp_path),
@@ -437,6 +507,11 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     with _learner_processes(config, process_count, fast_bwd_override_rank) as (children, receipts, configs):
         assert all(row["global_devices"] == count and row["microbatches"] == 2 for row in receipts)
         assert all(row["backend"] == "cpu" and row["pid"] > 0 and row["global_model_parameters"] > 0 for row in receipts)
+        assert all(
+            row["allocation_policy"]
+            == {"allocator": "bfc", "memory_fraction": 0.9, "preallocate": preallocate, "unified_memory": False}
+            for row in receipts
+        )
         if fast_bwd_override_rank is not None:
             # Keep every parent alive until all four real children report the
             # collective rejection; FIRST_EXCEPTION teardown would hide stragglers.
@@ -515,6 +590,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                             "levanter_config": {
                                 "python_executable": sys.executable,
                                 "device_memory_fraction": 0.9,
+                                "preallocate": preallocate,
                                 "command_timeout_seconds": 60,
                                 "initialization_timeout_seconds": 60,
                                 "validate_checkpoint_roundtrip": True,

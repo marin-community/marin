@@ -140,6 +140,7 @@ trainer:
       validate_checkpoint_roundtrip: false
       coordinator_port: 29590
       device_memory_fraction: 0.90
+      preallocate: false
       projection_block_size: 1024
       projection_logits_dtype: float32
       attention_implementation: gpu_fa4_cute

@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import signal
 import sys
 import tempfile
@@ -30,6 +31,7 @@ import numpy as np
 import optax
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding, PartitionSpec
+from jaxlib import xla_client
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.distributed import DistributedConfig
@@ -173,6 +175,57 @@ def _projection_dtype(runtime: dict) -> jnp.dtype | None:
     return {"float32": None, "bfloat16": jnp.dtype("bfloat16")}[runtime["projection_logits_dtype"]]
 
 
+def _allocator_profile() -> dict:
+    if os.environ.get("TF_FORCE_UNIFIED_MEMORY", "false").lower() not in ("false", "0"):
+        raise ValueError("Native learner requires disabled TF_FORCE_UNIFIED_MEMORY to preserve its memory cap")
+    options = xla_client.generate_pjrt_gpu_plugin_options()
+    return {
+        "allocator": options["allocator"],
+        "memory_fraction": options.get("memory_fraction", 0.75),
+        "preallocate": options.get("preallocate", True),
+        "unified_memory": False,
+    }
+
+
+def _validate_allocator(config: dict) -> None:
+    flags = shlex.split(os.environ.get("XLA_FLAGS", ""))
+    for index, token in enumerate(flags):
+        name, separator, value = token.partition("=")
+        if name not in ("--xla_gpu_command_buffer_update_mode", "--xla_gpu_temp_buffer_use_separate_color"):
+            continue
+        if not separator:
+            value = flags[index + 1] if index + 1 < len(flags) else ""
+        if name == "--xla_gpu_command_buffer_update_mode":
+            # SKIP_TEMP makes pinned PJRT silently replace BFC with VMM.
+            if value != "ALWAYS_UPDATE":
+                raise ValueError("Native BFC learner requires xla_gpu_command_buffer_update_mode=ALWAYS_UPDATE")
+        elif value not in ("false", "0"):
+            # This otherwise installs an uncapped CUDA-async scratch allocator.
+            raise ValueError("Native BFC learner requires disabled xla_gpu_temp_buffer_use_separate_color")
+    runtime = config["runtime"]
+    expected = {
+        "allocator": "bfc",
+        "memory_fraction": runtime["device_memory_fraction"],
+        "preallocate": runtime["preallocate"],
+        "unified_memory": False,
+    }
+    if jax.config.jax_pjrt_client_create_options or _allocator_profile() != expected:
+        raise ValueError("Native learner PJRT allocator options differ from the configured allocation policy")
+
+
+def _allocator_limits() -> list[dict]:
+    rows = []
+    for device in jax.local_devices():
+        row: dict = {"device_id": device.id}
+        try:
+            stats = device.memory_stats()
+            row["bytes_limit"] = None if stats is None else stats.get("bytes_limit")
+        except Exception as error:
+            row["error_type"] = type(error).__name__
+        rows.append(row)
+    return rows
+
+
 def _create_trainer(config: dict) -> Trainer:
     distributed = config["distributed"]
     runtime = config["runtime"]
@@ -286,6 +339,7 @@ class NativePolicyRuntime:
         if self.trainer is not None:
             raise RuntimeError("Learner is already initialized")
         self.settings = config
+        _validate_allocator(config)
         if config["runtime"].get("validate_checkpoint_roundtrip", False):
             os.environ["LEVANTER_CE_DIAGNOSTICS"] = "1"
         else:
@@ -542,6 +596,10 @@ class NativePolicyRuntime:
                 "default_prng_impl": jax.config.jax_default_prng_impl,
             },
             "xla_flags": scientific_xla_flags(self.settings),
+            "allocation_policy": _allocator_profile(),
+            "allocator_bytes_limits": sorted(
+                {int(row["bytes_limit"]) for row in _allocator_limits() if row.get("bytes_limit") is not None}
+            ),
             "mesh": {
                 "axes": list(mesh.axis_names),
                 "shape": dict(mesh.shape),
@@ -753,6 +811,8 @@ class NativePolicyRuntime:
                 math.prod(value.shape) for value in jax.tree.leaves(self.state.model) if eqx.is_array(value)
             ),
             "source": self.source_identity,
+            "allocation_policy": _allocator_profile(),
+            "allocator_limits": _allocator_limits(),
         }
 
     def validate_model_change(self, payload: dict) -> dict:

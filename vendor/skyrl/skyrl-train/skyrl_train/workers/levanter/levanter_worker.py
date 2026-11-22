@@ -25,7 +25,8 @@ from skyrl_train.workers.levanter_batch import forward_payload, policy_payload, 
 
 
 def _child_environment(
-    python_executable: str, memory_fraction: float, *, require_accelerator: bool, compiler_diagnostics: bool = False
+    python_executable: str, memory_fraction: float, *, require_accelerator: bool, compiler_diagnostics: bool = False,
+    preallocate: bool = False,
 ) -> dict[str, str]:
     environment = dict(os.environ)
     for name in (
@@ -35,8 +36,11 @@ def _child_environment(
     ):
         environment.pop(name, None)
     environment["PATH"] = f"{Path(python_executable).parent}{os.pathsep}{os.defpath}"
-    environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = str(preallocate).lower()
+    environment.pop("XLA_CLIENT_MEM_FRACTION", None)
     environment["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(memory_fraction)
+    environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = "bfc"
+    environment["TF_FORCE_UNIFIED_MEMORY"] = "false"
     # CPU coordinator defaults must not select the learner backend. CUDA comes
     # first; the runtime verifies it before loading a model. CPU supports staging.
     environment["JAX_PLATFORMS"] = "cuda,cpu" if require_accelerator else "cpu"
@@ -133,6 +137,7 @@ class LevanterHostWorker:
             runtime.device_memory_fraction,
             require_accelerator=self.initialization_config["require_accelerator"],
             compiler_diagnostics=runtime.validate_checkpoint_roundtrip,
+            preallocate=runtime.preallocate,
         )
         if runtime.validate_checkpoint_roundtrip:
             self.initialization_config["compiler_dump_dir"] = shlex.split(environment["XLA_FLAGS"])[-3].split("=", 1)[1]

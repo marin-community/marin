@@ -539,6 +539,8 @@ def validate_levanter_cfg(cfg: DictConfig) -> None:
             raise ValueError(f"trainer.policy.levanter_config.{name} must be a positive integer")
     if not 0 < runtime.device_memory_fraction <= 1:
         raise ValueError("trainer.policy.levanter_config.device_memory_fraction must be in (0, 1]")
+    if not isinstance(runtime.preallocate, bool):
+        raise ValueError("trainer.policy.levanter_config.preallocate must be a boolean")
     if (
         not isinstance(runtime.coordinator_port, int)
         or isinstance(runtime.coordinator_port, bool)

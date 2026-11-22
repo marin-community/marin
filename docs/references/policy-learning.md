@@ -42,6 +42,12 @@ The learner overrides inherited CPU-coordinator JAX settings with
 `JAX_PLATFORMS=cuda,cpu`, retaining Ray's `CUDA_VISIBLE_DEVICES` assignment.
 CUDA must initialize successfully; the CPU backend supports checkpoint host
 staging. Bootstrap verifies the isolated CUDA backend before starting Ray.
+The quick-loop candidate enables BFC preallocation with the same `0.90`
+device-memory fraction. This addresses segmented pool growth before the compiled
+update without increasing the allocator limit. Native initialization receipts
+record the resolved allocator policy and available device-limit counters;
+successful updates and checkpoint continuation still require accelerator
+acceptance. The worker's general `preallocate` default remains false.
 Recovery checkpoints contain native learner state; terminal HF export is not
 implemented for this strategy.
 
