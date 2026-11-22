@@ -20,8 +20,10 @@ import haliax as hax
 import jax
 import jaxlib
 import numpy as np
+import tensorstore as ts
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.tensorstore_serialization import _create_ocdbt_spec
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from marin.rl.levanter_worker_runtime import NativePolicyRuntime, _payload_fingerprint
 from marin.rl.levanter_worker_runtime import main as worker_main
@@ -210,13 +212,109 @@ def _persist_arm(directory: Path, row: dict, stage: str) -> None:
     (directory.parent / f"lifecycle-{directory.name}.json").write_text(json.dumps(row, indent=2) + "\n")
 
 
+def _checkpoint_deviations(left: Path, right: Path) -> dict:
+    """Compare persisted states one leaf pair at a time, without an acceptance tolerance."""
+    manifest = json.loads((left / "manifest.json").read_text())
+    if manifest != json.loads((right / "manifest.json").read_text()):
+        raise RuntimeError("Replay checkpoint manifests differ")
+    rows = []
+    components = {}
+    for entry in manifest["arrays"]:
+        path = entry["path"]
+        a = ts.open(_create_ocdbt_spec(str(left), path), open=True).result().read().result()
+        b = ts.open(_create_ocdbt_spec(str(right), path), open=True).result().read().result()
+        if a.shape != b.shape or a.dtype != b.dtype:
+            raise RuntimeError(f"Replay checkpoint array schema differs: {path}")
+        finite_a, finite_b = np.isfinite(a), np.isfinite(b)
+        finite = finite_a & finite_b
+        delta = a[finite].astype(np.float64) - b[finite].astype(np.float64)
+        square_sum = float(np.sum(delta * delta))
+        maximum = float(np.max(np.abs(delta))) if delta.size else None
+        unequal = int(np.count_nonzero(a != b))
+        row = {
+            "path": path,
+            "shape": list(a.shape),
+            "dtype": str(a.dtype),
+            "elements": int(a.size),
+            "left_nonfinite": int(a.size - np.count_nonzero(finite_a)),
+            "right_nonfinite": int(b.size - np.count_nonzero(finite_b)),
+            "unequal": unequal,
+            "max_abs_finite": maximum,
+            "rms_finite": float(np.sqrt(square_sum / delta.size)) if delta.size else None,
+        }
+        rows.append(row)
+        component = components.setdefault(
+            path.split("/")[0],
+            {
+                "arrays": 0,
+                "elements": 0,
+                "left_nonfinite": 0,
+                "right_nonfinite": 0,
+                "unequal": 0,
+                "finite_pairs": 0,
+                "square_sum": 0.0,
+                "max_abs_finite": None,
+            },
+        )
+        component["arrays"] += 1
+        for name in ("elements", "left_nonfinite", "right_nonfinite", "unequal"):
+            component[name] += row[name]
+        component["finite_pairs"] += int(delta.size)
+        component["square_sum"] += square_sum
+        if maximum is not None:
+            component["max_abs_finite"] = max(component["max_abs_finite"] or 0.0, maximum)
+    for component in components.values():
+        squares = component.pop("square_sum")
+        count = component["finite_pairs"]
+        component["rms_finite"] = float(np.sqrt(squares / count)) if count else None
+    return {
+        "left": str(left),
+        "right": str(right),
+        "components": components,
+        "arrays": rows,
+        "exact_arrays": all(row["unequal"] == 0 for row in rows),
+        "tolerance": None,
+    }
+
+
+def _capture_control(child: LearnerProcess, payload: dict, directory: Path, row: dict) -> tuple:
+    """Preserve both control steps before any comparison can discard the evidence."""
+    row["control_updates"] = []
+    row["control_checkpoints"] = []
+    for step in (1, 2):
+        payload["global_step"] = step
+        row["control_updates"].append(child.request("train", payload))
+        saved = child.request(
+            "save_checkpoint", {"ckpt_dir": str(directory / f"control-step{step}"), "include_fingerprints": True}
+        )
+        row["control_checkpoints"].append(saved)
+        _persist_arm(directory, row, f"control_step{step}_captured")
+    scores = child.request("forward", payload)["output"]
+    np.save(directory / "control-scores.npy", scores, allow_pickle=False)
+    row["control_scores"] = str(directory / "control-scores.npy")
+    _persist_arm(directory, row, "control_scores_captured")
+    return row["control_updates"], row["control_checkpoints"][-1]["state_fingerprints"], scores
+
+
 def _arm(
-    python: str, environment: dict, config: dict, directory: Path, baseline: bool, sequence_length: int = 8
+    python: str,
+    environment: dict,
+    config: dict,
+    directory: Path,
+    baseline: bool,
+    sequence_length: int = 8,
+    capture_replay_states: bool = False,
 ) -> dict:
     directory.mkdir(parents=True)
     child = None
     exits = []
     row: dict = {"status": "running", "exits": exits}
+    if capture_replay_states:
+        row["replay_capture_scope"] = (
+            "Added checkpoint serialization and fingerprint synchronization may perturb GPU execution timing/layout. "
+            "The exact gate is unchanged; a captured pass cannot explain the earlier uncaptured mismatch. "
+            "Control forward remains after the second train."
+        )
     _persist_arm(directory, row, "initialize")
     try:
         child, identity = _start(python, environment, config, baseline)
@@ -257,11 +355,46 @@ def _arm(
         continued_scores = child.request("forward", payload)["output"]
         row["continued_state"] = continued_state
         row["updates"].append(continued)
+        if capture_replay_states:
+            row["continued_checkpoint"] = child.request(
+                "save_checkpoint", {"ckpt_dir": str(directory / "resumed-step2"), "include_fingerprints": True}
+            )
+            np.save(directory / "continued-scores.npy", continued_scores, allow_pickle=False)
+            row["continued_scores"] = str(directory / "continued-scores.npy")
         _persist_arm(directory, row, "restored_natural_exit")
         exits.append(_exit(child))
         child.close()
         _persist_arm(directory, row, "uninterrupted_control")
         child, _ = _start(python, environment, config, baseline)
+        if capture_replay_states:
+            updates, control_state, control_scores = _capture_control(child, payload, directory, row)
+            row["state_comparisons"] = {
+                "step1": _checkpoint_deviations(directory / "step1", directory / "control-step1"),
+                "step2": _checkpoint_deviations(directory / "resumed-step2", directory / "control-step2"),
+                "step1_fingerprints_exact": (
+                    saved["state_fingerprints"] == row["control_checkpoints"][0]["state_fingerprints"]
+                ),
+                "step2_fingerprints_exact": continued_state == control_state,
+                "scores_exact": bool(np.array_equal(continued_scores, control_scores)),
+            }
+            _persist_arm(directory, row, "control_comparison_captured")
+            # A failed exact comparison is still a failed qualification; natural
+            # process exit is recorded separately before reporting the mismatch.
+            exits.append(_exit(child))
+            comparisons = row["state_comparisons"]
+            if (
+                updates != [update1, continued]
+                or not comparisons["step1_fingerprints_exact"]
+                or not comparisons["step2_fingerprints_exact"]
+                or not comparisons["step1"]["exact_arrays"]
+                or not comparisons["step2"]["exact_arrays"]
+            ):
+                raise RuntimeError("Continued update or full state differs from uninterrupted control")
+            np.testing.assert_array_equal(control_scores, continued_scores)
+            row["continuation_exact"] = True
+            row["status"] = "passed"
+            _persist_arm(directory, row, "complete")
+            return row
         payload["global_step"] = 1
         if child.request("train", payload) != update1:
             raise RuntimeError("Fresh control first update differs")

@@ -40,6 +40,7 @@ from marin.rl.levanter_worker_runtime import (
     _validate_allocator,
 )
 
+from experiments.post_training.inventory.actual_attention_probe import capture_raw_case, replay_captures
 from experiments.post_training.inventory.learner_lifecycle_qualification import (
     _arm,
     _configuration,
@@ -81,6 +82,7 @@ def _source_hashes() -> dict[str, str]:
     root = Path(__file__).resolve().parents[3]
     files = (
         "experiments/post_training/inventory/native_gradient_diagnostics.py",
+        "experiments/post_training/inventory/actual_attention_probe.py",
         "experiments/post_training/inventory/learner_lifecycle_qualification.py",
         "lib/marin/src/marin/rl/levanter_worker_runtime.py",
         "lib/marin/src/marin/rl/levanter_worker_protocol.py",
@@ -267,6 +269,8 @@ def _run_child(args, case: str, initializer: Path, fa4_case: str | None = None) 
     ]
     if fa4_case is not None:
         command.extend(["--fa4-case", fa4_case])
+    if args.capture_replay_states:
+        command.append("--capture-replay-states")
     with (args.output_dir / (name + ".log")).open("wb") as log:
         try:
             process = subprocess.run(
@@ -301,15 +305,24 @@ def _suite(args) -> dict:
         "old_initializer": old_identity,
         "cases": {},
         "aligned_lifecycle_qualified": False,
+        "capture_replay_states": args.capture_replay_states,
+        "replay_capture_scope": (
+            "Added serialization/fingerprint synchronization can perturb GPU timing/layout; "
+            "exact acceptance remains unchanged, and a captured pass does not explain the uncaptured mismatch."
+            if args.capture_replay_states
+            else None
+        ),
     }
     result["source_hashes"] = _source_hashes()
     target = args.output_dir / "gradient-suite.json"
     for case, initializer in (
-        ("old-raw", args.old_initializer),
+        ("observed-raw" if args.capture_replay_states else "old-raw", args.old_initializer),
         ("fa4-direct", args.old_initializer),
         ("aligned-raw", aligned),
     ):
-        if case == "fa4-direct" and args.platform == "cpu":
+        if case == "fa4-direct" and args.capture_replay_states:
+            result["cases"][case] = {"status": "not_requested", "scope": "Prior direct cases already completed"}
+        elif case == "fa4-direct" and args.platform == "cpu":
             result["cases"][case] = {"status": "not_run_cpu", "scope": "No CPU replacement for FA4/CuTe"}
         elif case == "fa4-direct":
             cases = [_run_child(args, case, initializer, definition[0]) for definition in _FA4_CASES]
@@ -328,10 +341,28 @@ def _suite(args) -> dict:
             result["cases"][case] = _run_child(args, case, initializer)
         _write(target, result)
         print(json.dumps({"case": case, "status": result["cases"][case]["status"]}), flush=True)
+        if case == "observed-raw" and (args.output_dir / "captures" / "captures.json").exists():
+            result["cases"]["actual-replay"] = _run_child(args, "actual-replay", args.old_initializer)
+            _write(target, result)
+            print(
+                json.dumps({"case": "actual-replay", "status": result["cases"]["actual-replay"]["status"]}), flush=True
+            )
+        if case == "aligned-raw" and args.capture_replay_states:
+            result["cases"]["aligned-actual-replay"] = _run_child(args, "aligned-actual-replay", aligned)
+            _write(target, result)
+            print(
+                json.dumps(
+                    {"case": "aligned-actual-replay", "status": result["cases"]["aligned-actual-replay"]["status"]}
+                ),
+                flush=True,
+            )
     if not args.raw_only and result["cases"]["aligned-raw"]["status"] == "finite":
         config = _configuration(aligned, args.output_dir, args.platform, 8)
         arms = {}
-        for name, baseline in (("baseline", True), ("extension", False)):
+        requested_arms = (
+            (("extension", False),) if args.capture_replay_states else (("baseline", True), ("extension", False))
+        )
+        for name, baseline in requested_arms:
             arms[name] = _arm(
                 args.python_executable,
                 _environment(args.platform, args.python_executable),
@@ -339,12 +370,13 @@ def _suite(args) -> dict:
                 args.output_dir / "aligned-lifecycle" / name,
                 baseline,
                 sequence_length=128,
+                capture_replay_states=args.capture_replay_states,
             )
             result["aligned_lifecycle"] = arms
             _write(target, result)
         hashes = [arm.get("frozen_batch_sha256") for arm in arms.values()]
         result["aligned_lifecycle_qualified"] = (
-            all(arm["status"] == "passed" for arm in arms.values()) and hashes[0] is not None and hashes[0] == hashes[1]
+            all(arm["status"] == "passed" for arm in arms.values()) and hashes[0] is not None and len(set(hashes)) == 1
         )
     result["all_requested_cases_completed"] = all(
         row["status"] != "error"
@@ -373,9 +405,26 @@ def main() -> None:
     parser.add_argument("--old-initializer", type=Path, required=True)
     parser.add_argument("--old-initializer-sha256", required=True, help="Canonical five-file directory digest")
     parser.add_argument("--platform", choices=("gpu", "cpu"), default="gpu")
-    parser.add_argument("--case", choices=("suite", "old-raw", "aligned-raw", "fa4-direct"), default="suite")
+    parser.add_argument(
+        "--case",
+        choices=(
+            "suite",
+            "old-raw",
+            "aligned-raw",
+            "fa4-direct",
+            "observed-raw",
+            "actual-replay",
+            "aligned-actual-replay",
+        ),
+        default="suite",
+    )
     parser.add_argument("--case-initializer", type=Path)
     parser.add_argument("--fa4-case", choices=[definition[0] for definition in _FA4_CASES])
+    parser.add_argument(
+        "--capture-replay-states",
+        action="store_true",
+        help="Extension-only aligned replay with four checkpoint trees and exact per-leaf diagnostics",
+    )
     parser.add_argument(
         "--raw-only", action="store_true", help="Explicit local diagnostic-only run, no lifecycle acceptance"
     )
@@ -399,7 +448,31 @@ def main() -> None:
     numpy_policy = _numpy_allocation_policy(False)
     _validate_allocator({"runtime": {"allocator": "vmm", "preallocate": False, "device_memory_fraction": 0.9}})
     identity = _device_identity(args.platform)
-    if args.case == "fa4-direct":
+    if args.case in ("actual-replay", "aligned-actual-replay"):
+        source = args.output_dir / "aligned-observed" if args.case == "aligned-actual-replay" else args.output_dir
+        target = args.output_dir / (args.case + ".json")
+        result = replay_captures(
+            source / "captures",
+            target,
+            implementation="gpu_fa4_cute" if args.platform == "gpu" else "reference",
+        )
+        result.update(
+            source_hashes=_source_hashes(),
+            native_device_identity=identity,
+            allocation_policy=_allocator_profile(),
+            numpy_allocation_policy=numpy_policy,
+        )
+        _write(target, result)
+    elif args.case == "observed-raw":
+        if args.case_initializer is None:
+            parser.error("Observed raw diagnostic requires --case-initializer")
+        capture_raw_case(args.case_initializer, args.output_dir, args.platform)
+    elif args.case == "aligned-raw" and args.capture_replay_states:
+        if args.case_initializer is None:
+            parser.error("Observed aligned raw diagnostic requires --case-initializer")
+        result = capture_raw_case(args.case_initializer, args.output_dir / "aligned-observed", args.platform)
+        _write(args.output_dir / "aligned-raw.json", result)
+    elif args.case == "fa4-direct":
         name = "fa4-direct" if args.fa4_case is None else f"fa4-direct-{args.fa4_case}"
         target = args.output_dir / (name + ".json")
         result = run_fa4_probe(target, args.fa4_case)
