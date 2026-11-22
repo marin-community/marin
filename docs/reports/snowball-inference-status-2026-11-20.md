@@ -1118,6 +1118,14 @@ could be reused with the resident sliding-window KV. The run reached
 536.41 output tok/s with zero profiling errors.
 [Per-request cache attribution](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v49-prefix-attribution)
 
+On the same worker and with the same 80-context page allocation, raising
+the prompt-index limit from 128 to 512 reused 3.27 million versus 2.60
+million tokens in the second block of 128 warmup requests. The 256-request
+warmup elapsed 223.77 versus 241.96 s. The larger index was trimmed because
+the allocated KV pages filled. The first attempt lost its worker during
+profiling, after the completed warmup.
+[Expanded prefix index trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v51-retain-512-prompts)
+
 An experimental FIFO policy emitted the first tokens for a leading
 group of requests with at most 2,048 uncached tokens before prefilling
 the next longer suffix. It split 20 profiling batches and reached
@@ -1367,6 +1375,14 @@ All 392 output lengths paired with compiled vLLM matched. Native
 p90 TTFT was 1.78 s overall, versus 1.31 s for vLLM. The five
 primed serial medians were 10–12 ms above vLLM.
 [Shorter suffixes first](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v34-short-suffix-first)
+
+With 28 logical contexts, shorter suffixes first reached 575.27 output
+tok/s on another v6e-8 worker. Across 414 shared turns with the unsorted
+28-context run, median TTFT fell from 696 to 552 ms and p90 moved from
+1.60 to 1.63 s. Active decode was 52.18 versus 52.86 tok/s. All 392 output
+lengths shared with compiled vLLM matched and there were zero profiling
+errors.
+[28-context shorter-suffix trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v38-28-contexts-short-suffix-first)
 
 The published branch with 32 logical contexts, 2,880 sliding-window
 pages, four-step decode rounds, and the 256-token prefill bucket
