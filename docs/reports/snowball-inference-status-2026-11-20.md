@@ -454,6 +454,9 @@ mesh. Both engines enabled prefix caching.
 | [Native, 48 KV contexts and host-side completion](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v12-larger-kv) | 400 | 109,781 | 522.76 | 0.63 | 1.29 |
 | [Native, packed expert routing](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v13-packed-routing) | 403 | 110,891 | 528.05 | 0.67 | 1.33 |
 | [Native, 32 decode steps per device round](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v14-longer-rounds) | 412 | 114,335 | 544.45 | 0.99 | 1.94 |
+| [Native, 48 KV contexts and H100 attention split tuning](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v19-48-context-tuned) | 413 | 114,525 | 545.35 | 1.11 | 2.15 |
+| [Native, 56 KV contexts with bounded prefill scratch](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v20-bounded-prefill) | 415 | 114,820 | 546.76 | 0.85 | 1.45 |
+| [Native, two four-GPU replicas](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v21-bounded-replicas) | 421 | 117,409 | 559.09 | 0.48 | 0.96 |
 
 The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
 requests at the drain deadline. On 47 common turns, both engines emitted
@@ -547,6 +550,32 @@ raised throughput to 91.8% of vLLM. All 412 paired turns matched output
 lengths. Native active decode on those turns reached 49.44 tok/s, compared
 with 55.33 tok/s for vLLM. Overall p90 TTFT increased from 1.29 to 1.94 s.
 
+On one H100, using 64 key splits for full-context decode reduced attention
+time from 0.319 to 0.292 ms at 32 padded rows and from 0.544 to 0.511 ms at
+64 rows. The maximum absolute difference was below 5e-7. The 48-context
+run used this split and 40-step device rounds. Paired active decode reached
+55.61 tok/s for native and 55.35 tok/s for vLLM across 413 matching turns.
+The higher overall p90 TTFT limited aggregate throughput to 92.0% of vLLM.
+[Attention split benchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-h100-attention-splits-20261122-v1)
+
+The 52- and 56-context attempts hit memory limits during large prefill
+buckets. Bounding the separate expert projections' scratch rows and
+processing skewed routes in chunks let the 56-context configuration
+complete AgentX with 32-step rounds. It reached 92.2% of vLLM throughput
+and p90 TTFT was 1.453 s versus 1.443 s. All 415 paired turns matched
+output lengths. Paired active decode was 53.72 tok/s for native and
+55.36 tok/s for vLLM. Both runs reported zero profiling errors.
+[52-context memory limit](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v17-52-contexts)
+
+The two-replica trial ran one expert mesh on each group of four H100s.
+Each replica used 16 KV contexts, 16 decode steps per round, and up to
+32 decode rows. A local streaming proxy routed requests by a hash of the
+first user message to retain prefix affinity. The replicas reached
+94.3% of vLLM's aggregate throughput with 0.96 s p90 TTFT. Across 420
+paired turns, output lengths matched and active decode was 58.37 tok/s
+for native versus 55.72 tok/s for vLLM. Both runs reported zero profiling
+errors.
+
 ## AgentX at concurrency 128 on TPU
 
 The first native v5p-8 attempt with 16 full KV contexts reached decode
@@ -577,11 +606,14 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v5p-8, native EP4 with shared reservations and 12 KV contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v4-shared-pages) | 118 | 20,338 | 96.85 | 23,806 | 41,521 |
 | [v5p-8, native EP4 with compact attention metadata](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v5-compact-decode) | 139 | 23,367 | 106.21 | 23,908 | 34,497 |
 | [v5p-8, native EP4 with fused append through 32 rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v6-fused-decode) | 157 | 26,337 | 121.82 | 20,917 | 33,037 |
+| [v5p-8, native EP4 with 24 KV contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v7-24-contexts) | 304 | 75,891 | 361.38 | 1,698 | 4,856 |
 | [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
 | [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
 | [v6e-8, native EP8 with shared reservations and 16 decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v5-shared-pages) | 111 | 19,864 | 94.59 | 36,227 | 53,402 |
 | [v6e-8, native EP8 with compact attention metadata](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v6-compact-decode) | 145 | 29,477 | 133.99 | 31,722 | 40,447 |
+| [v6e-8, native EP8 with eight KV contexts and separate append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v7-eight-contexts) | 173 | 35,534 | 169.21 | 20,156 | 28,726 |
 | [v6e-8, native EP8 with fused append through 16 rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v8-fused-decode) | 171 | 37,727 | 179.65 | 25,885 | 38,854 |
+| [v6e-8, native EP8 with eight KV contexts and fused append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v9-fused-live-prefix) | 180 | 37,969 | 180.80 | 24,634 | 35,626 |
 
 The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
 v6e-8 baseline ran in `us-east1` with one disconnected request. Native
@@ -613,6 +645,10 @@ same four-context configuration. All 145 paired turns matched output
 lengths, with zero native profiling errors. Paired active decode was
 28.13 tok/s for native and 34.20 tok/s for vLLM.
 
+Eight KV contexts raised separate-append v6e throughput by 26.3% over
+four contexts. All 173 paired turns matched output lengths. Paired
+active decode was 16.44 tok/s for native and 33.10 tok/s for vLLM.
+
 On v5p, compact metadata raised AgentX throughput by 9.7% over the
 same 12-context configuration. All 139 paired turns matched output
 lengths, with zero profiling errors. Paired active decode was
@@ -621,6 +657,11 @@ lengths, with zero profiling errors. Paired active decode was
 Wider fused append raised v5p AgentX throughput by a further 14.7%.
 All 157 paired turns matched output lengths. Native paired active decode
 rose to 12.75 tok/s, against vLLM's 36.07 tok/s.
+
+With 24 KV contexts, v5p-8 throughput rose by 197%. The native run reused
+8.76 million prompt tokens across 192 admissions during the profiling
+window. All 304 paired turns matched output lengths and paired active
+decode reached 18.27 tok/s for native versus 33.27 tok/s for vLLM.
 
 On one v6e chip, fusing KV append at 16 padded rows cut full-context
 attention plus cache update from 0.727 to 0.520 ms and sliding-window
@@ -634,6 +675,12 @@ The v6e-8 fused run raised throughput by 34.1% over compact decode
 with four KV contexts. All 171 paired turns matched output lengths.
 Native paired active decode reached 35.70 tok/s, compared with vLLM's
 33.03 tok/s. The native run logged one reused prefix with 39,808 tokens.
+
+With eight KV contexts, fused append, and retention of live prefixes, v6e-8
+reused 168,192 prompt tokens across four admissions during profiling.
+Throughput reached 180.80 output tok/s. All 180 paired turns matched output
+lengths and paired active decode was 28.55 tok/s versus 32.49 tok/s.
+Both of the higher-capacity native TPU runs reported zero profiling errors.
 
 ### Serial raw prefill with the concurrency-128 server configurations
 

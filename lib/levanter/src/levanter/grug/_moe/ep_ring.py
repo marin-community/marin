@@ -25,6 +25,7 @@ from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug._moe.selected_gpu import selected_expert_mlp, supports_selected_matvec
 
 _SMALL_DECODE_ROUTE_CAPACITY = 256
+_MIN_CHUNKED_PREFILL_TOKENS = 512
 
 
 def _moe_mlp_ep_ring_local(
@@ -128,9 +129,7 @@ def _moe_mlp_ep_ring_local(
     else:
         dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile, megablox_output_tile=megablox_output_tile)
 
-    def compute(buffer_rows: int) -> jax.Array:
-        valid = jnp.arange(buffer_rows, dtype=jnp.int32) < accepted_total
-        _, local_idx = jax.lax.top_k(selection_key, buffer_rows)
+    def accumulate(local_idx, group_sizes, valid, output):
         token_local = jnp.floor_divide(local_idx, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
@@ -141,23 +140,54 @@ def _moe_mlp_ep_ring_local(
         with jax.named_scope("moe_up_down"):
             # Omit unused rows from the grouped dots and mask their unwritten results.
             active_rows = valid[:, None]
-            gate_out = jnp.where(active_rows, dot(x_dispatch, gate_or_packed, accepted_counts), 0)
+            gate_out = jnp.where(active_rows, dot(x_dispatch, gate_or_packed, group_sizes), 0)
             if up_weight is None:
                 gate_out = tree_checkpoint_name(gate_out, _CHECKPOINT_EXPERT_HIDDEN)
                 gate, up = jnp.split(gate_out, [moe_w2_local.shape[1]], axis=-1)
             else:
                 gate = gate_out
-                up = jnp.where(active_rows, dot(x_dispatch, up_weight, accepted_counts), 0)
-            out_dispatch = jnp.where(active_rows, dot(activation_fn(gate) * up, moe_w2_local, accepted_counts), 0)
+                up = jnp.where(active_rows, dot(x_dispatch, up_weight, group_sizes), 0)
+            out_dispatch = jnp.where(active_rows, dot(activation_fn(gate) * up, moe_w2_local, group_sizes), 0)
             out_dispatch = tree_checkpoint_name(out_dispatch, _CHECKPOINT_DISPATCH_OUTPUT)
 
         with jax.named_scope("scatter"):
-            return jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+            destinations = jnp.where(valid, token_local, tokens)
+            return output.at[destinations].add(out_dispatch * weight_dispatch[:, None], mode="drop")
 
-    # A TPU shard normally needs no more than twice its even share of routes.
-    # Keep the full capacity for skewed routing. Communication stays outside the branch.
+    def compute(buffer_rows: int) -> jax.Array:
+        _, local_idx = jax.lax.top_k(selection_key, buffer_rows)
+        valid = jnp.arange(buffer_rows, dtype=jnp.int32) < accepted_total
+        return accumulate(local_idx, accepted_counts, valid, jnp.zeros_like(x_global))
+
+    def compute_in_chunks(buffer_rows: int) -> jax.Array:
+        _, local_idx = jax.lax.top_k(selection_key, physical_capacity)
+        num_chunks = math.ceil(physical_capacity / buffer_rows)
+        local_idx = jnp.pad(local_idx, (0, num_chunks * buffer_rows - physical_capacity))
+        ends = jnp.cumsum(accepted_counts)
+        starts = ends - accepted_counts
+        rows = jnp.arange(buffer_rows, dtype=jnp.int32)
+
+        def process_chunk(chunk, output):
+            offset = chunk * buffer_rows
+
+            def process():
+                indices = jax.lax.dynamic_slice_in_dim(local_idx, offset, buffer_rows)
+                group_sizes = jnp.maximum(0, jnp.minimum(ends, offset + buffer_rows) - jnp.maximum(starts, offset))
+                return accumulate(indices, group_sizes, offset + rows < accepted_total, output)
+
+            return jax.lax.cond(offset < accepted_total, process, lambda: output)
+
+        return jax.lax.fori_loop(0, num_chunks, process_chunk, jnp.zeros_like(x_global))
+
+    # Bound serving scratch at twice the even share, including on skewed routes.
     balanced_capacity = max(local_experts, 2 * assignments // ep_size)
-    if jax.default_backend() == "tpu" and balanced_capacity < physical_capacity:
+    if balanced_capacity < physical_capacity and up_weight is not None and tokens >= _MIN_CHUNKED_PREFILL_TOKENS:
+        out_global = jax.lax.cond(
+            accepted_total <= balanced_capacity,
+            lambda: compute(balanced_capacity),
+            lambda: compute_in_chunks(balanced_capacity),
+        )
+    elif jax.default_backend() == "tpu" and balanced_capacity < physical_capacity:
         out_global = jax.lax.cond(
             accepted_total <= balanced_capacity, lambda: compute(balanced_capacity), lambda: compute(physical_capacity)
         )

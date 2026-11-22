@@ -34,6 +34,7 @@ _GPU_PAGED_QUERY_LIMIT = 128
 _GPU_PACKED_DECODE_SPLITS = 16
 _GPU_FULL_DECODE_SPLITS = 128
 _GPU_WINDOWED_DECODE_SPLITS = 16
+_H100_PACKED_FULL_DECODE_SPLITS = 64
 
 
 def ragged_paged_attention(
@@ -267,6 +268,8 @@ def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
         max_splits = _GPU_FULL_DECODE_SPLITS if sliding_window is None else _GPU_WINDOWED_DECODE_SPLITS
         if q.shape[0] > _GPU_PACKED_DECODE_SPLITS:
             max_splits = _GPU_PACKED_DECODE_SPLITS
+            if sliding_window is None and q.shape[0] in (32, 64) and "H100" in jax.devices()[0].device_kind:
+                max_splits = _H100_PACKED_FULL_DECODE_SPLITS
         return gpu_paged_attention(
             q,
             kv_pages,

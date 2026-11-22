@@ -131,6 +131,7 @@ def _triton_ragged_dot_kernel(
     @pl.when(start_m < hi)
     def _compute():
         span_m = pl.ds(start_m, block_m)
+        row_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
         start_n = pl.program_id(1) * out_ref.shape[1]
         acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
         k = a_ref.shape[1]
@@ -140,10 +141,10 @@ def _triton_ragged_dot_kernel(
             span_k = pl.ds(start_k, block_k)
             if k % block_k:
                 contraction_mask = start_k + jnp.arange(block_k) < k
-                a = plgpu.load(a_ref.at[span_m, span_k], mask=contraction_mask[None, :], other=0.0)
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=row_mask & contraction_mask[None, :], other=0.0)
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])], mask=contraction_mask[:, None], other=0.0)
             else:
-                a = plgpu.load(a_ref.at[span_m, span_k])
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=row_mask, other=0.0)
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
             return acc + pl.dot(a.astype(dtype), b.astype(dtype))
@@ -151,7 +152,7 @@ def _triton_ragged_dot_kernel(
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
         # Tokamax's BlockRef masks logical output edges; raw Pallas refs do not.
-        store_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
+        store_mask = row_mask
         if n % out_ref.shape[1]:
             store_mask &= (start_n + jnp.arange(out_ref.shape[1]) < n)[None, :]
         plgpu.store(

@@ -47,6 +47,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _TransportBufferSite,
     _unpermute_from_global_expert,
 )
+from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -65,6 +66,47 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _BF16_MOE_RELATIVE_TOLERANCE = 0.02
 _FP32_MOE_RELATIVE_TOLERANCE = 1e-4
+
+
+@pytest.mark.skipif(jax.device_count() < 4, reason="Requires at least four expert shards")
+def test_separate_ring_prefill_preserves_skewed_routes_across_dispatch_chunks():
+    rng = np.random.default_rng(159)
+    tokens, experts, width, hidden = 512, 8, 16, 8
+    x = rng.normal(size=(tokens, width)).astype(np.float32)
+    gate = rng.normal(size=(experts, width, hidden)).astype(np.float32) * 0.1
+    up = rng.normal(size=gate.shape).astype(np.float32) * 0.1
+    down = rng.normal(size=(experts, hidden, width)).astype(np.float32) * 0.1
+    routes = np.tile(np.array([0, 1], np.int32), (tokens, 1))
+    routes[:60, 0] = 2
+    weights = rng.uniform(0, 1, size=routes.shape).astype(np.float32)
+    valid = np.arange(tokens) < tokens - 13
+
+    mesh = Mesh(np.array(jax.devices()[:4]), ("expert",), axis_types=(AxisType.Explicit,))
+    spec = P("expert")
+    sharding = NamedSharding(mesh, spec)
+    run = jax.jit(
+        jax.shard_map(
+            functools.partial(
+                _moe_mlp_ep_ring_local,
+                activation_fn=jax.nn.silu,
+                num_experts=experts,
+                capacity_factor=4.0,
+                token_sharding_axes=("expert",),
+            ),
+            mesh=mesh,
+            in_specs=(spec,) * 7,
+            out_specs=(spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
+            check_vma=False,
+        )
+    )
+    actual, drops = run(*(jax.device_put(value, sharding) for value in (x, routes, weights, valid, gate, down, up)))
+    assert int(drops.receiver_dropped) == int(drops.sender_dropped) == 0
+
+    gate_values = np.einsum("td,tkdi->tki", x, gate[routes])
+    hidden_values = (gate_values / (1 + np.exp(-gate_values))) * np.einsum("td,tkdi->tki", x, up[routes])
+    routed = np.einsum("tki,tkid->tkd", hidden_values, down[routes])
+    expected = np.sum(routed * weights[..., None], axis=1) * valid[:, None]
+    np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
 
 
 def _make_dense_mesh() -> Mesh:
