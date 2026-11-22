@@ -104,8 +104,8 @@ spec; this release restores the image each author declared, checked against the 
 task. A task that depends on the image's contents (system packages, Python minor version, preinstalled
 tools) can therefore behave differently here than in its recorded trials.
 
-The tasks have not been re-executed through the Atlas rollout path or measured for Daytona snapshot
-identity.
+These historical campaign measurements do not prove Atlas executability. The corrected retained
+population has separate Atlas qualification below.
 
 ## Known issues
 
@@ -139,6 +139,59 @@ The third adds the OpenMDW 1.1 license and omits the optional `integrity_contrac
 unset, so rows also load with TaskCompendium versions that predate it. The fourth (converter version
 `2026.11.21.1`) re-roots the workspace resources described under Known issues; every other field of
 every row is unchanged. The fifth (`2026.11.21.2`) preserves each task's authored golden control as
-private oracle resources on 1,024 tasks: `solution/solve.sh` rewrites the control's workspace files at
+private oracle resources on 1,030 tasks: `solution/solve.sh` rewrites the control's workspace files at
 their authored locations, and `solution/answer.txt` carries its reply where the grader reads the reply.
 The oracle role is private, so an agent never sees the answer; no other field changes.
+
+
+## Atlas qualification, 2026-11-22
+
+The corrected source is
+`open-athena/forge-main-taskcompendium-20261117@2f1155cb0278fbb3dd4ee5b0685ae68800d2a143`.
+It contains 1,030 original-oracle tasks and 2,970 tasks without an oracle. The private retained
+population is
+`open-athena/forge-main-atlas-20261122-v1@f5766a0e3da2320d30af7c5d6c245f1f1fa711d5`,
+converter version `2026.11.22.1`. Its `tasks.parquet` has canonical `task_spec` and `runtime` columns.
+Shape detection identifies all 3,577 rows as TaskSpec.
+
+| Retention | Tasks |
+| --- | --- |
+| Qualified original oracle, with a bound non-passing NoP where required | 607 |
+| No oracle, retained under the static policy; executability unmeasured | 2,970 |
+| **Retained** | **3,577** |
+| **Archived exclusions** | **423** |
+
+| Primary exclusion reason | Tasks |
+| --- | --- |
+| Unsupported ShellSim backend contract | 352 |
+| Oracle failed | 59 |
+| Calibration infrastructure failure, pending | 7 |
+| Calibration verifier timeout | 1 |
+| Negative control pending | 3 |
+| Shared executor required | 1 |
+
+All 4,000 source rows are accounted for. Infrastructure failures remain pending. Static retention
+supplies no fabricated execution pass. The retained population has a fresh actor and integrity
+census, matched grading environments on all 3,577 rows, zero within-source duplicates, and zero
+lexical contamination against the shared evaluation Bloom filter. Its three highest overlap
+candidates were reviewed as distinct sources.
+
+The complete source ledger and archived exclusions are under
+`s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/static-retention-v1/`
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Fingest-b%2Fforge-main%2F2026.11.21.2%2Fstatic-retention-v1%2F)).
+The selected-pin measurements are under the sibling `selected-qualification-v3/`,
+`selected-final-evidence-v2/`, and `selected-overlap-v1/` prefixes.
+
+
+The frozen seed-zero SAMPLE panel has 100 conclusive reviews, zero unavailable observations,
+and zero uncertain observations under the pinned V4 reviewer. Its Result is GOOD with one recorded
+finding. An independent Decimal audit of that finding counts eight events outside the window,
+including two separate events at 15.50, and agrees with the task's grader. The reviewer omitted
+one repeated event. The original review stays unchanged; the audit records the false positive.
+
+The immutable SAMPLE receipt is
+`s3://marin-us-east-08a/marin/rl-data/atlas/forge-main/2026.11.22.1/sample-qc-v5/receipt.json`
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Fmarin%2Frl-data%2Fatlas%2Fforge-main%2F2026.11.22.1%2Fsample-qc-v5%2Freceipt.json)).
+The audit is
+`s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/selected-qc-audit-v1/arithmetic.json`
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Fingest-b%2Fforge-main%2F2026.11.21.2%2Fselected-qc-audit-v1%2Farithmetic.json)).
