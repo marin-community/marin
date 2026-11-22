@@ -360,6 +360,34 @@ updates, exact fresh restore and byte-identical resumed continuation with
 the same delay and deadline.
 [Readiness retry coordinator][iris-smoke-readiness] · [Frozen source and timed reproducer][h100-readiness-handoff]
 
+#### Read only the HF weight ranges a learner host needs
+
+The frozen Levanter smoke streams roughly 125 GiB of BF16 payload across
+all 39 Hugging Face safetensors files on each learner host, then places its
+addressable tensor slices. Levanter previously prototyped direct GCS reads
+per FSDP slice. The requests were small and numerous, so the merged loader
+switched to large contiguous reads on each host.
+[Original slice reader][original-hf-slice-reader] · [Loader history][hf-loader-history]
+
+SkyRL's Megatron loader already coalesces direct reads for rank-owned HF
+tensors and first-axis expert slices. Its Snowball comparison reduced
+policy-worker startup from 209.9 s to 75.3 s versus per-tensor requests.
+Prototype that range planning for the Levanter mesh. Start with HF tensors
+whose addressable slices map to contiguous ranges, and retain coalesced
+whole-tensor reads where the mesh would otherwise generate many tiny
+requests. Compare object bytes and GET counts per host, cold time to
+learner readiness, and bitwise equality of the loaded model against the
+smoke loader. Use the same pinned BF16 export for both readers.
+[SkyRL range prefetch][skyrl-hf-prefetch] · [Pinned export record][pinned-hf-export]
+
+A regional native checkpoint is also an option for repeated cold starts.
+Convert the pinned export, including its finalized router biases, to a
+model-only Levanter checkpoint. Verify the source hashes and the FP32
+loaded weights against the direct HF initializer. The native TensorStore
+reader loads addressable slices and can elect one reader per replicated
+shard. Snowball supports model-only restore with fresh Adam state.
+[Converter][hf-to-native-converter] · [Native shard reader][native-shard-reader] · [Model-only restore][model-only-restore]
+
 The prior handoffs preserve the `2026.11.20.9` and `2026.11.20.8` source,
 along with the held serving comparison. The restored serving plans reproduce
 the original artifact roots with a repository-local Git tree abbreviation.
@@ -1056,6 +1084,13 @@ arms. [Prior timing comparison][timing]
 [h100-optimizer-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.11%2Fh100-pinned-optimizer-retry.tar.zst
 [h100-readiness-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.11%2Fobserved-failure.json
 [h100-readiness-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.12%2Fh100-readiness-retry.tar.zst
+[original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
+[hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
+[skyrl-hf-prefetch]: https://github.com/marin-community/marin/pull/10662
+[native-shard-reader]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/levanter/src/levanter/tensorstore_serialization.py#L988-L1024
+[hf-to-native-converter]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/marin/src/marin/experiment/checkpoints.py#L125
+[model-only-restore]: https://github.com/marin-community/marin/pull/9475
+[pinned-hf-export]: https://huggingface.co/open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21/blob/fe666478454e79fe6027a0bab0388d9abd68f51a/export_complete.json
 [frozen-validation-panel]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Ftask-selection%2Fsnowball-100k%2F2026.11.04%2Fvalidation.parquet
 [frozen-receiver-numbering]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/vendor/skyrl/skyrl-train/skyrl_train/weight_sync/expert_block/schedule.py#L117-L118
 [snowball-status]: https://github.com/marin-community/marin/blob/5992abd0529d81bb90356e97bab3a8ac498daf68/docs/reports/snowball-inference-status-2026-11-20.md
