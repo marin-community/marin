@@ -67,6 +67,14 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
+from experiments.grug.fast_track.sampled_softmax import (
+    SAMPLE_BLOCK,
+    batch_shortlist,
+    debiased_loss,
+    sampled_positions,
+    shortlist_loss,
+    shortlist_positions,
+)
 from experiments.grug.fast_track.spelling_bytes import BYTE_POSITIONS, SpellingCase, spelling_tables
 from experiments.grug.fast_track.spelling_ngrams import ngram_pairs, ngram_tables
 from experiments.grug.moe.kda import chunk_kda, kda_fused
@@ -548,8 +556,26 @@ class GrugModelConfig:
     token ids before the train step's ``value_and_grad``. Its zero-initialised ``w`` ``[D, 2]``, ``b`` ``[2]`` and
     ``o`` are on Adam without decay. Excludes ``cplm_plus``, ``lm_head_bilinear``, ``pointer_mixture`` and
     ``full_bandwidth_passes``."""
+    sampled_softmax_shortlist_frac: float = 0.0
+    """Train the lm_head on a debiased sampled softmax (``sampled_softmax.py``): every position scores the loss over
+    the batch's most frequent labels (this fraction of the vocabulary) plus its own target, and one position per 16
+    adds its full-vocabulary loss minus that, divided by its sampling probability, so the training loss and its
+    gradient equal the full ones in expectation (z-loss included). Evaluation scores the full vocabulary. 0.0: off.
+    Excludes ``cplm_plus``, ``pointer_mixture``, ``ngram_cache_mixture`` and ``logit_soft_cap``."""
 
     def __post_init__(self) -> None:
+        if self.sampled_softmax_shortlist_frac and (
+            not 0 < self.sampled_softmax_shortlist_size < self.vocab_size
+            or self.cplm_plus
+            or self.pointer_mixture
+            or self.ngram_cache_mixture
+            or self.logit_soft_cap is not None
+        ):
+            raise ValueError(
+                "sampled_softmax_shortlist_frac must leave a shortlist in (0, vocab_size), and excludes cplm_plus, "
+                "pointer_mixture, "
+                "ngram_cache_mixture and logit_soft_cap"
+            )
         if self.full_bandwidth_passes and (self.full_bandwidth_passes < 2 or self.cplm_plus or self.pointer_mixture):
             raise ValueError("full_bandwidth_passes must be 0 or >= 2, and excludes cplm_plus and pointer_mixture")
         if self.lm_head_value_embeds and (
@@ -632,6 +658,11 @@ class GrugModelConfig:
     def expert_in_dim(self) -> int:
         """Width the routed experts read and write: the MoE latent, or the hidden dim without one."""
         return self.latent_dim if self.latent_dim is not None else self.hidden_dim
+
+    @property
+    def sampled_softmax_shortlist_size(self) -> int:
+        """Rows of the ``sampled_softmax_shortlist_frac`` shortlist (0 when off)."""
+        return round(self.sampled_softmax_shortlist_frac * self.vocab_size)
 
     @property
     def head_bilinear_dim(self) -> int:
@@ -2971,6 +3002,10 @@ class Transformer(eqx.Module):
             cross_entropy_loss, copy_metrics = self._ngram_cache_mixture_loss(
                 head_in, labels, counts, loss_weight, reduction, logsumexp_weight, loss_dtype
             )
+        elif self.config.sampled_softmax_shortlist_frac and train_terms:
+            cross_entropy_loss, copy_metrics = self._sampled_softmax_loss(
+                head_in, token_ids, labels, loss_weight, reduction, logsumexp_weight, loss_dtype
+            )
         else:
             cross_entropy_loss = self._vocab_cross_entropy(
                 head_in, labels, loss_weight, reduction, logsumexp_weight, loss_dtype
@@ -3060,6 +3095,68 @@ class Transformer(eqx.Module):
             block_sizes=_CE_BLOCK_SIZES,
             logit_soft_cap=self.config.logit_soft_cap,
         )
+
+    def _sampled_softmax_loss(
+        self,
+        head_in: Float[Array, "B S E"],
+        token_ids: Int[Array, "B S"],
+        labels: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """``sampled_softmax_shortlist_frac``: the debiased sampled-softmax estimate of the mean vocabulary cross-entropy
+        (with the z-loss when ``logsumexp_weight`` is set). Also returns its logging metrics."""
+        if reduction != "mean":
+            raise ValueError("sampled_softmax_shortlist_frac estimates the mean training loss; use reduction='mean'")
+        cfg = self.config
+        shortlist = jax.lax.stop_gradient(
+            batch_shortlist(labels, loss_weight, cfg.vocab_size, cfg.sampled_softmax_shortlist_size)
+        )
+        columns = shortlist_positions(shortlist, labels, cfg.vocab_size, _BATCH_AXES)
+        in_shortlist = columns < shortlist.shape[0]
+        head = reshard(self.output_proj, P(None, None))
+        shortlist_head = jnp.take(head, shortlist, axis=1)
+        shortlist_ce = fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            shortlist_head,
+            jnp.where(in_shortlist, columns, 0),
+            reduction="none",
+            dtype=jnp.float32,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+        )
+        target_rows = _embedding_gather(head.T, labels)
+        target_logit = jnp.einsum("bse,bse->bs", head_in, target_rows, preferred_element_type=jnp.float32)
+        first_logit = jnp.einsum("bse,e->bs", head_in, shortlist_head[:, 0], preferred_element_type=jnp.float32)
+        pivot_logit = jnp.where(in_shortlist, target_logit, first_logit)
+        short = shortlist_loss(shortlist_ce, pivot_logit, target_logit, in_shortlist, logsumexp_weight)
+
+        positions, inverse_probability = sampled_positions(token_ids, SAMPLE_BLOCK)
+        positions = reshard(positions, P(_BATCH_AXES, None))
+        full = fused_linear_softmax_cross_entropy_loss(
+            jnp.take_along_axis(head_in, positions[..., None], axis=1),
+            self.output_proj,
+            jnp.take_along_axis(labels, positions, axis=1),
+            reduction="none",
+            logsumexp_weight=logsumexp_weight,
+            dtype=jnp.float32,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+        )
+        loss, gap = debiased_loss(short, full, positions, inverse_probability, loss_weight)
+        weight = loss_weight.astype(jnp.float32)
+        count = jnp.maximum(jnp.sum(weight), 1.0)
+        sampled_weight = jnp.take_along_axis(weight, positions, axis=1)
+        metrics = {
+            "train/aux/sampled_softmax/shortlist_loss": jax.lax.stop_gradient(jnp.sum(weight * short) / count),
+            "train/aux/sampled_softmax/label_coverage": jnp.sum(weight * in_shortlist) / count,
+            "train/aux/sampled_softmax/full_minus_shortlist": jax.lax.stop_gradient(
+                jnp.sum(sampled_weight * gap) / jnp.maximum(jnp.sum(sampled_weight), 1.0)
+            ),
+        }
+        return loss.astype(loss_dtype), metrics
 
     def _copy_mixture_loss(
         self,
