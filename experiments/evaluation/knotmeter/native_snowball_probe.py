@@ -13,6 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -22,7 +23,13 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import (
+    SnowballConfig,
+    SnowballLMHeadModel,
+    snowball_block_from_state_dict,
+    snowball_embeddings_from_state_dict,
+    snowball_final_from_state_dict,
+)
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
@@ -91,6 +98,31 @@ def _profile_prefill(engine: InferenceEngine, output: Path) -> None:
             engine.generate([_request(prompt, 1)])
 
 
+def _convert_layers(
+    template: SnowballLMHeadModel, state_dict: dict[str, jax.Array], prefix: str | None
+) -> SnowballLMHeadModel:
+    """Convert a resident HF state dict one layer at a time, releasing the inputs."""
+    layer_prefix = f"{prefix}.model.layers." if prefix else "model.layers."
+    weights_by_layer: list[dict[str, jax.Array]] = [{} for _ in template.transformer.blocks]
+    for name in tuple(state_dict):
+        if name.startswith(layer_prefix):
+            index, _, suffix = name.removeprefix(layer_prefix).partition(".")
+            weights_by_layer[int(index)][f"{layer_prefix}0.{suffix}"] = state_dict.pop(name)
+
+    transformer = eqx.filter_jit(snowball_embeddings_from_state_dict)(template.transformer, state_dict, prefix)
+    transformer = eqx.filter_jit(snowball_final_from_state_dict)(transformer, state_dict, prefix)
+    jax.block_until_ready(transformer)
+    state_dict.clear()
+
+    convert_block = eqx.filter_jit(snowball_block_from_state_dict)
+    blocks = []
+    for block, weights in zip(transformer.blocks, weights_by_layer, strict=True):
+        blocks.append(jax.block_until_ready(convert_block(block, weights, 0, prefix)))
+        weights.clear()
+    transformer = eqx.tree_at(lambda value: value.blocks, transformer, tuple(blocks))
+    return eqx.tree_at(lambda model: model.transformer, template, transformer)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
@@ -99,6 +131,7 @@ def main() -> None:
     benchmark.add_argument("--prefill-only", action="store_true")
     parser.add_argument("--measure-prefill", action="store_true", help="Also measure prefill after AgentX")
     parser.add_argument("--chips", type=int, choices=(4, 8), default=4)
+    parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
@@ -106,6 +139,7 @@ def main() -> None:
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
     parser.add_argument("--kv-cache-contexts", type=int, default=1)
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
+    parser.add_argument("--max-unrolled-prefill-tokens", type=int)
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt", "recent_prompts"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
     parser.add_argument(
@@ -158,15 +192,32 @@ def main() -> None:
             inference_kv_sharding=args.kv_sharding,
             inference_kv_append=args.kv_append,
         )
+        if args.max_unrolled_prefill_tokens is not None:
+            model_config = dataclasses.replace(
+                model_config, inference_max_unrolled_prefill_tokens=args.max_unrolled_prefill_tokens
+            )
         tokenizer = load_tokenizer(series["tokenizer"], revision=series["tokenizer_revision"])
         with trainer.use_device_mesh():
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=args.weights,
-                config=model_config,
-                dtype=trainer.mp.compute_dtype,
-                axis_mapping=trainer.parameter_axis_mapping,
-            )
+            if args.layerwise_load:
+                dtype = trainer.mp.compute_dtype
+                state_dict = converter.load_state_dict(args.weights, dtype)
+                prefix = converter.ignore_prefix
+                if prefix and not any(name.startswith(f"{prefix}.") for name in state_dict):
+                    prefix = None
+                vocab = converter.Vocab.resize(model_config.vocab_size)
+                template = eqx.filter_eval_shape(
+                    SnowballLMHeadModel.init, vocab, model_config, key=jax.random.PRNGKey(0)
+                )
+                with hax.axis_mapping(trainer.parameter_axis_mapping):
+                    model = _convert_layers(template, state_dict, prefix)
+            else:
+                model = converter.load_pretrained(
+                    model_config.model_type,
+                    ref=args.weights,
+                    config=model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                )
             jax.block_until_ready(model)
             load_seconds = time.monotonic() - started
             logger.info("Loaded Snowball in %.1f seconds", load_seconds)
@@ -195,8 +246,10 @@ def main() -> None:
             "kv_sharding": args.kv_sharding,
             "kv_append": args.kv_append,
             "prefill_buckets": service.prefill_bucket_sizes,
+            "max_unrolled_prefill_tokens": model_config.inference_max_unrolled_prefill_tokens,
             "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,
+            "layerwise_load": args.layerwise_load,
             "command": command,
         }
         try:

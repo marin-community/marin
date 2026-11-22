@@ -111,7 +111,6 @@ SnowballQKRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantR
 SnowballSharedAttentionImplementation: TypeAlias = Literal["native", "fixed_schedule"]
 
 _FIXED_SCHEDULE_BLOCK_SIZE = 128
-_MAX_UNROLLED_PREFILL_TOKENS = 512
 
 
 class SnowballRouteCaptureBatch(NamedTuple):
@@ -490,6 +489,7 @@ class SnowballConfig(HFCompatConfig):
     attention_implementation: Optional[GrugAttentionImplementation] = None
     inference_attention_implementation: PagedAttentionImplementation | None = None
     inference_decode_implementation: Literal["scan", "unrolled", "unrolled_split_cache"] = "scan"
+    inference_max_unrolled_prefill_tokens: int = 512
     inference_expert_implementation: SnowballDecodeExpertImplementation = "grouped"
     inference_kv_sharding: Literal["model", "expert"] = "model"
     inference_kv_append: SnowballKvAppendImplementation = "separate"
@@ -526,6 +526,8 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.inference_max_unrolled_prefill_tokens < 0:
+            raise ValueError("inference_max_unrolled_prefill_tokens must be nonnegative")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
         _ = self.inferred_head_dim
@@ -2005,7 +2007,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         # use scan to keep compilation bounded.
         unroll_prefill = (
             self.config.inference_decode_implementation == "unrolled_split_cache"
-            and input_ids.array.shape[0] <= _MAX_UNROLLED_PREFILL_TOKENS
+            and input_ids.array.shape[0] <= self.config.inference_max_unrolled_prefill_tokens
         )
         unroll = (
             self.config.inference_decode_implementation != "scan"
