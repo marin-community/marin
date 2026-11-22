@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Write rollout events to Finelog: one row per event, and one row per message of the transcript.
+"""Write rollout events to Finelog: one row per event, and rows for transcript messages and conversation options.
 
 Finelog is telemetry here. The ``Rollout`` that ``RolloutEngine.run_task`` returns stays the record of a task
 attempt, with its token IDs and log probabilities. A retry can repeat a row and rows can be lost, so a reader
@@ -317,7 +317,7 @@ class FinelogObserver:
     """Write each event of a task attempt to the rollout log.
 
     ``content_fraction`` is the share of task attempts whose transcript goes to the messages table, from 0 to
-    1. The events table has every task attempt. ``on_event`` only queues rows, so it does not hold the engine's
+    1. The events table has every task attempt. ``on_event`` serializes content and queues rows on the engine's
     delivery task.
     """
 
