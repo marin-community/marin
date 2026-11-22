@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 3:10 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 3:22 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -18,7 +18,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. | Run a fresh matched control with publication verification after the Levanter smoke. |
 | Levanter learner with vLLM | The integration is wired through the artifact main. CPU proofs cover learner updates, restart and Gloo weight replay. The first H100 smoke failed before model load because the worker inherited `JAX_PLATFORMS=cpu`. The fix selects CUDA explicitly and keeps runtime scratch in the compute region. | Finish the frozen 40-H100 smoke. Then compare both learners for 25 updates. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Run `2026.11.20.18` reached version 2 after two updates and an exact four-learner restore. Seven K/V payloads differed between exports, and each receiver reported 929 mismatched bytes. Run `2026.11.20.19` staged one binary export and passed the version-0 byte check on all eight receivers. | Verify both updates, fresh-process restore, versions 1 and 2, final generation, and the terminal checkpoint on the new attempt before the matched arms. |
+| 40-H100 learner smoke | Run `2026.11.20.18` reached version 2 after two updates and an exact four-learner restore. Seven K/V payloads differed between exports, and each receiver reported 929 mismatched bytes. Run `2026.11.20.19` passed the version-0 byte check on all eight receivers and committed the first update's native checkpoint. | Verify changed model bytes, exact fresh-process restore, the second update, versions 1 and 2, final generation, and the terminal checkpoint before the matched arms. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
 | Native inventory backend | With visible-page bounds and dedicated 90% GPU preallocation, the pinned 67B model generated all four full-length replies on eight H100s. The inventory FA4 and fused scorer passed the fixed-checkpoint gate with zero PPO clip crossings across 32,768 targets. | Qualify online weight handoff and tool turns at 67B and run the held-learner serving comparison after the priority learner jobs. |
@@ -539,8 +539,11 @@ All eight original vLLM receivers compared 157,498,867,712 bytes total
 with zero mismatches before the driver released version 0 at 11:09:30
 UTC. Initial publication took 202.048 seconds, including 165.440 seconds
 to install. The previous attempt took 254.647 seconds for its initial
-publication on the same five physical hosts. Evaluation began under the
-released policy. The updated policies and checkpoint gates are pending.
+publication on the same five physical hosts. The initial evaluation
+completed all 100 tasks with a mean verifier score of 0.24.
+All four learners completed the first gradient and committed the native
+step-1 checkpoint at 11:21:39 UTC. Fresh-process restore and the trained
+policy releases are pending.
 [Immutable replay smoke][iris-smoke-canonical-replay] · [Frozen source and checks][h100-canonical-replay-handoff]
 
 #### Read only the HF weight ranges a learner host needs
@@ -1267,6 +1270,19 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   sibling allocated disjoint pages and matched its independent cold frame.
   The fixture retained prefixes from single-request calls. Production
   page geometry, a real 67B tool turn, and serving throughput remain open.
+
+  A separate CPU fixture used the production SkyRL tool parser, rollout
+  worker and typed native serving subprocess. The model sampled a
+  `fetch_url` action and an offline provider returned the observation that
+  SkyRL rendered into the second turn. The binary learner frames retained
+  all 24 overlapping token positions and 96 expert assignments. All nine
+  observation and boundary tokens carried zero objective weight. Recomputed
+  raw policy logprobs matched the sampled tokens exactly.
+  The first request after a live policy install reused zero prefix tokens.
+  Its binary replay frame matched a cold subprocess's frame byte for byte.
+  A repeat under the same policy reused 32 tokens. The 67B fixture still
+  needs two consecutive typed snapshots from a real learner update and the
+  content hashes of the pinned tokenizer.
   [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
   Parquet has SHA-256
