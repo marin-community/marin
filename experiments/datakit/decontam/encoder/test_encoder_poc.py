@@ -12,6 +12,7 @@ import pytest
 from experiments.datakit.decontam.encoder import rarest_key
 from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.pairs import _located
+from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
 from experiments.datakit.decontam.encoder.text_keys import (
     WINDOW,
@@ -248,3 +249,18 @@ def test_a_short_question_is_located_by_its_key_with_the_choices():
     _, stream, at = _located(streams, text_stream(question), keyed[offset : offset + WINDOW], offset)
     # The copy with its choices starts after the filler, not at the record's first "Which is it?".
     assert at == stream.rindex(text_stream(question))
+
+
+def test_every_planted_form_of_an_item_holds_its_key():
+    item = {
+        "question": "Which gas do plants take in from the air during photosynthesis?",
+        "choices": ["Oxygen", "Carbon dioxide", "Nitrogen", "Helium"],
+        "answer": "Carbon dioxide",
+    }
+    stream = item_stream(item["question"], item["choices"])
+    key = int(window_hashes(stream)[len(stream) // 2 - WINDOW])
+    host = "Some unrelated record text. " * 120
+    for form, text in positive_forms(item, "Argon", random.Random(0)).items():
+        assert holds_key(f"{host}\n{text}\n{host}", key), form
+    # Negatives share the key; stage 2, not stage 1, has to reject them.
+    assert set(negative_forms(item, "Argon", host)) == {"changed_choice", "choices_far", "missing_choice"}

@@ -31,6 +31,7 @@ twice. Without this, a copy stored in a JSON dump loses about a third of its win
 | Fine-tuning (one H100) | `train.py` | `model/`, `results.json`, `test_scores.parquet` |
 | Scoring pairs with a saved model | `score.py` | one parquet |
 | Stage-1 recall on judged copies | `key_recall.py` | `key_recall.json` |
+| Planted copies in 14 forms, stage 1 and stage 2 (gate G2) | `planted.py` | `stats/*.json`, `pairs/*.parquet` |
 
 `sources.json` lists the 160 normalized sources of the sample. `rarest_key.py` draws one measure
 shard per source (seed 7) and two other reference shards per source (seed 11), in list order. A
@@ -184,6 +185,23 @@ the bound is an item-clustered stratified bootstrap 5th percentile:
 
 154 of the 160 copies have word overlap of at least 0.9 (the high band), and recall is reported
 there. The low band holds 1 copy in 99 labeled pairs.
+
+**Planted copies (gate G2).** `planted.py` plants up to 50 items per eval (41,350 items over 827
+evals) into real record text in 14 forms and checks stage 1. Stage 1 finds every planted copy in
+the plain, parenthesized, extra-option, no-line-break and JSON-escaped (once and twice) forms.
+It misses three kinds:
+- **Short items in a layout without letters (recall 0.858 in the sample).** Markdown, numbered,
+  JSON and question-only layouts. A question shorter than 20 stream characters is keyed on the
+  question with its lettered choices (2.9% of all items: ZhoBLiMP, BBQ), so its key needs the letters.
+- **Shuffled choices (0.952).** The same short items.
+- **No punctuation (0.987) and upper case (0.989).** LaTeX commands without their backslash become
+  words, and some casing does not round-trip (Turkish).
+
+206 sampled items (0.5%) have no key. With the excerpt read as the pipeline reads it, the frozen
+classifier marks 0.94-0.96 of planted copies at 0.99 in most layouts (escaped 0.91-0.93, ASCII JSON
+0.81, no punctuation 0.71). It rejects a changed number or sign (2% marked). A changed or missing
+choice and choices far from the question are marked (83-97%), because the record still holds the
+whole question.
 
 Most remaining false marks are variants that drop or add one condition ("of the first half"), or that
 show the same passage with another question. Most missed copies are edited copies (reworded

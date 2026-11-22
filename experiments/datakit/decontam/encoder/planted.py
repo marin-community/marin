@@ -1,0 +1,178 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Planted-copy check of the frozen configuration (gate G2).
+
+A Zephyr job over the item table plants copies of sampled items, in several forms, into real
+record text, and checks stage 1 on each: does the planted record hold the item's key 1, read as
+stage 1 reads records? It also writes, for a subset of items, the planted positives and planted
+negatives (a changed or missing choice, a changed number or sign, choices far from the question)
+as candidate pairs, which ``score.py`` scores with the frozen classifier.
+"""
+
+import argparse
+import json
+import logging
+import random
+import re
+from collections import Counter
+from collections.abc import Callable, Iterator
+from typing import Any
+
+import pyarrow as pa
+from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset, ShardInfo
+
+from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame, read_table, write_table
+from experiments.datakit.decontam.encoder.text_keys import readings, text_stream, window_hashes
+
+logger = logging.getLogger(__name__)
+LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 4
+CONTEXT = 1500
+FAR = 3000
+MIN_HOST = 2 * CONTEXT + FAR
+NUMBER = re.compile(r"\d+")
+PUNCTUATION = re.compile(r"[^\w\s]")
+SIGNS = (("+", "-"), ("-", "+"), ("<", ">"), (">", "<"))
+
+
+def lettered(question: str, choices: list[str]) -> str:
+    return question + "".join(f"\n{LABELS[i]}. {choice}" for i, choice in enumerate(choices))
+
+
+def positive_forms(item: dict[str, Any], other_choice: str, rng: random.Random) -> dict[str, str]:
+    """Copies of the item as a record could hold them."""
+    question, choices, answer = item["question"], list(item["choices"]), item["answer"] or ""
+    plain = lettered(question, choices)
+    shuffled = choices[:]
+    rng.shuffle(shuffled)
+    forms = {
+        "plain": plain,
+        "upper": plain.upper(),
+        "no_punctuation": PUNCTUATION.sub(" ", plain),
+        "no_line_breaks": plain.replace("\n", " "),
+        "numbered": question + "".join(f"\n{i + 1}) {c}" for i, c in enumerate(choices)),
+        "parenthesized": question + " " + " ".join(f"({LABELS[i]}) {c}" for i, c in enumerate(choices)),
+        "shuffled": lettered(question, shuffled),
+        "extra_option": lettered(question, [*choices, other_choice]),
+        "markdown": f"**{question}**" + "".join(f"\n- {c}" for c in choices),
+        "json": json.dumps({"question": question, "choices": choices, "answer": answer}, ensure_ascii=False),
+        "json_ascii": json.dumps({"question": question, "choices": choices, "answer": answer}),
+        "escaped_once": json.dumps(plain)[1:-1],
+        "escaped_twice": json.dumps(json.dumps(plain))[1:-1],
+        "question_only": question,
+    }
+    return forms
+
+
+def negative_forms(item: dict[str, Any], other_choice: str, far_text: str) -> dict[str, str]:
+    """Records that share the item's text but do not hold the item."""
+    question, choices = item["question"], list(item["choices"])
+    forms = {}
+    if choices:
+        changed = choices[:]
+        changed[len(changed) // 2] = other_choice
+        forms["changed_choice"] = lettered(question, changed)
+        forms["choices_far"] = question + "\n" + far_text + lettered("", choices)
+    if len(choices) >= 3:
+        forms["missing_choice"] = lettered(question, choices[:-1])
+    if match := NUMBER.search(question):
+        changed_number = question[: match.start()] + str(int(match.group()) + 1) + question[match.end() :]
+        forms["number_changed"] = lettered(changed_number, choices)
+    for sign, other in SIGNS:
+        if sign in question:
+            index = question.index(sign)
+            forms["sign_changed"] = lettered(question[:index] + other + question[index + 1 :], choices)
+            break
+    return forms
+
+
+def reading_with_key(record: str, key: int) -> str | None:
+    """The first reading of *record* that holds *key*, as ``pairs.extract`` cuts its excerpt from it."""
+    return next((r for r in readings(record) if key in set(window_hashes(text_stream(r)).tolist())), None)
+
+
+def holds_key(record: str, key: int) -> bool:
+    return reading_with_key(record, key) is not None
+
+
+def make_plant(output: str, keys_path: str, hosts_path: str, per_eval: int, scored_per_eval: int) -> Callable:
+    def plant(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
+        keys = read_frame(keys_path, ["id", "key1_hash"])
+        key_of = dict(zip(keys["id"], keys["key1_hash"].to_numpy(dtype="uint64").tolist(), strict=True))
+        hosts = [text for text in read_frame(hosts_path, ["text"])["text"] if text and len(text) >= MIN_HOST]
+        rng = random.Random(shard.shard_idx)
+        for path in paths:
+            items = read_table(path, ["id", "eval", "question", "choices", "answer", "reason"]).to_pylist()
+            items = [item for item in items if not item["reason"] and item["question"]]
+            sampled = random.Random(0).sample(items, min(per_eval, len(items)))
+            counts: Counter = Counter()
+            misses, pairs = [], []
+            for number, item in enumerate(sampled):
+                key = key_of.get(item["id"], 0)
+                if not key:
+                    counts["not_indexable"] += 1
+                    continue
+                other = rng.choice(sampled)
+                other_choice = (list(other["choices"]) or [other["question"][:80]])[0]
+                host = rng.choice(hosts)
+                before, after = host[:CONTEXT], host[CONTEXT : 2 * CONTEXT]
+                for form, text in positive_forms(item, other_choice, rng).items():
+                    record = f"{before}\n{text}\n{after}"
+                    reading = reading_with_key(record, key)
+                    found = reading is not None
+                    counts[f"{form}|planted"] += 1
+                    counts[f"{form}|found"] += found
+                    if not found:
+                        misses.append({"id": item["id"], "eval": item["eval"], "form": form})
+                    if number < scored_per_eval:
+                        pairs.append({**_pair(item, reading or record), "form": form, "planted": "positive"})
+                if number < scored_per_eval:
+                    far = host[2 * CONTEXT : 2 * CONTEXT + FAR]
+                    for form, text in negative_forms(item, other_choice, far).items():
+                        pairs.append({**_pair(item, f"{before}\n{text}\n{after}"), "form": form, "planted": "negative"})
+            name = StoragePath(path).name.removesuffix(".parquet")
+            stats = {"eval": name, "items": len(sampled), "counts": dict(counts), "misses": misses}
+            StoragePath(prefix_join(output, f"stats/{name}.json")).write_text(json.dumps(stats))
+            if pairs:
+                write_table(pa.Table.from_pylist(pairs), prefix_join(output, f"pairs/{name}.parquet"))
+            yield {"eval": name, "items": len(sampled), "misses": len(misses)}
+
+    return plant
+
+
+def _pair(item: dict[str, Any], record: str) -> dict[str, Any]:
+    return {
+        "record": "planted",
+        "item": item["id"],
+        "eval": item["eval"],
+        "question": item["question"],
+        "choices": list(item["choices"]),
+        "answer": item["answer"] or "",
+        "right": record,
+    }
+
+
+def main() -> None:
+    configure_logging(logging.INFO)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet)")
+    parser.add_argument("--keys", required=True, help="the frozen stage-1 keys.parquet")
+    parser.add_argument("--hosts", required=True, help="parquet with a text column: real records to plant into")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--per-eval", type=int, default=50, help="items checked per eval")
+    parser.add_argument("--scored-per-eval", type=int, default=10, help="items per eval written as pairs for stage 2")
+    args = parser.parse_args()
+    files = parquet_files(args.items)
+    resources = ResourceConfig(cpu=1, ram="8g")
+    context = ZephyrContext(name="decon-encoder-planted", resources=resources, max_workers=min(100, len(files)))
+    plant = make_plant(args.output, args.keys, args.hosts, args.per_eval, args.scored_per_eval)
+    outcome = context.execute(Dataset.from_list(files).map_shard(plant), map_task_resources=resources)
+    logger.info("planted: %d evals, %d misses", len(outcome.results), sum(r["misses"] for r in outcome.results))
+
+
+if __name__ == "__main__":
+    main()
