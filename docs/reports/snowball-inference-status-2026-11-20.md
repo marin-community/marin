@@ -11,12 +11,13 @@ The full BF16 67B checkpoint completed matched 64K AgentX replays at 128
 offered clients on v5p-8, v6e-8, and eight H100s. The table shows the best
 completed throughput on each backend and p90 HTTP time to first token
 from the same runs. The v5p-8 row includes the experimental wide
-expert contraction tile.
+expert contraction tile. The v6e-8 row uses experimental chunked
+prefill with four decode steps between chunks.
 
 | Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM p90 TTFT |
 | --- | ---: | ---: | ---: |
 | v5p-8 | 538.58 | 549.46 | 3.74 / 1.34 s |
-| v6e-8 | 600.63 | 554.00 | 2.03 / 1.31 s |
+| v6e-8 | 605.66 | 554.00 | 2.57 / 1.31 s |
 | 8× H100 | 621.18 | 593.09 | 1.01 / 1.44 s |
 
 The v6e-8 same-worker repeat reached 595.38 versus 554.00 output tok/s.
@@ -1172,6 +1173,16 @@ shapes. On the same worker and 398 shared turns, all paired output lengths
 matched and active decode rose from 44.28 to 58.14 tok/s. Paired p90 TTFT
 rose from 2.14 to 5.38 s. Both runs had zero profiling errors.
 [Warmed chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v30-warmed-live-prefill-chunks)
+
+Running four decode steps between unfinished prefill chunks reached
+605.66 output tok/s on the same v6e-8 worker as compiled vLLM.
+Native was 9.3% ahead, with 411 successful requests and no errors.
+All 392 output lengths paired with vLLM matched. Paired active
+decode was 49.96 versus 36.35 tok/s. Compared with 16 steps between
+chunks on 399 shared turns, p90 TTFT fell from 5.38 to 2.58 s
+and active decode fell from 58.15 to 50.25 tok/s. The native
+aggregate p90 was 2.57 s versus compiled vLLM's 1.31 s.
+[Four-step chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v31-live-prefill-chunks-four-decode-steps)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
