@@ -42,7 +42,7 @@ example `s3://marin-us-east-08a/tmp/ttl=7d/$USER`. GPU jobs need `--disk 100GB`:
 disk is too small for the model and the pairs.
 
 ```bash
-# Item table (4 parts, about 1 hour each).
+# Item table (4 parts, about 15 minutes each).
 iris --cluster=cw-us-east-02a job run --extra=cpu --extra=lm_eval --memory 32GB --cpu 4 --disk 200GB \
   --enable-extra-resources -e MARIN_PREFIX s3://marin-us-east-02a/marin --job-name decon-items-0 -- \
   python -m experiments.datakit.decontam.encoder.items \
@@ -111,7 +111,7 @@ batches of tasks; each judge reads `RUBRIC.md` and writes `<set>/<judge>/batch_*
 
 ## Measured results
 
-All numbers come from the cluster runs recorded in the experiment notebook. A *candidate* is a
+All numbers come from cluster runs of these modules or of their earlier versions. A *candidate* is a
 (record, item) pair that stage 1 sends to stage 2. *Real test* pairs are the test splits of the
 judge-labeled candidate sets; their items never appear in training.
 
@@ -123,7 +123,10 @@ judge-labeled candidate sets; their items never appear in training.
 | Rarest window (key 1) | 0.337% | 0.0364 | 6.9e8 |
 | Key 1 or key 2 | 2.37% | 0.161 | 3.1e9 |
 
-STAGE1_V6
+With the JSON readings (item table v6, same shards), the load does not change: key 1 still sends
+0.337% of records (0.0364 candidates per record). The CPU time of the measure step grows from 18.2
+to 29.5 worker-hours, because a record with backslashes is read three times. That is about 20,000
+worker-hours for the catalog.
 
 At 441 pairs per second on one H100 (mmBERT-base, 1,024 tokens), key 1 alone costs about 440
 H100-hours for the catalog. Key recall on judged copies from earlier candidate sets: 0.963 with the
@@ -131,7 +134,7 @@ plain reading on item table v1. On table v3 it is 0.882 for the 237 judged copie
 item, and 0.932 with the JSON readings. The other misses are long items whose judged excerpt is
 shorter than the item.
 
-**Stage 2.** Iterations, each one change, on real test pairs:
+**Stage 2.** Iterations on real test pairs:
 
 | Iteration | Change | Real test | Question AUC |
 |---|---|---|---|
@@ -140,25 +143,43 @@ shorter than the item.
 | 6 | + context synthetic pairs (items inside real candidate text) | set 11 | 0.972; repeat run 0.948 |
 | 8 | + set 12 | sets 11-12 (69 copies) | 0.963-0.971 |
 | 9 | item input: choices shown, answer words out of the question hint | sets 11-12 | 0.971 / 0.968 (old input 0.950 / 0.960) |
-| 10 | + set 13, dev split from the label sets | ITER10_TEST | ITER10_AUC |
+| 10 | + set 13, dev split from the label sets | sets 11-13 (151 copies) | 0.961 / 0.973 |
 
 Rejected on the way: 512 and 2,048 tokens, repeated judge-labeled pairs, a reference-frequency hint
 (set-11 AUC 0.936 against 0.972), one output instead of two, and averaging two seeds.
 
-ITER10_TEXT
+The reference model is iteration 10, seed 1. On the pooled real test (691 pairs, 151 copies; the
+bound is the Jeffreys 5th percentile):
+
+| Score at least | Marks | Precision [bound] | Recall | Without DROP: precision [bound] / recall |
+|---|---|---|---|---|
+| 0.5 | 158 | 0.82 [0.77] | 0.86 | 0.77 [0.69] / 0.80 |
+| 0.9 | 121 | 0.92 [0.87] | 0.74 | 0.88 [0.79] / 0.59 |
+| 0.99 | 83 | 0.98 [0.93] | 0.54 | 0.96 [0.86] / 0.31 |
+
+The answer output has AUC 0.922 (57 copies show the answer); at 0.9 it gives precision 0.96 and
+recall 0.44. The test pairs are a stratified sample: most come from candidates whose record holds at
+least 90% of the question's words, where the copies are. On set 13, which the iteration-9 model never
+saw, weighting the strata to the whole candidate sample gives that model a precision of 0.95 at its
+dev threshold (0.94) and 0.98 at 0.99. Recall outside the high-overlap stratum rests on 2 copies among
+100 labeled low-score pairs, so it is not measured.
+
+Most remaining false marks are variants that drop or add one condition ("of the first half"), or that
+show the same passage with another question. Most missed copies are edited copies (reworded
+problems, other versions of a code file) and short CoLA sentences.
 
 ## Limits
 
 - **The precision target is not met.** The goal is a precision whose lower bound is at least 0.95
-  on real candidates. The best runs reach a point precision of 0.96 at score 0.99, on about 27
-  marks, at about 37% recall. That is too few marks for a lower bound near 0.95, and the recall is
-  low.
+  on real candidates. The reference model reaches a point precision of 0.98 at score 0.99, with a
+  bound of 0.93, at 54% recall. Also, no split sets the threshold well. The dev split (261 pairs, 45
+  copies) holds a few clean pairs that score near 1.0, so its 0.95 threshold is 0.9997, at 8% recall.
 - **One training run is noisy.** The same recipe and data, with only GPU nondeterminism between
   runs, gave set-11 test AUCs of 0.973 and 0.948. Compare recipes on the pooled real test with more
   than one seed.
-- **Real labels are few.** Sets 11 and 12 hold 147 agreed copies, and 69 of them are in the test
-  splits. A safety classifier stopped one Claude judge in set 12, so 288 of its 859 pairs have only
-  one judge and were dropped. When set 12 was labeled, the item table gave every DROP item the
+- **Real labels are few.** Sets 11 to 13 hold 326 agreed copies, and 151 of them are in the test
+  splits; 127 of the 179 copies in set 13 are DROP questions. A safety classifier stopped one Claude
+  judge in set 12, so 288 of its 859 pairs have only one judge and were dropped. When set 12 was labeled, the item table gave every DROP item the
   placeholder answer `number,date,spans,worker_id,hit_id` (fixed in `items.py`), so the DROP answer
   labels in set 12 lean to "not shown".
 - **Silver negatives are noisy.** Of the judged pairs with word overlap below 0.8, 5 of 561 (0.9%)

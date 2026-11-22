@@ -3,9 +3,10 @@
 
 """Stage-1 recall on judged copies: does the excerpt of each judged copy hold its item's key?
 
-Judged pairs name their item by question text; the item table maps that text to item ids, and the
-stage-1 keys table gives each id its keys. Reports, per judges' label, the share of excerpts
-that hold the first window, key 1, and key 2.
+The excerpt is read as stage 1 reads a record (``text_keys.readings``). Judged pairs name their
+item by question text; the item table maps that text to item ids, and the stage-1 keys table
+gives each id its keys. Reports, per judges' label, the share of excerpts that hold the first
+window, key 1, and key 2.
 """
 
 import argparse
@@ -17,7 +18,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame
-from experiments.datakit.decontam.encoder.text_keys import text_stream, window_hashes
+from experiments.datakit.decontam.encoder.text_keys import readings, text_stream, window_hashes
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def main() -> None:
         if item_id is None or item_id not in row_of:
             counts[(label, "no item")] += 1
             continue
-        windows = set(window_hashes(text_stream(right)).tolist())
+        windows = {int(h) for reading in readings(right) for h in window_hashes(text_stream(reading))}
         for name, values in columns.items():
             value = int(values[row_of[item_id]])
             counts[(label, name)] += bool(value and value in windows)
