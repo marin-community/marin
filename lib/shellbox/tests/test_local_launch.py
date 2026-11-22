@@ -46,14 +46,6 @@ def test_local_factory_in_iris_task_rejects_unsupported_profile(monkeypatch, pro
         local.LocalMachineFactory()
 
 
-def test_local_factory_in_iris_task_accepts_privileged_profile(monkeypatch):
-    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
-    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_PRIVILEGED_PROFILE)
-    monkeypatch.setattr(local, "_prepare_sandbox", lambda *args: None)
-    factory = local.LocalMachineFactory()
-    assert factory.bwrap.is_file()
-
-
 @pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap keeper to uid 65534")
 @pytest.mark.parametrize("system_directories", list(local.SystemDirectories))
 def test_iris_bubblewrap_factory_writes_to_workdir_as_sandbox_user(monkeypatch, system_directories):

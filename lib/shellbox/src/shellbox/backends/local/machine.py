@@ -1219,7 +1219,8 @@ class LocalMachineFactory:
     ):
         bwrap_user = None
         if "IRIS_TASK_ID" in os.environ:
-            # Iris is an optional Shellbox dependency, installed in task images.
+            # Existing Iris task code constructs this factory directly. The stamped profile
+            # is its admission signal; Iris remains an optional Shellbox dependency.
             from iris.cluster.runtime.env import IRIS_CONTAINER_PROFILE_ENV  # noqa: PLC0415
 
             profile = os.environ.get(IRIS_CONTAINER_PROFILE_ENV)
