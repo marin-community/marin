@@ -169,6 +169,21 @@ admitted with limited backend support: `LOCAL` supported and Daytona unsupported
 the tool cannot run under bubblewrap, the repair hosts it as a service that the
 sandbox reaches through the relay, as OpenResearcher's retrieval index does.
 
+Ruling 76 (2026-11-21): the Atlas carries a Format metadata column that states
+which format each source's payload is in.
+
+Ruling 77 (2026-11-21): TaskFormat is required ingestion metadata, detected
+purely from payload shape; a format check never asks where a payload came
+from. The shapes are `HARBOR` (Harbor task package rows), `TASKSPEC` (TaskSpec
+rows with no task package) and `MARINSKYRL` (MarinSkyRL blend records). The
+declared shape must equal the detected shape for every row, and a source whose
+rows span several shapes is rejected until it is split into one source per
+shape. Consequence: the grandfathered-blend admission machinery is retired — a
+MarinSkyRL blend record is an ordinary payload shape, no frozen exception list
+admits a blend source, and the historical provenance-era labels
+(`taskcompendium`, `native_taskspec`) parse onto their shape and never re-enter
+declarations. See [Declarations](#declarations).
+
 Run `experiments.post_training.task_curation.consumer_audit` in the population's
 storage region. Supply a frozen input inventory, runtime git archive and JSON
 configuration with `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
@@ -206,9 +221,9 @@ uv run python -m experiments.post_training.task_curation.datasets.consumer_recei
 ```
 
 
-Synced to preview revision 36 (2026-11-20). These rules include the admission
-display policy for Atlas preview revision 36. When a later section of this
-reference conflicts with them, this section is current.
+Synced to Atlas revision r38 (cut 558dce231f, 2026-11-21). These rules include
+the admission display policy for Atlas preview revision 36. When a later section
+of this reference conflicts with them, this section is current.
 
 **SAMPLE panels across re-pins.** A SAMPLE panel drawn at an earlier pin binds at the
 current pin when its task specs are byte-identical to the current pin's actor census
@@ -434,7 +449,7 @@ grading assessment are unchanged.
   (`experiments/post_training/task_curation/backend_live_probes.py`); a backend
   that cannot pull is UNSUPPORTED for internal-image sources.
 - Strict exact-contract deduplication applies to every source, including EVAL
-  sources and grandfathered blends.
+  sources and MarinSkyRL blends.
 - Lexical 13-gram decontamination removes flagged TRAIN tasks. EVAL sources are
   measured only.
 - Cross-source overlap matches each task to its nearest neighbor in the other
@@ -599,7 +614,7 @@ and population it checks. Keep the receipt and the failed check when a gate fail
 | Stage | Required action and evidence | Procedure and enforcing code |
 | --- | --- | --- |
 | <span id="atlas-stage-a">a</span> Declare | Register the candidate's immutable HF revision, stable source ID, converter identity, provenance, Use and restriction. Run the binding license gate before spend. | [Declarations](#declarations), [license gate](#stage-0-binding-license-gate); [sources.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py), [license_check.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/license_check.py) |
-| <span id="atlas-stage-b">b</span> Convert | Preserve prompts, references, grader and environment in TaskSpecs. Apply the accepted agentic format gate; answer-only tasks still need a complete task contract. | [Conversion](#conversion-modes); [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py) |
+| <span id="atlas-stage-b">b</span> Convert | Preserve prompts, references, grader and environment in TaskSpecs. Apply the payload-shape format check; answer-only tasks still need a complete task contract. | [Conversion](#conversion-modes); [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py) |
 | <span id="atlas-stage-c">c</span> Census | Check environment fidelity, actor and grader roles, SHARED/SEPARATE grading, locks, image identities and backend fit. Record population digests and complete grading counts. Reconcile the final retained population again at admission. | [Census](#actor-census-registration), [fidelity](#environment-fidelity-and-repair); [census_binding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/census_binding.py), [grading_census.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/grading_census.py) |
 | <span id="atlas-stage-d">d</span> Exact deduplication | Drop exact within-source duplicate contracts. Preserve raw, unique and dropped counts and the drop manifest. | [Within-source deduplication](#mandatory-within-source-duplicate-removal); [within_source_census.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/within_source_census.py) |
 | <span id="atlas-stage-d2">d2</span> Cross-source check | Compare the candidate's source fingerprint against admitted sources. Resolve every duplicate group through the overlap flow before admission. | [Overlap resolution](#overlap-resolution); [source_fingerprints.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source_fingerprints.py) |
@@ -968,7 +983,10 @@ training paths map to `LEXICAL_RECEIPT_MISSING` and
 also requires one surveyed backend that can run the population before a source
 is Available: a cohort no backend supports is Excluded with
 `NO_SUPPORTED_BACKEND`, while a source whose every backend cell is
-`role_absent` — it declares no machine roles at all — needs no backend.
+`role_absent` — it declares no machine roles at all — needs no backend. The
+rule holds after admission too (user ruling 2026-11-21): an Available source
+that no surveyed backend can run must be repaired or excluded; stale admission
+evidence does not keep an unrunnable source selectable.
 Policy exclusions that the admission checks
 cannot derive are recorded per source in
 `experiments/post_training/task_curation/exclusion_registry.py`: license
@@ -1022,7 +1040,7 @@ A lexical-remediation-only row queues as Pending under `Lexical remediation queu
 | `LEXICAL_RECEIPT_MISSING` | EVAL has no current-pin lexical measurement. | Measure the frozen evaluation corpus; retain EVAL overlap. | e: measured receipt for the declared Use. |
 | `LEXICAL_REMEDIATION_REQUIRED` | TRAIN lacks a clean/remediated release receipt. | Remove the duplicate/lexical drop union and bind the private retained version. | e: clean or remediated exact-pin release; final-population bindings at i. |
 | `OVERSIGHT_MISSING` | No verified oversight evidence. | Produce a conversion receipt or run the required fixed-panel review. | h: SAMPLE/FULL receipt; current policy also accepts QUICK without claiming content review. |
-| `AGENTIC_TASK_FORMAT_MISSING` | Agentic source has no accepted format. | Declare the faithful TaskCompendium/Harbor conversion; use only an existing grandfathered registration. | b: accepted format; conversion and later qualification. |
+| `AGENTIC_TASK_FORMAT_MISSING` | Agentic source declares no payload shape. | Declare the exact shape of every row (`HARBOR`, `TASKSPEC` or `MARINSKYRL`); the detector must confirm it. | b: declared shape the detector confirms; conversion and later qualification. |
 | `SNAPSHOT_IDENTITY_MISSING` | Production snapshot identities unmeasured. | Measure the task-declared profiles through the production naming path. | c: current-pin identity receipt; static identity is not a live quota test. |
 | `EXECUTION_REQUIREMENT_MISSING` | Execution requirements unmeasured. | Inventory declared limits; calibrate missing agentic limits. | c then f: bound requirement and calibration evidence. |
 | `EVAL_ONLY_BENCHMARK` | A ruling excludes training use. | Retain EVAL use unless a user ruling explicitly admits TRAIN. | a: scoped Use ruling and e evidence for that Use; EVAL admission alone does not clear TRAIN exclusion. |
@@ -1260,9 +1278,9 @@ input pin separately from the archived private snapshot and final release.
 The recipe runner rejects missing or mismatched receipts before conversion,
 reviewer requests or grader controls. Prebuilt imports also check the receipt
 population against the published cohort and preserve the receipt in their
-manifest. Receipt changes enter artifact identity. Existing grandfathered
-MarinSkyRL blend selection remains unchanged; their measurements and remediation
-candidates are recorded without changing the blend wiring.
+manifest. Receipt changes enter artifact identity. Existing MarinSkyRL blend
+selection remains unchanged; their measurements and remediation candidates are
+recorded without changing the blend wiring.
 
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
@@ -1771,7 +1789,7 @@ python -m experiments.post_training.task_curation.admission_inventory \
   --declarations FROZEN_DECLARATIONS.json --output-root NEW_VERSIONED_PREFIX --workers 12
 ```
 
-Catalog projection rejects every non-grandfathered source without actor census
+Catalog projection rejects every source without actor census
 counts and their basis, including conversation-only sources claiming N/A. Keep
 unmeasured cohorts in the pending ingestion ledger. Publish a new metadata
 snapshot only after the producer's exact-pin census supplies these proofs;
@@ -1903,7 +1921,7 @@ Before admitting a new or changed source:
    the published remainder, then attach the production backend survey and
    curation assessment to that source declaration and catalog snapshot.
 
-Grandfathered MarinSkyRL blends are included in measurements and candidate
+MarinSkyRL blend sources are included in measurements and candidate
 remediated versions. Their existing admission and training selection remain
 unchanged until explicitly approved. Lexical filtering detects verbatim and
 near-verbatim overlap; it does not establish absence of paraphrases or semantic
@@ -2195,7 +2213,13 @@ The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
 It moves the exact initial repository/dependency setup into Harbor's pre-agent
 setup and uses common actor images. Source `setup_files/` resources retain their
 bytes and file modes in the native package, including tasks with declared build
-contexts; Harbor uploads them before running that setup. Publish the resulting native package, copy
+contexts; Harbor uploads them before running that setup. Native Harbor import
+and export also retain explicit empty directory entries from the archived build
+context, with their modes and timestamps: they restore only directories the
+source archive contains, and a missing `COPY` source never authorizes a created
+directory or a placeholder file. Build contexts without directory entries keep
+their existing serialized form. The generated TaskTrove exporter refuses these
+contexts; use the native Harbor path for them. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
 Harbor ORACLE filtering and SAMPLE/FULL QA.
 
@@ -2607,11 +2631,17 @@ condition:
 - `PIPELINE` gaps belong to the measurement pipeline: unscored coverage,
   protocol input budget, provider capacity, Daytona snapshot and TaskSpec
   preflights, Harbor trial qualification, judge route and temperature
-  qualification, interrupted dispatches and unqualified prior aggregates.
+  qualification, interrupted dispatches, unqualified prior aggregates and
+  environment-start failures.
 - `SOURCE` gaps belong to the source: a declared environment artifact that
   exists in no region, a compose document or tool-provider contract no backend
   supports, a network policy the production policy rejects, a judge route or
   API that cannot be served, and an invalid reference in the frozen sample.
+
+An environment-start failure is a typed environment gap, never
+`COVERAGE_SHORTFALL`: the record names the declared image reference
+(`environment_start_failure:<image ref>`), the wave re-runs the attempt once
+the machine pulls, and the cell neither blocks nor counts as a coverage drop.
 
 Difficulty workers may only emit enum members plus typed evidence — a detail
 after `:` (a judge model, requirement URIs, a contract token) and an evidence
@@ -2687,7 +2717,8 @@ and its existence check, the `BackendSurvey` row, the judge identity and its
 validation, or the frozen-sample receipt — and let the user rule between
 repair, re-measure and exclusion. Current rulings: rebuild a missing
 environment artifact in region first and exclude only when it cannot be
-rebuilt; exclude a source no surveyed backend can run; re-pin a judge to a
+rebuilt; an admitted source that no surveyed backend can run must be repaired
+or excluded (user ruling 2026-11-21); re-pin a judge to a
 served tier through a private remediation version (fresh SAMPLE, admission and
 end-to-end judge validation) rather than exclude; repair an invalid reference
 in a private remediation version. Never exclude on oversight-level grounds:
@@ -2768,6 +2799,13 @@ bound. The cap is 22 active Difficulty Iris jobs in the owner's namespace, inclu
 the controller, legacy campaigns and serving children. A candidate or judge
 repair reserves headroom for its serving children before those jobs appear.
 Serving keeps compilation and CUDA graphs enabled.
+A cell with an attempt batch already in flight defers a second batch, in the
+same pass and across passes. Attempt waves pull declared images through the
+registry credential (`--registry-auth-secret`). A cell named by a recorded
+repair verification — its escalation landed and its repair deployed — plans at
+the front of its priority band, so a deployed repair verifies ahead of the
+coverage backlog. Imported receipt and measurement rows keep their cause's
+typed error identity.
 Snowball attempt manifests record its established
 `marin-vllm-gpu-20260924-01911be34fac` release tag. The inference launcher selects
 that release's wheel and pins its CUDA Torch ABI independently of the global
@@ -2793,6 +2831,23 @@ the worker maps it to Harbor's `DAYTONA_API_KEY`. It never falls back to EVAL.
 Named snapshot preflight resolves the RL key from Secret Manager and preserves
 existing snapshots within its snapshot limit. See the
 [Daytona credential and account rules](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#credentials-and-account-selection).
+
+An actor image larger than Daytona's 20 GB snapshot limit cannot run on
+Daytona: the account rejects its snapshot (user ruling 2026-11-21; DATA
+Daytona rejected OpenResearcher's 55.19 GB full-index actor against the 20 GB
+maximum). Such a source reruns its difficulty measurements on the maintained
+LOCAL backend (`LOCAL_ACTOR_SOURCES` overrides the frozen backend choice), and
+a LOCAL actor machine gets a 7,200-second image-start allowance instead of
+Harbor's 600-second default, because its pull can move tens of GB before the
+first attempt starts. Where a Daytona run is still required, the source uses a
+variant whose actor image fits: OpenResearcher's Daytona RL route runs a thin
+actor with a hosted BM25 retrieval service
+(`open-athena/openresearcher-openresearcher-dataset-service-20261121-v1` at
+`0c4f39584d7f0121e97f6ad4f4761749add56fef`), which requires the frozen BM25
+service and retains every task and the native grader; only its actor image and
+importer revision differ from the full-image pin. The full-image pin
+(`open-athena/openresearcher` at `8d5a48bf4994f861c903cc90f34e1530c25ea052`)
+stays the source's admission pin.
 Before each actor or verifier sandbox create, Harbor runs the inventory admission
 command. The shared `shellbox-daytona-usage` gate counts compute and disk charged
 by every sandbox across all inventory pages. It keeps 20% of DATA's total
@@ -2860,7 +2915,9 @@ checks is an admission gate.
 **Payload preservation (offline).** For each rebuilt task, every file the native
 recipe `COPY`s into the workspace must appear in the rebuilt setup payload with
 identical bytes and mode. This catches a rebuild that drops directory sources,
-rewrites fixture data or changes an executable bit. `ADD` recipes have no
+rewrites fixture data or changes an executable bit. An explicitly archived
+empty directory is a legitimate `COPY` source: the package retains it with its
+mode and timestamp. `ADD` recipes have no
 preservation contract and must be deferred by the converter.
 
 **Setup execution (local Docker).** Preservation proves the bytes travel; it does
@@ -3095,7 +3152,7 @@ complete oracle/control decisions to actor, grading, lexical and sampled content
 evidence measured for the exact published dataset revision. SHARED grading, where
 the agent and grader use the same container, also requires a complete
 integrity-contract census. `TaskFormat.HARBOR` selects
-`import_oracle_harbor_prebuilt`; `TaskFormat.TASKCOMPENDIUM` selects
+`import_oracle_harbor_prebuilt`; `TaskFormat.TASKSPEC` selects
 `import_taskcompendium_prebuilt`. The selected `PrebuiltCohort.version` must match
 the actor census's recorded `converter_version` so its measurements cover that
 pipeline. Qualification of the original, unfiltered population remains archived. A zero-drop retained release whose population is byte-identical to its
@@ -3744,8 +3801,13 @@ framework worker enforces the verifier CPU, RAM, disk and time budget; it leaves
 the TaskSpec and task package lock unchanged and installs no SDK into the task
 environment. Both paths use the production structured-verdict parser. Judge
 transport requires `model_endpoint` and its declared `model_name` in environment
-kwargs. A verifier-only loopback relay carries requests to that fixed endpoint;
-provider credentials stay on the host. Agent/verifier credential declarations
+kwargs. A scripted judge whose endpoint is reachable only from the host calls a
+machine-local relay endpoint with a placeholder key; the relay forwards the
+request unchanged through the host HTTP client, which adds the provider
+credential (the provider blocks the native Python client). When the judge
+endpoint is already reachable inside the grading machine, the script calls it
+directly with that endpoint's own key; the provider credential itself stays out
+of the machine. Agent/verifier credential declarations
 configure host transport and do not modify TaskSpec environment variables.
 
 The `oracle` control executes a preserved file-task or workspace-state `solution/solve.sh` in its
@@ -3764,7 +3826,11 @@ using the enum from `taskcompendium.models`, or pass `--docker-build declarative
 `task_spec_harbor` (the default is `reject`). Run the Trial with
 `environment: {type: daytona, kwargs: {provisioning: declarative}}`.
 The Trial owns a temporary copy of each original Docker build context until its
-machines close. It preserves build bytes, file modes, timestamps and the image-default
+machines close. Snapshot and declarative Daytona builds both send the complete
+original context as one archive, so directory entries — including explicitly
+empty `COPY` sources — travel with the original files; no Dockerfile is
+modified and no placeholder file is added. It preserves build bytes, file modes,
+timestamps and the image-default
 working directory. Daytona commands use its existing root account unless a command
 selects a user; RST retains its original root actor. Mutable bases and downloads remain mutable; this
 route records a direct build rather than claiming an immutable image pin.
@@ -4378,10 +4444,10 @@ reviewed and admitted counts) is kept as `RecipeQAHistoricalNotes` on the
 declaration's `recipe_qa_history`. It is clearly labeled history: it can never
 assert a level, and it does not feed the derivation.
 
-Runnable agentic sources require an accepted task format, a production snapshot-identity
+Runnable agentic sources require a declared task format that the detector confirms, a production snapshot-identity
 measurement and its basis, an execution-requirement failure count, and evidence-derived
 SAMPLE or FULL oversight with verification evidence. A missing required record blocks admission.
-The grandfathered MarinSkyRL sources retain their existing admission policy.
+MarinSkyRL blend sources clear the same admission gates as every other source.
 Conversion and diagnostic review can collect evidence before admission; there is
 no inventory-only substitute for a registered converter.
 Deprecated sources retain their history and name their qualified replacement.
