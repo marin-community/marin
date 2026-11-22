@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import torch
 from iris.cluster.client.job_info import get_job_info
+from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.inference.backend import ModelSpec
 from marin.inference.config import ServingGeometry, VllmEngineConfig
 from marin.inference.iris_vllm import (
@@ -22,6 +23,7 @@ from marin.inference.iris_vllm import (
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.vllm_backend import VllmBackend
+from marin.inference.vllm_server import VllmEnvironment
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from safetensors.torch import load_file
 from skyrl_train.inference_engines.base import request_id_for_session
@@ -84,10 +86,12 @@ def qualify_windows(spec: dict, results: list[dict]) -> list[dict]:
     return checked
 
 
-async def generate(base_url: str, spec: dict) -> None:
+async def generate(environment: VllmEnvironment, spec: dict) -> None:
     """Retain exact Mochi continuations and seal bounded per-rank verifier features."""
     rows = [json.loads(line) for line in StoragePath(spec["prompts"]).read_text().splitlines()]
     rows = rows[: spec["prompt_count"]]
+    base_url = environment.server_url
+    metric_window = await asyncio.to_thread(InferenceMetricWindow.start, environment, speculative=True)
     semaphore = asyncio.Semaphore(spec["concurrency"])
     async with httpx.AsyncClient(timeout=spec["request_timeout"], limits=httpx.Limits(max_connections=1024)) as client:
 
@@ -158,6 +162,8 @@ async def generate(base_url: str, spec: dict) -> None:
         started.raise_for_status()
         write_json(spec["output"], "capture-start.json", started.json())
         results = await asyncio.gather(*(continuation(i, row) for i, row in enumerate(rows)))
+        metrics = await asyncio.to_thread(metric_window.finish)
+        write_json(spec["output"], "generation-metrics.json", metrics.model_dump(mode="json"))
         sealed = await client.post(
             f"{base_url.removesuffix('/v1')}/collective_rpc",
             json={"method": "seal_mochi_capture", "args": [prefix_join(spec["output"], "captures")], "timeout": 1800},
@@ -188,24 +194,9 @@ async def generate(base_url: str, spec: dict) -> None:
         )
 
 
-def run(spec: dict) -> None:
-    """Own the native Iris serving gang for one offline capture interval."""
-    info = get_job_info()
-    if info is None:
-        raise RuntimeError("Run regional capture in Iris")
-    # The GPU-only vLLM package is optional in the CPU coordinator environment.
-    from vllm.config import CompilationConfig  # noqa: PLC0415
-
-    if not spec["output"].startswith("s3://marin-us-east-08a/"):
-        raise ValueError("Mochi captures must remain in regional 08a S3")
-    if (StoragePath(spec["output"]) / "generation.json").exists():
-        raise FileExistsError("Completed capture output already exists")
-    geometry = ServingGeometry(**spec["geometry"])
-    compilation = CompilationConfig(mode=3, cudagraph_mode="PIECEWISE")
-    compilation.set_splitting_ops_for_v1("allgather_reducescatter", data_parallel_size=geometry.data_parallel_size)
-    assert compilation.splitting_ops is not None
-    compilation.splitting_ops.append("vllm::grug_moe_short_conv")
-    model = ModelSpec(
+def mochi_model_spec() -> ModelSpec:
+    """Pin the adopted TP1/BF16 Mochi verifier and its tokenizer."""
+    return ModelSpec(
         weights=TARGET_URI,
         api_model="mochi",
         num_chips=None,
@@ -216,51 +207,87 @@ def run(spec: dict) -> None:
         tokenizer=TOKENIZER,
         tokenizer_revision=TOKENIZER_REVISION,
     )
+
+
+def mochi_engine_config(geometry: ServingGeometry, draft: Path | None) -> VllmEngineConfig:
+    """Use matched native settings for capture and target/draft evaluation arms."""
+    # The GPU-only package is optional in the CPU coordinator environment.
+    from vllm.config import CompilationConfig  # noqa: PLC0415
+
+    compilation = CompilationConfig(mode=3, cudagraph_mode="PIECEWISE")
+    compilation.set_splitting_ops_for_v1("allgather_reducescatter", data_parallel_size=geometry.data_parallel_size)
+    assert compilation.splitting_ops is not None
+    compilation.splitting_ops.append("vllm::grug_moe_short_conv")
+    arguments = (
+        "--enable-expert-parallel",
+        "--attention-backend",
+        "FLASH_ATTN",
+        "--moe-backend",
+        "triton",
+        "--enable-return-routed-experts",
+        "--load-format",
+        "runai_streamer",
+        "--model-loader-extra-config",
+        json.dumps({"distributed": False, "concurrency": 4, "memory_limit": 8589934592}),
+        "--gpu-memory-utilization",
+        "0.85",
+        "--no-enable-prefix-caching",
+        "--mamba-cache-mode",
+        "none",
+        "--no-async-scheduling",
+        "--worker-extension-cls",
+        "experiments.post_training.mochi_eagle3_worker.MochiCaptureWorker",
+        "--compilation-config",
+        json.dumps(
+            {
+                "mode": 3,
+                "cudagraph_mode": "PIECEWISE",
+                "splitting_ops": compilation.splitting_ops,
+            }
+        ),
+    )
+    if draft is not None:
+        arguments += (
+            "--speculative-config",
+            json.dumps(
+                {
+                    "method": "eagle3",
+                    "model": str(draft),
+                    "num_speculative_tokens": 3,
+                    "max_model_len": 98304,
+                }
+            ),
+        )
+    return VllmEngineConfig(
+        startup_timeout_seconds=7200,
+        max_num_seqs=64,
+        max_num_batched_tokens=8192,
+        extra_args=arguments,
+        extra_metric_families=frozenset(
+            {
+                "vllm:spec_decode_num_drafts",
+                "vllm:spec_decode_num_draft_tokens",
+                "vllm:spec_decode_num_accepted_tokens",
+            }
+        ),
+    )
+
+
+def run(spec: dict) -> None:
+    """Own the native Iris serving gang for one offline capture interval."""
+    info = get_job_info()
+    if info is None:
+        raise RuntimeError("Run regional capture in Iris")
+    if not spec["output"].startswith("s3://marin-us-east-08a/"):
+        raise ValueError("Mochi captures must remain in regional 08a S3")
+    if (StoragePath(spec["output"]) / "generation.json").exists():
+        raise FileExistsError("Completed capture output already exists")
+    geometry = ServingGeometry(**spec["geometry"])
+    model = mochi_model_spec()
     with tempfile.TemporaryDirectory(prefix="mochi-eagle3-seed-") as scratch:
         draft = Path(scratch) / "draft"
         io.download_directory(spec["seed_draft"], str(draft))
-        engine = VllmEngineConfig(
-            startup_timeout_seconds=7200,
-            max_num_seqs=64,
-            max_num_batched_tokens=8192,
-            extra_args=(
-                "--enable-expert-parallel",
-                "--attention-backend",
-                "FLASH_ATTN",
-                "--moe-backend",
-                "triton",
-                "--enable-return-routed-experts",
-                "--load-format",
-                "runai_streamer",
-                "--model-loader-extra-config",
-                json.dumps({"distributed": False, "concurrency": 4, "memory_limit": 8589934592}),
-                "--gpu-memory-utilization",
-                "0.85",
-                "--no-enable-prefix-caching",
-                "--mamba-cache-mode",
-                "none",
-                "--no-async-scheduling",
-                "--worker-extension-cls",
-                "experiments.post_training.mochi_eagle3_worker.MochiCaptureWorker",
-                "--compilation-config",
-                json.dumps(
-                    {
-                        "mode": 3,
-                        "cudagraph_mode": "PIECEWISE",
-                        "splitting_ops": compilation.splitting_ops,
-                    }
-                ),
-                "--speculative-config",
-                json.dumps(
-                    {
-                        "method": "eagle3",
-                        "model": str(draft),
-                        "num_speculative_tokens": 3,
-                        "max_model_len": 98304,
-                    }
-                ),
-            ),
-        )
+        engine = mochi_engine_config(geometry, draft)
         with iris_vllm_launch(geometry) as launch:
             # Bounded verifier-feature capture is implemented in the V1 runner.
             environment_variables = {
@@ -274,7 +301,7 @@ def run(spec: dict) -> None:
                 if launch.is_leader:
                     with iris_vllm_followers(launch):
                         environment.wait_until_ready()
-                        asyncio.run(generate(environment.server_url, spec))
+                        asyncio.run(generate(environment, spec))
                 else:
                     wait_for_iris_vllm_shutdown(launch, environment.check_alive)
                 logs = environment.logs()
