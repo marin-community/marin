@@ -25,6 +25,7 @@ from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Re
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.snowball import (
+    SnowballBlock,
     SnowballConfig,
     SnowballLMHeadModel,
     snowball_block_from_state_dict,
@@ -100,7 +101,7 @@ def _profile_prefill(engine: InferenceEngine, output: Path) -> None:
 
 
 def _convert_layers(
-    template: SnowballLMHeadModel, state_dict: dict[str, jax.Array], prefix: str | None
+    template: SnowballLMHeadModel, state_dict: dict[str, jax.Array], prefix: str | None, *, pack_expert_weights: bool
 ) -> SnowballLMHeadModel:
     """Convert a resident HF state dict one layer at a time, releasing the inputs."""
     layer_prefix = f"{prefix}.model.layers." if prefix else "model.layers."
@@ -116,9 +117,13 @@ def _convert_layers(
     state_dict.clear()
 
     convert_block = eqx.filter_jit(snowball_block_from_state_dict)
+    pack_block = eqx.filter_jit(SnowballBlock.with_packed_experts)
     blocks = []
     for block, weights in zip(transformer.blocks, weights_by_layer, strict=True):
-        blocks.append(jax.block_until_ready(convert_block(block, weights, 0, prefix)))
+        block = jax.block_until_ready(convert_block(block, weights, 0, prefix))
+        if pack_expert_weights:
+            block = jax.block_until_ready(pack_block(block))
+        blocks.append(block)
         weights.clear()
     transformer = eqx.tree_at(lambda value: value.blocks, transformer, tuple(blocks))
     return eqx.tree_at(lambda model: model.transformer, template, transformer)
@@ -139,6 +144,7 @@ def main() -> None:
     parser.add_argument("--accelerator", choices=("tpu", "h100x4", "h100x8"), default="tpu")
     parser.add_argument("--chips", type=int, choices=(4, 8))
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
+    parser.add_argument("--pack-expert-weights", action="store_true", help="Pack gate and up weights for inference")
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3", "gpu", "reference"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "separate", "split"), default="grouped")
@@ -157,6 +163,8 @@ def main() -> None:
         "--profile-prefill", action="store_true", help="Trace fresh and primed prefill after measurement"
     )
     args = parser.parse_args()
+    if args.pack_expert_weights and not args.layerwise_load:
+        parser.error("--pack-expert-weights requires --layerwise-load")
     if min(args.concurrency, args.max_seqs_in_prefill, args.max_rounds) < 1:
         parser.error("--concurrency, --max-seqs-in-prefill, and --max-rounds must be positive")
     if args.concurrency > 1 and (args.prefix_cache == "last_prompt" or args.decode_token_layout == "replicated"):
@@ -253,7 +261,7 @@ def main() -> None:
                     SnowballLMHeadModel.init, vocab, model_config, key=jax.random.PRNGKey(0)
                 )
                 with hax.axis_mapping(trainer.parameter_axis_mapping):
-                    model = _convert_layers(template, state_dict, prefix)
+                    model = _convert_layers(template, state_dict, prefix, pack_expert_weights=args.pack_expert_weights)
             else:
                 model = converter.load_pretrained(
                     model_config.model_type,
@@ -303,6 +311,7 @@ def main() -> None:
             "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,
             "layerwise_load": args.layerwise_load,
+            "pack_expert_weights": args.pack_expert_weights,
             "batch_timeout": config.batch_timeout,
             "command": command,
         }

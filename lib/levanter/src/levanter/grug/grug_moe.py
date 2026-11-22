@@ -15,6 +15,7 @@ Implementation overview:
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import cast, NamedTuple
 
@@ -524,7 +525,8 @@ class MoEExpertMlp(eqx.Module):
     """Expert MLP weights for routed MoE calls."""
 
     w_gate: jax.Array
-    w_up: jax.Array
+    """Gate projection, followed by the up projection if packed."""
+    w_up: jax.Array | None
     w_down: jax.Array
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
@@ -573,6 +575,19 @@ class MoEExpertMlp(eqx.Module):
             num_expert_waves=num_expert_waves,
         )
 
+    def with_packed_gate_up(self) -> "MoEExpertMlp":
+        """Combine the gate and up weights for repeated inference."""
+        if self.w_up is None:
+            return self
+        return replace(self, w_gate=jnp.concatenate((self.w_gate, self.w_up), axis=-1), w_up=None)
+
+    def split_gate_up(self) -> tuple[jax.Array, jax.Array]:
+        """Return the gate and up projections in checkpoint layout."""
+        if self.w_up is not None:
+            return self.w_gate, self.w_up
+        gate, up = jnp.split(self.w_gate, 2, axis=-1)
+        return gate, up
+
     @named_call
     def __call__(
         self,
@@ -584,7 +599,7 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
-        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        w_gate_up = self.w_gate if self.w_up is None else jnp.concatenate((self.w_gate, self.w_up), axis=-1)
         return moe_mlp(
             x,
             selected_experts,
@@ -624,9 +639,17 @@ class MoEExpertMlp(eqx.Module):
         token_tile = 128 if x.shape[0] <= 8192 else 256
         # Snowball's 1,280-wide projections use a whole output tile on v6e.
         output_tile = 1280 if chip == pltpu.ChipVersion.TPU_V6E else None
-        if chip == pltpu.ChipVersion.TPU_V5P and x.shape[0] <= 2048 and self.w_gate.shape[1:] == (2560, 1280):
+        if chip == pltpu.ChipVersion.TPU_V5P and x.shape[0] <= 2048 and self.w_down.shape[1:] == (1280, 2560):
             token_tile, output_tile = (32 if x.shape[0] <= 512 else 64), 1280
         expert_spec = P("expert", None, None)
+        weight_specs = (expert_spec, expert_spec)
+        weights = (
+            _reshard_for_shard_map(self.w_gate, mesh, expert_spec),
+            _reshard_for_shard_map(self.w_down, mesh, expert_spec),
+        )
+        if self.w_up is not None:
+            weight_specs += (expert_spec,)
+            weights += (_reshard_for_shard_map(self.w_up, mesh, expert_spec),)
         run = shard_map(
             partial(
                 _moe_mlp_ep_ring_local,
@@ -638,7 +661,7 @@ class MoEExpertMlp(eqx.Module):
                 megablox_output_tile=output_tile,
             ),
             mesh=mesh,
-            in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),
+            in_specs=(token_spec, token_spec, token_spec, token_spec, *weight_specs),
             out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
             check_vma=False,
         )
@@ -647,9 +670,7 @@ class MoEExpertMlp(eqx.Module):
             _reshard_for_shard_map(selected_experts, mesh, token_spec),
             _reshard_for_shard_map(combine_weights, mesh, token_spec),
             _reshard_for_shard_map(token_valid, mesh, token_spec),
-            _reshard_for_shard_map(self.w_gate, mesh, expert_spec),
-            _reshard_for_shard_map(self.w_down, mesh, expert_spec),
-            _reshard_for_shard_map(self.w_up, mesh, expert_spec),
+            *weights,
         )
         return out
 
@@ -674,6 +695,7 @@ class MoEExpertMlp(eqx.Module):
         )
         token_spec = P() if replicated_token else _token_spec_from_x(x, mesh)
         expert_spec = P("expert", None, None)
+        gate, up = self.split_gate_up()
         run = shard_map(
             partial(
                 _moe_mlp_ep_small_local,
@@ -691,8 +713,8 @@ class MoEExpertMlp(eqx.Module):
             _reshard_for_shard_map(selected_experts, mesh, token_spec),
             _reshard_for_shard_map(combine_weights, mesh, token_spec),
             _reshard_for_shard_map(token_valid, mesh, token_spec),
-            _reshard_for_shard_map(self.w_gate, mesh, expert_spec),
-            _reshard_for_shard_map(self.w_up, mesh, expert_spec),
+            _reshard_for_shard_map(gate, mesh, expert_spec),
+            _reshard_for_shard_map(up, mesh, expert_spec),
             _reshard_for_shard_map(self.w_down, mesh, expert_spec),
         )
 

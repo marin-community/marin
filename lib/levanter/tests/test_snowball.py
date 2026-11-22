@@ -1208,11 +1208,15 @@ def test_snowball_state_dict_key_and_shape_manifest():
 
 @pytest.mark.parametrize("individual_experts", [False, True])
 @pytest.mark.parametrize("prefix", [None, "policy"])
-def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix):
+@pytest.mark.parametrize("packed_experts", [False, True])
+def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix, packed_experts):
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         src = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(1))
         dst = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(2))
+        if packed_experts:
+            blocks = tuple(layer.with_packed_experts() for layer in dst.transformer.blocks)
+            dst = eqx.tree_at(lambda model: model.transformer.blocks, dst, blocks)
         canonical = src.to_state_dict(prefix=prefix)
         sd = {}
         for name, weight in canonical.items():
@@ -1228,6 +1232,7 @@ def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix):
             else:
                 sd[name] = weight
         dst = hax.named_jit(lambda m, state: m.from_state_dict(state, prefix=prefix))(dst, sd)
+        assert all((layer.mlp.expert_mlp.w_up is None) == packed_experts for layer in dst.transformer.blocks)
         for name, weight in dst.to_state_dict(prefix=prefix).items():
             np.testing.assert_array_equal(np.asarray(weight), np.asarray(canonical[name]), err_msg=name)
 

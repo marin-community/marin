@@ -15,7 +15,7 @@ expert contraction tile.
 
 | Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM p90 TTFT |
 | --- | ---: | ---: | ---: |
-| v5p-8 | 533.77 | 549.46 | 3.19 / 1.34 s |
+| v5p-8 | 538.58 | 549.46 | 3.74 / 1.34 s |
 | v6e-8 | 600.63 | 554.00 | 2.03 / 1.31 s |
 | 8× H100 | 621.18 | 593.09 | 1.01 / 1.44 s |
 
@@ -970,6 +970,24 @@ the wide contraction tile diverged at the sixth greedy token.
 The original contraction order remains in the branch.
 [Wide contraction replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v35-80-contexts-expert-contraction) · [Generation check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-expert-output-check-20261122-v1)
 
+With the experimental wide contraction, packing experts at 80
+contexts reached 537.10 output tok/s. Keeping the second retained
+window span as well reached 538.58, 2.0% below the strongest compiled
+run. The latter run matched all 375 paired output lengths with zero
+errors. On paired turns, active decode reached 35.94 versus 35.55
+tok/s for compiled vLLM. Its aggregate p90 TTFT was 3.74 versus
+1.34 s. All five primed serial medians were within 4 ms.
+[Packed and wide contraction](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v36-80-contexts-packed-contraction) · [Combined cache and experts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v37-80-contexts-two-window-packed-experts)
+
+With the original contraction order, packing alone preserved all
+195 generated token IDs and their sampled log probabilities exactly
+in a two-layer TPU test with the checkpoint's expert dimensions. The
+prompts had 512, 768, and 29,500 tokens. The native probe exposes the
+verified layout via `--layerwise-load --pack-expert-weights`. Checkpoint
+export keeps separate gate and up arrays, and reload preserves the
+in-memory layout.
+[Packed layout numerical check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-packed-expert-output-check-20261122-v2)
+
 One packed v5p trace ran 16 concurrent sequences at 51,870 input tokens.
 Its 260 ms device round spent about 98 ms in the seven full-attention
 kernels. The 512-token trace took 157 ms. Limiting internal slots to
@@ -1117,6 +1135,13 @@ primed serial median was 110 versus 85 ms. The first attempt ended in
 worker preemption. The earlier 3,072-window-page allocation exceeded
 device memory by about 40 MiB.
 [32-context retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v25-32-contexts-2880-window-pages)
+
+Moving chat tokenization off the HTTP event loop into four workers
+reached 588.28 output tok/s on a second v6e-8 worker. On all 397 common
+turns with the 256-token-bucket control, output lengths matched, p90
+TTFT rose from 2.16 to 2.39 s, and active decode fell from 44.31 to
+43.49 tok/s. Both runs had zero profiling errors.
+[Parallel tokenization trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v28-parallel-chat-tokenizer)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly

@@ -38,6 +38,7 @@ def _global_parameters(model: HeroTransformer) -> tuple[_Parameter, ...]:
 
 
 def _block_parameters(block: HeroBlock) -> tuple[_Parameter, ...]:
+    gate, up = block.mlp.expert_mlp.split_gate_up()
     parameters = [
         _Parameter("input_layernorm.weight", block.rms_attn.weight),
         _Parameter("attn_gated_norm.down_proj.weight", block.attn_gated_norm.w_down, True),
@@ -52,8 +53,8 @@ def _block_parameters(block: HeroBlock) -> tuple[_Parameter, ...]:
         _Parameter("mlp_gated_norm.up_proj.weight", block.mlp_gated_norm.w_up, True),
         _Parameter("mlp.router.weight", block.mlp.router, True),
         _Parameter("mlp.router.bias", block.mlp.router_bias),
-        _Parameter("mlp.experts.gate_proj.weight", block.mlp.expert_mlp.w_gate, True),
-        _Parameter("mlp.experts.up_proj.weight", block.mlp.expert_mlp.w_up, True),
+        _Parameter("mlp.experts.gate_proj.weight", gate, True),
+        _Parameter("mlp.experts.up_proj.weight", up, True),
         _Parameter("mlp.experts.down_proj.weight", block.mlp.expert_mlp.w_down, True),
     ]
     if block.mlp.w_latent_down is not None:
