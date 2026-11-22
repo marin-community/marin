@@ -317,6 +317,12 @@ def eurus2_stdin_row(statement: str) -> dict:
     [
         ("Build a tree. If there are multiple answers, print any of them.", "any_valid_output"),
         ("Find the path with the minimum cost. If there are multiple answers, print any.", "any_valid_output"),
+        ("If there are multiple answers, print any of them with the smallest first element.", "any_valid_output"),
+        (
+            "If there are multiple answers, print any of them. String a is lexicographically less than string b if a "
+            "is a proper prefix of b.",
+            "any_valid_output",
+        ),
         ("Print the distance. It is considered correct if its absolute error is below 1e-6.", "float_tolerance"),
         ("This is an interactive problem. Query the judge.", "interactive_problem"),
         ("You don't need to read input. Complete the function sum2().", "function_template_with_example_tests"),
@@ -332,7 +338,7 @@ def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, r
     "statement",
     [
         "Read two integers and print their sum. Do not print any extra spaces.",
-        "If there are multiple answers, print any of them with the smallest first element.",
+        "If the answer is not unique, print the lexicographically smallest one.",
         "Complete the function add in the editor below.\n\nInput Format\n\nTwo integers.",
     ],
 )

@@ -28,8 +28,11 @@ _ANY_VALID_OUTPUT = re.compile(
     re.IGNORECASE,
 )
 _ONE_ANSWER_CHOSEN = re.compile(
-    r"lexicographically|smallest possible|with the (smallest|largest|minimum|maximum)|the one with", re.IGNORECASE
+    r"\blexicographically\s+(smallest|minimal|minimum|least|largest|maximal|maximum|greatest|first|last)\b",
+    re.IGNORECASE,
 )
+"""A tie-breaker that orders whole answers. A partial one ("with the smallest first element") can leave several
+answers, and a comparative ("a is lexicographically less than b") defines an order without choosing an answer."""
 _FLOAT_TOLERANCE = re.compile(
     r"absolute or relative|relative or absolute|relative error|absolute error"
     r"|error (does not|must not|should not|doesn't) exceed"
