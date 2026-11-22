@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 5:49 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 6:10 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,7 +15,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The fresh verified-publication control `2026.11.20.6` completed the initial panel and its first five updates on H100. | Verify all 25 updates, their final policy publication and the final fixed-panel evaluation. |
+| Megatron learner with vLLM | The fresh verified-publication control `2026.11.20.6` completed the initial panel and its first 13 updates on H100. All 112 receiver receipts through version 13 passed. | Verify all 25 updates, their final policy publication and the final fixed-panel evaluation. |
 | Levanter learner with vLLM | The artifact main passed the frozen 40-H100 smoke through training, exact restart, byte-verified publication, and terminal checkpoint. | Run the 25-update Levanter arm with the same workload and evaluation panel as the Megatron control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
@@ -1349,8 +1349,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The combined CPU port includes the fingerprint staging change and the
   optional prefix implementation. Twenty replay and wire tests passed.
   All three optimizer modes reproduced their exact fresh restore and next
-  update. The prospective held presets retain their existing allocator and
-  keep prefix reuse disabled until the accelerator gate.
+  update. The follow-up at `5fefb7ae6b` brings the accepted canonical
+  byte replay and Ray finalization fix into the typed learner. Both
+  version `2026.11.22.1` plans use the same 80% GPU preallocation,
+  pinned-host Adam, and learner checkpoint roundtrip. The dry-run
+  comparison matched initializer, training selection, evaluation,
+  and learner fields. Eleven CPU transport cases and 34 typed learner,
+  config, and serving cases passed on the port. The prospective native
+  preset keeps prefix reuse disabled until the accelerator gate.
   Retain the binary frames and native snapshot install, then qualify the
   ported learner with vLLM. The archived preset uses one turn per episode.
   Use a separate 67B tool-turn fixture to test continuation and a live
@@ -1396,8 +1402,9 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   resolved configuration builds an abstract model of 67,078,882,816
   parameters. Convert the two checkpoints on the original Data4/EP8
   learner layout, then independently verify the typed snapshots on the
-  one-host serving mesh. The full conversion and live swap remain
-  accelerator gates.
+  one-host serving mesh. The staged Iris wiring starts the serving job
+  only after the conversion succeeds and its immutable receipt validates.
+  The full conversion and live swap remain accelerator gates.
 
   The typed install keeps the old model and KV pool live until it verifies
   the replacement weights and allocates the new pool. A CPU probe found
@@ -1405,6 +1412,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   swap. On H100, sample live device bytes during restore and allocation,
   after the swap, and during the first request. The measured cold-run
   peak covers one resident policy.
+
+  The post-swap fused probe captures four production-length responses
+  under the replacement policy in the same live serving process. A
+  fresh one-host scorer verifies the installed weights independently
+  and scores the actual binary replay with FA4 and fused projection.
+  The CPU fixture passed all 32 action targets with maximum absolute
+  log-ratio `2.38e-7` and zero clip crossings. Require zero crossings
+  on all 32,768 post-swap targets on H100. The held comparison measures
+  end-to-end rollout admission and optimizer timing with four learner
+  hosts.
+
   [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
   Parquet has SHA-256
