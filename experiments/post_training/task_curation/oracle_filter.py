@@ -35,7 +35,7 @@ from taskcompendium.harbor.native_network import ReconstructedNativeNetworkPolic
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
-from taskcompendium.identity import canonical_sha256, task_spec_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_json, task_spec_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.legacy_producer_1485 import LegacyProducer1485QualificationReceipt
 from taskcompendium.pipeline.legacy_roles import LegacyRoleQualificationReceipt
@@ -969,10 +969,10 @@ def row_with_task(row: dict, task: TaskSpec) -> dict:
     row = dict(row)
     if "lowered_task_spec" in row:
         envelope = json.loads(row["lowered_task_spec"])
-        envelope["task"] = task.model_dump(mode="json")
+        envelope["task"] = task.source_document()
         row["lowered_task_spec"] = json.dumps(envelope)
     else:
-        serialized = task.model_dump_json()
+        serialized = task_spec_json(task)
         row["task_json" if "task_json" in row else "task_spec"] = serialized
         if "task_sha256" in row:
             row["task_sha256"] = hashlib.sha256(serialized.encode()).hexdigest()

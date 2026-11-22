@@ -57,6 +57,24 @@ from .negative_control_fixtures import filter_with_negative_controls as filter_c
 from .prebuilt_fixtures import prebuilt_task
 
 
+@pytest.mark.parametrize("carrier", ["lowered_task_spec", "task_spec", "task_json"])
+def test_projection_preserves_absent_source_fields(carrier):
+    envelope = json.loads(prebuilt_task("unchanged-source")["lowered_task_spec"])
+    envelope["task"].pop("integrity_contract", None)
+    task = TaskSpec.model_validate_json(json.dumps(envelope["task"]))
+    runtime = envelope["runtime"]
+    row = (
+        {carrier: json.dumps(envelope)}
+        if carrier == "lowered_task_spec"
+        else {carrier: json.dumps(envelope["task"]), "runtime": json.dumps(runtime)}
+    )
+    projected = oracle_filter.row_with_task(row, task)
+    restored = oracle_filter.row_task(projected)
+    assert task_spec_sha256(restored) == task_spec_sha256(task)
+    assert "integrity_contract" not in restored.source_document()
+    assert oracle_filter.row_runtime(projected) == runtime
+
+
 def calibration_cohort(tmp_path, count, prompt_bytes):
     template = TaskSpec.model_validate(json.loads(prebuilt_task("template")["lowered_task_spec"])["task"])
     template = template.model_copy(
