@@ -4,7 +4,7 @@ name: MuonC anneal 0.2 + AdamC head/router/embed
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7023898181
@@ -50,6 +50,13 @@ trials:
   commit: af9afb5768
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8503
+  delta:
+  - -0.0178
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: 0%
 - id: t003
   variant: X0250, matrix decay scaled to hold lambda*lr_max*N
   rung: competitive-d768
