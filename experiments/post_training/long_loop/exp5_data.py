@@ -11,7 +11,6 @@ full admitted version or a subsample with the upstream admitted row count, the g
 provenance, and ``training_ready``.
 """
 
-import base64
 import hashlib
 import json
 import os
@@ -20,7 +19,6 @@ from collections import Counter
 from pathlib import Path
 
 import click
-import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
@@ -34,9 +32,25 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Sou
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 
+from experiments.post_training.long_loop.exp4_data import (
+    GENERATED_ROW_COUNT,
+    GENERATED_V3_FULL_RUN_ROWS,
+    NEMOTRON_IF_LABEL,
+    NEMOTRON_IF_RECIPE_VERSION,
+    NEMOTRON_JSONL_URL,
+    NEMOTRON_KEPT_ROWS,
+    NEMOTRON_REJECTED_ROWS,
+    NEMOTRON_REVISION,
+    NEMOTRON_SOURCE,
+    NEMOTRON_UPSTREAM_ROWS,
+    _regenerate_generated_label,
+    _write_pool_file,
+    row_identity,
+)
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.long_loop_rl import AGENTIC_TRAIN_SOURCE, TEACHER_ROUTE_LABELS
 from experiments.post_training.task_curation.datasets.reasoning_gym.tasks import GENERATOR_URL
+from experiments.post_training.task_curation.datasets.skyrl.ifeval import convert_nemotron_if
 from experiments.post_training.task_curation.datasets.skyrl.math import convert_hardmath
 from experiments.post_training.task_curation.exp5_curriculum import (
     HARDMATH_FILE,
@@ -54,27 +68,10 @@ from experiments.post_training.task_curation.exp5_curriculum import (
     IFBENCH_SOURCE,
     IFBENCH_SOURCE_REVISION,
     OPENRESEARCHER_LABEL,
-    TARGET_SHARES,
     exp5_rl_curriculum,
     exp5_validation_split,
 )
 from experiments.post_training.task_curation.images.build import environment_artifact
-from experiments.post_training.long_loop.exp4_data import (
-    GENERATED_ROW_COUNT,
-    GENERATED_V3_FULL_RUN_ROWS,
-    NEMOTRON_IF_LABEL,
-    NEMOTRON_IF_RECIPE_VERSION,
-    NEMOTRON_JSONL_URL,
-    NEMOTRON_KEPT_ROWS,
-    NEMOTRON_REJECTED_ROWS,
-    NEMOTRON_REVISION,
-    NEMOTRON_SOURCE,
-    NEMOTRON_UPSTREAM_ROWS,
-    POOL_SCHEMA,
-    _regenerate_generated_label,
-    _write_pool_file,
-    row_identity,
-)
 
 OUTPUT_PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5"
 AGENTIC_RELEASE_URL = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release"
@@ -416,9 +413,7 @@ def prepare_pool(
                     OPENRESEARCHER_LABEL: {
                         "provisioned": "full",
                         "upstream_admitted_count": OPENRESEARCHER_ROWS,
-                        "version": (
-                            f"{OPENRESEARCHER_SERVICE_REPO}@{OPENRESEARCHER_SERVICE_REVISION} thin service pin"
-                        ),
+                        "version": f"{OPENRESEARCHER_SERVICE_REPO}@{OPENRESEARCHER_SERVICE_REVISION} thin service pin",
                     },
                     HARDMATH_LABEL: {
                         "provisioned": "full",

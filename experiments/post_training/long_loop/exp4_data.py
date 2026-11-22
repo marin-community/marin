@@ -228,8 +228,10 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
         "generator_version": GENERATOR_VERSION,
         "generated_version": "3",
         "row_count": len(regenerated),
-        "regenerated_indices": "the adopted label's exact cycle indices (the full v3 run yields "
-        f"{GENERATED_V3_FULL_RUN_ROWS}; the pools keep the adopted 20,800 composition)",
+        "regenerated_indices": (
+            "the adopted label's exact cycle indices (the full v3 run yields "
+            f"{GENERATED_V3_FULL_RUN_ROWS}; the pools keep the adopted 20,800 composition)"
+        ),
         "prompts_unchanged": True,
         "shared_grade_script": (
             "every row's embedded reasoning_gym_grade.py is regenerated: the cross-day entry comparison "

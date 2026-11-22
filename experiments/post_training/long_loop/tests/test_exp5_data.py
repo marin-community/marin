@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import json
 import math
 import subprocess
@@ -10,7 +9,6 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from marin.rl.curriculum import PoolRow, consumed_route_quotas, draw_validation_split
-from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -24,7 +22,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 
-from experiments.post_training.long_loop.exp5 import EXPECTED_ROUTE_QUOTAS, main, exp5_round_pools
+from experiments.post_training.long_loop.exp5 import EXPECTED_ROUTE_QUOTAS, main
 from experiments.post_training.long_loop.exp5_data import hardmath_task, ifbench_row
 from experiments.post_training.long_loop.round_runner import load_round
 from experiments.post_training.task_curation.exp5_curriculum import (

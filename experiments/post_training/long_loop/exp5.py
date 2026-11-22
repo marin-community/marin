@@ -22,6 +22,7 @@ from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
 from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
+from marin.rl.skyrl import SkyRLRolePlan
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -33,7 +34,6 @@ from experiments.post_training.long_loop.exp3_recipe import (
     whole_run_lr_receipt,
 )
 from experiments.post_training.long_loop.exp4 import release_artifact
-from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE
 from experiments.post_training.long_loop.exp5_data import OUTPUT_PREFIX, ROUTES, pool_steps
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
@@ -49,15 +49,8 @@ from experiments.post_training.long_loop.round_runner import (
 )
 from experiments.post_training.long_loop.shared_sft import native_sft_step
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
-from marin.rl.skyrl import SkyRLRolePlan
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES
 from experiments.post_training.task_curation.exp5_curriculum import (
-    HARDMATH_LABEL,
-    HARDMATH_REPO,
-    IFBENCH_LABEL,
-    IFBENCH_SOURCE,
-    OPENRESEARCHER_LABEL,
     TARGET_SHARES,
     exp5_rl_curriculum,
     exp5_validation_from_manifest,
@@ -173,8 +166,9 @@ def main(round_path: Path, source_revision: str, validation_output: Path, stage:
         ),
         "openresearcher": {
             "track": "thin-image + hosted retrieval service (pin 0c4f3958, 10/10 native grades)",
-            "runtime": "Daytona actor with the frozen BM25 retrieval service; the full 55 GB image is not a "
-            "Daytona snapshot",
+            "runtime": (
+                "Daytona actor with the frozen BM25 retrieval service; the full 55 GB image is not a " "Daytona snapshot"
+            ),
         },
         "science": "Reuse the exact qualified V7 science components; existing checked repairs are already present",
         "sft_ruling": {
