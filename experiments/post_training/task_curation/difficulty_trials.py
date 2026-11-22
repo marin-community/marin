@@ -58,6 +58,11 @@ from experiments.post_training.task_curation.environment import Environment
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
+
+HARBOR_DEFAULT_BUILD_TIMEOUT_SEC = 600.0
+"""Harbor's environment build allowance when the original task declares none."""
+LOCAL_IMAGE_START_ALLOWANCE_SEC = 7200.0
+"""A LOCAL actor machine may pull tens of GB before its first attempt starts."""
 JUDGE_TEMPERATURE = PROTOCOLS[PROTOCOL_ID].temperature
 INPUT_BUDGET_REASON = difficulty_gap_reason(DifficultyGap.PROTOCOL_INPUT_BUDGET_EXCEEDED)
 PROVIDER_WAIT_REASON = difficulty_gap_reason(DifficultyGap.PROVIDER_CAPACITY_WAIT)
@@ -613,6 +618,9 @@ def run_task(
                 kwargs=kwargs,
             ),
             environment=EnvironmentConfig(type=task.backend, kwargs=options),
+            environment_build_timeout_multiplier=(
+                LOCAL_IMAGE_START_ALLOWANCE_SEC / HARBOR_DEFAULT_BUILD_TIMEOUT_SEC if task.backend == "local" else None
+            ),
         )
 
         # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
