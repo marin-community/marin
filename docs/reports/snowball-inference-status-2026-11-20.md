@@ -9,7 +9,7 @@ integration remain open.
 
 The full BF16 67B checkpoint completed the matched 64K AgentX replay at
 128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
-reached 80% and 34% of compiled vLLM's aggregate output throughput on
+reached 80% and 96% of compiled vLLM's aggregate output throughput on
 v5p-8 and v6e-8. On eight H100s, two native replicas with singleton decode
 reached 616.68–621.18 output tok/s versus 590.24–593.09 for compiled vLLM.
 Native p90 time to first token was 0.96–1.01 s versus 1.43–1.44 s. At
@@ -672,6 +672,7 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v6e-8, native EP8 with eight KV contexts and separate append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v7-eight-contexts) | 173 | 35,534 | 169.21 | 20,156 | 28,726 |
 | [v6e-8, native EP8 with fused append through 16 rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v8-fused-decode) | 171 | 37,727 | 179.65 | 25,885 | 38,854 |
 | [v6e-8, native EP8 with eight KV contexts and fused append](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v9-fused-live-prefix) | 180 | 37,969 | 180.80 | 24,634 | 35,626 |
+| [v6e-8, 24 logical contexts with retained window tails](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v13-hybrid-terminal-pins) | 359 | 102,751 | 509.62 | 1,379 | 3,375 |
 
 The v5p-8 baseline ran in `us-central1` with zero profiling errors. The
 v6e-8 baseline ran in `us-east1` with one disconnected request. Native
@@ -781,6 +782,15 @@ The 12- and 14-context v6e-8 attempts ran into the 31.24 GiB per-chip
 HBM limit during preflight compilation. XLA reported 31.90 GiB and
 31.58 GiB respectively. The 14-context run used bounded prefill scratch.
 [12-context attempt](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v10-12-contexts) · [14-context attempt](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v11-bounded-prefill)
+
+The compact BF16 cache fit 24 logical contexts and 3,072 sliding-window
+pages on v6e-8. It reused 9.93 million prompt tokens across 223 admissions
+during the 180-second send phase. The run reached 509.62 output tok/s
+against 531.50 for compiled vLLM. It completed 359 requests with zero
+errors. All 359 paired output lengths matched, and paired active decode
+was 30.61 tok/s versus 32.91. The raw 64,512-token fresh prefill took
+1.343 s versus 1.522 s, or 48.0k versus 42.4k prompt tok/s. With a primed
+prefix and a 256-token suffix, native took 103 ms versus 84 ms.
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
