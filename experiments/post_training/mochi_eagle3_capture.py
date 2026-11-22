@@ -14,7 +14,7 @@ import torch
 from iris.cluster.client.job_info import get_job_info
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.inference.backend import ModelSpec
-from marin.inference.config import ServingGeometry, VllmEngineConfig
+from marin.inference.config import ServingGeometry, VllmCompilationCacheMode, VllmEngineConfig
 from marin.inference.iris_vllm import (
     iris_vllm_followers,
     iris_vllm_launch,
@@ -259,6 +259,9 @@ def mochi_engine_config(geometry: ServingGeometry, draft: Path | None) -> VllmEn
             ),
         )
     return VllmEngineConfig(
+        # The preinstalled wheel has a private source overlay. Its compile caches
+        # must not be published under the shared launcher's canonical identity.
+        compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED,
         startup_timeout_seconds=7200,
         max_num_seqs=64,
         max_num_batched_tokens=8192,
