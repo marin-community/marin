@@ -128,53 +128,65 @@ def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> 
 
 async def decode_probes(base_url: str, probes: list[dict]) -> dict:
     """Retain autoregressive target logprobs and routes across speculative rejections."""
-    trajectories = []
-    decoded = {}
     async with httpx.AsyncClient(timeout=1800) as client:
-        for probe in probes:
-            if not probe["identity"].endswith("@0"):
-                continue
+
+        async def decode(probe: dict, temperature: float) -> dict:
             prompt = probe["prompt"][:-1]
-            for temperature in (0, 0.7):
-                response = await client.post(
-                    f"{base_url}/completions",
-                    json={
-                        "model": "mochi",
-                        "prompt": prompt,
-                        "max_tokens": 256,
-                        "temperature": temperature,
-                        "top_p": 1.0,
-                        "seed": 17,
-                        "stop_token_ids": [128001, 128009],
-                        "return_token_ids": True,
-                        "return_tokens_as_token_ids": True,
-                        "logprobs": 1,
-                        "routed_experts_prompt_start": len(prompt) - 1,
-                    },
-                )
-                response.raise_for_status()
-                choice = response.json()["choices"][0]
-                tokens = choice["token_ids"]
-                routes = normalize_routed_experts(choice["routed_experts"], prompt[-1:], tokens)
-                if routes.shape[1:] != (48, 8) or routes.max() >= 384:
-                    raise ValueError("Autoregressive Mochi routes are not aligned to target output IDs")
-                trajectories.append({"identity": probe["identity"], "temperature": temperature, "choice": choice})
-                for position in DECODE_POSITIONS:
-                    if position >= len(tokens):
-                        continue
-                    identity = f"{probe['identity']}/temp{temperature}/decode{position}"
-                    top = choice["logprobs"]["top_logprobs"][position]
-                    top_token = min(top, key=lambda token: (-top[token], int(token.removeprefix("token_id:"))))
-                    decoded[identity] = {
-                        "logprob": choice["logprobs"]["token_logprobs"][position],
-                        "top1": int(top_token.removeprefix("token_id:")),
-                        "top1_logprob": top[top_token],
-                        "routes": routes[position].tolist(),
-                        "prompt": prompt + tokens[: position + 1],
-                        "token": tokens[position],
-                        "identity": identity,
-                    }
-    return {"scores": decoded, "trajectories": trajectories}
+            response = await client.post(
+                f"{base_url}/completions",
+                json={
+                    "model": "mochi",
+                    "prompt": prompt,
+                    "max_tokens": 256,
+                    "temperature": temperature,
+                    "top_p": 1.0,
+                    "seed": 17,
+                    "stop_token_ids": [128001, 128009],
+                    "return_token_ids": True,
+                    "return_tokens_as_token_ids": True,
+                    "logprobs": 1,
+                    "routed_experts_prompt_start": len(prompt) - 1,
+                },
+            )
+            response.raise_for_status()
+            choice = response.json()["choices"][0]
+            tokens = choice["token_ids"]
+            routes = normalize_routed_experts(choice["routed_experts"], prompt[-1:], tokens)
+            if routes.shape[1:] != (48, 8) or routes.max() >= 384:
+                raise ValueError("Autoregressive Mochi routes are not aligned to target output IDs")
+            decoded = {}
+            for position in DECODE_POSITIONS:
+                if position >= len(tokens):
+                    continue
+                identity = f"{probe['identity']}/temp{temperature}/decode{position}"
+                top = choice["logprobs"]["top_logprobs"][position]
+                top_token = min(top, key=lambda token: (-top[token], int(token.removeprefix("token_id:"))))
+                decoded[identity] = {
+                    "logprob": choice["logprobs"]["token_logprobs"][position],
+                    "top1": int(top_token.removeprefix("token_id:")),
+                    "top1_logprob": top[top_token],
+                    "routes": routes[position].tolist(),
+                    "prompt": prompt + tokens[: position + 1],
+                    "token": tokens[position],
+                    "identity": identity,
+                }
+            return {
+                "scores": decoded,
+                "trajectory": {"identity": probe["identity"], "temperature": temperature, "choice": choice},
+            }
+
+        results = await asyncio.gather(
+            *(
+                decode(probe, temperature)
+                for probe in probes
+                if probe["identity"].endswith("@0")
+                for temperature in (0, 0.7)
+            )
+        )
+    return {
+        "scores": {key: row for result in results for key, row in result["scores"].items()},
+        "trajectories": [result["trajectory"] for result in results],
+    }
 
 
 async def steady_counters(environment: VllmEnvironment, config: LoadConfig, speculative: bool) -> dict:
