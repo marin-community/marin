@@ -146,6 +146,9 @@ struct Args {
     table_segment_history: bool,
 }
 
+/// How long shutdown waits for each periodic background task to exit.
+const PERIODIC_TASK_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Abort the standalone server after reporting any Rust panic.
 fn install_abort_on_panic_hook() {
     // Tokio contains task panics as JoinErrors, which can leave poisoned store
@@ -310,9 +313,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     diag_stop.store(true, Ordering::SeqCst);
     diag_shutdown.notify_waiters();
-    let _ = tokio::time::timeout(Duration::from_secs(2), diag).await;
+    let _ = tokio::time::timeout(PERIODIC_TASK_STOP_TIMEOUT, diag).await;
     if let Some(task) = segment_history {
-        let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+        let _ = tokio::time::timeout(PERIODIC_TASK_STOP_TIMEOUT, task).await;
     }
     let _ = tokio::time::timeout(
         Duration::from_secs(10),

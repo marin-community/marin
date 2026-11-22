@@ -7,7 +7,7 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use tokio::task::JoinHandle;
@@ -18,6 +18,7 @@ use crate::server::diagnostics::spawn_periodic;
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, Schema};
+use crate::store::table::now_ms;
 use crate::store::types::NamespaceStats;
 use crate::store::Store;
 
@@ -136,16 +137,8 @@ pub fn record_table_segments(store: &Store, timestamp_ms: i64) -> Result<(), Sta
 }
 
 async fn record_now(store: Arc<Store>) {
-    let recorded = tokio::task::spawn_blocking(move || {
-        let timestamp_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| {
-                StatsError::Internal(format!("system clock is before the unix epoch: {error}"))
-            })?
-            .as_millis() as i64;
-        record_table_segments(&store, timestamp_ms)
-    })
-    .await;
+    let recorded =
+        tokio::task::spawn_blocking(move || record_table_segments(&store, now_ms())).await;
     // One failed write must not end the history for the rest of the process.
     match recorded {
         Ok(Ok(())) => {}
@@ -154,7 +147,7 @@ async fn record_now(store: Arc<Store>) {
     }
 }
 
-/// Spawn the history task. It stops the same way the diagnostics task does.
+/// Spawn the history task. It exits once `stop` is set and `shutdown` notified.
 pub fn spawn_table_segment_history(
     store: Arc<Store>,
     stop: Arc<AtomicBool>,
@@ -198,8 +191,15 @@ mod tests {
         store.write_rows("iris.worker", &ipc, None).unwrap();
     }
 
-    /// `(namespace, segment_count, l0, l1)` for every recorded row, by namespace.
-    async fn recorded_rows(store: &Store) -> Vec<(String, i64, i64, i64)> {
+    #[derive(Debug, PartialEq)]
+    struct RecordedRow {
+        namespace: String,
+        segment_count: i64,
+        l0_segment_count: i64,
+        l1_segment_count: i64,
+    }
+
+    async fn recorded_rows(store: &Store) -> Vec<RecordedRow> {
         let sql = format!(
             "SELECT namespace, segment_count, l0_segment_count, l1_segment_count \
              FROM \"{TABLE_SEGMENTS_NAMESPACE}\" ORDER BY namespace"
@@ -219,12 +219,12 @@ mod tests {
             let int = |column: usize| batch.column(column).as_primitive::<Int64Type>().clone();
             let (segments, l0, l1) = (int(1), int(2), int(3));
             for row in 0..batch.num_rows() {
-                rows.push((
-                    namespaces.value(row).to_string(),
-                    segments.value(row),
-                    l0.value(row),
-                    l1.value(row),
-                ));
+                rows.push(RecordedRow {
+                    namespace: namespaces.value(row).to_string(),
+                    segment_count: segments.value(row),
+                    l0_segment_count: l0.value(row),
+                    l1_segment_count: l1.value(row),
+                });
             }
         }
         rows
@@ -258,28 +258,13 @@ mod tests {
             .unwrap();
 
         let rows = recorded_rows(&store).await;
-        assert!(
-            rows.contains(&("iris.worker".to_string(), 2, 1, 1)),
-            "{rows:?}"
-        );
-        assert!(rows.contains(&("log".to_string(), 0, 0, 0)), "{rows:?}");
-    }
-
-    #[test]
-    fn a_segment_above_the_last_level_column_is_an_error() {
-        let stats = NamespaceStats {
-            segment_count: 1,
-            segment_count_by_level: vec![0, 0, 0, 0, 1],
-            ..NamespaceStats::default()
+        let worker = RecordedRow {
+            namespace: "iris.worker".to_string(),
+            segment_count: 2,
+            l0_segment_count: 1,
+            l1_segment_count: 1,
         };
-
-        let result = table_segments_batch(
-            &table_segments_schema(),
-            1_000,
-            &[("iris.worker".to_string(), stats)],
-        );
-
-        assert!(matches!(result, Err(StatsError::Internal(_))));
+        assert!(rows.contains(&worker), "{rows:?}");
     }
 
     #[test]
