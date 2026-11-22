@@ -6,9 +6,11 @@
 import hashlib
 from pathlib import PurePosixPath
 
+DEFAULT_TOKENIZER_REVISION = "main"
+
 
 def immutable_model_cache_key(source: str, identity: str) -> str:
-    """Return a stable cache key for one immutable model source."""
+    """Preserve the digest used in existing worker and bucket cache paths."""
     return hashlib.sha256(f"{source}@{identity}".encode()).hexdigest()
 
 

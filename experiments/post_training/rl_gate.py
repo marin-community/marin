@@ -41,7 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
-from skyrlrecipe.model_staging import model_metadata_relative_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
@@ -423,6 +423,48 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
+def _normalize_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
+    aliases = [recorded.model_uri, recorded.model_local_path]
+    model_metadata = model_metadata_relative_path(recorded.model_uri, recorded.model_identity)
+    model = config["inputs"]["model"]
+    tokenizer_uri = model.get("tokenizer_uri")
+    tokenizer_metadata = (
+        model_metadata_relative_path(tokenizer_uri, model.get("tokenizer_revision") or DEFAULT_TOKENIZER_REVISION)
+        if tokenizer_uri
+        else model_metadata
+    )
+    model["local_path"] = "<model-staging>"
+    for path, metadata in (
+        ("skyrl.trainer.policy.model.path", model_metadata),
+        ("skyrl.trainer.ref.model.path", model_metadata),
+        ("skyrl.trainer.policy.model.tokenizer_path", tokenizer_metadata),
+        ("skyrl.trainer.ref.model.tokenizer_path", tokenizer_metadata),
+        ("skyrl.generator.model_name", None),
+        ("skyrl.generator.trajectory_retention.model_path", None),
+    ):
+        value = get_path(config, path)
+        if value is MISSING:
+            continue
+        staged = (
+            metadata is not None
+            and isinstance(value, str)
+            and PurePosixPath(value).is_absolute()
+            and PurePosixPath(value).parts[-len(metadata.parts) :] == metadata.parts
+        )
+        if value not in aliases and not staged:
+            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
+        if staged and path.endswith(".tokenizer_path"):
+            revision_path = path.removesuffix("tokenizer_path") + "tokenizer_revision"
+            if get_path(config, revision_path) is not None:
+                raise InvalidComparison(f"native tokenizer revision differs from the staged tokenizer: {revision_path}")
+            # Staging resolves the revision into the path, so the worker no longer needs it.
+            set_path(config, revision_path, recorded.model_identity)
+        set_path(config, path, "<model-staging>")
+    engine_name_path = "skyrl.generator.engine_init_kwargs.served_model_name"
+    if get_path(config, engine_name_path) in [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases]:
+        set_path(config, engine_name_path, "<served-model-name>")
+
+
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
     """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
@@ -484,46 +526,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                     )
                 )
 
-    aliases = [recorded.model_uri, recorded.model_local_path]
-    model_metadata = model_metadata_relative_path(recorded.model_uri, recorded.model_identity)
-    tokenizer_uri = inputs["model"].get("tokenizer_uri")
-    tokenizer_metadata = (
-        model_metadata_relative_path(tokenizer_uri, inputs["model"].get("tokenizer_revision") or "main")
-        if tokenizer_uri
-        else model_metadata
-    )
-    config["inputs"]["model"]["local_path"] = "<model-staging>"
-    for path, metadata in (
-        ("skyrl.trainer.policy.model.path", model_metadata),
-        ("skyrl.trainer.ref.model.path", model_metadata),
-        ("skyrl.trainer.policy.model.tokenizer_path", tokenizer_metadata),
-        ("skyrl.trainer.ref.model.tokenizer_path", tokenizer_metadata),
-        ("skyrl.generator.model_name", None),
-        ("skyrl.generator.trajectory_retention.model_path", None),
-    ):
-        value = get_path(config, path)
-        if value is MISSING:
-            continue
-        staged = (
-            metadata is not None
-            and isinstance(value, str)
-            and PurePosixPath(value).is_absolute()
-            and PurePosixPath(value).parts[-len(metadata.parts) :] == metadata.parts
-        )
-        if value not in aliases and not staged:
-            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
-        if staged and path.endswith(".tokenizer_path"):
-            revision_path = path.removesuffix("tokenizer_path") + "tokenizer_revision"
-            if get_path(config, revision_path) is not None:
-                raise InvalidComparison(f"native tokenizer revision differs from the staged tokenizer: {revision_path}")
-            # Staging resolves the revision into the path, so the worker no longer needs it.
-            set_path(config, revision_path, recorded.model_identity)
-        set_path(config, path, "<model-staging>")
-    replace_alias(
-        "skyrl.generator.engine_init_kwargs.served_model_name",
-        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases],
-        "<served-model-name>",
-    )
+    _normalize_model_bindings(config, recorded)
     for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
         config["artifacts"][field] = f"<output:{field}>"
     for path, field, suffix in (

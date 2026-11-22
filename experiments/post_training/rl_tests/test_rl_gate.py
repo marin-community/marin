@@ -35,7 +35,7 @@ from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
-from skyrlrecipe.model_staging import model_metadata_relative_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -122,7 +122,9 @@ def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
             model = launch["inputs"]["model"]
             staging_root = Path("/tmp/skyrl-worker")
             model_path = str(staging_root / model_metadata_relative_path(model["uri"], model["identity"]))
-            tokenizer_revision = "different" if root == wrong_tokenizer else model["tokenizer_revision"] or "main"
+            tokenizer_revision = (
+                "different" if root == wrong_tokenizer else model["tokenizer_revision"] or DEFAULT_TOKENIZER_REVISION
+            )
             tokenizer_path = str(staging_root / model_metadata_relative_path(model["tokenizer_uri"], tokenizer_revision))
             for role in ("policy", "ref"):
                 launch["skyrl"]["trainer"][role]["model"].update(
