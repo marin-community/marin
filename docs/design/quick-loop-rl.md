@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 6:26 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 6:34 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,7 +15,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The first `2026.11.20.6` child completed 17 updates before Iris preempted its CPU coordinator. All 144 receiver receipts passed. The first replacement also lost its coordinator during initialization. | Verify all 25 updates and the final fixed panel on a successful child. The hub CPU route has passed an offline configuration check. |
+| Megatron learner with vLLM | The first `2026.11.20.6` child completed 17 updates before Iris preempted its CPU coordinator. All 144 receiver receipts passed. The first replacement also lost its coordinator during initialization. Iris started a third child. | Verify all 25 updates and the final fixed panel on a successful child. |
 | Levanter learner with vLLM | The artifact main passed the frozen 40-H100 smoke through training, exact restart, byte-verified publication, and terminal checkpoint. | Run the 25-update Levanter arm with the same workload and evaluation panel as the Megatron control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
@@ -749,11 +749,11 @@ coordinator. Keep each child and its panel, timing and receiver evidence
 separate. [First control child][iris-matched-megatron] ·
 [First replacement][iris-matched-megatron-retry]
 
-The fallback plans move the CPU coordinator to the Marin hub and keep the
-40 H100s, initializer, training selection and evaluation panel in
-`cw-us-east-02a`. The offline render matched the frozen configurations
-after replacing route and attempt identities. Neither fallback has been
-submitted.
+The built-in `hub` route submits through the Marin hub and delegates the
+CPU coordinator to `cw-us-east-02a`. The frozen launcher also defaults
+in-task child submission to the parent's cluster. A hub-resident CPU
+coordinator would require an explicit regional GPU child route. Verify
+both placements before using a fallback for coordinator evictions.
 
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
