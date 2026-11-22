@@ -27,7 +27,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame, read_table, write_table
-from experiments.datakit.decontam.encoder.text_keys import readings, text_stream, window_hashes
+from experiments.datakit.decontam.encoder.text_keys import WINDOW, readings, text_stream, window_hashes
 
 logger = logging.getLogger(__name__)
 LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 4
@@ -90,16 +90,18 @@ def negative_forms(item: dict[str, Any], other_choice: str, far_text: str) -> di
     return forms
 
 
-def reading_with_key(record: str, key: int) -> str | None:
+def reading_with_key(record: str, key: int, width: int = WINDOW) -> str | None:
     """The first reading of *record* that holds *key*, as ``pairs.extract`` cuts its excerpt from it."""
-    return next((r for r in readings(record) if key in set(window_hashes(text_stream(r)).tolist())), None)
+    return next((r for r in readings(record) if key in set(window_hashes(text_stream(r), width).tolist())), None)
 
 
-def holds_key(record: str, key: int) -> bool:
-    return reading_with_key(record, key) is not None
+def holds_key(record: str, key: int, width: int = WINDOW) -> bool:
+    return reading_with_key(record, key, width) is not None
 
 
-def make_plant(output: str, keys_path: str, hosts_path: str, per_eval: int, scored_per_eval: int) -> Callable:
+def make_plant(
+    output: str, keys_path: str, hosts_path: str, per_eval: int, scored_per_eval: int, width: int = WINDOW
+) -> Callable:
     def plant(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         keys = read_frame(keys_path, ["id", "key1_hash"])
         key_of = dict(zip(keys["id"], keys["key1_hash"].to_numpy(dtype="uint64").tolist(), strict=True))
@@ -122,7 +124,7 @@ def make_plant(output: str, keys_path: str, hosts_path: str, per_eval: int, scor
                 before, after = host[:CONTEXT], host[CONTEXT : 2 * CONTEXT]
                 for form, text in positive_forms(item, other_choice, rng).items():
                     record = f"{before}\n{text}\n{after}"
-                    reading = reading_with_key(record, key)
+                    reading = reading_with_key(record, key, width)
                     found = reading is not None
                     counts[f"{form}|planted"] += 1
                     counts[f"{form}|found"] += found
@@ -165,11 +167,12 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--per-eval", type=int, default=50, help="items checked per eval")
     parser.add_argument("--scored-per-eval", type=int, default=10, help="items per eval written as pairs for stage 2")
+    parser.add_argument("--width", type=int, default=WINDOW, help="key window width of the stage-1 keys")
     args = parser.parse_args()
     files = parquet_files(args.items)
     resources = ResourceConfig(cpu=1, ram="8g")
     context = ZephyrContext(name="decon-encoder-planted", resources=resources, max_workers=min(100, len(files)))
-    plant = make_plant(args.output, args.keys, args.hosts, args.per_eval, args.scored_per_eval)
+    plant = make_plant(args.output, args.keys, args.hosts, args.per_eval, args.scored_per_eval, args.width)
     outcome = context.execute(Dataset.from_list(files).map_shard(plant), map_task_resources=resources)
     logger.info("planted: %d evals, %d misses", len(outcome.results), sum(r["misses"] for r in outcome.results))
 

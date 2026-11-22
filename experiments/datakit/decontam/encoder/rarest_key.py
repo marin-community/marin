@@ -46,34 +46,34 @@ MEASURE_SEED = 7
 REFERENCE_SEED = 11
 
 
-def item_streams(root: str) -> tuple[list[str], list[str]]:
+def item_streams(root: str, width: int) -> tuple[list[str], list[str]]:
     """Item ids and the stream that their keys come from: the question, or the block for a short question."""
     ids, streams = [], []
     for path in parquet_files(root):
         for row in read_table(path, ["id", "question", "choices"]).to_pylist():
             ids.append(row["id"])
-            streams.append(item_stream(row["question"], row["choices"] or []))
+            streams.append(item_stream(row["question"], row["choices"] or [], width))
     return ids, streams
 
 
-def candidate_windows(streams: list[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def candidate_windows(streams: list[str], width: int = WINDOW) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Hashes of the candidate windows, the item of each, and its offset in the item stream."""
     hashes, owners, offsets = [], [], []
     for number, stream in enumerate(streams):
-        if len(stream) < WINDOW:
+        if len(stream) < width:
             continue
-        last = len(stream) - WINDOW
+        last = len(stream) - width
         starts = sorted({round(k * last / (WINDOWS_PER_ITEM - 1)) for k in range(WINDOWS_PER_ITEM)}) if last else [0]
-        window = window_hashes(stream)
+        window = window_hashes(stream, width)
         hashes.append(window[starts])
         owners.append(np.full(len(starts), number, dtype=np.int32))
         offsets.append(np.array(starts, dtype=np.int32))
     return np.concatenate(hashes), np.concatenate(owners), np.concatenate(offsets)
 
 
-def prepare(items: str, output: str) -> None:
-    ids, streams = item_streams(items)
-    hashes, owners, offsets = candidate_windows(streams)
+def prepare(items: str, output: str, width: int) -> None:
+    ids, streams = item_streams(items, width)
+    hashes, owners, offsets = candidate_windows(streams, width)
     buffer = io.BytesIO()
     np.savez(buffer, hashes=hashes, owners=owners, offsets=offsets, ids=np.array(ids, dtype=object))
     StoragePath(prefix_join(output, "windows.npz")).write_bytes(buffer.getvalue())
@@ -112,7 +112,7 @@ class KeyTable:
         return [item for index in found.tolist() for item in self.items[self.starts[index] : self.starts[index + 1]]]
 
 
-def make_count(output: str):
+def make_count(output: str, width: int):
     def count(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         unique = np.unique(load_windows(output).hashes)
         counts = np.zeros(len(unique), dtype=np.uint32)
@@ -124,7 +124,7 @@ def make_count(output: str):
                 if len(text) > MAX_DOC_CHARS:
                     continue
                 records += 1
-                counts[record_hit_indices(text, unique)] += 1
+                counts[record_hit_indices(text, unique, width)] += 1
         nonzero = np.nonzero(counts)[0]
         buffer = io.BytesIO()
         np.savez(buffer, hashes=unique[nonzero], counts=counts[nonzero])
@@ -137,7 +137,7 @@ def make_count(output: str):
 KEY_COLUMNS = ("id", "first_hash", "first_count", "key1_hash", "key1_count", "key1_offset", "key2_hash", "key2_count")
 
 
-def keys_table(windows: Windows, window_counts: np.ndarray) -> pa.Table:
+def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW) -> pa.Table:
     """One row per item: its first window, its rarest window (key 1), and the rarest window that does not
     overlap key 1 (key 2). Hash columns are uint64; 0 means "no such key", and its count is -1."""
     hashes, owners, offsets, ids = windows
@@ -152,7 +152,7 @@ def keys_table(windows: Windows, window_counts: np.ndarray) -> pa.Table:
             end += 1
         group = order[start:end]
         first = group[0]
-        second = next((k for k in group[1:] if abs(int(offsets[k]) - int(offsets[first])) >= WINDOW), None)
+        second = next((k for k in group[1:] if abs(int(offsets[k]) - int(offsets[first])) >= width), None)
         lowest = group[int(np.argmin(offsets[group]))]
         keyed.add(owner)
         values = (
@@ -180,7 +180,7 @@ def keys_table(windows: Windows, window_counts: np.ndarray) -> pa.Table:
     )
 
 
-def choose(output: str) -> None:
+def choose(output: str, width: int = WINDOW) -> None:
     """Sum the reference counts of every candidate window and write each item's keys (``keys_table``)."""
     windows = load_windows(output)
     parts_hashes, parts_counts = [], []
@@ -192,7 +192,7 @@ def choose(output: str) -> None:
     totals = np.bincount(inverse, weights=np.concatenate(parts_counts)).astype(np.int64)
     slot = np.minimum(np.searchsorted(seen, windows.hashes), len(seen) - 1)
     window_counts = np.where(seen[slot] == windows.hashes, totals[slot], 0)
-    table = keys_table(windows, window_counts)
+    table = keys_table(windows, window_counts, width)
     write_table(table, prefix_join(output, "keys.parquet"))
     counts = np.array([c for c in table.column("key1_count").to_pylist() if c >= 0])
     firsts = np.array([c for c in table.column("first_count").to_pylist() if c >= 0])
@@ -208,7 +208,7 @@ def choose(output: str) -> None:
     )
 
 
-def make_measure(output: str):
+def make_measure(output: str, width: int):
     def measure(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         keys = read_table(prefix_join(output, "keys.parquet")).to_pandas()
         keys = keys[keys["key1_hash"] != 0]
@@ -232,7 +232,7 @@ def make_measure(output: str):
                     continue
                 stats["records"] += 1
                 stats["chars"] += len(text)
-                found = {name: record_hit_indices(text, table.unique) for name, table in tables.items()}
+                found = {name: record_hit_indices(text, table.unique, width) for name, table in tables.items()}
                 first = tables["first"].items_of(found["first"])
                 items1 = set(tables["key1"].items_of(found["key1"]))
                 either = items1 | set(tables["key2"].items_of(found["key2"]))
@@ -292,6 +292,9 @@ def main() -> None:
     parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet)")
     parser.add_argument("--output", required=True)
     parser.add_argument("--ram", default="32g")
+    parser.add_argument(
+        "--width", type=int, default=WINDOW, help="key window width in stream characters; same for every step"
+    )
     parser.add_argument("--measure-seed", type=int, default=MEASURE_SEED, help="seed of the measure-shard draw")
     parser.add_argument(
         "--exclude-shards",
@@ -299,10 +302,10 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.step == "prepare":
-        prepare(args.items, args.output)
+        prepare(args.items, args.output, args.width)
         return
     if args.step == "choose":
-        choose(args.output)
+        choose(args.output, args.width)
         return
     excluded: frozenset[str] = frozenset()
     if args.exclude_shards:
@@ -315,7 +318,7 @@ def main() -> None:
     logger.info("%s: %d shards", args.step, len(files))
     resources = ResourceConfig(cpu=1, ram=args.ram)
     context = ZephyrContext(name=f"decon-encoder-{args.step}", resources=resources, max_workers=len(files))
-    scan = make_count(args.output) if args.step == "count" else make_measure(args.output)
+    scan = make_count(args.output, args.width) if args.step == "count" else make_measure(args.output, args.width)
     outcome = context.execute(Dataset.from_list(files).map_shard(scan), map_task_resources=resources)
     logger.info("%s done: %d results", args.step, len(outcome.results))
 

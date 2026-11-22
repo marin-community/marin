@@ -39,11 +39,11 @@ def text_stream(text: str) -> str:
     return _NOT_STREAM.sub("", _TEX_COMMAND.sub(" ", folded).lower())
 
 
-def item_stream(question: str, choices: list[str]) -> str:
+def item_stream(question: str, choices: list[str], width: int = WINDOW) -> str:
     """The stream that an item's keys come from: its question, or, for a question shorter than a
-    window, the question followed by each choice with its letter (a, b, ...)."""
+    *width*-character window, the question followed by each choice with its letter (a, b, ...)."""
     stream = text_stream(question)
-    if len(stream) < WINDOW and choices:
+    if len(stream) < width and choices:
         stream += "".join(_LETTERS[i % len(_LETTERS)] + text_stream(c) for i, c in enumerate(choices))
     return stream
 
@@ -68,29 +68,29 @@ def readings(text: str) -> list[str]:
     return found
 
 
-def window_hashes(stream: str) -> np.ndarray:
-    """A polynomial hash, modulo 2**64, of every ``WINDOW``-character window of *stream*."""
+def window_hashes(stream: str, width: int = WINDOW) -> np.ndarray:
+    """A polynomial hash, modulo 2**64, of every *width*-character window of *stream*."""
     codes = np.frombuffer(stream.encode("utf-32-le"), dtype=np.uint32).astype(np.uint64)
-    count = len(codes) - WINDOW + 1
+    count = len(codes) - width + 1
     if count <= 0:
         return np.empty(0, dtype=np.uint64)
     hashes = np.zeros(count, dtype=np.uint64)
     with np.errstate(over="ignore"):
-        for offset in range(WINDOW):
+        for offset in range(width):
             hashes = hashes * _MULTIPLIER + codes[offset : offset + count]
     return hashes
 
 
-def hit_indices(stream: str, sorted_hashes: np.ndarray) -> np.ndarray:
-    """Indices into *sorted_hashes* of the windows that *stream* holds."""
-    hashes = window_hashes(stream)
+def hit_indices(stream: str, sorted_hashes: np.ndarray, width: int = WINDOW) -> np.ndarray:
+    """Indices into *sorted_hashes* of the *width*-character windows that *stream* holds."""
+    hashes = window_hashes(stream, width)
     if not len(hashes) or not len(sorted_hashes):
         return np.empty(0, dtype=np.int64)
     slot = np.minimum(np.searchsorted(sorted_hashes, hashes), len(sorted_hashes) - 1)
     return np.unique(slot[sorted_hashes[slot] == hashes])
 
 
-def record_hit_indices(text: str, sorted_hashes: np.ndarray) -> np.ndarray:
+def record_hit_indices(text: str, sorted_hashes: np.ndarray, width: int = WINDOW) -> np.ndarray:
     """Indices into *sorted_hashes* of the windows that any reading of the record *text* holds."""
-    hits = [hit_indices(text_stream(reading), sorted_hashes) for reading in readings(text)]
+    hits = [hit_indices(text_stream(reading), sorted_hashes, width) for reading in readings(text)]
     return np.unique(np.concatenate(hits))
