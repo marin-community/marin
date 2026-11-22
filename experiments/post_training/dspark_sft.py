@@ -15,7 +15,7 @@ import draccus
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import OUT, ArtifactStep, apply, lower
 from marin.execution.step_runner import StepRunner
-from marin.training.dspark.data_preparation import (
+from marin.training.drafting.dspark_data import (
     DraftRecipe,
     GrugShape,
     inspect_mix,
@@ -23,7 +23,7 @@ from marin.training.dspark.data_preparation import (
     prepare_data,
     require_sha256,
 )
-from marin.training.dspark.distillation import (
+from marin.training.drafting.dspark_distillation import (
     SPECULATORS_REVISION,
     VLLM_SOURCE_COMMIT,
     TrainingProvenance,

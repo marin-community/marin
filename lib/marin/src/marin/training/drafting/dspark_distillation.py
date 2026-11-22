@@ -25,7 +25,7 @@ from safetensors import safe_open
 
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
-from marin.training.dspark.data_preparation import (
+from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
     LM_HEAD,
