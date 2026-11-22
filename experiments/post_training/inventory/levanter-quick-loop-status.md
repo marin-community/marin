@@ -2,6 +2,13 @@
 
 November 21, 2026 (PST).
 
+Diagnostic BATCH smoke `2026.11.21.9` is submitted from
+`a7c751443ffbc55ca5e8b3603d0e41c09af17d3d`. At 18:55 PST its CPU coordinator
+was running, with no GPU child yet discovered. Its accepted bundle matches all
+4,583 frozen entries, including 43 required runtime files. It adds compiler
+memory evidence before the update; current-source accelerator acceptance is
+pending.
+
 BATCH smoke `2026.11.21.8`, from
 `233030789c6afd6aa61d315a001ce65ac7436007`, initialized the full 67B Snowball
 model on all four native learner hosts and byte-verified initial publication
@@ -318,8 +325,12 @@ uploads use a CPU-only process and explicit 02a lifecycle storage. Real CPU
 tests preserve exact diagnostics-on/off model, Adam, RNG, step, and averaging
 state, and retain the original training exception when upload fails.
 Two-process checkpoint continuation and independent source review pass.
-Diagnostic smoke `2026.11.21.9` is prepared but not yet submitted; these checks
-do not establish its GPU fit or explain the earlier allocation failure.
+Diagnostic smoke `2026.11.21.9` uses coordinator
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.9-coordinator-9066931e`,
+submitted at `2026-11-22T02:53:39.792Z`. It has verified BATCH priority and zero
+automatic failure retries. Its CPU coordinator is running; GPU execution has
+not yet been observed. The local checks do not establish its GPU fit or explain
+the earlier allocation failure.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
