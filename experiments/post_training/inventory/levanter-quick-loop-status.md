@@ -75,9 +75,21 @@ natural-exit requirement remains unchanged.
 A separate tiny-model lifecycle driver compares the prior cleanup operations
 with this candidate, using real checkpoint restoration, new process IDs and
 continuation against an uninterrupted control. Local CPU validation passed both
-arms. An eight-H100 job will qualify GPU lifecycle behavior before another
-40-H100 full-model smoke; neither that smaller job nor CPU success establishes
-full-model fit, cross-host exit or end-to-end quick-loop acceptance.
+arms. The eight-H100 job `/dlwh/native-lifecycle-2026-11-22-2`, from
+`7f91fe880a38e7e4e5fe7295bde7710988d24cc3`, failed on the continued update
+with `Loss is NaN` in both variants. Both had completed a first update,
+committed step-1 checkpoints, exited naturally with status zero, and restored
+exact model/Adam/RNG/step/averaging fingerprints in fresh processes. The frozen
+batch hashes also matched across variants. Those checks establish restoration
+of the saved state; they do not establish that state was finite or that the
+continued update succeeded.
+
+The complete 23.84-MiB task archive was downloaded and inspected. Actual
+receipts confirm eight H100s, the pinned packages and source bundle, VMM at
+0.90, and Linux NumPy advisories disabled. Both variants exited cleanly in this
+tiny case, so it does not identify or prove a remedy for the original full-model
+exit failure. The numerical failure is under investigation. No new 40-H100
+full-model smoke or matched 25-update comparison has been launched.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
