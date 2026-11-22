@@ -1292,7 +1292,7 @@ def test_backfill_declares_capability_with_evidence_before_review(tmp_path):
     for task in exported:
         assert task.environment_requirements.capabilities == ("network",)
         evidence = json.loads(task.labels[LABEL_KEY])
-        assert evidence["revision"] == "1" and evidence["policy_revision"] == "backfill-rules-1"
+        assert evidence["revision"] == "2" and evidence["policy_revision"] == "backfill-rules-1"
         entries = {entry["rule"]: entry for items in evidence["capabilities"].values() for entry in items}
         assert set(entries) == {"network_fetch_command", "package_install_command"}
         assert {entry["path"] for entry in entries.values()} == {"solution/solve.sh"}
@@ -1320,6 +1320,121 @@ def test_backfill_declares_capability_with_evidence_before_review(tmp_path):
     )
     phases = [phase["phase"] for phase in read_json(manifest["telemetry"])["phases"]]
     assert phases.index("within_source_dedup") < phases.index("requirements") < phases.index("audit_review")
+
+
+def docker_kata_task(name: str, resources: ResourceGroups) -> TaskSpec:
+    """A machine-ful task shaped like the pilot's pytest katas, with the given resources."""
+    environment = {"docker_image": "x@sha256:" + "b" * 64, "command_semantics": CommandSemantics.LINUX_PROCESS}
+    return TaskSpec(
+        id=name,
+        source={"dataset": "fixture", "revision": "1", "row": name, "importer_revision": "1"},
+        context={"events": [{"type": "message", "role": "user", "content": "solve the kata"}]},
+        answer_type="text",
+        answer_format={"kind": "plain_text"},
+        grader={
+            "kind": "script",
+            "argv": ("bash", "/tests/grade.sh"),
+            "environment": environment,
+            "reward": {"kind": "exit_code"},
+        },
+        environment_requirements=environment,
+        resources=resources,
+    )
+
+
+def test_backfill_task_treats_dockerfile_matches_as_build_time_only():
+    task = docker_kata_task(
+        "fixture-docker-only",
+        ResourceGroups(
+            oracle=(
+                inline_resource(
+                    "environment/Dockerfile",
+                    b"FROM python:3.10-slim\nWORKDIR /app\nRUN pip install --no-cache-dir pytest\n",
+                ),
+                inline_resource("solution/solve.sh", b"#!/bin/bash\ncp /solution/solution.py /app/solution.py\n"),
+            )
+        ),
+    )
+    backfill = backfill_task(task, BackfillPolicy("backfill-rules-2"))
+    assert backfill.task.environment_requirements.capabilities == ()
+    assert LABEL_KEY not in backfill.task.labels
+    assert backfill.outcome == "not_stated" and not backfill.ambiguous
+    assert backfill.rule_hits == {
+        "rule:package_install_command": 1,
+        "rule:python_runtime_command": 1,
+        "rule:python_mention": 1,
+        "rule:install_mention": 1,
+    }
+
+
+def test_backfill_task_declares_python_from_shipped_sources_and_keeps_network_silent():
+    task = docker_kata_task(
+        "fixture-pilot-shape",
+        ResourceGroups(
+            oracle=(
+                inline_resource("solution/solution.py", b"def solve(n):\n    return n\n"),
+                inline_resource("solution/solve.sh", b"#!/bin/bash\ncp /solution/solution.py /app/solution.py\n"),
+                inline_resource(
+                    "environment/Dockerfile",
+                    b"FROM python:3.10-slim\nWORKDIR /app\nRUN pip install --no-cache-dir pytest\n",
+                ),
+                inline_resource("test_solution.py", b"import unittest\nfrom solution import solve\n"),
+            )
+        ),
+    )
+    backfill = backfill_task(task, BackfillPolicy("backfill-rules-2"))
+    assert backfill.task.environment_requirements.capabilities == ("python",)
+    evidence = json.loads(backfill.task.labels[LABEL_KEY])
+    assert set(evidence["capabilities"]) == {"python"}
+    assert {entry["path"] for entries in evidence["capabilities"].values() for entry in entries} == {
+        "solution/solution.py",
+        "test_solution.py",
+    }
+    assert backfill.outcome == "declared" and not backfill.ambiguous
+    assert backfill.rule_hits["rule:python_source_file"] == 2
+    assert backfill.rule_hits["rule:package_install_command"] == 1
+
+
+def test_backfill_ambiguous_set_includes_declared_tasks_with_ambiguous_capabilities():
+    task = docker_kata_task(
+        "fixture-declared-with-residual",
+        ResourceGroups(
+            oracle=(
+                inline_resource("solution/solution.py", b"def solve(n):\n    return n\n"),
+                inline_resource(
+                    "solution/solve.sh",
+                    b"#!/bin/bash\n# download the reference weights before solving\n"
+                    b"cp /solution/solution.py /app/solution.py\n",
+                ),
+            )
+        ),
+    )
+    backfill = backfill_task(task, BackfillPolicy("backfill-rules-2"))
+    assert backfill.task.environment_requirements.capabilities == ("python",)
+    assert backfill.outcome == "declared"
+    assert backfill.ambiguous
+    assert backfill.outcomes["network"] == "ambiguous"
+    assert backfill.outcomes["python"] == "declared"
+
+
+def test_backfill_python_word_rules_ignore_json_metadata_prose():
+    task = docker_kata_task(
+        "fixture-json-prose",
+        ResourceGroups(
+            oracle=(
+                inline_resource("solution/solution.py", b"def solve(n):\n    return n\n"),
+                inline_resource("metadata.json", b'{"source": "unitsyn", "language": "python", "repo": ""}'),
+            )
+        ),
+    )
+    backfill = backfill_task(task, BackfillPolicy("backfill-rules-2"))
+    assert backfill.task.environment_requirements.capabilities == ("python",)
+    evidence = json.loads(backfill.task.labels[LABEL_KEY])
+    assert {entry["path"] for entries in evidence["capabilities"].values() for entry in entries} == {
+        "solution/solution.py"
+    }
+    assert backfill.rule_hits["rule:python_runtime_command"] == 0
+    assert backfill.rule_hits["rule:python_source_file"] == 1
 
 
 def test_backfill_task_declares_git_repository_and_network_from_remote_git(tmp_path):

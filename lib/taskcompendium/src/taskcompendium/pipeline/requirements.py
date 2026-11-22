@@ -43,8 +43,14 @@ from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outpu
 from taskcompendium.pipeline.sources import raw_input_sha256
 from taskcompendium.runtime.resources import resource_bytes
 
-REQUIREMENTS_REVISION = "1"
-"""The backfill stage's rule vocabulary and receipt schema revision."""
+REQUIREMENTS_REVISION = "2"
+"""The backfill stage's rule vocabulary and receipt schema revision.
+
+Revision 2 (ruling 2026-11-22, the pilot's hand-check): Dockerfile content matches are
+build-time evidence that declares nothing, ``python_source_file`` carries the python
+evidence from shipped Python sources, python word rules ignore JSON metadata prose, and
+the ambiguous set holds every task with a per-capability ambiguous outcome.
+"""
 
 REQUIREMENTS_MANIFEST_PATH = "requirements/manifest.json"
 """The backfill receipt, relative to a source's output, beside the review and verify manifests."""
@@ -89,12 +95,18 @@ class RequirementRule:
     capabilities: tuple[str, ...]
     pattern: re.Pattern[str] | None = None
     filename_pattern: re.Pattern[str] | None = None
+    exclude_suffixes: tuple[str, ...] = ()
+    """File suffixes whose text never matches this rule's content pattern, for word rules
+    that would otherwise read metadata prose (``"language": "python"`` in a JSON sidecar)
+    as an invocation."""
     ambiguous: bool = False
 
     def matches(self, path: str, text: str | None, *, executable: bool) -> bool:
         """Match a file by its name, or by its decoded text when the file can carry commands."""
         if self.filename_pattern is not None:
             return self.filename_pattern.search(_file_name(path)) is not None
+        if self.exclude_suffixes and path.endswith(self.exclude_suffixes):
+            return False
         return executable and text is not None and self.pattern is not None and self.pattern.search(text) is not None
 
 
@@ -107,7 +119,7 @@ def _file_name(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def _is_command_file(path: str) -> bool:
+def is_command_file(path: str) -> bool:
     name = _file_name(path)
     return name.startswith("Dockerfile") or name in COMMAND_FILE_NAMES or path.endswith(COMMAND_FILE_SUFFIXES)
 
@@ -163,6 +175,12 @@ DECLARED_RULES: tuple[RequirementRule, ...] = (
         "python_runtime_command",
         (PYTHON_CAPABILITY,),
         re.compile(r"\b(?:python3?(?:\.\d+)?|pytest)\b"),
+        exclude_suffixes=(".json",),
+    ),
+    RequirementRule(
+        "python_source_file",
+        (PYTHON_CAPABILITY,),
+        filename_pattern=re.compile(r"\.py$"),
     ),
 )
 """Rules that declare a capability from explicit usage.
@@ -174,6 +192,12 @@ over-declares network for vendored dependencies that no longer need resolving;
 ``git_remote_command`` misses git through frameworks; ``background_process_command`` misses
 background work through service supervisors it does not name; ``python_runtime_command``
 misses Python invoked through a shebang with no literal name in the script body.
+
+Content matches in a task's Dockerfile are build-time evidence (pilot hand-check, ruling
+2026-11-22): they prove what the image build needed, not what the running machine needs,
+so they stay visible as rule hits but declare nothing and mark nothing ambiguous.
+``python_source_file`` carries the python evidence instead: shipped Python sources are
+files the task's machine must execute.
 """
 
 AMBIGUOUS_RULES: tuple[RequirementRule, ...] = (
@@ -211,6 +235,7 @@ AMBIGUOUS_RULES: tuple[RequirementRule, ...] = (
         "python_mention",
         (PYTHON_CAPABILITY,),
         re.compile(r"\b(?:pytest|unittest|python)\b", re.IGNORECASE),
+        exclude_suffixes=(".json",),
         ambiguous=True,
     ),
 )
@@ -275,11 +300,16 @@ def _rule_hits(
         except UnicodeDecodeError:
             text = None
     code = _executable_text(text) if text is not None else None
+    build_time = _file_name(path).startswith("Dockerfile")
     for rule in RULES:
         haystack = text if rule.ambiguous else code
         if not rule.matches(path, haystack, executable=executable):
             continue
         counts[f"rule:{rule.name}"] += 1
+        # Build-time evidence stays visible as a rule hit but declares nothing: a Dockerfile
+        # install proves what the image build needed, not what the running machine needs.
+        if build_time:
+            continue
         if rule.ambiguous:
             ambiguous.update(rule.capabilities)
             continue
@@ -305,6 +335,8 @@ class TaskBackfill:
     rule_hits: Counter[str]
     """How many files each rule matched, the drift metric the pilot's ledger reads."""
     ambiguous: bool
+    """Whether any capability stays ambiguous, even when another was declared: such tasks
+    belong in the ambiguous set the LLM residual processes."""
     machine_less: bool
 
 
@@ -327,7 +359,7 @@ def backfill_task(task: TaskSpec, policy: BackfillPolicy) -> TaskBackfill:
         if path in seen:
             continue
         seen.add(path)
-        file_declared, file_ambiguous = _rule_hits(path, data, _is_command_file(path), rule_hits)
+        file_declared, file_ambiguous = _rule_hits(path, data, is_command_file(path), rule_hits)
         for capability, entries in file_declared.items():
             declared.setdefault(capability, [])
             for entry in entries:
@@ -347,6 +379,9 @@ def backfill_task(task: TaskSpec, policy: BackfillPolicy) -> TaskBackfill:
             outcomes[capability] = "ambiguous"
         else:
             outcomes[capability] = "not_stated"
+    # The ambiguous set reads the resolved outcomes: a declared capability supersedes its
+    # own mention signals, so only capabilities whose outcome stayed ambiguous count.
+    residual = {capability for capability, outcome in outcomes.items() if outcome == "ambiguous"}
     if written:
         environment = task.environment_requirements.model_copy(
             update={"capabilities": task.environment_requirements.capabilities + tuple(sorted(written))}
@@ -360,8 +395,8 @@ def backfill_task(task: TaskSpec, policy: BackfillPolicy) -> TaskBackfill:
         new_task = task.model_copy(
             update={"environment_requirements": environment, "labels": {**task.labels, LABEL_KEY: label}}
         )
-        return TaskBackfill(new_task, "declared", outcomes, written, rule_hits, False, False)
-    if ambiguous - already:
+        return TaskBackfill(new_task, "declared", outcomes, written, rule_hits, bool(residual), False)
+    if residual:
         return TaskBackfill(task, "ambiguous", outcomes, written, rule_hits, True, False)
     if already:
         return TaskBackfill(task, "unchanged", outcomes, written, rule_hits, False, False)
@@ -384,6 +419,8 @@ def _backfill_record(row: ConvertedRow, *, policy: BackfillPolicy) -> BackfillRe
     for capability, outcome in result.outcomes.items():
         counts[f"cap:{capability}:{outcome}"] += 1
     counts[f"task:{result.outcome}"] += 1
+    if result.ambiguous:
+        counts["task:ambiguous_set"] += 1
     return BackfillRecord(replace(row, result=replace(row.result, task=result.task)), counts, result.ambiguous)
 
 
@@ -440,7 +477,10 @@ def _receipt(counts: Counter[str], policy: BackfillPolicy, population_path: str,
     normalized = counts["task:normalized"]
     machine_less = counts["task:machine_less"]
     machine_ful = normalized - machine_less
-    ambiguous_count = counts["task:ambiguous"]
+    # The ambiguous set holds every task with a per-capability ambiguous outcome, including
+    # tasks whose other capabilities were declared; the task-level "ambiguous" outcome counts
+    # only tasks where ambiguity was the whole outcome.
+    ambiguous_count = counts["task:ambiguous_set"]
     share = ambiguous_count / machine_ful if machine_ful else 0.0
     threshold = policy.residual_threshold
     receipt: dict[str, Any] = {
