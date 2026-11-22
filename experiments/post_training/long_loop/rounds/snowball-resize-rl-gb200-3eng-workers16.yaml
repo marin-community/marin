@@ -246,6 +246,7 @@ rl:
         initial_model_uri: model-input
         ema_window: 5
         evaluation_interval: 3
+        expected_tasks: 120
       - type: wall_time_budget
         seconds: 36000
         drain_margin: 1800
