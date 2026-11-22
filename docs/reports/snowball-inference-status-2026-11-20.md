@@ -9,8 +9,8 @@ integration remain open.
 
 The full BF16 67B checkpoint completed the matched 64K AgentX replay at
 128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
-reached 67%, 34%, and 100% of compiled vLLM's aggregate output throughput
-on those platforms. The two-replica H100 trial reached 0.95 s p90 time to
+reached 75%, 34%, and 104% of compiled vLLM's aggregate output throughput
+on those platforms. The H100 aggregate result varied across repeats. The two-replica H100 trial reached 0.95 s p90 time to
 first token versus vLLM's 1.44 s. At 64,512 fresh prompt tokens, native
 HTTP prefill reached 35.5k prompt tok/s on v5p-8 and 42.2k on v6e-8
 versus 33.1k and 42.4k for vLLM.
@@ -467,6 +467,8 @@ mesh. Both engines enabled prefix caching.
 | [Native, two four-GPU replicas](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v21-bounded-replicas) | 421 | 117,409 | 559.09 | 0.48 | 0.96 |
 | [Native, two replicas and 24-step rounds](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v23-replicas-24-rounds) | 421 | 117,409 | 559.09 | 0.66 | 1.25 |
 | [Native, two replicas and batched KV release](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v25-replicas-batched-release) | 433 | 124,472 | 593.47 | 0.44 | 0.95 |
+| [Native, batched release repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v28-parity-repeat) | 431 | 120,142 | 572.10 | 0.43 | 0.90 |
+| [Native, two replicas with singleton decode](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v27-replicas-singleton-fastpath) | 432 | 124,385 | 616.68 | 0.45 | 0.96 |
 
 The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
 requests at the drain deadline. On 47 common turns, both engines emitted
@@ -595,6 +597,21 @@ was 73.98 versus 56.91 tok/s, and paired p90 TTFT was 0.947 versus 1.443 s.
 Both backends reported zero profiling errors. The native artifacts include
 each replica's config and serving log.
 
+The batched-release repeat reached 572.10 output tok/s and 0.898 s p90
+TTFT. It matched all 422 paired output lengths. A 4,169-token turn from
+the vLLM run was absent from the completed native turns. Paired active
+decode remained faster at 75.58 versus 55.75 tok/s.
+
+The experimental singleton path replicated the activation when an expert
+mesh served one live sequence. On four H100s, an isolated two-layer
+model matched all 129 generated tokens at both tested prompt lengths.
+At 29,000 input tokens, a 16-step decode round took 8.43 ms versus 9.09 ms
+with packing. The 67B AgentX trial completed 124,385 output tokens with
+a shorter drain and reached 616.68 output tok/s at 0.962 s p90 TTFT.
+All 423 paired output lengths matched. Paired active decode was 72.94
+tok/s versus 56.91 for vLLM.
+[Singleton kernel test](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-replicated-singleton-h100-20261122-v2)
+
 Reproduce the native run in an Iris job on one eight-H100 80 GB host.
 Set the weights and replay receipt to the local CoreWeave region.
 
@@ -635,6 +652,7 @@ Both compiled vLLM baselines enabled the prefix cache and configured
 | [v5p-8, native EP4 with compact attention metadata](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v5-compact-decode) | 139 | 23,367 | 106.21 | 23,908 | 34,497 |
 | [v5p-8, native EP4 with fused append through 32 rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v6-fused-decode) | 157 | 26,337 | 121.82 | 20,917 | 33,037 |
 | [v5p-8, native EP4 with 24 KV contexts](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v7-24-contexts) | 304 | 75,891 | 361.38 | 1,698 | 4,856 |
+| [v5p-8, native EP4 with 32 KV contexts and bounded prefill scratch](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v10-bounded-32-contexts) | 325 | 84,402 | 401.91 | 1,548 | 3,932 |
 | [v6e-8, vLLM TP4 × EP2](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v1) | 385 | 108,246 | 531.50 | 284 | 1,274 |
 | [v6e-8, native EP8 with eight decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v4-decode-cap) | 102 | 18,619 | 88.66 | 41,158 | 64,947 |
 | [v6e-8, native EP8 with shared reservations and 16 decode rows](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v5-shared-pages) | 111 | 19,864 | 94.59 | 36,227 | 53,402 |
@@ -694,6 +712,13 @@ With 24 KV contexts, v5p-8 throughput rose by 197%. The native run reused
 window. All 304 paired turns matched output lengths and paired active
 decode reached 18.27 tok/s for native versus 33.27 tok/s for vLLM.
 
+The bounded-prefill run with 32 KV contexts reused 10.22 million prompt
+tokens across 227 admissions during profiling. It reached 401.91 output
+tok/s with zero errors and matching output lengths for all 325 paired
+turns. Paired active decode reached 21.32 versus 33.34 tok/s. Serial
+fresh 64,512-token prefill took 1.846 s, or 35.0k prompt tok/s. Primed
+prefill with a 256-token suffix took 0.168 s versus vLLM's 0.115 s.
+
 On one v6e chip, fusing KV append at 16 padded rows cut full-context
 attention plus cache update from 0.727 to 0.520 ms and sliding-window
 attention plus cache update from 0.567 to 0.416 ms. The 32-row case
@@ -712,6 +737,11 @@ reused 168,192 prompt tokens across four admissions during profiling.
 Throughput reached 180.80 output tok/s. All 180 paired turns matched output
 lengths and paired active decode was 28.55 tok/s versus 32.49 tok/s.
 Both of the higher-capacity native TPU runs reported zero profiling errors.
+
+The 12- and 14-context v6e-8 attempts ran into the 31.24 GiB per-chip
+HBM limit during preflight compilation. XLA reported 31.90 GiB and
+31.58 GiB respectively. The 14-context run used bounded prefill scratch.
+[12-context attempt](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v10-12-contexts) · [14-context attempt](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v11-bounded-prefill)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
