@@ -3,7 +3,6 @@
 
 """Compare a frozen Mochi draft with target-only serving on the same Iris gang."""
 
-import argparse
 import asyncio
 import json
 import logging
@@ -29,11 +28,13 @@ from skyrl_train.io import io
 from skyrl_train.trajectory_runners.routed_experts import decode_routed_experts, normalize_routed_experts
 
 from experiments.post_training.long_loop.throughput import graph_capture_observed, workload_requests, write_json
+from experiments.post_training.mochi_eagle3 import worker_spec
 from experiments.post_training.mochi_eagle3_capture import mochi_engine_config, mochi_model_spec
 
 logger = logging.getLogger(__name__)
 PROBE_POSITIONS = (0, 1, 3, 7, 15, 31, 63)
 DECODE_POSITIONS = (*PROBE_POSITIONS, 127, 255)
+AUTOREGRESSIVE_ARTIFACT = "autoregressive.json"
 
 
 async def probe_inventory(base_url: str, requests: list[LoadRequest]) -> list[dict]:
@@ -250,7 +251,7 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
         repeat = await prefix_scores(environment.server_url, probes, 16)
         noise = score_difference(reference, repeat)
         autoregressive = await decode_probes(environment.server_url, probes)
-        write_json(spec["output"], f"{arm['name']}/autoregressive.json", autoregressive)
+        write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
         teacher = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
         decode_noise = score_difference(autoregressive["scores"], teacher)
         # Accepted design: predeclare the numerical bound from baseline repeats,
@@ -286,11 +287,11 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
     if not passed:
         raise ValueError("Fixed-prefix correctness exceeded the predeclared baseline-noise bound")
     autoregressive = await decode_probes(environment.server_url, calibration["probes"])
-    write_json(spec["output"], f"{arm['name']}/autoregressive.json", autoregressive)
+    write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
     if arm["name"] != spec["arms"][-1]["name"]:
         return
     for candidate in spec["arms"][1:]:
-        recorded = json.loads((root / candidate["name"] / "autoregressive.json").read_text())
+        recorded = json.loads((root / candidate["name"] / AUTOREGRESSIVE_ARTIFACT).read_text())
         teacher = await prefix_scores(environment.server_url, list(recorded["scores"].values()), 16)
         difference = score_difference(recorded["scores"], teacher)
         passed = all(difference[name] <= bound for name, bound in calibration["decode_bounds"].items())
@@ -344,13 +345,7 @@ def run(spec: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", required=True)
-    parser.add_argument("--source-revision", required=True)
-    args = parser.parse_args()
-    spec = json.loads(StoragePath(args.spec).read_text())
-    spec["source_revision"] = args.source_revision
-    run(spec)
+    run(worker_spec(__doc__))
 
 
 if __name__ == "__main__":

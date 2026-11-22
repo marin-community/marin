@@ -85,7 +85,8 @@ def bootstrap_records() -> list[dict]:
     return records
 
 
-def prepare_prompts(nonagentic_count: int, seed: int) -> PromptPreparation:
+def prepare_bootstrap_prompts() -> PromptPreparation:
+    """Separate exact Mochi vocabulary bootstrap tokens from agentic generation prompts."""
     records = bootstrap_records()
     grouped_records: dict[str, list[dict]] = {}
     for record in records:
@@ -110,7 +111,21 @@ def prepare_prompts(nonagentic_count: int, seed: int) -> PromptPreparation:
             prompts.setdefault(group, DraftPrompt(group, group, "agentic", tokens))
     if not frequencies:
         raise ValueError("Bootstrap training groups have no supervised target tokens")
+    return PromptPreparation(
+        list(prompts.values()),
+        frequencies,
+        {
+            "bootstrap_archives": BOOTSTRAP_ARCHIVES,
+            "bootstrap_frequency_groups": len(frequency_groups),
+            "bootstrap_supervised_tokens": frequencies.total(),
+        },
+    )
 
+
+def prepare_prompts(nonagentic_count: int, seed: int) -> PromptPreparation:
+    """Sample rendered generation prompts and retain the separate bootstrap provenance."""
+    bootstrap = prepare_bootstrap_prompts()
+    prompts = {row.group: row for row in bootstrap.prompts}
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER, revision=TOKENIZER_REVISION)
     filesystem, path = filesystem_for(TRAIN_POOL)
     generator = random.Random(seed)
@@ -152,19 +167,28 @@ def prepare_prompts(nonagentic_count: int, seed: int) -> PromptPreparation:
     rows = list(prompts.values())
     generator.shuffle(rows)
     receipt = {
+        **bootstrap.receipt,
         "target": TARGET_URI,
         "target_identity": TARGET_IDENTITY,
         "tokenizer": TOKENIZER,
         "tokenizer_revision": TOKENIZER_REVISION,
-        "bootstrap_archives": BOOTSTRAP_ARCHIVES,
-        "bootstrap_frequency_groups": len(frequency_groups),
-        "bootstrap_supervised_tokens": frequencies.total(),
         "generation_prompts": len(rows),
         "routes": dict(Counter(row.route for row in rows)),
         "nonagentic_pool": TRAIN_POOL,
         "seed": seed,
     }
-    return PromptPreparation(rows, frequencies, receipt)
+    return PromptPreparation(rows, bootstrap.frequencies, receipt)
+
+
+def worker_spec(description: str | None) -> dict:
+    """Read an immutable regional worker specification with its bundled source revision."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--spec", required=True)
+    parser.add_argument("--source-revision", required=True)
+    args = parser.parse_args()
+    spec = json.loads(StoragePath(args.spec).read_text())
+    spec["source_revision"] = args.source_revision
+    return spec
 
 
 def initialize_draft(directory: Path, frequencies: Counter[int], seed: int) -> dict:

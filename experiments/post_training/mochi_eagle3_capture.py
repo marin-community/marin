@@ -3,7 +3,6 @@
 
 """Generate Mochi continuations and seal verifier features without an RL run."""
 
-import argparse
 import asyncio
 import json
 import logging
@@ -37,6 +36,7 @@ from experiments.post_training.mochi_eagle3 import (
     TARGET_URI,
     TOKENIZER,
     TOKENIZER_REVISION,
+    worker_spec,
 )
 
 logger = logging.getLogger(__name__)
@@ -313,13 +313,7 @@ def run(spec: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", required=True)
-    parser.add_argument("--source-revision", required=True)
-    args = parser.parse_args()
-    spec = json.loads(StoragePath(args.spec).read_text())
-    spec["source_revision"] = args.source_revision
-    run(spec)
+    run(worker_spec(__doc__))
 
 
 if __name__ == "__main__":

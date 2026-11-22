@@ -3,7 +3,6 @@
 
 """Train a fresh Mochi draft from immutable regional verifier captures."""
 
-import argparse
 import hashlib
 import json
 import logging
@@ -25,7 +24,7 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
 )
 from skyrl_train.io import io
 
-from experiments.post_training.mochi_eagle3 import TARGET_IDENTITY, initialize_draft
+from experiments.post_training.mochi_eagle3 import TARGET_IDENTITY, initialize_draft, worker_spec
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +142,7 @@ def train(spec: dict, directory: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", required=True)
-    parser.add_argument("--source-revision", required=True)
-    args = parser.parse_args()
-    spec = json.loads(StoragePath(args.spec).read_text())
-    spec["source_revision"] = args.source_revision
+    spec = worker_spec(__doc__)
     if not spec["output"].startswith("s3://marin-us-east-08a/"):
         raise ValueError("Mochi training artifacts must remain in regional 08a S3")
     with tempfile.TemporaryDirectory(prefix="mochi-eagle3-training-") as scratch:
