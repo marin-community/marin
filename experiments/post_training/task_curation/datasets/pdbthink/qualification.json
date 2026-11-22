@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "2f15e56b4ecc7609343ac7f00a0ec442ad4e627c",
+  "path": "experiments/post_training/task_curation/datasets/pdbthink/qualification.json",
+  "sha256": "b61b7153fe60c136f3b1c60cbacefeaf7b1a4344c0cf6f6f8116c94bffa283d4"
+}

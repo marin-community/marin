@@ -1173,20 +1173,6 @@
   },
   "pending": [
     {
-      "id": "OpenAthena:pdbthink-coordinate-tasks",
-      "name": "pdbthink-coordinate-train",
-      "display_name": "PDBThink v1.3.0 coordinate tasks",
-      "status": "Pending",
-      "origin": "OpenAthena",
-      "upstream_dataset": "pdbthink-coordinate-tasks",
-      "upstream_url": "https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks",
-      "notes": "Original train split only; exact native budgets and provider status required; original verifiers and oracles preserved.",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": []
-    },
-    {
       "id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
       "name": "nemotron-cascade-2-if-rl",
       "display_name": "Nemotron Cascade-2 RL data",

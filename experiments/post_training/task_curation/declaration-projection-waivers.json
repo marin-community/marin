@@ -15,6 +15,7 @@
     "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
     "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
     "Marin:forge-main-20261117",
-    "FWeindel:validated-tasks/mimo_v1"
+    "FWeindel:validated-tasks/mimo_v1",
+    "OpenAthena:pdbthink-coordinate-tasks"
   ]
 }
