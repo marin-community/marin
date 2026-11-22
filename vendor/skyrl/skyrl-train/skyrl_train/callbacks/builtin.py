@@ -684,9 +684,9 @@ class EvaluationCallback(TrainerCallback):
             control.should_evaluate = True
         return control
 
-    def on_step_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs):
+    async def on_step_begin_async(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs):
         if self.eval_steps > 0 and state.global_step % self.eval_steps == 0 and trainer.eval_dataset is not None:
-            trainer.context.pause()
+            await trainer.context.prepare_evaluation()
         return control
 
     def on_train_end(

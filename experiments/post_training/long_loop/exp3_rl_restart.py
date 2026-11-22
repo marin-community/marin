@@ -37,6 +37,7 @@ def restart_recipe(reference: dict) -> dict:
     for name in SOCKET_OVERRIDES:
         recipe["extra_env"].pop(name, None)
     trainer = recipe["trainer"]
+    trainer["rollout_buffer"]["eval_drain"] = "wait"
     trainer["resume_mode"] = "none"
     trainer["ckpt_interval"] = -1
     for callback in trainer["callbacks"]:

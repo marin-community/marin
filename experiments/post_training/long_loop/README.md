@@ -1079,7 +1079,15 @@ separate checks; a source rollout does not establish an optimizer update.
 best selection every three steps and evaluates the initial policy through the
 evaluation callback. Generation and agent budgets match the 30-minute recipe.
 The trainer pauses new rollout admission after acquiring an evaluation step's
-batch, before learner work, so pending training groups drain during optimization.
+batch, before learner work. Every round explicitly selects
+`trainer.rollout_buffer.eval_drain`: `wait` lets submitted groups finish, while
+`abort` revokes their leases, cancels generation and waits for worker sandbox
+cleanup acknowledgement. Aborted groups never enter a training batch or its score
+metrics; their prompts are re-queued without spending a staleness retry. Late RPC
+arrivals and commits under revoked leases are rejected. The prepared Track 1 round
+uses `abort`; other rounds explicitly select `wait`. Runtime events record the
+strategy and aborted/re-queued group count. Ordinary trajectory timeouts still
+run the verifier and retain its score.
 Pausing before batch acquisition could prevent rejected groups from being replaced.
 
 For separate policy and rollout GPUs, the cadence snapshot overlaps frozen-policy

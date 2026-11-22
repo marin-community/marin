@@ -374,6 +374,8 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     if execution.cluster != spec.cluster or execution.job_timeout_seconds != job_limit:
         raise ValueError("Adopted RL requires the round cluster and a 48-hour job limit (two hours for smoke)")
     recipe = json.loads(json.dumps(rl.recipe))
+    if "eval_drain" not in recipe["trainer"]["rollout_buffer"]:
+        raise ValueError("Every adopted RL round must explicitly choose rollout_buffer.eval_drain: wait or abort")
     if rl.selection_eligibility not in {"covered", "complete_window"}:
         raise ValueError("Unknown checkpoint selection eligibility")
     for callback in recipe["trainer"]["callbacks"]:

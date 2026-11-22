@@ -570,6 +570,8 @@ class RolloutBuffer:
         self._policy_step = 0
         self._route_order = collections.deque(config.consumed_route_quotas)
         self._leases: dict[str, RolloutLease] = {}
+        self._leasing_paused = False
+        self._aborted_leases: set[str] = set()
         # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
         self._ready: list[ReadyRollout] = []
         self._admitted: collections.defaultdict[int, list[ReadyRollout]] = collections.defaultdict(list)
@@ -583,6 +585,8 @@ class RolloutBuffer:
         self._logged_admission_gate: str | None = None
 
     def _lease_batch(self) -> int | None:
+        if self._leasing_paused:
+            return None
         if self._policy_step == 0:
             return None
         if self.config.max_in_flight is not None and len(self._leases) >= self.config.max_in_flight:
@@ -639,6 +643,8 @@ class RolloutBuffer:
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
+            if lease_id in self._aborted_leases:
+                return
             lease = self._leases[lease_id]
             if lease.route is not None and prompt.get("group_route") != lease.route:
                 raise ValueError("Committed prompt does not match its consumed-route lease")
@@ -650,6 +656,21 @@ class RolloutBuffer:
                 )
             )
             self._select()
+            self._changed.notify_all()
+
+    async def abort_leases(self) -> tuple[str, ...]:
+        """Revoke all uncommitted leases and reject their late results until cleanup finishes."""
+        async with self._changed:
+            self._leasing_paused = True
+            leases = tuple(self._leases)
+            self._aborted_leases.update(leases)
+            self._leases.clear()
+            self._changed.notify_all()
+            return leases
+
+    async def resume_leasing(self) -> None:
+        async with self._changed:
+            self._leasing_paused = False
             self._changed.notify_all()
 
     async def publish(self, policy_step: int) -> None:

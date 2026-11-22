@@ -111,6 +111,7 @@ rl:
         group_admission:
           stall_timeout: 18000
       rollout_buffer:
+        eval_drain: wait
         consumed_route_quotas:
           agentic: 16
           nonagentic: 16

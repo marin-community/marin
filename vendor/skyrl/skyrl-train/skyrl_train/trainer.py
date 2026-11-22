@@ -1425,6 +1425,7 @@ class RayPPOTrainer:
                 "max_staleness_steps": buffer.max_staleness_steps,
                 "batch_policy": buffer.batch_policy.value,
                 "consumed_route_quotas": json.dumps(buffer.consumed_route_quotas, sort_keys=True),
+                "eval_drain": self.cfg.trainer.rollout_buffer.eval_drain,
                 "samples_per_group": self.cfg.generator.n_samples_per_prompt,
                 "trajectory_bound_per_worker": (
                     math.ceil(buffer.max_concurrent_rollouts / workers.num_workers)
@@ -1712,7 +1713,7 @@ class RayPPOTrainer:
                     await self._sync_policy_for_rollouts(reason="evaluation")
                 yield pool
         finally:
-            self.context.resume()
+            await self.context.resume()
 
     async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
         async with self._evaluation_session() as pool:

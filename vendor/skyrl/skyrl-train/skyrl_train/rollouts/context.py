@@ -8,6 +8,7 @@ import dataclasses
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, TypeVar
 
 import ray
@@ -47,13 +48,18 @@ from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, P
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
-from skyrl_train.telemetry import record_generated_work, record_rollout_buffer
+from skyrl_train.telemetry import record_event, record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
+
+
+class EvalDrainStrategy(StrEnum):
+    WAIT = "wait"
+    ABORT = "abort"
 
 
 @dataclass(frozen=True)
@@ -147,12 +153,14 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
+        eval_drain: EvalDrainStrategy,
     ):
         self.loader = loader
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
         self._rollout_spans = rollout_spans
+        self.eval_drain = eval_drain
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -161,7 +169,8 @@ class TrainingContext:
         self._in_flight: dict[str, RolloutTask] = {}
         self._live_uids: collections.Counter[str] = collections.Counter()
         self._uids_released = asyncio.Condition()
-        self._running: set[asyncio.Task] = set()
+        self._running: dict[str, asyncio.Task] = {}
+        self._aborted_leases: set[str] = set()
         self._dispatcher: asyncio.Task | None = None
         self._failure: asyncio.Future | None = None
         self._submission_allowed = asyncio.Event()
@@ -237,6 +246,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
+            eval_drain=EvalDrainStrategy(config.trainer.rollout_buffer.eval_drain),
         )
 
     def start(self) -> None:
@@ -245,7 +255,7 @@ class TrainingContext:
         self._dispatcher = asyncio.create_task(self._dispatch())
 
     async def close(self) -> None:
-        tasks = [task for task in (self._dispatcher, *self._running) if task is not None]
+        tasks = [task for task in (self._dispatcher, *self._running.values()) if task is not None]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -255,13 +265,55 @@ class TrainingContext:
         """Stop new generation admissions while submitted groups finish."""
         self._submission_allowed.clear()
 
+    async def prepare_evaluation(self) -> None:
+        """Stop admissions and, when requested, revoke unfinished groups before cancelling them."""
+        self.pause()
+        if self.eval_drain is EvalDrainStrategy.WAIT or self._dispatcher is None:
+            return
+        in_flight = dict(self._in_flight)
+        running_by_id = dict(self._running)
+        lease_ids = await self.wait(self._buffer.abort_leases.remote())
+        self._aborted_leases.update(lease_ids)
+        if not lease_ids:
+            return
+        in_flight.update(self._in_flight)
+        running_by_id.update(self._running)
+        prompts = {lease_id: in_flight[lease_id].prompt for lease_id in lease_ids if lease_id in in_flight}
+        running = [running_by_id[lease_id] for lease_id in lease_ids if lease_id in running_by_id]
+        for task in running:
+            task.cancel()
+        # A held prompt whose lease crossed the pause never started a worker.
+        async with self._uids_released:
+            for lease_id, prompt in prompts.items():
+                if lease_id not in running_by_id:
+                    del self._in_flight[lease_id]
+                self._live_uids[prompt["uid"]] -= 1
+                if not self._live_uids[prompt["uid"]]:
+                    del self._live_uids[prompt["uid"]]
+                self.loader.requeue(prompt)
+            self._uids_released.notify_all()
+        results = await asyncio.gather(*running, return_exceptions=True)
+        # Cancelling a Ray await releases its driver task before the remote
+        # coroutine finishes cleanup. Wait for an explicit worker acknowledgement.
+        await self._workers.abort_training(lease_ids)
+        errors = [result for result in results if isinstance(result, Exception)]
+        if errors:
+            raise ExceptionGroup("Aborted rollout cleanup failed", errors)
+        record_event(
+            "rollout_evaluation_aborted",
+            {"revoked_leases": len(lease_ids), "aborted_groups": len(prompts), "active_groups": len(running),
+             "policy_step": self._policy_step},
+        )
+
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
-        self.pause()
+        await self.prepare_evaluation()
         if self._running:
-            await self.wait(asyncio.gather(*self._running))
+            await self.wait(asyncio.gather(*self._running.values()))
 
-    def resume(self) -> None:
+    async def resume(self) -> None:
+        if self.eval_drain is EvalDrainStrategy.ABORT and self._dispatcher is not None:
+            await self._buffer.resume_leasing.remote()
         self._submission_allowed.set()
 
     async def publish(self, policy_step: int) -> None:
@@ -410,18 +462,25 @@ class TrainingContext:
                 await self._submission_allowed.wait()
                 with self._wait("slot"):
                     lease = await self._buffer.acquire_lease.remote()
+                if lease.lease_id in self._aborted_leases:
+                    continue
                 with self._wait("prompt"):
                     async with self._uids_released:
                         prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids, lease.route))
+                        if lease.lease_id in self._aborted_leases:
+                            self.loader.requeue(prompt)
+                            continue
                         self._live_uids[prompt["uid"]] += 1
                 task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
                 self._in_flight[lease.lease_id] = task
                 # A lease or prompt wait may span an evaluation boundary. Keep
                 # the held prompt in checkpoint state without submitting it yet.
                 await self._submission_allowed.wait()
+                if lease.lease_id in self._aborted_leases:
+                    continue
                 running = asyncio.create_task(self._run(task))
-                self._running.add(running)
-                running.add_done_callback(self._running.discard)
+                self._running[lease.lease_id] = running
+                running.add_done_callback(lambda _, lease_id=lease.lease_id: self._running.pop(lease_id))
         except Exception as error:
             self._fail(error)
 

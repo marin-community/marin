@@ -97,6 +97,7 @@ config:
       ref_num_nodes: 10
       ref_num_gpus_per_node: 8
     rollout_buffer:
+      eval_drain: wait
       max_staleness_steps: 2
       batch_policy: full_batch
       max_in_flight: 32

@@ -7,7 +7,7 @@ import pytest
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import EvaluationCallback
 from skyrl_train.rollouts.buffer import BatchPolicy, RolloutBuffer, RolloutBufferConfig
-from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
+from skyrl_train.rollouts.context import EvalDrainStrategy, RolloutRequestSpec, TrainingContext
 from skyrl_train.rollouts.loader import PromptLoader, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads
 from tests.cpu.task_specs import lowered_task, task_input, text_task
@@ -53,7 +53,7 @@ async def test_eval_pause_overlaps_existing_work_and_preserves_lease_crossing_pa
         lease = await buffer.acquire_lease()
         # The actor response races the pause, as it can when acquisition was
         # already pending at the end of training's batch admission.
-        EvaluationCallback(eval_steps=3).on_step_begin(
+        await EvaluationCallback(eval_steps=3).on_step_begin_async(
             TrainerState(3, 0, 32, 32), TrainerControl(),
             trainer=SimpleNamespace(eval_dataset=dataset, context=context),
         )
@@ -66,7 +66,7 @@ async def test_eval_pause_overlaps_existing_work_and_preserves_lease_crossing_pa
     )
     context = TrainingContext(
         loader, config, actor, None, RolloutRequestSpec(1, {}),
-        SimpleNamespace(run_task=run_task), MemoryPayloads(), rollout_spans=False,
+        SimpleNamespace(run_task=run_task), MemoryPayloads(), rollout_spans=False, eval_drain=EvalDrainStrategy.WAIT,
     )
     monkeypatch.setattr("skyrl_train.rollouts.context.ray.kill", lambda actor: None)
     context.start()
@@ -77,7 +77,7 @@ async def test_eval_pause_overlaps_existing_work_and_preserves_lease_crossing_pa
         assert not submitted.is_set()
         state = await context.state_dict()
         assert [row["uid"] for row in state.loader.retries] == ["task"]
-        context.resume()
+        await context.resume()
         await asyncio.wait_for(submitted.wait(), timeout=5)
         finish.set()
         await context.pause_and_drain()

@@ -436,6 +436,8 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
+    eval_drain: Literal["wait", "abort"] = field("wait")
+    "Wait for in-flight training groups before evaluation, or discard and requeue them after cancellation cleanup."
     consumed_route_quotas: OpenMap = field({})
     "Exact consumed-group quotas, enforced at lease admission; full_batch only."
     source_routes: OpenMap = field({})

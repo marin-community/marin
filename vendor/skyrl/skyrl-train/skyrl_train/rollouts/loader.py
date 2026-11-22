@@ -204,6 +204,10 @@ class PromptLoader:
             self._retries_exhausted += 1
             return
         self._stale_retries[uid] = count + 1
+        self.requeue(prompt)
+
+    def requeue(self, prompt: dict) -> None:
+        """Return an aborted prompt to the queue without spending a staleness retry."""
         self._retries.append(prompt)
 
     def record_disposition(self, uid: str, disposition: str) -> None:

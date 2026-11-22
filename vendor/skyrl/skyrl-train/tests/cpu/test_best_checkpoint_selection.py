@@ -249,7 +249,7 @@ async def test_evaluation_overlaps_save_but_step_exit_and_best_pointer_wait_for_
         pass
 
     trainer.context.pause_and_drain = drain
-    trainer.context.resume = lambda: None
+    trainer.context.resume = drain
     trainer.callback_handler = CallbackHandler(create_callbacks_from_config(OmegaConf.create({
         "trainer": {"callbacks": [
             {"type": "checkpoint", "save_steps": 2},

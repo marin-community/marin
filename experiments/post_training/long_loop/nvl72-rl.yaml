@@ -80,6 +80,7 @@ trainer:
       optimizer_checkpoint_sharding_type: dp_reshardable
       moe_router_replay: true
   rollout_buffer:
+    eval_drain: wait
     max_staleness_steps: 3
     batch_policy: full_batch
     max_in_flight: 32
