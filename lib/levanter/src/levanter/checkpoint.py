@@ -527,7 +527,7 @@ class Checkpointer:
         self.keep_params = keep_params
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
-        self._last_save_step = 0
+        self._last_save_step: int | None = None
         self._last_save_permanent = False
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
@@ -618,6 +618,17 @@ class Checkpointer:
         if force and step == self._last_save_step and self._last_save_permanent:
             # The final hook must still surface a failed pending save before later hooks run.
             self._manager.wait_until_finished()
+            return
+        if force and step == self._last_save_step and self.temporary_base_path is None:
+            # Promote the committed temporary save without rewriting its arrays or manifest.
+            self._manager.wait_until_finished()
+            # Match save_checkpoint's path so the temporary retention entry can be removed.
+            checkpoint_path = os.path.join(self.base_path, f"step-{step}")
+            _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=self.metadata)
+            if jax.process_index() == 0:
+                self._temporary_checkpoints = [r for r in self._temporary_checkpoints if r.path != checkpoint_path]
+                self._prune_temporary_checkpoints(0)
+            self._last_save_permanent = True
             return
 
         my_should_save = force or requested_retention is not None
