@@ -23,6 +23,7 @@ from scripts.ci.package_release import (
     cargo_compatible_version,
     latest_native_release_versions,
     latest_supported_version,
+    lock_changed_outside,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -429,7 +430,7 @@ source = { registry = "https://pypi.org/simple" }
         )
 
 
-def test_validate_targeted_lock_change_accepts_respelled_markers() -> None:
+def test_marker_changes_pass_the_lock_guard_and_are_reported() -> None:
     # uv 0.13.9 factors shared terms out of the markers that uv 0.13.8 and earlier wrote.
     expanded = (
         "(python_full_version < '3.13' and sys_platform == 'linux') or "
@@ -454,10 +455,12 @@ source = {{ registry = "https://pypi.org/simple" }}
 """
     before = lock.format(marker=expanded, jax="0.8.0", native="0.1.3")
     target = "0.1.4.dev30194118926"
+    bumped = lock.format(marker=expanded, jax="0.8.0", native=target)
+    respelled = lock.format(marker=factored, jax="0.8.0", native=target)
 
-    validate_targeted_lock_change(
-        before, lock.format(marker=factored, jax="0.8.0", native=target), "marin-iris-native", target
-    )
+    validate_targeted_lock_change(before, respelled, "marin-iris-native", target)
+    assert lock_changed_outside(before, respelled, ("marin-iris-native",))
+    assert not lock_changed_outside(before, bumped, ("marin-iris-native",))
     with pytest.raises(ValueError, match="jax"):
         validate_targeted_lock_change(
             before, lock.format(marker=factored, jax="0.8.1", native=target), "marin-iris-native", target
@@ -492,6 +495,10 @@ def test_native_version_updates_run_from_main_after_trusted_releases() -> None:
     assert "bump" not in release_workflow["jobs"]
     assert workflow["permissions"] == {"contents": "read"}
     assert "workflow_run.event != 'pull_request'" in workflow["jobs"]["update"]["if"]
+    merge = next(
+        step for step in workflow["jobs"]["update"]["steps"] if step.get("name") == "Merge green native package update"
+    )
+    assert "steps.bump.outputs.markers_changed == 'false'" in merge["if"]
 
 
 @pytest.mark.parametrize("workflow_path", [EXTERNAL_UPDATE_WORKFLOW, NATIVE_UPDATE_WORKFLOW])
