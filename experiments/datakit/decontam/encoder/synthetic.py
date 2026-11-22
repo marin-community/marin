@@ -30,6 +30,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame, write_frame
 from experiments.datakit.decontam.encoder.text_keys import text_stream
 
 logger = logging.getLogger(__name__)
@@ -204,11 +205,6 @@ def context_pairs(candidates: pd.DataFrame, rng: random.Random) -> Iterator[dict
             yield _row(item, before + "\n" + changed + "\n" + after, f"ctx_variant_{found[0]}", 0, 0, 0)
 
 
-def read_parquet(path: str, columns: list[str] | None = None) -> pd.DataFrame:
-    with StoragePath(path).open("rb") as source:
-        return pq.read_table(io.BytesIO(source.read()), columns=columns).to_pandas()
-
-
 def main() -> None:
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -225,28 +221,28 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     rng = random.Random(args.seed)
-    excluded = {item for path in args.exclude_items for item in read_parquet(path, ["item"])["item"]}
+    excluded = {item for path in args.exclude_items for item in read_frame(path, ["item"])["item"]}
     if args.mode == "generic":
-        paths = sorted(str(path) for path in StoragePath(f"{args.items}/*.parquet").glob())
+        paths = parquet_files(args.items)
         families: dict[str, list[str]] = {}
         for path in paths:
-            families.setdefault(path.rsplit("/", 1)[1].split("_")[0], []).append(path)
+            families.setdefault(StoragePath(path).name.split("_")[0], []).append(path)
         chosen = [path for group in families.values() for path in rng.sample(group, min(len(group), EVALS_PER_FAMILY))]
         frames = []
         for path in chosen:
-            frame = read_parquet(path)
+            frame = read_frame(path)
             frame = frame[(frame["reason"] == "") & frame["question"].str.len().between(1, MAX_QUESTION - 1)]
             frames.append(frame.sample(min(len(frame), args.per_eval), random_state=args.seed))
         items = pd.concat(frames, ignore_index=True)
         items = items[~items["id"].isin(excluded)].to_dict("records")
         hosts = []
         for path in sorted(str(path) for path in StoragePath(args.hosts).glob())[:HOST_FILES]:
-            with StoragePath(path).open("rb") as source:
-                texts = pq.ParquetFile(io.BytesIO(source.read())).read_row_group(0, columns=["text"]).column("text")
+            texts = pq.ParquetFile(io.BytesIO(StoragePath(path).read_bytes())).read_row_group(0, columns=["text"])
+            texts = texts.column("text")
             hosts += [text for text in texts.to_pylist()[:HOST_TEXTS] if text and len(text) > MIN_HOST]
         rows = list(generic_pairs(items, hosts, rng))
     else:
-        candidates = read_parquet(args.candidates)
+        candidates = read_frame(args.candidates)
         candidates = candidates[~candidates["item"].isin(excluded)]
         rows = list(context_pairs(candidates.sample(min(args.size, len(candidates)), random_state=args.seed), rng))
     frame = pd.DataFrame(rows)
@@ -254,10 +250,7 @@ def main() -> None:
     held_out = set(random.Random(args.seed).sample(evals, len(evals) // 5)) if args.mode == "generic" else set()
     frame["split"] = ["test" if e in held_out else "train" for e in frame["eval"]]
     frame["source"] = "synthetic" if args.mode == "generic" else "synthetic_ctx"
-    buffer = io.BytesIO()
-    frame.to_parquet(buffer)
-    with StoragePath(args.output).open("wb") as sink:
-        sink.write(buffer.getvalue())
+    write_frame(frame, args.output)
     logger.info(
         "%s: %d pairs; %s", args.mode, len(frame), frame.groupby(["kind", "label_q", "label_qa"]).size().to_dict()
     )

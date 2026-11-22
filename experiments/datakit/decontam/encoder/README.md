@@ -111,7 +111,41 @@ batches of tasks; each judge reads `RUBRIC.md` and writes `<set>/<judge>/batch_*
 
 ## Measured results
 
-RESULTS
+All numbers come from the cluster runs recorded in the experiment notebook. A *candidate* is a
+(record, item) pair that stage 1 sends to stage 2. *Real test* pairs are the test splits of the
+judge-labeled candidate sets; their items never appear in training.
+
+**Stage 1** (160 measure shards, one per source, 27,361,567 records; item table v3):
+
+| Key | Records with a candidate | Candidates per record | Candidates in the catalog (1.9e10 records) |
+|---|---|---|---|
+| First 20-character window | 21.9% | 61.6 | 1.2e12 |
+| Rarest window (key 1) | 0.337% | 0.0364 | 6.9e8 |
+| Key 1 or key 2 | 2.37% | 0.161 | 3.1e9 |
+
+STAGE1_V6
+
+At 441 pairs per second on one H100 (mmBERT-base, 1,024 tokens), key 1 alone costs about 440
+H100-hours for the catalog. Key recall on judged copies from earlier candidate sets: 0.963 with the
+plain reading on item table v1. On table v3 it is 0.882 for the 237 judged copies that still match an
+item, and 0.932 with the JSON readings. The other misses are long items whose judged excerpt is
+shorter than the item.
+
+**Stage 2.** Iterations, each one change, on real test pairs:
+
+| Iteration | Change | Real test | Question AUC |
+|---|---|---|---|
+| 4 | + 20,000 silver negatives, + set 11 (part), hint | set 11 (8 copies) | 0.947 (no hint: 0.931) |
+| 5 | mmBERT-base for mmBERT-small | set 11 (17 copies) | 0.948 (small: 0.924) |
+| 6 | + context synthetic pairs (items inside real candidate text) | set 11 | 0.972; repeat run 0.948 |
+| 8 | + set 12 | sets 11-12 (69 copies) | 0.963-0.971 |
+| 9 | item input: choices shown, answer words out of the question hint | sets 11-12 | 0.971 / 0.968 (old input 0.950 / 0.960) |
+| 10 | + set 13, dev split from the label sets | ITER10_TEST | ITER10_AUC |
+
+Rejected on the way: 512 and 2,048 tokens, repeated judge-labeled pairs, a reference-frequency hint
+(set-11 AUC 0.936 against 0.972), one output instead of two, and averaging two seeds.
+
+ITER10_TEXT
 
 ## Limits
 
@@ -129,6 +163,11 @@ RESULTS
   labels in set 12 lean to "not shown".
 - **Silver negatives are noisy.** Of the judged pairs with word overlap below 0.8, 5 of 561 (0.9%)
   were copies, so about 1% of the silver negatives are copies.
+- **A short question of a passage-based eval is generic.** The item question is the prompt without
+  its passage. A DROP question such as "How many yards was the longest field goal?" is then a common
+  sentence, and the rubric labels a record that holds it as a copy, even when the record is about
+  another game. This follows the recall-first policy (remove any record that holds a required
+  question), so the removal budget has to catch these evals.
 - **One key covers one place in a long item.** A record that copies only part of a long item (an
   Uncheatable document, a long code file) holds the item's key only if the copied part contains it.
 - **GPQA choice order is random.** lm-eval shuffles GPQA choices without a seed, so the question

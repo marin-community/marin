@@ -22,10 +22,10 @@ import logging
 import random
 import time
 from collections.abc import Iterator
+from typing import NamedTuple
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
@@ -34,6 +34,7 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
+from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
 from experiments.datakit.decontam.encoder.text_keys import WINDOW, record_hit_indices, text_stream, window_hashes
 
 logger = logging.getLogger(__name__)
@@ -46,10 +47,8 @@ SAMPLE_ROWS_PER_SHARD = 400
 def item_streams(root: str) -> tuple[list[str], list[str]]:
     """Item ids and the stream that their keys come from: the question, or the block for a short question."""
     ids, streams = [], []
-    for path in sorted(str(p) for p in StoragePath(root + "/*.parquet").glob()):
-        with StoragePath(path).open("rb") as source:
-            table = pq.read_table(io.BytesIO(source.read()), columns=["id", "question", "choices"]).to_pylist()
-        for row in table:
+    for path in parquet_files(root):
+        for row in read_table(path, ["id", "question", "choices"]).to_pylist():
             stream = text_stream(row["question"])
             if len(stream) < WINDOW and row["choices"]:
                 stream += "".join(LETTERS[i % 26] + text_stream(c) for i, c in enumerate(row["choices"]))
@@ -78,8 +77,7 @@ def prepare(items: str, output: str) -> None:
     hashes, owners, offsets = candidate_windows(streams)
     buffer = io.BytesIO()
     np.savez(buffer, hashes=hashes, owners=owners, offsets=offsets, ids=np.array(ids, dtype=object))
-    with StoragePath(prefix_join(output, "windows.npz")).open("wb") as sink:
-        sink.write(buffer.getvalue())
+    StoragePath(prefix_join(output, "windows.npz")).write_bytes(buffer.getvalue())
     logger.info(
         "prepare: %d items, %d candidate windows, %d without a key",
         len(ids),
@@ -88,10 +86,18 @@ def prepare(items: str, output: str) -> None:
     )
 
 
-def load_windows(output: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    with StoragePath(prefix_join(output, "windows.npz")).open("rb") as source:
-        data = np.load(io.BytesIO(source.read()), allow_pickle=True)
-    return data["hashes"], data["owners"], data["offsets"], data["ids"]
+class Windows(NamedTuple):
+    """The candidate windows of all items: hash, item number, and offset in the item stream; and item ids."""
+
+    hashes: np.ndarray
+    owners: np.ndarray
+    offsets: np.ndarray
+    ids: np.ndarray
+
+
+def load_windows(output: str) -> Windows:
+    data = np.load(io.BytesIO(StoragePath(prefix_join(output, "windows.npz")).read_bytes()), allow_pickle=True)
+    return Windows(data["hashes"], data["owners"], data["offsets"], data["ids"])
 
 
 class KeyTable:
@@ -109,8 +115,7 @@ class KeyTable:
 
 def make_count(output: str):
     def count(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
-        hashes, _, _, _ = load_windows(output)
-        unique = np.unique(hashes)
+        unique = np.unique(load_windows(output).hashes)
         counts = np.zeros(len(unique), dtype=np.uint32)
         records = 0
         started = time.monotonic()
@@ -124,45 +129,20 @@ def make_count(output: str):
         nonzero = np.nonzero(counts)[0]
         buffer = io.BytesIO()
         np.savez(buffer, hashes=unique[nonzero], counts=counts[nonzero])
-        with StoragePath(prefix_join(output, f"counts/part-{shard.shard_idx:05d}.npz")).open("wb") as sink:
-            sink.write(buffer.getvalue())
+        StoragePath(prefix_join(output, f"counts/part-{shard.shard_idx:05d}.npz")).write_bytes(buffer.getvalue())
         yield {"records": records, "nonzero": len(nonzero), "seconds": time.monotonic() - started}
 
     return count
 
 
-def choose(output: str) -> None:
-    hashes, owners, offsets, ids = load_windows(output)
-    parts_hashes, parts_counts = [], []
-    for path in StoragePath(prefix_join(output, "counts/*.npz")).glob():
-        with path.open("rb") as source:
-            part = np.load(io.BytesIO(source.read()))
-        parts_hashes.append(part["hashes"])
-        parts_counts.append(part["counts"].astype(np.int64))
-    seen, inverse = np.unique(np.concatenate(parts_hashes), return_inverse=True)
-    totals = np.bincount(inverse, weights=np.concatenate(parts_counts)).astype(np.int64)
-    slot = np.minimum(np.searchsorted(seen, hashes), len(seen) - 1)
-    window_counts = np.where(seen[slot] == hashes, totals[slot], 0)
-    # The reference frequency of every candidate window, for the classifier's rarity hint.
-    frequency = pa.table({"hash": pa.array(seen, type=pa.uint64()), "count": pa.array(totals)})
-    buffer = io.BytesIO()
-    pq.write_table(frequency, buffer)
-    with StoragePath(prefix_join(output, "window_counts.parquet")).open("wb") as sink:
-        sink.write(buffer.getvalue())
-    # One row per item. Hash columns are uint64; 0 means "no such key" (an item with no window, or no second key).
-    columns: dict[str, list] = {
-        name: []
-        for name in (
-            "id",
-            "first_hash",
-            "first_count",
-            "key1_hash",
-            "key1_count",
-            "key1_offset",
-            "key2_hash",
-            "key2_count",
-        )
-    }
+KEY_COLUMNS = ("id", "first_hash", "first_count", "key1_hash", "key1_count", "key1_offset", "key2_hash", "key2_count")
+
+
+def keys_table(windows: Windows, window_counts: np.ndarray) -> pa.Table:
+    """One row per item: its first window, its rarest window (key 1), and the rarest window that does not
+    overlap key 1 (key 2). Hash columns are uint64; 0 means "no such key", and its count is -1."""
+    hashes, owners, offsets, ids = windows
+    columns: dict[str, list] = {name: [] for name in KEY_COLUMNS}
     order = np.lexsort((offsets, window_counts, owners))
     keyed: set[int] = set()
     start = 0
@@ -193,21 +173,33 @@ def choose(output: str) -> None:
         if owner not in keyed:
             for name, value in zip(columns, (str(ids[owner]), 0, -1, 0, -1, -1, 0, -1), strict=True):
                 columns[name].append(value)
-    table = pa.table(
+    return pa.table(
         {
             name: pa.array(np.array(values, dtype=np.uint64)) if name.endswith("_hash") else pa.array(values)
             for name, values in columns.items()
         }
     )
-    buffer = io.BytesIO()
-    pq.write_table(table, buffer)
-    with StoragePath(prefix_join(output, "keys.parquet")).open("wb") as sink:
-        sink.write(buffer.getvalue())
-    counts = np.array([c for c in columns["key1_count"] if c >= 0])
-    firsts = np.array([c for c in columns["first_count"] if c >= 0])
+
+
+def choose(output: str) -> None:
+    """Sum the reference counts of every candidate window and write each item's keys (``keys_table``)."""
+    windows = load_windows(output)
+    parts_hashes, parts_counts = [], []
+    for path in parquet_files(prefix_join(output, "counts"), "*.npz"):
+        part = np.load(io.BytesIO(StoragePath(path).read_bytes()))
+        parts_hashes.append(part["hashes"])
+        parts_counts.append(part["counts"].astype(np.int64))
+    seen, inverse = np.unique(np.concatenate(parts_hashes), return_inverse=True)
+    totals = np.bincount(inverse, weights=np.concatenate(parts_counts)).astype(np.int64)
+    slot = np.minimum(np.searchsorted(seen, windows.hashes), len(seen) - 1)
+    window_counts = np.where(seen[slot] == windows.hashes, totals[slot], 0)
+    table = keys_table(windows, window_counts)
+    write_table(table, prefix_join(output, "keys.parquet"))
+    counts = np.array([c for c in table.column("key1_count").to_pylist() if c >= 0])
+    firsts = np.array([c for c in table.column("first_count").to_pylist() if c >= 0])
     logger.info(
         "keys: %d items, %d keyed; key-1 frequency median %d, p99 %d, max %d; first-window median %d, p99 %d",
-        len(columns["id"]),
+        table.num_rows,
         len(counts),
         np.median(counts),
         np.percentile(counts, 99),
@@ -219,8 +211,7 @@ def choose(output: str) -> None:
 
 def make_measure(output: str):
     def measure(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
-        with StoragePath(prefix_join(output, "keys.parquet")).open("rb") as source:
-            keys = pq.read_table(io.BytesIO(source.read())).to_pandas()
+        keys = read_table(prefix_join(output, "keys.parquet")).to_pandas()
         keys = keys[keys["key1_hash"] != 0]
         tables = {}
         for name, column in (("first", "first_hash"), ("key1", "key1_hash"), ("key2", "key2_hash")):
@@ -258,16 +249,12 @@ def make_measure(output: str):
                     elif rng.random() < SAMPLE_ROWS_PER_SHARD / seen:
                         sample[rng.randrange(SAMPLE_ROWS_PER_SHARD)] = row
             stats["seconds"] = time.monotonic() - started
-            name = path.split("/normalized/")[1].replace("/", "__")
-            with StoragePath(prefix_join(output, f"measure/{name}.json")).open("w") as sink:
-                json.dump(stats, sink)
+            name = shard_name(path)
+            StoragePath(prefix_join(output, f"measure/{name}.json")).write_text(json.dumps(stats))
             if sample:
                 for row in sample:
                     row["path"] = path
-                buffer = io.BytesIO()
-                pq.write_table(pa.Table.from_pylist(sample), buffer)
-                with StoragePath(prefix_join(output, f"sample/{name}.parquet")).open("wb") as sink:
-                    sink.write(buffer.getvalue())
+                write_table(pa.Table.from_pylist(sample), prefix_join(output, f"sample/{name}.parquet"))
             yield stats
 
     return measure
@@ -283,7 +270,7 @@ def shard_lists(sources_path: str, input_root: str) -> tuple[list[str], list[str
     measure_rng, reference_rng = random.Random(7), random.Random(11)
     measure, reference = [], []
     for name in names:
-        shards = sorted(str(p) for p in StoragePath(f"{input_root}/{name}/outputs/main/*.parquet").glob())
+        shards = parquet_files(prefix_join(input_root, f"{name}/outputs/main"))
         picked = measure_rng.sample(shards, min(1, len(shards)))
         measure += picked
         rest = [shard for shard in shards if shard not in picked]

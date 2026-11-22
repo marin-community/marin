@@ -20,7 +20,6 @@ pairs are dropped. ``label_qa`` is 1 when both judges say the answer is shown. I
 
 import argparse
 import hashlib
-import io
 import json
 import logging
 import re
@@ -28,8 +27,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+
+from experiments.datakit.decontam.encoder.tables import read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 EXCERPT = 3000
@@ -161,18 +161,6 @@ def silver(pairs: pd.DataFrame, excluded: set[str], size: int, seed: int) -> pd.
     return frame.reset_index(drop=True)[TRAINING_COLUMNS]
 
 
-def _read(path: str) -> pd.DataFrame:
-    with StoragePath(path).open("rb") as source:
-        return pd.read_parquet(io.BytesIO(source.read()))
-
-
-def _write(frame: pd.DataFrame, path: str) -> None:
-    buffer = io.BytesIO()
-    frame.to_parquet(buffer)
-    with StoragePath(path).open("wb") as sink:
-        sink.write(buffer.getvalue())
-
-
 def main() -> None:
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -189,13 +177,13 @@ def main() -> None:
     parser.add_argument("--judges", nargs=2, default=["codex", "claude"], help="merge: judge label directories")
     parser.add_argument("--output", help="merge, silver: training rows (parquet)")
     args = parser.parse_args()
-    excluded = {item for path in args.exclude_items for item in _read(path)["item"]}
+    excluded = {item for path in args.exclude_items for item in read_frame(path)["item"]}
     if args.step == "silver":
-        _write(silver(_read(args.scored), excluded, args.size, seed=0), args.output)
+        write_frame(silver(read_frame(args.scored), excluded, args.size, seed=0), args.output)
         return
     directory = Path(args.set)
     if args.step == "sample":
-        pairs = _read(args.scored)
+        pairs = read_frame(args.scored)
         pairs = pairs[~pairs["item"].isin(excluded)]
         chosen = sample(pairs, args.high, args.other)
         write_batches(chosen, directory, args.batches)
@@ -208,7 +196,7 @@ def main() -> None:
         return
     pairs = pd.read_parquet(directory / "pairs.parquet")
     rows = merge(pairs, *(judge_labels(directory, judge) for judge in args.judges), directory.name)
-    _write(rows, args.output)
+    write_frame(rows, args.output)
     logger.info("wrote %d rows: %s", len(rows), rows.groupby(["split", "label", "label_qa"]).size().to_dict())
 
 

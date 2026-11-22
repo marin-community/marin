@@ -10,11 +10,11 @@ Results (metrics, test scores, model) go to ``--output``.
 """
 
 import argparse
-import io
 import json
 import math
 import random
 import re
+import tempfile
 import time
 import unicodedata
 from pathlib import Path
@@ -22,15 +22,18 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from experiments.datakit.decontam.encoder.labels import TRAINING_COLUMNS
+from experiments.datakit.decontam.encoder.tables import read_frame, write_frame
 
 _SPACE = re.compile(r"\s+")
 TARGET_PRECISION = 0.95
 # One in this many train items of the real label sets goes to the dev split.
 DEV_EVERY = 4
+# Judged pairs of the earlier block-rule candidates, in --data.
+JUDGED_PAIRS = "judged_pairs_v2.parquet"
 
 
 def text_normalize(text: str) -> str:
@@ -66,23 +69,9 @@ def pair_left(question: str, choices: list[str], answer: str, right: str) -> str
     return f"{left}\n[missing] {_missing(' '.join([question, *choices]), present)}\n[answer missing] {answer_missing}"
 
 
-def read_parquet(path: str) -> pd.DataFrame:
-    if path.startswith("s3://"):
-        with StoragePath(path).open("rb") as source:
-            return pd.read_parquet(io.BytesIO(source.read()))
-    return pd.read_parquet(path)
-
-
-def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    judged = read_parquet(f"{data}/judged_pairs_v2.parquet")
-    judged["source"], judged["kind"], judged["eval"] = "judged", judged["judges"], ""
-    synthetic = read_parquet(f"{data}/{synthetic_name}")
-    synthetic["source"] = "synthetic"
-    frames = [judged[TRAINING_COLUMNS], synthetic[TRAINING_COLUMNS]]
-    for path in extra:
-        # More labeled pairs, for example judged stage-1 candidates, with the same columns.
-        frames.append(read_parquet(path)[TRAINING_COLUMNS])
-    frame = pd.concat(frames, ignore_index=True)
+def with_pair_text(frame: pd.DataFrame) -> pd.DataFrame:
+    """*frame* with `right` normalized and cut to ``RIGHT_CHARS``, and `left` built by ``pair_left``."""
+    frame = frame.copy()
     frame["right"] = frame["right"].map(text_normalize).str.slice(0, RIGHT_CHARS)
     frame["left"] = [
         pair_left(question, list(choices), answer, right)
@@ -90,6 +79,19 @@ def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame
             frame["question"], frame["choices"], frame["answer"], frame["right"], strict=True
         )
     ]
+    return frame
+
+
+def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    judged = read_frame(prefix_join(data, JUDGED_PAIRS))
+    judged["source"], judged["kind"], judged["eval"] = "judged", judged["judges"], ""
+    synthetic = read_frame(prefix_join(data, synthetic_name))
+    synthetic["source"] = "synthetic"
+    frames = [judged[TRAINING_COLUMNS], synthetic[TRAINING_COLUMNS]]
+    for path in extra:
+        # More labeled pairs, for example judged stage-1 candidates, with the same columns.
+        frames.append(read_frame(path)[TRAINING_COLUMNS])
+    frame = with_pair_text(pd.concat(frames, ignore_index=True))
     # The threshold comes from judge-labeled real stage-1 candidates (the label sets), whose share of
     # copies matches what stage 2 sees; never from silver, synthetic or the older judged pairs.
     real = frame["source"].str.startswith("set")
@@ -100,7 +102,8 @@ def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame
     return train, dev, frame[frame.split == "test"]
 
 
-def batches(frame: pd.DataFrame, tokenizer, size: int, max_length: int, shuffle: bool, label_columns: list[str]):
+def batches(frame: pd.DataFrame, tokenizer, size: int, max_length: int, shuffle: bool):
+    """Row positions and encoded (left, right) pairs, in batches of records of similar length."""
     order = list(range(len(frame)))
     if shuffle:
         random.shuffle(order)
@@ -119,7 +122,21 @@ def batches(frame: pd.DataFrame, tokenizer, size: int, max_length: int, shuffle:
             padding=True,
             return_tensors="pt",
         )
-        yield group, encoded, torch.tensor(rows[label_columns].to_numpy(), dtype=torch.float32)
+        yield group, encoded
+
+
+@torch.no_grad()
+def predict(model, tokenizer, frame: pd.DataFrame, max_length: int, device: str) -> np.ndarray:
+    """Sigmoid scores of every output of *model* for every pair of *frame* (see ``with_pair_text``)."""
+    was_training = model.training
+    model.eval()
+    scores = np.zeros((len(frame), model.config.num_labels))
+    for group, encoded in batches(frame, tokenizer, 64, max_length, False):
+        with torch.autocast(device, dtype=torch.bfloat16, enabled=device == "cuda"):
+            logits = model(**{k: v.to(device) for k, v in encoded.items()}).logits.float()
+        scores[group] = torch.sigmoid(logits).cpu().numpy()
+    model.train(was_training)
+    return scores
 
 
 def roc_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
@@ -159,6 +176,31 @@ def metrics(scores: np.ndarray, labels: np.ndarray, threshold: float) -> dict:
     }
 
 
+def evaluation(
+    label_columns: list[str], dev: pd.DataFrame, dev_scores: np.ndarray, test: pd.DataFrame, test_scores: np.ndarray
+) -> dict:
+    """Per output: the dev threshold, and metrics on dev, on judged and synthetic test pairs, and per test source."""
+    results: dict = {}
+    for head, column in enumerate(label_columns):
+        threshold = threshold_for(dev_scores[:, head], dev[column].to_numpy())
+        results[column] = {
+            "threshold": threshold,
+            "dev": metrics(dev_scores[:, head], dev[column].to_numpy(), threshold),
+        }
+        for name, part in (("judged", test.source != "synthetic"), ("synthetic", test.source == "synthetic")):
+            results[column][name] = metrics(
+                test_scores[part.to_numpy(), head], test.loc[part, column].to_numpy(), threshold
+            )
+            # Every output is also scored against the judges' "contaminated" label.
+            results[column][f"{name}_vs_label"] = metrics(
+                test_scores[part.to_numpy(), head], test.loc[part, "label"].to_numpy(), threshold
+            )
+        for source in sorted(set(test["source"]) - {"synthetic", "judged"}):
+            part = (test["source"] == source).to_numpy()
+            results[column][source] = metrics(test_scores[part, head], test.loc[part, column].to_numpy(), threshold)
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, help="pretrained encoder, for example jhu-clsp/mmBERT-base")
@@ -191,7 +233,8 @@ def main() -> None:
     loss_fn = torch.nn.BCEWithLogitsLoss()
     step, started = 0, time.time()
     while step < steps:
-        for _, encoded, labels in batches(train, tokenizer, args.batch, args.max_length, True, label_columns):
+        for group, encoded in batches(train, tokenizer, args.batch, args.max_length, True):
+            labels = torch.tensor(train.iloc[group][label_columns].to_numpy(), dtype=torch.float32)
             with torch.autocast(device, dtype=torch.bfloat16, enabled=device == "cuda"):
                 logits = model(**{k: v.to(device) for k, v in encoded.items()}).logits
             loss = loss_fn(logits.float(), labels.to(device))
@@ -209,19 +252,9 @@ def main() -> None:
             if step >= steps:
                 break
 
-    @torch.no_grad()
-    def predict(frame: pd.DataFrame) -> np.ndarray:
-        model.eval()
-        scores = np.zeros((len(frame), len(label_columns)))
-        for group, encoded, _ in batches(frame, tokenizer, 64, args.max_length, False, label_columns):
-            with torch.autocast(device, dtype=torch.bfloat16, enabled=device == "cuda"):
-                logits = model(**{k: v.to(device) for k, v in encoded.items()}).logits.float()
-            scores[group] = torch.sigmoid(logits).cpu().numpy()
-        model.train()
-        return scores
-
     started = time.time()
-    dev_scores, test_scores = predict(dev), predict(test)
+    dev_scores = predict(model, tokenizer, dev, args.max_length, device)
+    test_scores = predict(model, tokenizer, test, args.max_length, device)
     rate = (len(dev) + len(test)) / (time.time() - started)
     results: dict = {
         "seed": args.seed,
@@ -230,36 +263,18 @@ def main() -> None:
         "max_length": args.max_length,
         "pairs_per_second": rate,
     }
+    results.update(evaluation(label_columns, dev, dev_scores, test, test_scores))
     for head, column in enumerate(label_columns):
-        threshold = threshold_for(dev_scores[:, head], dev[column].to_numpy())
-        results[column] = {
-            "threshold": threshold,
-            "dev": metrics(dev_scores[:, head], dev[column].to_numpy(), threshold),
-        }
-        for name, part in (("judged", test.source != "synthetic"), ("synthetic", test.source == "synthetic")):
-            results[column][name] = metrics(
-                test_scores[part.to_numpy(), head], test.loc[part, column].to_numpy(), threshold
-            )
-            # Every head is also scored against the judges' "contaminated" label.
-            results[column][f"{name}_vs_label"] = metrics(
-                test_scores[part.to_numpy(), head], test.loc[part, "label"].to_numpy(), threshold
-            )
-        for source in sorted(set(test["source"]) - {"synthetic", "judged"}):
-            part = (test["source"] == source).to_numpy()
-            results[column][source] = metrics(test_scores[part, head], test.loc[part, column].to_numpy(), threshold)
         test[f"score_{column}"] = test_scores[:, head]
     print(json.dumps(results, indent=1), flush=True)
-    buffer = io.BytesIO()
-    test.to_parquet(buffer)
-    with StoragePath(f"{args.output}/{args.tag}/test_scores.parquet").open("wb") as sink:
-        sink.write(buffer.getvalue())
-    with StoragePath(f"{args.output}/{args.tag}/results.json").open("w") as sink:
-        json.dump(results, sink, indent=1)
-    model.save_pretrained(f"/tmp/model_{args.tag}")
-    tokenizer.save_pretrained(f"/tmp/model_{args.tag}")
-    for path in Path(f"/tmp/model_{args.tag}").iterdir():
-        with StoragePath(f"{args.output}/{args.tag}/model/{path.name}").open("wb") as sink:
-            sink.write(path.read_bytes())
+    run = prefix_join(args.output, args.tag)
+    write_frame(test, prefix_join(run, "test_scores.parquet"))
+    StoragePath(prefix_join(run, "results.json")).write_text(json.dumps(results, indent=1))
+    with tempfile.TemporaryDirectory() as directory:
+        model.save_pretrained(directory)
+        tokenizer.save_pretrained(directory)
+        for path in Path(directory).iterdir():
+            StoragePath(prefix_join(run, f"model/{path.name}")).write_bytes(path.read_bytes())
 
 
 if __name__ == "__main__":

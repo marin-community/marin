@@ -33,13 +33,13 @@ import re
 from collections import Counter
 from collections.abc import Iterator
 from itertools import pairwise
-from typing import Any
+from typing import Any, NamedTuple, Protocol
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.encoder.tables import write_table
 from experiments.datakit.decontam.encoder.text_keys import WINDOW, text_stream
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
@@ -94,10 +94,6 @@ def shared_values(docs: list[Any]) -> set[str]:
         if isinstance(doc, dict):
             seen.update({value for value in doc.values() if isinstance(value, str)})
     return {value for value, count in seen.items() if count > 1}
-
-
-def _stream(text: str) -> str:
-    return text_stream(text)
 
 
 def _option_fields(doc: Any, labels: list[str]) -> list[str] | None:
@@ -194,7 +190,54 @@ def _structured_target(target: Any, doc: Any) -> Any:
     return target
 
 
-def lmh_item(leaf: str, record_id: str, task: Any, doc: Any, shared: set[str]) -> dict[str, Any]:
+class LmTask(Protocol):
+    """The part of an lm-eval task that the item table reads."""
+
+    OUTPUT_TYPE: str
+
+    def doc_to_text(self, doc: Any) -> Any: ...
+
+    def doc_to_target(self, doc: Any) -> Any: ...
+
+    def doc_to_choice(self, doc: Any) -> Any: ...
+
+
+class EvalRows(NamedTuple):
+    """The item rows of one eval, or the error that stopped them."""
+
+    name: str
+    rows: list[dict[str, Any]]
+    error: str
+
+
+def item_row(
+    record_id: str,
+    eval_name: str,
+    suite: str,
+    question: str,
+    choices: list[str] | None = None,
+    answer: str = "",
+    prompt: str = "",
+    passage: str = "",
+    choices_mode: str = "none",
+    reason: str = "",
+) -> dict[str, Any]:
+    """One row of the item table (see ``SCHEMA``)."""
+    return {
+        "id": record_id,
+        "eval": eval_name,
+        "suite": suite,
+        "question": question,
+        "choices": choices or [],
+        "answer": answer,
+        "prompt": prompt,
+        "passage": passage,
+        "choices_mode": choices_mode,
+        "reason": reason,
+    }
+
+
+def lmh_item(leaf: str, record_id: str, task: LmTask, doc: Any, shared: set[str]) -> dict[str, Any]:
     reasons = []
     try:
         rendered = task.doc_to_text(doc)
@@ -202,7 +245,7 @@ def lmh_item(leaf: str, record_id: str, task: Any, doc: Any, shared: set[str]) -
         rendered = ""
         reasons.append(f"doc_to_text: {error!r}")
     prompt = rendered if isinstance(rendered, str) else ""
-    prompt_stream = _stream(prompt)
+    prompt_stream = text_stream(prompt)
     values = doc.items() if isinstance(doc, dict) else []
     pairs = [(key, value) for key, value in values if isinstance(value, str) and value.strip()]
     choices: list[str] = []
@@ -224,11 +267,11 @@ def lmh_item(leaf: str, record_id: str, task: Any, doc: Any, shared: set[str]) -
 
     def id_like(value: str) -> bool:
         # Ids, numbers and one- or two-character labels are never the question.
-        stream = _stream(value)
+        stream = text_stream(value)
         return not stream or stream.isdigit() or len(stream) <= 2
 
     def position(value: str, start: int = 0) -> int:
-        return prompt_stream.find(_stream(value), start) if _stream(value) else -1
+        return prompt_stream.find(text_stream(value), start) if text_stream(value) else -1
 
     candidates = [value for _, value in pairs if value not in option_set and value not in labels and not id_like(value)]
     passage_like = {value for key, value in pairs if (_is_passage(key) or value in shared) and value in candidates}
@@ -270,22 +313,13 @@ def lmh_item(leaf: str, record_id: str, task: Any, doc: Any, shared: set[str]) -
         question = max(fields, key=_stream_len, default="")
     if not question:
         reasons.append("no question")
-    return {
-        "id": record_id,
-        "eval": leaf,
-        "suite": "lm-eval",
-        "question": question,
-        "choices": choices,
-        "answer": answer,
-        "prompt": prompt,
-        "passage": passage,
-        "choices_mode": mode,
-        "reason": "; ".join(reasons)[:300],
-    }
+    return item_row(
+        record_id, leaf, "lm-eval", question, choices, answer, prompt, passage, mode, "; ".join(reasons)[:300]
+    )
 
 
-def lmh_rows(task_names: list[str], leaves_of: dict[str, list[str]]) -> Iterator[tuple[str, list[dict[str, Any]], str]]:
-    """Yield (leaf, rows, error) for each leaf of the named required lm-eval tasks."""
+def lmh_rows(task_names: list[str], leaves_of: dict[str, list[str]]) -> Iterator[EvalRows]:
+    """The rows of each leaf of the named required lm-eval tasks."""
     from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: the lm_eval extra
 
     patch_hf_dataset_loading()
@@ -294,19 +328,18 @@ def lmh_rows(task_names: list[str], leaves_of: dict[str, list[str]]) -> Iterator
             loaded = dict(flatten_task_dict(get_task_dict([name])))
         except Exception as error:
             for leaf in leaves_of[name]:
-                yield leaf, [], f"load: {error!r}"[:300]
+                yield EvalRows(leaf, [], f"load: {error!r}"[:300])
             continue
         for leaf in leaves_of[name]:
             task = loaded.get(leaf)
             chosen = materialize_first_nonempty_split(task) if task is not None else None
             if chosen is None:
-                yield leaf, [], "leaf not loaded or no docs"
+                yield EvalRows(leaf, [], "leaf not loaded or no docs")
                 continue
             split, docs = chosen
             shared = shared_values(docs)
-            yield leaf, [
-                lmh_item(leaf, f"{leaf}-{split}-{index}", task, doc, shared) for index, doc in enumerate(docs)
-            ], ""
+            rows = [lmh_item(leaf, f"{leaf}-{split}-{index}", task, doc, shared) for index, doc in enumerate(docs)]
+            yield EvalRows(leaf, rows, "")
 
 
 def _answer_fields(fields: tuple[str, ...]) -> list[str]:
@@ -318,33 +351,20 @@ def _has_wrong_answers(fields: list[str]) -> bool:
     return any("incorrect" in field.lower() for field in fields)
 
 
-def aa_rows() -> Iterator[tuple[str, list[dict[str, Any]], str]]:
+def aa_rows() -> Iterator[EvalRows]:
     for cfg in AA_EVALS:
         try:
             raw = list(_iter_aa_rows(cfg))
             records = _aa_records(raw, cfg)
         except Exception as error:
-            yield cfg.name, [], f"load: {error!r}"[:300]
+            yield EvalRows(cfg.name, [], f"load: {error!r}"[:300])
             continue
         rows = []
         if cfg.record_type != AARecordType.ROW:
             # Multi-part tasks (SciCode steps, tau3 tasks, Terminal-Bench tasks): the record text is the item.
             for record in records:
-                rows.append(
-                    {
-                        "id": record["id"],
-                        "eval": cfg.name,
-                        "suite": "aa",
-                        "question": record["text"],
-                        "choices": [],
-                        "answer": "",
-                        "prompt": record["text"],
-                        "passage": "",
-                        "choices_mode": "none",
-                        "reason": "",
-                    }
-                )
-            yield cfg.name, rows, ""
+                rows.append(item_row(record["id"], cfg.name, "aa", record["text"], prompt=record["text"]))
+            yield EvalRows(cfg.name, rows, "")
             continue
         answers = _answer_fields(cfg.text_fields)
         questions = [field for field in cfg.text_fields if field not in answers]
@@ -356,48 +376,33 @@ def aa_rows() -> Iterator[tuple[str, list[dict[str, Any]], str]]:
             values = [str(row[field]) for field in answers if isinstance(row.get(field), str | int | float)]
             choices = values if _has_wrong_answers(answers) else []
             rows.append(
-                {
-                    "id": f"{cfg.subdir}-{_row_identifier(row, index)}",
-                    "eval": cfg.name,
-                    "suite": "aa",
-                    "question": question,
-                    "choices": choices,
-                    "answer": values[0] if values else "",
-                    "prompt": "",
-                    "passage": "",
-                    "choices_mode": "options" if choices else "none",
-                    "reason": "" if question else "no question field",
-                }
+                item_row(
+                    f"{cfg.subdir}-{_row_identifier(row, index)}",
+                    cfg.name,
+                    "aa",
+                    question,
+                    choices,
+                    answer=values[0] if values else "",
+                    choices_mode="options" if choices else "none",
+                    reason="" if question else "no question field",
+                )
             )
-        yield cfg.name, rows, ""
+        yield EvalRows(cfg.name, rows, "")
 
 
-def uncheatable_rows() -> Iterator[tuple[str, list[dict[str, Any]], str]]:
+def uncheatable_rows() -> Iterator[EvalRows]:
     for subset in UNCHEATABLE_RECORDS:
         try:
             records = _uncheatable_records(subset)
         except Exception as error:
-            yield f"uncheatable-{subset}", [], f"load: {error!r}"[:300]
+            yield EvalRows(f"uncheatable-{subset}", [], f"load: {error!r}"[:300])
             continue
-        yield f"uncheatable-{subset}", [
-            {
-                "id": r["id"],
-                "eval": f"uncheatable-{subset}",
-                "suite": "uncheatable",
-                "question": r["text"],
-                "choices": [],
-                "answer": "",
-                "prompt": "",
-                "passage": "",
-                "choices_mode": "none",
-                "reason": "",
-            }
-            for r in records
-        ], ""
+        name = f"uncheatable-{subset}"
+        yield EvalRows(name, [item_row(record["id"], name, "uncheatable", record["text"]) for record in records], "")
 
 
 def summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Counts for the G1 report: question length bins, items not indexable at each window, symbol-only choices."""
+    """Counts for the per-eval report: question length bins, items not indexable at each window, symbol-only choices."""
     lengths = [_stream_len(row["question"]) for row in rows]
     longest = [
         max([length, *(_stream_len(choice) for choice in row["choices"])])
@@ -444,15 +449,17 @@ def main() -> None:
         sources += [aa_rows(), uncheatable_rows()]
     report = {}
     for source in sources:
-        for name, rows, error in source:
-            if rows:
-                with StoragePath(prefix_join(args.output, f"items/{name}.parquet")).open("wb") as sink:
-                    pq.write_table(pa.Table.from_pylist(rows, schema=SCHEMA), sink, compression="zstd")
-            entry = {"error": error, "expected_records": expected.get(name), **(summary(rows) if rows else {"items": 0})}
-            report[name] = entry
-            logger.info("%s: %d items (expected %s) %s", name, entry["items"], entry["expected_records"], error)
-    with StoragePath(prefix_join(args.output, f"report/part-{args.part:02d}.json")).open("w") as sink:
-        json.dump(report, sink, indent=1)
+        for result in source:
+            if result.rows:
+                table = pa.Table.from_pylist(result.rows, schema=SCHEMA)
+                write_table(table, prefix_join(args.output, f"items/{result.name}.parquet"))
+            counts = summary(result.rows) if result.rows else {"items": 0}
+            entry = {"error": result.error, "expected_records": expected.get(result.name), **counts}
+            report[result.name] = entry
+            logger.info(
+                "%s: %d items (expected %s) %s", result.name, entry["items"], entry["expected_records"], result.error
+            )
+    StoragePath(prefix_join(args.output, f"report/part-{args.part:02d}.json")).write_text(json.dumps(report, indent=1))
     logger.info(
         "part %d done: %d evals, %d items", args.part, len(report), sum(entry["items"] for entry in report.values())
     )

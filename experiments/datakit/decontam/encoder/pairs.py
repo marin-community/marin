@@ -6,26 +6,25 @@
 ``items``: join the sampled candidate rows with the item table (question, choices, answer).
 ``extract``: a Zephyr job over the sampled shards reads each candidate record and cuts the text
 around the place where the item starts (or, for an edited copy, where its key matches). It also
-records text checks that serve as features and silver labels: question in the record, answer
-after it, and every choice after it.
+records three text checks for analysis: the whole question in the record, the answer after it,
+and every choice after it.
 """
 
 import argparse
-import io
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
+from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
 from experiments.datakit.decontam.encoder.text_keys import WINDOW, readings, text_stream
 
 logger = logging.getLogger(__name__)
@@ -33,24 +32,12 @@ BEFORE = 1500
 AFTER = 3000
 
 
-def read_table(path: str) -> pa.Table:
-    with StoragePath(path).open("rb") as source:
-        return pq.read_table(io.BytesIO(source.read()))
-
-
-def write_table(table: pa.Table, path: str) -> None:
-    buffer = io.BytesIO()
-    pq.write_table(table, buffer, compression="zstd")
-    with StoragePath(path).open("wb") as sink:
-        sink.write(buffer.getvalue())
-
-
 def join_items(items_root: str, stage1: str, output: str) -> None:
-    sample = pa.concat_tables([read_table(str(p)) for p in StoragePath(prefix_join(stage1, "sample/*.parquet")).glob()])
+    sample = pa.concat_tables([read_table(path) for path in parquet_files(prefix_join(stage1, "sample"))])
     wanted = set(sample.column("item").to_pylist())
     rows = []
-    for path in StoragePath(items_root + "/*.parquet").glob():
-        table = read_table(str(path)).select(["id", "eval", "question", "choices", "answer"]).to_pylist()
+    for path in parquet_files(items_root):
+        table = read_table(path, ["id", "eval", "question", "choices", "answer"]).to_pylist()
         rows += [row for row in table if row["id"] in wanted]
     keys = read_table(prefix_join(stage1, "keys.parquet")).select(["id", "key1_offset"]).to_pylist()
     offsets = {row["id"]: row["key1_offset"] for row in keys if row["id"] in wanted}
@@ -62,16 +49,12 @@ def join_items(items_root: str, stage1: str, output: str) -> None:
     logger.info("items: %d sampled candidate rows, %d items found of %d", sample.num_rows, items.num_rows, len(wanted))
 
 
-def _stream(text: str) -> str:
-    return text_stream(text)
-
-
 def _offset(text: str, position: int) -> int:
     """The smallest prefix length of *text* whose stream is longer than *position*."""
     low, high = 0, len(text)
     while low < high:
         middle = (low + high) // 2
-        if len(_stream(text[:middle])) > position:
+        if len(text_stream(text[:middle])) > position:
             high = middle
         else:
             low = middle + 1
@@ -106,17 +89,17 @@ def make_extract(output: str):
                 if record_id not in wanted:
                     continue
                 record_text = str(record.get("text") or "")
-                streams = [(reading, _stream(reading)) for reading in readings(record_text)]
+                streams = [(reading, text_stream(reading)) for reading in readings(record_text)]
                 for item_id in wanted[record_id]:
                     item = items[item_id]
-                    question = _stream(item["question"])
+                    question = text_stream(item["question"])
                     offset = item.get("key1_offset", -1)
                     key = question[offset : offset + WINDOW] if offset is not None and offset >= 0 else ""
                     text, stream, at = _located(streams, question, key, offset)
                     start = _offset(text, max(at, 0)) - 1 if at >= 0 else 0
                     right = text[max(0, start - BEFORE) : start + len(item["question"]) + AFTER]
                     after = stream[at + len(question) :] if at >= 0 and stream.startswith(question, at) else ""
-                    answer = _stream(item["answer"])
+                    answer = text_stream(item["answer"])
                     pairs.append(
                         {
                             "path": path,
@@ -133,11 +116,11 @@ def make_extract(output: str):
                             "choices_after": (
                                 bool(after)
                                 and bool(item["choices"])
-                                and all(_stream(c) in after for c in item["choices"] if _stream(c))
+                                and all(text_stream(c) in after for c in item["choices"] if text_stream(c))
                             ),
                         }
                     )
-            name = path.split("/normalized/")[1].replace("/", "__")
+            name = shard_name(path)
             if pairs:
                 write_table(pa.Table.from_pylist(pairs), prefix_join(output, f"pairs/{name}.parquet"))
             yield {"path": path, "pairs": len(pairs)}
