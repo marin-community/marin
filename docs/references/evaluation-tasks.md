@@ -302,3 +302,38 @@ See [task curation](task-curation.md) for acquisition and publication,
 [task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains
 separate. Historical Evalchemy archives remain readable; reproducing their runs
 requires the recorded checkout.
+
+## SciRecipe-Eval
+
+`--evals scirecipe-eval` selects all 600 rows of
+[`manglu3935/SciRecipe`](https://huggingface.co/datasets/manglu3935/SciRecipe/tree/2aad80a53a2288963b24c504ddcccd58d6b8bfec),
+file `SciRecipe-Eval.parquet` (MIT). The reference is
+[`eval/eval_batch.py`](https://github.com/InternScience/Thoth/blob/a155710079da47bb26a021646fa84d5544aa180e/eval/eval_batch.py).
+The converter maps `exp_goal` to the runner's question, preserves its system prompt,
+shuffles actions with seed 42, and uses greedy decoding with a 1,024-token cap.
+Scores are means overall and by `type` and `level`. No evaluation suite includes
+this benchmark automatically.
+
+All 23 reference metrics are retained: eight structured metrics, four BLEU
+precisions and their mean, METEOR, three ROUGE scores, keyword precision/recall/F1,
+and BERTScore precision/recall/F1. The primary metric is `content_score`
+(Semantic-A), whose reference range is 0–1.5; only the internal verifier reward
+is divided by 1.5. `order_strict` is exact action-list equality, and `step_match`
+compares nonblank line counts. The reference's greedy alignment can exhaust the
+gold sequence on an unknown action; its Kendall tau is 1 whenever at least two
+actions align. These semantics are retained for comparison with the runner.
+
+The grader uses final-answer text. It accepts `<key>`, `<orc>`, and `<note>`
+without requiring `<think>`, because serving APIs can put reasoning in a separate
+channel. A malformed block sequence falls back to parsing step lines from the
+final answer, as in the reference. Dependency failures remain infrastructure
+errors rather than silently receiving zero text-metric scores.
+
+RoBERTa-large and MiniLM weights/tokenizers are pinned by revision and SHA-256 in
+`experiments/evaluation/benchmarks/scirecipe_assets.py`. They occupy about 1.52 GB
+before Python dependencies. The environment builder stages them as `Download`
+files and WordNet as an `Archive`; workers mount those files read-only and grade
+offline on CPU. Build and execute this environment on a remote worker with enough
+memory for RoBERTa-large and the archive build, not the shared development VM.
+The named selection runs one item at a time so concurrent grader processes do
+not each load another copy of the embedding models into the 12-GB evaluator.

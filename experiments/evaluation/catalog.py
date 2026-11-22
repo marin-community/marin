@@ -27,6 +27,7 @@ from experiments.evaluation.benchmarks import (
     nupa,
     question_answering,
     reasoning,
+    scirecipe,
     simpleqa,
     supergpqa,
 )
@@ -60,6 +61,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             jee,
             math,
             reasoning,
+            scirecipe,
             financebench,
             facts_grounding,
             simpleqa,

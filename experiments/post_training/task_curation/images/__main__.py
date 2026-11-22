@@ -22,6 +22,7 @@ from experiments.evaluation.benchmarks.environments import (
     MATH_GRADER,
     MATH_JUDGE_GRADER,
     PYTHON_GRADER,
+    SCIRECIPE_GRADER,
 )
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.environment import Environment
@@ -43,6 +44,7 @@ def declared_environments() -> dict[str, Environment]:
             MATH_GRADER,
             MATH_JUDGE_GRADER,
             PYTHON_GRADER,
+            SCIRECIPE_GRADER,
             LIVECODEBENCH_GRADER,
             *INSTRUCTION_ENVIRONMENTS,
         )

@@ -24,7 +24,7 @@ import subprocess
 import tarfile
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
 from importlib.metadata import requires
 from pathlib import Path, PurePosixPath
@@ -52,7 +52,7 @@ from taskcompendium.runtime.local import (
     runtime_files,
 )
 
-from experiments.post_training.task_curation.environment import Archive, Environment, Placement, placement
+from experiments.post_training.task_curation.environment import Archive, Download, Environment, Placement, placement
 
 DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
 BASE_IMAGE = "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab"
@@ -109,10 +109,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
     identity = {
         "requirements": sorted(environment.requirements),
         "apt": sorted(environment.apt),
-        "files": {
-            path: {"url": archive.url, "sha256": archive.sha256, "member": archive.member}
-            for path, archive in sorted(environment.files.items())
-        },
+        "files": {path: asdict(artifact) for path, artifact in sorted(environment.files.items())},
         "env": dict(sorted(environment.env.items())),
         "dockerfile_sha256": _fragment_sha256(environment),
         "exclude_newer": EXCLUDE_NEWER,
@@ -222,8 +219,21 @@ def _archive_members(data: bytes, member: str) -> dict[str, bytes]:
     return {name.removeprefix(prefix): content for name, content in selected.items()}
 
 
-def materialize(archive: Archive, target: Path) -> None:
-    """Download ``archive``, verify its digest, and place its member at ``target``, a file or a directory."""
+def materialize(archive: Archive | Download, target: Path) -> None:
+    """Verify and place an archive member or a streamed verbatim download at ``target``."""
+    if isinstance(archive, Download):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        with TemporaryDirectory(dir=target.parent) as directory:
+            staged = Path(directory) / "download"
+            with urllib.request.urlopen(archive.url) as response, staged.open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    digest.update(chunk)
+                    output.write(chunk)
+            if digest.hexdigest() != archive.sha256:
+                raise ValueError(f"{archive.url} has SHA-256 {digest.hexdigest()}, not the declared {archive.sha256}")
+            staged.replace(target)
+        return
     data = download(archive.url)
     digest = hashlib.sha256(data).hexdigest()
     if digest != archive.sha256:

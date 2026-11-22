@@ -71,6 +71,18 @@ class Archive:
             raise ValueError(f"An archive member must be a relative path inside the archive: {self.member}")
 
 
+@dataclass(frozen=True)
+class Download:
+    """A checksum-pinned HTTPS file placed verbatim, such as a model weight or tokenizer."""
+
+    url: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not self.url.startswith("https://") or SHA256.fullmatch(self.sha256) is None:
+            raise ValueError("A download requires an HTTPS URL and a lowercase SHA-256 digest")
+
+
 def _relative_or_escaping(path: str) -> bool:
     parts = PurePosixPath(path)
     return not parts.is_absolute() or ".." in parts.parts
@@ -90,8 +102,8 @@ class Environment:
 
     ``requirements`` are the direct Python requirements, each an exact ``name==version`` pin or a direct
     URL requirement whose URL names a commit; the build compiles them to a hash lock. ``apt`` names
-    Debian packages. ``files`` places pinned archive members at absolute paths: the same path in a built
-    image and in the worker, where bubblewrap binds each read-only, so a path cannot lie under the host
+    Debian packages. ``files`` places pinned archive members or verbatim downloads at absolute paths,
+    the same in a built image and in the worker. Bubblewrap binds each read-only, so a path cannot lie under the host
     system directories (``/usr``, ``/etc`` and the rest of ``SYSTEM_DIRECTORIES``), which are
     already bound read-only. ``env`` sets environment variables for graders in both placements. ``image``
     is a digest-pinned image used as-is and excludes every other field. ``dockerfile`` is a checked-in,
@@ -102,7 +114,7 @@ class Environment:
 
     requirements: tuple[str, ...] = ()
     apt: tuple[str, ...] = ()
-    files: Mapping[str, Archive] = field(default_factory=dict)
+    files: Mapping[str, Archive | Download] = field(default_factory=dict)
     env: Mapping[str, str] = field(default_factory=dict)
     image: str | None = None
     dockerfile: Path | None = None

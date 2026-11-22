@@ -1,4 +1,8 @@
 evaluations:
+  scirecipe-eval:
+    benchmark: scirecipe-eval
+    run:
+      concurrency: 1
   aime24-smoke:
     benchmark: aime24
     run:

@@ -17,6 +17,10 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 
 def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
+    if scorer == "scirecipe":
+        from .scirecipe import grade_scirecipe
+
+        return grade_scirecipe(config["key"], config["orc"], response)
     # Scorers load only the dependencies of the selected dataset's environment.
     if scorer == "gsm8k_cot":
         from .math import grade_gsm8k_cot

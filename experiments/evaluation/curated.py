@@ -138,7 +138,7 @@ def settings_for(
         if not run.judge_api_key or any(not is_secret_reference(ref) for ref in run.judge_api_key):
             raise ValueError("A judge requires secret references in judge_api_key")
     return CuratedSettings(
-        concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
+        concurrency=run.concurrency or model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
         max_tokens=run.max_tokens,
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
@@ -157,7 +157,7 @@ def record_ref_for(
         source_digest="sha256:"
         + canonical_sha256(
             {
-                "selection": selection.model_dump(mode="json"),
+                "selection": selection.model_dump(mode="json", exclude={"run": {"concurrency"}}),
                 "settings": scoring_settings(settings.model_dump(mode="json")),
             }
         ),

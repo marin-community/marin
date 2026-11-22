@@ -3,6 +3,7 @@
 
 """Pinned grader dependencies and source data archives."""
 
+from experiments.evaluation.benchmarks.scirecipe_assets import MODEL_FILES
 from experiments.post_training.task_curation.datasets.environments import PUNKT_TAB
 from experiments.post_training.task_curation.environment import Archive, Environment
 
@@ -48,3 +49,36 @@ IFBENCH_GRADER = Environment(
     env={"NLTK_DATA": NLTK_DATA_ROOT},
 )
 INSTRUCTION_ENVIRONMENTS = (IFEVAL_GRADER, IFBENCH_GRADER)
+
+SCIRECIPE_GRADER = Environment(
+    requirements=(
+        "torch==2.6.0",
+        "transformers==4.51.3",
+        "huggingface-hub==0.35.3",
+        "sentence-transformers==5.1.0",
+        "keybert==0.9.0",
+        "bert-score==0.3.13",
+        "sacrebleu==2.5.1",
+        "rouge-score==0.1.2",
+        "nltk==3.9.1",
+        "tomli-w==1.2.0",
+    ),
+    files={
+        **MODEL_FILES,
+        "/opt/scirecipe/nltk_data/corpora/wordnet": Archive(
+            "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/"
+            "packages/corpora/wordnet.zip",
+            "cbda5ea6eef7f36a97a43d4a75f85e07fccbb4f23657d27b4ccbc93e2646ab59",
+            "wordnet",
+        ),
+    },
+    env={
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "NLTK_DATA": "/opt/scirecipe/nltk_data",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+    },
+)
