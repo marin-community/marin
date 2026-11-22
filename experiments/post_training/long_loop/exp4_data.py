@@ -155,6 +155,23 @@ def _write_pool_file(destination: StoragePath, name: str, rows: list[dict]) -> s
         return digest
 
 
+def _index_chunks(indices: list[int], max_bytes: int = 80_000) -> list[list[int]]:
+    """Split the requested row indices into argv-safe chunks (a single 20k-entry list exceeds ARG_MAX)."""
+    chunks: list[list[int]] = []
+    current: list[int] = []
+    size = 0
+    for index in indices:
+        piece = len(str(index)) + 1
+        if current and size + piece > max_bytes:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(index)
+        size += piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -> tuple[list[dict], dict]:
     """Regenerate the generated label with the current pipeline and guard it against the adopted rows.
 
@@ -178,28 +195,33 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
             ),
         )
         # Parts own tasks, not cycle-index strata: each part prints the requested rows its own
-        # tasks produce, so every part filters against the full adopted index set.
-        part_indices = frozenset(adopted_indices)
-        if not part_indices:
-            return []
+        # tasks produce, so every part filters against the full adopted index set, chunked to
+        # stay under the OS per-argument limit.
         converted = []
-        for index, data in generated_rows(
-            wheel, GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, part, GENERATOR_PARTS, part_indices
-        ):
-            if index not in old_rows:
-                raise ValueError(f"Regenerated cycle index {index} is absent from the adopted label")
-            source = Source(
-                dataset=GENERATOR_URL,
-                revision=GENERATOR_SHA256,
-                row=f"{GENERATOR_ARCHIVE}:{index}",
-                importer_revision="1",
-            )
-            raw = RawRow(id=row_identity(GENERATOR_RECIPE_NAME, source), source=source, data=data)
-            task = convert_generated(raw, context)
-            if isinstance(task, ImportRejection):
-                rejections.append({"index": index, **task.model_dump(mode="json")})
-                continue
-            converted.append((index, task.model_dump_json()))
+        for chunk in _index_chunks(adopted_indices):
+            for index, data in generated_rows(
+                wheel,
+                GENERATOR_VERSION,
+                EXCLUDED_GENERATORS,
+                PYTHON_HASH_SEED,
+                part,
+                GENERATOR_PARTS,
+                frozenset(chunk),
+            ):
+                if index not in old_rows:
+                    raise ValueError(f"Regenerated cycle index {index} is absent from the adopted label")
+                source = Source(
+                    dataset=GENERATOR_URL,
+                    revision=GENERATOR_SHA256,
+                    row=f"{GENERATOR_ARCHIVE}:{index}",
+                    importer_revision="1",
+                )
+                raw = RawRow(id=row_identity(GENERATOR_RECIPE_NAME, source), source=source, data=data)
+                task = convert_generated(raw, context)
+                if isinstance(task, ImportRejection):
+                    rejections.append({"index": index, **task.model_dump(mode="json")})
+                    continue
+                converted.append((index, task.model_dump_json()))
         return converted
 
     with ThreadPoolExecutor(max_workers=8) as pool:
