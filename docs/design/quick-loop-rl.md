@@ -16,7 +16,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The first `2026.11.20.7` child completed 16 of 25 updates before its CPU coordinator was preempted. | Verify the replacement child's complete 25-update receipts and compare it with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The first completed 16 updates and the second was still loading weights. | Verify all 25 updates on the next complete child and compare with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
@@ -742,7 +742,8 @@ publication verification. The trainer differences are the learner
 strategy, batch builder and Levanter policy configuration.
 [Accepted Megatron control][iris-matched-megatron-third] ·
 [First Levanter child][iris-matched-levanter] ·
-[Levanter replacement][iris-matched-levanter-retry]
+[Second Levanter child][iris-matched-levanter-retry] ·
+[Third Levanter child][iris-matched-levanter-third]
 
 The first control child started at step 0 on the same five physical H100 hosts. Its
 initial panel scored 0.2602. The row-level audit verified all 100 tasks,
@@ -829,12 +830,15 @@ median step took 416.7 seconds, with 162.1 seconds for verified
 publication. Kubernetes preempted the CPU coordinator and Iris stopped
 all five GPU tasks. The recipe schedules its regular checkpoint at step
 25, and the regional checkpoint prefix held no committed step after
-this interruption. Iris admitted all five GPU tasks for the automatic
-replacement, which starts at step 0 on the same frozen source. Use the
-first child's data for phase diagnosis. Compare terminal panel, timing
-and receiver evidence from each complete child.
+this interruption. The second child started on the same frozen source
+and lost its CPU coordinator to Kueue preemption during initializer
+streaming, before any initial policy publication or evaluation.
+Iris submitted a third child. Use the first child's data for phase
+diagnosis. Compare terminal panel, timing and receiver evidence from each
+complete child.
 [First Levanter child][iris-matched-levanter] ·
-[Levanter replacement][iris-matched-levanter-retry]
+[Second Levanter child][iris-matched-levanter-retry] ·
+[Third Levanter child][iris-matched-levanter-third]
 
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
@@ -847,8 +851,9 @@ The direct regional GPU-root path reproduced the frozen five-host BATCH
 request and the ArtifactStep fingerprint in a local fixture. The same
 fixture interrupted an observer after the native terminal receipt and
 reattached under the ArtifactStep lease to write the typed record. Live
-admission and remote lease recovery still need verification. The current
-automatic replacement uses the ordinary coordinator.
+admission and remote lease recovery still need verification. Use a fresh
+output version if the existing coordinator and all GPU children reach a
+terminal state and a direct-root retry is needed.
 
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
@@ -1694,6 +1699,7 @@ arms. [Prior timing comparison][timing]
 [iris-matched-megatron-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-ab4ae1aae5e9
 [iris-matched-levanter]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af8929ab8ff2
 [iris-matched-levanter-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-ae4bda9bd4c7
+[iris-matched-levanter-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af6dc8d549b1
 [iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122e
 [iris-native-live-score]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122g
 [iris-native-allocator-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122h
