@@ -2,6 +2,15 @@
 
 November 21, 2026 (PST).
 
+Recovery BATCH smoke `2026.11.21.12` is running from
+`a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
+are identical to `e9fa30e8a2230a4015d8488280d2b375b81ea07d`; only this
+writeup changed. After prior GPU cleanup, all five replacement tasks were
+running at 22:35 PST. Both accepted bundles match the frozen source and the
+executed configuration matches the preflight. The scheduler reused all five
+hosts, including the affected `g83c00a`. A changed stall condition and all
+native initialization, publication, update, and resume gates remain unverified.
+
 BATCH smoke `2026.11.21.11`, from
 `e9fa30e8a2230a4015d8488280d2b375b81ea07d`, failed at the existing
 3,600-second model-initialization deadline. Three learner hosts finished
@@ -13,11 +22,10 @@ or CPU throttling. The underlying stall cause remains unproven.
 
 This run did not qualify dynamic VMM, publication, updates, or resume. Both
 accepted bundles match all 4,583 frozen entries, including 43 required runtime
-files, and the executed configuration matches the preflight. One fresh BATCH
-allocation with identical runtime source, recipe, and timeout is planned after
-terminal cleanup. Its worker placement and stall condition must be checked
-before calling it a recovery. VMM retains the same 0.90 budget with
-preallocation disabled.
+files, and the executed configuration matches the preflight. The `.12` run
+preserves the runtime source, recipe, allocation, and timeout. VMM retains the
+same 0.90 budget with preallocation disabled. A fresh allocation alone does not
+establish that the stall is resolved.
 
 BATCH smoke `2026.11.21.10`, from
 `42a248d50564f44d6010a35591d49d2f65c0ea38`, initialized all four full-model
