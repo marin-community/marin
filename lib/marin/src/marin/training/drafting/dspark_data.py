@@ -13,13 +13,14 @@ from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal
+from typing import Literal, cast
 
 import datasets
 import pyarrow.parquet as pq
 from levanter.data.text.formats import ChatProcessor
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE, GRUG_MOE_MODEL_TYPE
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
 
@@ -154,12 +155,12 @@ def _teacher_files(
 
 
 def _tensor_header(path: StoragePath) -> dict:
-    # Range-read the safetensors header so CPU preflight never stages weights.
-    with path.open("rb", block_size=0) as stream:
-        (size,) = struct.unpack("<Q", stream.read(8))
-        if not 0 < size <= _MAX_SAFETENSORS_HEADER:
-            raise ValueError(f"Invalid safetensors header size in {path}: {size}")
-        return json.loads(stream.read(size))
+    fs, location = url_to_fs(str(path))
+    length = cast(bytes, fs.cat_file(location, start=0, end=8))
+    (size,) = struct.unpack("<Q", length)
+    if not 0 < size <= _MAX_SAFETENSORS_HEADER:
+        raise ValueError(f"Invalid safetensors header size in {path}: {size}")
+    return json.loads(fs.cat_file(location, start=8, end=8 + size))
 
 
 def _check_teacher_tensors(files: dict[str, StoragePath], metadata: Path, shape: GrugShape) -> None:
