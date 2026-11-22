@@ -2,12 +2,13 @@
 
 November 21, 2026 (PST).
 
-Fresh BATCH smoke `2026.11.21.10` is submitted from
-`42a248d50564f44d6010a35591d49d2f65c0ea38`, enabling BFC preallocation at the
-same 0.90 limit. At 19:55 PST its CPU coordinator was running; no GPU child
-had yet been discovered. The accepted bundle matches all 4,583 frozen entries,
-including 43 required runtime files. Accelerator acceptance for this source is
-pending. The hardware evidence below covers the preceding `.9` source.
+BATCH smoke `2026.11.21.10`, from
+`42a248d50564f44d6010a35591d49d2f65c0ea38`, initialized all four full-model
+learners with BFC preallocation and the same observed 0.90 limit on all 32
+H100s. Initial publication then failed: a new JAX NCCL communicator could not
+allocate 2 MiB of CUDA memory on any learner host. Receiver timeouts and actor
+termination followed. No completed publication payload or train step is
+established for this source. The next memory-policy candidate is under review.
 
 Diagnostic BATCH smoke `2026.11.21.9`, from
 `a7c751443ffbc55ca5e8b3603d0e41c09af17d3d`, initialized all four full-model
@@ -84,8 +85,8 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `2026.11.21.9` reports all four native process identities, GPU backend, H100 80GB devices, 67,078,882,816 installed parameters, and the expected 32-device data4/expert8 mesh. Compiler and allocator receipts identify the first train step's contiguous arena allocation failure. | Validate the allocator remedy and complete two real parameter updates with the pinned CUDA kernels. |
-| Publication and resume | Smoke `2026.11.21.9` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. The preceding `.7` smoke completed the 100-task baseline evaluation. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
+| Actual H100 | Smoke `2026.11.21.10` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, and BFC preallocation at the expected per-device limit. It fails on NCCL allocation during initial publication. The earlier `.9` source reached its first train step and failed a contiguous arena allocation. | Qualify memory management through publication and two real parameter updates with the pinned CUDA kernels. |
+| Publication and resume | Earlier smoke `2026.11.21.9` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. Smoke `.10` records no completed initial payload. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
@@ -380,12 +381,12 @@ fragmentation risk of [disabling preallocation](https://docs.jax.dev/en/latest/g
 This is not proof that every later training operation fits: measured live
 memory plus the arena leaves only 2.023–2.121 GiB of optimistic headroom.
 
-The candidate remedy keeps BFC and enables preallocation at the same 0.90
-memory limit. This deliberately changes the earlier disabled-preallocation
-setting to address the measured pool fragmentation. It changes no training
-math, kernels, precision, geometry, or numerical tolerance. A fresh H100 run
-must still prove that the resulting pool can serve the update and subsequent
-operations; eliminating this blocker alone does not qualify the full loop.
+The `.10` remedy kept BFC and enabled preallocation at the same 0.90
+memory limit. This deliberately changed the earlier disabled-preallocation
+setting to address the measured pool fragmentation. It changed no training
+math, kernels, precision, geometry, or numerical tolerance. The run still
+needed to prove that the resulting pool could serve publication and updates;
+initialization alone did not qualify the full loop.
 The fresh acceptance attempt is recorded below.
 
 The candidate passes 13 focused real-process CPU cases, including rejection of
@@ -399,11 +400,40 @@ boundary and preserve local state semantics; they do not establish H100 fit.
 Smoke `2026.11.21.10` uses coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.10-coordinator-ddb628ca`,
 submitted at `2026-11-22T03:55:21.099Z`. Its actual priority is BATCH, with zero
-automatic failure retries. Its CPU task is running; no GPU execution is yet
-established by the startup snapshot. Root source, configured priority, retry
-budgets, and all frozen bundle contents were verified. The source pin is
+automatic failure retries. Root source, configured priority, retry budgets,
+and all frozen bundle contents were verified. The source pin is
 `42a248d50564f44d6010a35591d49d2f65c0ea38`; later status-only documentation
 commits are not its executed source.
+
+Its child suffix was `users-dlwh-checkpoints-snowball-inventory-2026.11.21.10-a4e4cc5c9f7f`.
+All four learners initialized the full model with resolved BFC/preallocate=true,
+fraction 0.90, unified memory disabled, and observed per-device limits of
+76,518,785,024 bytes. The first proven failure is at
+`2026-11-22T04:20:15–16Z`: NCCL fails a 2,097,152-byte CUDA allocation while
+creating a new 32-device JAX communicator during initial publication staging.
+External communicator/context memory pressure is supported; exact per-library
+physical usage was not recorded. Training memory fit remains unverified.
+
+Torch receiver groups had completed their warmup. Their first real payload
+then timed out; parent actors waited for the native publication response and
+were terminated by the Torch watchdog. The original trainer exception is
+`ActorDiedError` during `_sync_policy_for_rollouts`. Ray's generic list of
+possible causes does not establish SIGSEGV; the full stderr records an explicit
+watchdog abort. Both jobs failed with zero preemptions, all five GPU pods are
+absent, and the CPU coordinator pod remains terminal `Failed`. Task archives
+are empty or unreported; original exceptions and bounded full native stderr
+were fetched separately.
+
+A dynamic VMM allocator candidate is under review at the same 0.90 budget
+for physical allocations, with preallocation disabled. Pinned XLA source enforces
+that budget on padded physical allocations and maps P2P-capable peers.
+Managed collective colors share the budget; external NCCL, Torch, and context
+allocations do not. If CUDA recommends 2-MiB allocation granularity, rounding
+adds about 1.61 GiB for this recorded train program; the driver's actual
+granularity has not been measured. Fit remains uncertain. Standard
+JAX allocator counters do not support this pinned VMM path; the candidate
+adds explicitly labeled parent Torch and global driver-memory receipts.
+No VMM hardware run has been submitted.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
