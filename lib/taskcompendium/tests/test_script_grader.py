@@ -32,6 +32,7 @@ from verifyit.spec import NumericSpec
 
 import taskcompendium.runtime.grading as grading
 from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment, shared_integrity_issue
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
@@ -418,6 +419,8 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
         "out": {"a.txt": "a", "nested/b.txt": "b"},
         "missing": False,
     }
+    assert assess_grading_environment(task).required is GradingEnvironmentMode.SEPARATE
+    assert shared_integrity_issue(task) is None
     collected = await agent.run(Command(("cat", "/app/collected.txt")))
     assert collected.stdout == b"collected"
 

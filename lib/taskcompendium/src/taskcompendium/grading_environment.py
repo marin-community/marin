@@ -101,6 +101,12 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
         )
 
     grader = task.grader
+    if isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts):
+        return GradingEnvironmentAssessment(
+            required=GradingEnvironmentMode.SEPARATE,
+            declared=declared,
+            reason="The script grader consumes declared collected inputs in its separate verifier environment",
+        )
     repository = (
         task.answer_type is AnswerType.WORKSPACE_STATE
         or "git_repository" in task.environment_requirements.capabilities

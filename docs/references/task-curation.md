@@ -2112,10 +2112,13 @@ verify that its workspace change reaches the original grader. The
 exercise this path alongside oracle and NoP controls.
 
 Every conversion assesses its grading boundary from the task specification.
-WORKSPACE_STATE, repository capabilities and directory captures require SHARED
-execution because the agent can change the state the grader reads. Submitted
-program/stdout and typed file-only contracts may use an independent SEPARATE
-grader. A declared SEPARATE boundary when SHARED is required is rejected as
+WORKSPACE_STATE and repository contracts require SHARED execution when the
+grader reads the agent's mutable environment directly. A script grader with
+declared collect commands or artifact copies has an explicit transfer boundary:
+the captured inputs, including directory copies, are graded in the independent
+SEPARATE verifier environment. A root-delivery integrity contract still requires
+SHARED execution. Submitted program/stdout and typed file-only contracts may
+also use a SEPARATE grader. A declared SEPARATE boundary when SHARED is required is rejected as
 `grading_environment_mismatch`, before either SAMPLE or FULL admission.
 
 Normalized rows retain `grading_environment` with required mode, declared mode,
@@ -3598,21 +3601,25 @@ TaskSpec-population digest, complete cohort SHA-256 and Use. The complete popula
 must contain no original oracle; mixed or unknown oracle presence cannot use this
 route. Old receipts and an absent policy retain their existing admission rules.
 
-Wire version 6 supports a complete mixed population. `collect_mixed_retention`
-joins a wire4 collection to the frozen original cohort and its calibrated output.
-It preserves original-oracle receipts and applicable physical NoP controls.
-Only tasks without original oracle resources receive unchanged static receipts;
-their calibration-only trials supply no execution claim. The combined receipt
-requires both policies, the complete source context, and one outcome per input ID.
-Its retained rows include calibrated original-oracle passes and unchanged static
-passes; all other original rows remain in the typed exclusion archive.
+Mixed populations use `OracleFilterReceipt` wire version 6. The producer,
+`collect_mixed_retention`, takes the complete frozen original cohort, its wire4
+oracle/control receipt, and its calibrated retained rows. It preserves the exact
+original-oracle receipts and applicable physical NoP controls. Tasks without
+original oracle resources keep their original TaskSpec/runtime rows and receive
+static receipts with `executability=unmeasured`; calibration-only trials supply
+no oracle pass or execution qualification. The combined receipt requires the
+global `NegativeControlPolicy`, source-bound `NoOracleExecutabilityPolicy`, and
+complete `NoOracleSourceContext`, with one outcome per input ID. Every failed
+original-oracle task and static blocker remains in the typed exclusion archive.
 
 For a mixed admitted release, bind `OracleAdmittedReleaseReceipt.static_retention`
-to the final pin and census. Its static evidence counts `static_retained_count`
-and `oracle_retained_count` separately. The consumer uses the externally pinned
-`oracle_filter` URI and SHA-256 from that evidence, with a context reconstructed
-from its current configuration. This lets the receipt name the immutable dataset
-revision without requiring a dataset file to contain its own future commit hash.
+to the published dataset revision and its fresh census. The static evidence
+counts `static_retained_count` and `oracle_retained_count` separately. Store the
+canonical receipt outside the dataset and bind its `oracle_filter` URI and SHA-256
+in this evidence. The consumer reconstructs its expected context from its
+configured immutable dataset pin and census, then requires exact agreement with
+the receipt. The external receipt can name the final dataset revision without
+requiring a dataset file to contain its own future commit hash.
 
 `StaticRetainedTaskReceipt` records `outcome=static_retained` and
 `executability=unmeasured`. It carries the unchanged TaskSpec/runtime identities,
