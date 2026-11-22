@@ -2734,12 +2734,12 @@ async def test_dropped_events_leave_index_gaps_and_delivered_events_keep_their_e
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": Burst()}, observer=observer
     ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
 
-    after = next(event for event in observer.events if getattr(event.payload, "call_id", None) == "after")
-    burst = [event for event in observer.events if getattr(event.payload, "name", None) == "burst"][:-1]
+    *burst, after = [event for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    call_ids = [event.payload.call_id for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
     indexes = [event.index for event in observer.events]
     missing = set(range(after.index)) - set(indexes)
     assert indexes == sorted(indexes)
-    assert [event.payload.call_id for event in burst] == [f"burst-{call}" for call in range(len(burst))]
+    assert call_ids == [*(f"burst-{call}" for call in range(len(burst))), "after"]
     assert 0 < len(missing) == 10 - len(burst) <= record.rollout.metrics["observer_dropped_events"]
     # The observer received the burst after the gate opened, and each event has the time of its emit.
     assert all(event.emitted_at <= opened_at[0] for event in burst)
