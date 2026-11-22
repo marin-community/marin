@@ -242,6 +242,46 @@ def test_shared_prompt_pages_admit_three_requests_with_eight_physical_pages(serv
     assert result.tokens == fresh.generate(requests).tokens
 
 
+def test_cache_pressure_preserves_reusable_pages_of_a_live_prompt(serving_model, caplog):
+    config = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=8,
+        max_seqs=3,
+        page_size=2,
+        max_queued_tokens=3,
+        max_seqs_in_prefill=3,
+        max_prefill_size=12,
+        max_rounds=1,
+        prefix_cache="recent_prompts",
+        compute_dtype=jnp.float32,
+    )
+    cached = InferenceEngine.from_model_with_config(serving_model, None, config)
+    params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(6))
+    live = Request([1, 2, 3, 4], 10, dataclasses.replace(params, max_num_tokens=jnp.asarray(8)), 1)
+    short = Request([6, 7, 8, 9, 10], 20, params, 1)
+    fresh = Request([11, 12, 13, 14, 15], 30, params, 1)
+    reused = Request([1, 2, 3, 4, 16], 40, params, 1)
+    followups = {short.request_id: fresh, fresh.request_id: reused}
+    waiting = []
+    completed = []
+
+    def poll(capacity):
+        return [waiting.pop(0)] if capacity and waiting else []
+
+    def complete(rid, _result):
+        completed.append(rid)
+        if rid in followups:
+            waiting.append(followups[rid])
+
+    with caplog.at_level(logging.INFO, logger="levanter.inference.engine"):
+        cached.generate_continuously(
+            [live, short], poll, complete, should_abort=lambda: False, on_tokens=lambda *_: None
+        )
+
+    assert completed == [short.request_id, fresh.request_id, reused.request_id, live.request_id]
+    assert "Reused 4 prompt tokens" in caplog.text
+
+
 @pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
 @pytest.mark.parametrize(
     "expert_implementation,decode_layers",

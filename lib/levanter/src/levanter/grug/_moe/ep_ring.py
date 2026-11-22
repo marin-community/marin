@@ -24,7 +24,7 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug._moe.selected_gpu import selected_expert_mlp, supports_selected_matvec
 
-_H100_DECODE_EXPERT_CAPACITY = 256
+_SMALL_DECODE_ROUTE_CAPACITY = 256
 
 
 def _moe_mlp_ep_ring_local(
@@ -44,29 +44,47 @@ def _moe_mlp_ep_ring_local(
     megablox_output_tile: int | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Gather routes and scatter expert outputs using packed or separate gate and up weights."""
+    local_experts = gate_or_packed.shape[0]
+    ep_size, remainder = divmod(num_experts, local_experts)
+    if remainder:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+    local_tokens, width = x_local.shape
+    topk = selected_experts_local.shape[1]
+    tokens = local_tokens * ep_size
+    assignments = tokens * topk
+    physical_capacity = min(assignments, max(local_experts, math.ceil(capacity_factor * assignments / ep_size)))
+    small_decode = (
+        up_weight is not None and physical_capacity <= _SMALL_DECODE_ROUTE_CAPACITY and x_local.dtype == jnp.bfloat16
+    )
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
-        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
-        selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
-        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
-        token_valid_global = jax.lax.all_gather(token_valid_local, "expert", tiled=True)
+        if small_decode and num_experts <= 256 and combine_weights_local.dtype == x_local.dtype:
+            # BF16 represents every expert ID exactly for banks up to 256 experts.
+            payload = jnp.concatenate(
+                (
+                    x_local,
+                    selected_experts_local.astype(x_local.dtype),
+                    combine_weights_local,
+                    token_valid_local[:, None],
+                ),
+                axis=1,
+            )
+            gathered = jax.lax.all_gather(payload, "expert", tiled=True)
+            x_global = gathered[:, :width]
+            selected_experts_global = gathered[:, width : width + topk].astype(selected_experts_local.dtype)
+            combine_weights_global = gathered[:, width + topk : width + 2 * topk]
+            token_valid_global = gathered[:, -1].astype(jnp.bool_)
+        else:
+            x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+            selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
+            combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
+            token_valid_global = jax.lax.all_gather(token_valid_local, "expert", tiled=True)
 
-        tokens = x_global.shape[0]
-        topk = selected_experts_global.shape[1]
-        assignments = tokens * topk
         expert_flat = selected_experts_global.reshape(assignments)
         weight_flat = combine_weights_global.reshape(assignments)
-
-        local_experts = gate_or_packed.shape[0]
-        if num_experts % local_experts != 0:
-            raise ValueError(
-                f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
-            )
-
-        ep_size = num_experts // local_experts
-        physical_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
-        physical_capacity = min(assignments, max(local_experts, physical_capacity))
         assignment_valid = _assignment_validity(token_valid_global, tokens=tokens, topk=topk)
         valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
         logical_capacity = _scaled_capacity(
@@ -105,13 +123,7 @@ def _moe_mlp_ep_ring_local(
         max_order_key = local_experts * assignments
         selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
 
-    if (
-        up_weight is not None
-        and physical_capacity <= _H100_DECODE_EXPERT_CAPACITY
-        and x_local.dtype == jnp.bfloat16
-        and jax.default_backend() == "gpu"
-        and "H100" in jax.devices()[0].device_kind
-    ):
+    if small_decode and jax.default_backend() == "gpu" and "H100" in jax.devices()[0].device_kind:
         dot = triton_decode_ragged_dot
     else:
         dot = partial(ragged_dot, megablox_token_tile=megablox_token_tile, megablox_output_tile=megablox_output_tile)

@@ -1322,7 +1322,11 @@ class InferenceEngine:
         page_budget = table.num_pages - reserved
         pinned = np.count_nonzero((after > 0) & ~shared)
         while pinned > page_budget or len(self._cached_prompts) > self._retained_prompt_limit:
-            pages = self._cached_prompts.pop(0).pages
+            evict = 0
+            if pinned > page_budget:
+                # Prompts backed entirely by live pages consume no retention budget.
+                evict = next(i for i, cached in enumerate(self._cached_prompts) if not np.all(shared[cached.pages]))
+            pages = self._cached_prompts.pop(evict).pages
             np.add.at(after, pages, -1)
             pinned -= np.count_nonzero((after[pages] == 0) & ~shared[pages])
         change = after - before
