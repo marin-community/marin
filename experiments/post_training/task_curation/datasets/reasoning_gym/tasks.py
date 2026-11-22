@@ -364,7 +364,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
                 ),
                 convert=convert_generated,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
