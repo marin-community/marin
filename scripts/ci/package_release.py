@@ -35,6 +35,9 @@ IRIS_DISTRIBUTION = "marin-iris"
 # `iris.version` reads this first, so it has to be cleared to prove the date came
 # out of the artifact rather than out of the environment running the check.
 IRIS_REVISION_DATE_ENV = "IRIS_REVISION_DATE"
+_REQUIREMENT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# uv's re-resolve rewrites these environment-marker strings, and their form varies by uv release.
+LOCK_MARKER_KEYS = frozenset({"marker", "resolution-markers"})
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
 
 
@@ -499,6 +502,31 @@ def update_native_requirement(text: str, distribution: str, version: str) -> tup
     return pattern.sub(rf"\g<prefix>{version}\g<suffix>", text, count=1), True
 
 
+def _requirement_name(requirement: str) -> str:
+    match = _REQUIREMENT_NAME_RE.match(requirement.strip())
+    if match is None:
+        raise ValueError(f"Cannot read a distribution name from requirement {requirement!r}")
+    return _normalized_distribution(match.group(0))
+
+
+def requirement_extra(pyproject_text: str, distribution: str) -> str | None:
+    """Return the optional extra that declares `distribution`, or None for core dependencies."""
+    project = tomllib.loads(pyproject_text)["project"]
+    sections: dict[str | None, list[str]] = {
+        None: project.get("dependencies", []),
+        **project.get("optional-dependencies", {}),
+    }
+    wanted = _normalized_distribution(distribution)
+    owners = [
+        extra
+        for extra, requirements in sections.items()
+        if any(_requirement_name(item) == wanted for item in requirements)
+    ]
+    if len(owners) != 1:
+        raise ValueError(f"Expected {distribution!r} in exactly one dependency section, found {len(owners)}")
+    return owners[0]
+
+
 def _normalized_distribution(distribution: str) -> str:
     return re.sub(r"[-_.]+", "_", distribution).lower()
 
@@ -633,6 +661,43 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
+def _without_markers(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _without_markers(item) for key, item in value.items() if key not in LOCK_MARKER_KEYS}
+    if isinstance(value, list):
+        return [_without_markers(item) for item in value]
+    return value
+
+
+def validate_marker_only_change(before: str, after: str) -> None:
+    """Reject a re-resolve of unchanged requirements that changes more than environment markers."""
+    before_lock, after_lock = tomllib.loads(before), tomllib.loads(after)
+    for lock in (before_lock, after_lock):
+        lock.pop("revision", None)
+    if _without_markers(before_lock) != _without_markers(after_lock):
+        raise ValueError("Re-resolving unchanged requirements changed uv.lock beyond environment markers")
+
+
+def _relock_unchanged(repo_root: Path, distribution: str) -> str:
+    """Return the lock this uv writes for the current requirements, leaving uv.lock untouched.
+
+    uv releases spell environment markers differently, so the bump is compared with this
+    re-resolve instead of with a lock that an older or newer uv wrote.
+    """
+    lock_path = repo_root / "uv.lock"
+    original_lock = lock_path.read_text()
+    locked = [
+        package["version"] for package in tomllib.loads(original_lock)["package"] if package["name"] == distribution
+    ]
+    if len(locked) != 1:
+        raise ValueError(f"Expected one {distribution} entry in uv.lock, found {len(locked)}")
+    subprocess.run(["uv", "lock", "--upgrade-package", f"{distribution}=={locked[0]}"], cwd=repo_root, check=True)
+    relocked = lock_path.read_text()
+    lock_path.write_text(original_lock)
+    validate_marker_only_change(original_lock, relocked)
+    return relocked
+
+
 def emit_github_output(path: Path | None, **values: str) -> None:
     """Append single-line values to a GitHub Actions output file when configured."""
     if path is None:
@@ -665,11 +730,15 @@ def bump_native_requirement(
         return
 
     original_lock = lock_path.read_text()
+    baseline_lock = _relock_unchanged(repo_root, build.requirement_distribution)
+    extra = requirement_extra(original_requirement, build.requirement_distribution)
     command = [
         "uv",
         "add",
         "--package",
         build.requirement_owner,
+        # Without --optional, uv adds a second, core requirement instead of raising the extra's floor.
+        *(("--optional", extra) if extra else ()),
         f"{build.requirement_distribution}>={version}",
         "--upgrade-package",
         f"{build.requirement_distribution}=={version}",
@@ -679,7 +748,7 @@ def bump_native_requirement(
         if delay:
             time.sleep(delay)
         requirement_path.write_text(original_requirement)
-        lock_path.write_text(original_lock)
+        lock_path.write_text(baseline_lock)
         result = subprocess.run(command, cwd=repo_root)
         if result.returncode != 0:
             if attempt < len(LOCK_RETRY_DELAYS):
@@ -690,7 +759,7 @@ def bump_native_requirement(
         updated_lock = lock_path.read_text()
         try:
             validate_targeted_lock_change(
-                original_lock,
+                baseline_lock,
                 updated_lock,
                 build.requirement_distribution,
                 version,
