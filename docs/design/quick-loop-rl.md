@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 2:21 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 2:31 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,13 +15,13 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child applied update 25 and reconciled all 208 receiver checks with zero mismatches. | Verify the committed checkpoint and final 100-task panel against the completed control. |
+| Megatron learner with vLLM | The frozen control completed 25 updates on 40 H100s. It passed 208 receiver checks, committed step 25 and scored 0.1902 to 0.2700 on the fixed panel. | Use the frozen control to evaluate changes to the maintained learner. |
+| Levanter learner with vLLM | The frozen smoke and 25-update comparison passed on 40 H100s. The Levanter arm scored 0.2310 to 0.3201. Its median warm update took 3.0 times the control’s wall time. | Qualify and profile maintained binary publication on H100 before changing the learner default. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
-| 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The frozen 25-update candidate has published policy 25. |
+| 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Ordered gather served a verified 67B live swap and returned byte-identical first, repeat and cold replies. Both serving variants completed the 32,768-target capture. Their real tool-turn fused checks passed. The full-context score gate found three crossings for ordered gather and one for scatter. | Isolate the full-context scoring discrepancy and measure the held-learner comparison. |
+| Native inventory backend | The 67B live swap and real tool-turn replay passed. The full-context score gate found three crossings with ordered gather and one with scatter. The five-host pilot committed policy 0 and reached a model-config binding error at serving initialization. | Fix config binding, complete the held comparison and resolve the full-context scoring discrepancy. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -881,6 +881,40 @@ additional seconds per Levanter update on average. Publication made up
 65% of the total gap. The step-25 callback includes regular checkpoint
 and evaluation work, so the warm comparison stops at step 24.
 
+#### Completed frozen comparison
+
+Both successful attempts used five eight-H100 hosts and started from the
+pinned HF initializer. Each applied 25 updates, admitted 3,200 groups and
+12,800 trajectories, and passed all 208 receiver checks from policy 0
+through 25. The original serving streams carried stamp 26 on nonempty
+final-evaluation generation. The marker and policy metadata confirmed the
+committed step-25 checkpoints. The separate smoke covers exact fresh-process
+restore. All four panels contain the same 100 tasks and exact prompt tokens.
+
+| Measure | Megatron with vLLM | Levanter with vLLM |
+| --- | ---: | ---: |
+| Initial mean verifier score | 0.1902 | 0.2310 |
+| Final mean verifier score | 0.2700 | 0.3201 |
+| Score change | +0.0798 | +0.0891 |
+| Active learner and rollout wall time | 63.1 min | 187.9 min |
+| Consumed loss tokens | 38.12M | 35.57M |
+| Loss tokens per active second | 10,071 | 3,156 |
+| Median warm update | 150.1 s | 450.4 s |
+| Median verified publication in a warm update | 3.1 s | 200.8 s |
+| Group admission in warm updates | 0.96 s/group | 0.94 s/group |
+| Allocated H100-hours for the successful attempt | 56.26 | 153.01 |
+
+Active time runs from the initial evaluation result through the policy-25
+acknowledgment. The final checkpoint phase took 505 seconds for Megatron
+and 1,311 for Levanter. Final evaluations took 95 and 87 seconds.
+Levanter's gain over its own baseline exceeded Megatron's by 0.0093.
+Resampling the paired tasks within each dataset gave a 2.5th to 97.5th
+percentile range of −0.1004 to +0.1190 for that difference. The resampling
+captures variation across fixed-panel tasks. Each arm has one optimizer run.
+[Accepted Megatron control][iris-matched-megatron-third] ·
+[Accepted Levanter candidate][iris-matched-levanter-third] ·
+[Matched audit summary in Filer][matched-final-evidence]
+
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
 nested GPU job from a hub-resident parent. A regional coordinator can use
@@ -896,9 +930,11 @@ admission and remote lease recovery still need verification. Use a fresh
 output version if the existing coordinator and all GPU children reach a
 terminal state and a direct-root retry is needed.
 
-Before each submission, confirm that Iris and the durable and scratch prefixes
-have no prior attempt for that version. The launcher creates a fresh coordinator
-ID and the trainer can resume from an existing checkpoint.
+For a fresh artifact version, confirm that Iris and the durable and scratch
+prefixes have no prior attempt. To reuse a version, confirm that every prior
+owner has ended and check the executor lease, receipts and checkpoint index.
+The ordinary launcher creates a fresh coordinator ID and the trainer can
+resume from an existing checkpoint.
 [Earlier matched launch and audit package][h100-matched-handoff]
 
 For each arm, collect Finelog rows for the successful child and its task attempts.
@@ -1754,10 +1790,19 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   gang admission and terminal artifact recovery remain open.
 
   The native coordinator lost its first slot before the GPU group was
-  admitted and its second during regional initializer streaming. The
-  third native GPU child was admitted on five H100 hosts and reached
-  checkpoint streaming. Both plans use a 24,576-token serving limit and
-  a 16,896-token request limit. Native uses the cache geometry from the
+  admitted and its second during regional initializer streaming. Its
+  third child on five H100 hosts committed a 124.98 GiB policy-0 snapshot
+  across four learner hosts. Serving rejected the model binding before
+  reading tensor weights. The learner encoded the capacity factor as
+  integer `8`, and the typed serving decoder reconstructed float `8.0`.
+  The values produced different JSON digests. An independent CPU
+  reconstruction from the committed metadata matched all 502
+  serving-template shapes and dtypes and isolated this field. Require
+  the same typed config representation before hashing and keep the
+  existing tensor and policy identity checks. The failed child reached
+  neither rollout admission nor evaluation.
+
+  Both plans use a 24,576-token serving limit and a 16,896-token request limit. Native uses the cache geometry from the
   67B live-swap run. Use the same learner, selection and fixed panel to
   compare the completed attempts.
   [First held vLLM coordinator][iris-held-vllm-pilot] ·
@@ -1842,6 +1887,7 @@ arms. [Prior timing comparison][timing]
 [iris-matched-megatron-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-ab4ae1aae5e9
 [iris-matched-levanter]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af8929ab8ff2
 [iris-matched-levanter-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-ae4bda9bd4c7
+[matched-final-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.22.1%2Fmatched-h100-25-update-comparison.json
 [iris-matched-levanter-third]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-coordinator-6d5448c8%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.7-af6dc8d549b1
 [iris-native-fused-gate]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122e
 [iris-native-live-score]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122g
