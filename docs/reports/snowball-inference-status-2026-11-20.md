@@ -1205,6 +1205,17 @@ and active decode fell from 58.15 to 50.25 tok/s. The native
 aggregate p90 was 2.57 s versus compiled vLLM's 1.31 s.
 [Four-step chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v31-live-prefill-chunks-four-decode-steps)
 
+Reducing the quantum to one decode step between unfinished chunks
+lowered paired p90 TTFT from 2.57 to 2.05 s and active decode from
+50.27 to 46.84 tok/s across 410 turns. Both runs completed 411
+requests. The one-step run reached 565.73 output tok/s over 209 s
+including drain, versus 605.66 over 189 s for four steps. Its first
+attempt lost the TPU worker. The retry ran on a replacement v6e-8
+in the same zone. All 392 output lengths paired with compiled
+vLLM matched, with zero profiling errors. Compiled vLLM reached
+554.00 output tok/s and 1.31 s p90 TTFT.
+[One-step chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v32-live-prefill-chunks-one-decode-step)
+
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
 finished slots it took 0.45 ms versus 18.26 ms. Both cases used a 128-slot
