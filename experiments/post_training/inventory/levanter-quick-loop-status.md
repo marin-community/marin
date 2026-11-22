@@ -7,6 +7,14 @@ metadata was committed. End-to-end update confirmation, fresh-process
 continuation, updated-weight publication and generation, and the matched
 25-update comparison remain unverified.
 
+BATCH smoke `2026.11.22.1` is running from
+`8dde046e6980e120e13f577f0035be16c62d77f7` with the reviewed pre-ack cleanup
+candidate. At 00:21 PST all five GPU tasks were running. Both accepted bundles
+match all 4,583 frozen entries, including 43 required runtime files, and the
+executed configuration matches the preflight. The allocation reuses the
+previous import-stall host `g83c00a`. Current initialization, cleanup/exit,
+restore, updated-policy publication, and two-update acceptance remain pending.
+
 BATCH smoke `2026.11.21.13`, from
 `cb3fd4e7d767e52f0409ecb0b0fda5b98902e957`, failed during checkpoint
 validation on November 21 at 23:46 PST. A native learner acknowledged shutdown but did not
@@ -35,7 +43,7 @@ shutdown/finalization diagnostics. Final-source checks cover real restart and
 exact continuation, delayed `atexit` capture, and diagnostic-stream failures
 that must not skip cleanup or hide real errors. It preserves the real
 exit-zero requirement and the existing five-second grace period. Its GPU
-effectiveness remains unverified; no replacement run has been submitted.
+effectiveness remains unverified; `.22.1` is the replacement smoke.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
