@@ -3,6 +3,7 @@
 
 """Own the pinned OpenResearcher index for a long-loop RL attempt."""
 
+import hashlib
 from dataclasses import dataclass, replace
 
 import yaml
@@ -14,7 +15,9 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.rl.retrieval_service import RetrievalServiceConfig, RetrievalServiceLaunch, retrieval_service
 from marin.rl.skyrl import ArtifactDataSource, IrisSkyRLExecution, SkyRLRun, SkyRLRunConfig, run_skyrl
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
+from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretBehavior, require_secret
 from rigging.timing import Duration
 from skyrlrecipe import RecipePatch
@@ -144,14 +147,20 @@ def retrieval_launch(source: OpenResearcherService, execution: IrisSkyRLExecutio
     )
 
 
-def run_with_retrieval(config: SkyRLRunConfig, *, launch: RetrievalServiceLaunch) -> SkyRLRun:
+def run_with_retrieval(config: SkyRLRunConfig, *, launch: RetrievalServiceLaunch, parquet_sha256: str) -> SkyRLRun:
     """Inject a ready attempt-owned endpoint and keep its child alive through RL cleanup."""
+    document = yaml.safe_load(config.launch_config_yaml)
+    (source,) = document["inputs"]["train_data"]
+    fs, path = filesystem_for(str(StoragePath(source["uri"]) / source["relative_path"]))
+    with fs.open(path, "rb") as stream:
+        observed = hashlib.file_digest(stream, "sha256").hexdigest()
+    if observed != parquet_sha256:
+        raise ValueError("The service-backed OpenResearcher Parquet differs from its pinned SHA-256")
     launch = replace(
         launch,
         config=replace(launch.config, endpoint_name=sanitize_job_name(f"{config.run_id}-{config.attempt_id}-retrieval")),
     )
     with retrieval_service(launch) as endpoint:
-        document = yaml.safe_load(config.launch_config_yaml)
         document["skyrl"]["environment"]["task_sessions"]["retrieval_service"] = endpoint
         return run_skyrl(
             replace(config, launch_config_yaml=yaml.safe_dump(document, sort_keys=False)),

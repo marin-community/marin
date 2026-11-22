@@ -395,7 +395,10 @@ def build_run(
     )
     if openresearcher_service is not None:
         launch = retrieval_launch(openresearcher_service, execution or profile.execution)
-        step = replace(step, run=partial(run_with_retrieval, launch=launch))
+        return replace(
+            step,
+            run=partial(run_with_retrieval, launch=launch, parquet_sha256=openresearcher_service.parquet_sha256),
+        )
     if data_sha256 is None:
         return step
     original_build_config = step.build_config

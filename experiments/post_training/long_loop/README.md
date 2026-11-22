@@ -1048,7 +1048,8 @@ openresearcher_service:
 
 Keep the other model, tokenizer, artifact-version and role-plan fields explicit.
 The input builder downloads the immutable private pin as an artifact dependency.
-Its Parquet digest is checked before launch. Set the index URI to the run's own
+Its Parquet digest is checked after download and before service launch. Config
+rendering does not read an input artifact that has yet to run. Set the index URI to the run's own
 region; the service refuses a bucket in another region.
 
 The coordinator starts one Iris CPU child per run attempt with 8 CPUs, 32 GB RAM
