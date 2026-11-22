@@ -13,7 +13,9 @@ from fractions import Fraction
 from verifyit.grade import InvalidTask
 
 MAX_EXPRESSION_LENGTH = 256
-COIN_FLIP_RELATIVE_DENOMINATOR = 1_000_000
+# A coin_flip reply within this fraction of the reference probability is correct: the question asks for no precision,
+# and a reply rounded to four significant figures is within it.
+COIN_FLIP_RELATIVE_DENOMINATOR = 1_000
 
 
 def _puzzle24_value(node: ast.expr) -> tuple[Fraction, list[int]]:
