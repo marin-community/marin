@@ -5453,7 +5453,6 @@ mod tests {
                 .to_string()
         }
 
-        /// How many segment files the physical scan for `sql` opens.
         /// `sql` planned over this table, with the context that planned it.
         async fn physical_plan(
             &self,
@@ -5479,6 +5478,7 @@ mod tests {
             (ctx, plan)
         }
 
+        /// How many segment files the physical scan for `sql` opens.
         async fn planned_segment_count(&self, sql: &str) -> usize {
             let (_ctx, plan) = self.physical_plan(/* with_column_bounds */ true, sql).await;
             let mut files = 0;
