@@ -80,9 +80,12 @@ arms. The eight-H100 job `/dlwh/native-lifecycle-2026-11-22-2`, from
 with `Loss is NaN` in both variants. Both had completed a first update,
 committed step-1 checkpoints, exited naturally with status zero, and restored
 exact model/Adam/RNG/step/averaging fingerprints in fresh processes. The frozen
-batch hashes also matched across variants. Those checks establish restoration
-of the saved state; they do not establish that state was finite or that the
-continued update succeeded.
+batch hashes also matched across variants. Local inspection of both saved
+checkpoints found that the first update had already produced NaNs in every
+trainable model parameter and Adam moment. Only the frozen router biases,
+optimizer counter, RNG and step remained finite; the initializer was finite.
+The checkpoint restored that poisoned state exactly. A finite first loss did
+not establish finite gradients or a valid update.
 
 The complete 23.84-MiB task archive was downloaded and inspected. Actual
 receipts confirm eight H100s, the pinned packages and source bundle, VMM at
