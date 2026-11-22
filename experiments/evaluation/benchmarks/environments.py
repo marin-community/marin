@@ -50,6 +50,7 @@ IFBENCH_GRADER = Environment(
 )
 INSTRUCTION_ENVIRONMENTS = (IFEVAL_GRADER, IFBENCH_GRADER)
 
+SCIRECIPE_NLTK_DATA_ROOT = "/opt/scirecipe/nltk_data"
 SCIRECIPE_GRADER = Environment(
     requirements=(
         "torch==2.6.0",
@@ -65,9 +66,9 @@ SCIRECIPE_GRADER = Environment(
     ),
     files={
         **MODEL_FILES,
-        "/opt/scirecipe/nltk_data/corpora/wordnet": Archive(
-            "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/"
-            "packages/corpora/wordnet.zip",
+        SCIRECIPE_NLTK_DATA_ROOT
+        + "/corpora/wordnet": Archive(
+            f"https://raw.githubusercontent.com/nltk/nltk_data/{NLTK_DATA_REVISION}/" "packages/corpora/wordnet.zip",
             "cbda5ea6eef7f36a97a43d4a75f85e07fccbb4f23657d27b4ccbc93e2646ab59",
             "wordnet",
         ),
@@ -75,7 +76,7 @@ SCIRECIPE_GRADER = Environment(
     env={
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
-        "NLTK_DATA": "/opt/scirecipe/nltk_data",
+        "NLTK_DATA": SCIRECIPE_NLTK_DATA_ROOT,
         "OMP_NUM_THREADS": "1",
         "MKL_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1",

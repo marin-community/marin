@@ -310,7 +310,8 @@ requires the recorded checkout.
 file `SciRecipe-Eval.parquet` (MIT). The reference is
 [`eval/eval_batch.py`](https://github.com/InternScience/Thoth/blob/a155710079da47bb26a021646fa84d5544aa180e/eval/eval_batch.py).
 The converter maps `exp_goal` to the runner's question, preserves its system prompt,
-shuffles actions with seed 42, and uses greedy decoding with a 1,024-token cap.
+shuffles actions with seed 42 when `action_new` is absent, and uses greedy decoding
+with a 1,024-token cap. A supplied `action_new` list keeps its order.
 Scores are means overall and by `type` and `level`. No evaluation suite includes
 this benchmark automatically.
 
@@ -327,7 +328,8 @@ The grader uses final-answer text. It accepts `<key>`, `<orc>`, and `<note>`
 without requiring `<think>`, because serving APIs can put reasoning in a separate
 channel. A malformed block sequence falls back to parsing step lines from the
 final answer, as in the reference. Dependency failures remain infrastructure
-errors rather than silently receiving zero text-metric scores.
+errors rather than silently receiving zero text-metric scores. Malformed typed
+fields in a reference are invalid-task errors, rather than model zeros.
 
 RoBERTa-large and MiniLM weights/tokenizers are pinned by revision and SHA-256 in
 `experiments/evaluation/benchmarks/scirecipe_assets.py`. They occupy about 1.52 GB

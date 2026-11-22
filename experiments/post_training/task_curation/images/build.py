@@ -219,27 +219,30 @@ def _archive_members(data: bytes, member: str) -> dict[str, bytes]:
     return {name.removeprefix(prefix): content for name, content in selected.items()}
 
 
-def materialize(archive: Archive | Download, target: Path) -> None:
+def _verify_sha256(artifact: Archive | Download, digest: str) -> None:
+    if digest != artifact.sha256:
+        raise ValueError(f"{artifact.url} has SHA-256 {digest}, not the declared {artifact.sha256}")
+
+
+def materialize(artifact: Archive | Download, target: Path) -> None:
     """Verify and place an archive member or a streamed verbatim download at ``target``."""
-    if isinstance(archive, Download):
+    if isinstance(artifact, Download):
         target.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
         with TemporaryDirectory(dir=target.parent) as directory:
             staged = Path(directory) / "download"
-            with urllib.request.urlopen(archive.url) as response, staged.open("wb") as output:
+            with urllib.request.urlopen(artifact.url) as response, staged.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
                     digest.update(chunk)
                     output.write(chunk)
-            if digest.hexdigest() != archive.sha256:
-                raise ValueError(f"{archive.url} has SHA-256 {digest.hexdigest()}, not the declared {archive.sha256}")
+            _verify_sha256(artifact, digest.hexdigest())
             staged.replace(target)
         return
-    data = download(archive.url)
+    data = download(artifact.url)
     digest = hashlib.sha256(data).hexdigest()
-    if digest != archive.sha256:
-        raise ValueError(f"{archive.url} has SHA-256 {digest}, not the declared {archive.sha256}")
-    for name, content in _archive_members(data, archive.member).items():
-        path = target if name == archive.member else target / name
+    _verify_sha256(artifact, digest)
+    for name, content in _archive_members(data, artifact.member).items():
+        path = target if name == artifact.member else target / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 

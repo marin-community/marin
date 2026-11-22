@@ -11,10 +11,7 @@ from rouge_score.rouge_scorer import RougeScorer
 from sacrebleu.metrics import BLEU
 from verifyit.grade import GradingInfraError
 
-from .scirecipe import TEXT_METRICS
-
-ROBERTA_PATH = "/opt/scirecipe/roberta-large"
-MINILM_PATH = "/opt/scirecipe/all-MiniLM-L6-v2"
+from .scirecipe import MINILM_PATH, ROBERTA_PATH, TEXT_METRICS
 
 
 @cache

@@ -11,6 +11,8 @@ RoBERTa-large and MiniLM run on CPU in the offline grader environment. Infrastru
 remain unscored rather than silently becoming metric zeros as in the reference.
 """
 
+from dataclasses import replace
+
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metric,
@@ -69,4 +71,4 @@ def benchmarks() -> list[EvaluationBenchmark]:
         item_builder=scirecipe_item,
         grader=SCIRECIPE_GRADER,
     )
-    return fixed_benchmarks([source], "chat")
+    return [replace(benchmark, max_concurrency=1) for benchmark in fixed_benchmarks([source], "chat")]

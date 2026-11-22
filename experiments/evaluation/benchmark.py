@@ -30,6 +30,9 @@ class EvaluationBenchmark:
     variants: tuple[ProtocolVariant, ...]
     build: Callable[[ProtocolVariant], tuple[RlDataSource[EvaluationCorpusRecipe], ...]]
 
+    max_concurrency: int | None = None
+    """Cap simultaneous task executions when each grader needs substantial memory."""
+
     def resolve(
         self,
         protocol: str | None = None,

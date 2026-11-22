@@ -4,6 +4,7 @@
 import json
 
 import pytest
+from verifyit.grade import InvalidTask
 
 from taskcompendium.importers.evalchemy.scirecipe import (
     SYSTEM_PROMPT,
@@ -58,8 +59,12 @@ def test_prompt_matches_reference_shuffle_and_action_new():
     assert document["action"] == [" Mix ", "WAIT", "read", "", None]
 
 
-def test_structured_exact_match_preserves_unnormalized_content_score():
-    assert structured_metrics(KEY, KEY) == {
+@pytest.mark.parametrize("count", [2, 15, 25])
+def test_structured_exact_match_preserves_unnormalized_content_score(count):
+    # Dividing each pair before summing can push a perfect 15-step reward above 1.
+    lines = KEY.splitlines()
+    key = "\n".join(f"Step {i + 1}: {lines[i % 2].split(': ', 1)[1]}" for i in range(count))
+    assert structured_metrics(key, key) == {
         "step_match": 1,
         "order_strict": 1,
         "order_lcs": 1,
@@ -69,6 +74,11 @@ def test_structured_exact_match_preserves_unnormalized_content_score():
         "avg_para": 1,
         "avg_mx": 1,
     }
+
+
+def test_malformed_reference_is_an_invalid_task_instead_of_a_model_zero():
+    with pytest.raises(InvalidTask, match="reference"):
+        structured_metrics(KEY, 'Step 1: {"action": null}')
 
 
 def test_structured_reversed_actions_and_greedy_alignment():

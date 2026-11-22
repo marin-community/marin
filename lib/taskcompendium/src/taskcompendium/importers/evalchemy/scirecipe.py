@@ -10,7 +10,7 @@ from typing import Any
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
-from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem
+from taskcompendium.evaluation.spec import EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -61,9 +61,8 @@ def convert_scirecipe(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 def scirecipe_item(task: TaskSpec) -> EvaluationItem:
     evidence = source_evidence(task)
-    return chat_item(task).model_copy(
+    return chat_item(task, response_selection="final_only").model_copy(
         update={
-            "operation": ChatGeneration(response_selection="final_only"),
             "groups": {"type": str(evidence["type"]), "level": str(evidence["level"])},
         }
     )

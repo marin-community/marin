@@ -11,7 +11,10 @@ import json
 import re
 from dataclasses import dataclass
 
-from verifyit.grade import Reward, scored
+from verifyit.grade import InvalidTask, Reward, scored
+
+ROBERTA_PATH = "/opt/scirecipe/roberta-large"
+MINILM_PATH = "/opt/scirecipe/all-MiniLM-L6-v2"
 
 TAG_PATTERN = re.compile(
     r"<key>(.*?)</key>\s*<orc>(.*?)</orc>\s*<note>(.*?)</note>",
@@ -93,7 +96,11 @@ def intersection_over_union(left: set[str], right: set[str]) -> float:
 def structured_metrics(prediction: str, reference: str) -> dict[str, float]:
     metrics = dict.fromkeys(STRUCTURED_METRICS, 0.0)
     try:
-        predicted, expected = parse_steps(prediction), parse_steps(reference)
+        expected = parse_steps(reference)
+    except (AttributeError, TypeError) as error:
+        raise InvalidTask("Malformed typed fields in the SciRecipe reference") from error
+    try:
+        predicted = parse_steps(prediction)
     except (AttributeError, TypeError):
         # The reference assigns zero to every structured metric on malformed typed fields.
         return metrics
@@ -138,11 +145,14 @@ def structured_metrics(prediction: str, reference: str) -> dict[str, float]:
             ("avg_para", parameters),
             ("avg_mx", displacement),
         ):
-            metrics[name] += value / len(pairs)
+            metrics[name] += value
+    for name in ("content_score", "avg_obj", "avg_para", "avg_mx"):
+        metrics[name] /= max(1, len(pairs))
     return metrics
 
 
 def prediction_blocks(response: str) -> tuple[str, str]:
+    """Return key and orc blocks, falling back to the whole response and an empty orc."""
     # Serving APIs can separate <think> into a reasoning channel. Only the final artifact is graded.
     pattern = FULL_PATTERN if REASONING_TAG.search(response) else TAG_PATTERN
     match = pattern.search(response)

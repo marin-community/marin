@@ -373,12 +373,9 @@ def test_relaunch_changed_request_concurrency_and_task_evidence_preserves_identi
 
     model = replace(model, evaluation_num_concurrent=64)
     tuned = replace(model.serve, max_num_batched_tokens=8192, max_num_seqs=128, gpu_memory_utilization=0.9)
-    selection = spec.evals[0]
-    selection = selection.model_copy(update={"run": selection.run.model_copy(update={"concurrency": 1})})
     after = prepare_evaluation_batch(
-        replace(spec, evals=(selection,), model=replace(model, serve=tuned), task_evidence=TaskEvidence.REFERENCE)
+        replace(spec, model=replace(model, serve=tuned), task_evidence=TaskEvidence.REFERENCE)
     )
-    assert after.evaluations[0].identity.eval_ref.curated.settings.concurrency == 1
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert executed == []

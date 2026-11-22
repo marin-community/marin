@@ -365,7 +365,6 @@ class EvaluationOverrides(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     limit: int | None = Field(default=None, gt=0)
-    concurrency: int | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, gt=0)
     seed: int | None = None
     judge: JudgeIdentity | None = None

@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
+from evalrecords.records import EvaluationSelection, TaskEvidence
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
@@ -15,6 +18,8 @@ from taskcompendium.runtime.resources import resource_bytes
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.benchmarks.scirecipe import benchmarks
+from experiments.evaluation.curated import settings_for
+from experiments.evaluation.models import models
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 
@@ -56,3 +61,11 @@ def test_scirecipe_publication_preserves_prompts_private_references_and_groups(t
         config = json.loads(resource_bytes(next(r for r in case.task.resources.verifier if r.path == "config.json")))
         assert config == {"key": document["key"], "orc": document["orc"]}
         assert case.item.operation.response_selection == "final_only"
+
+
+@pytest.mark.parametrize("requested", [1, 64])
+def test_scirecipe_limits_grader_concurrency_without_limiting_other_benchmarks(requested):
+    model = replace(models()["qwen3-0.6b"], evaluation_num_concurrent=requested, tokenizer_revision="fixture")
+    for name, expected in (("scirecipe-eval", 1), ("gsm8k", requested)):
+        settings = settings_for(EvaluationSelection(benchmark=name), model, None, None, 0, TaskEvidence.REFERENCE)
+        assert settings.concurrency == expected
