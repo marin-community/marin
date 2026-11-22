@@ -85,12 +85,8 @@ class RolloutScope:
 
 
 @dataclass(frozen=True, slots=True)
-class EventRow:
-    """One rollout event: its scope, and the scalar fields of its payload.
-
-    A payload column has the name of the payload field, so its meaning follows ``event_type``: ``duration``,
-    ``stop_reason``, ``done`` and ``error`` belong to the event of the row. Columns of other payloads are null.
-    """
+class _ScopedRow:
+    """The columns of both tables: the time of the event, the scope of the run, and the place of the event."""
 
     key_column: ClassVar[str] = "timestamp_ms"
 
@@ -102,6 +98,16 @@ class EventRow:
     task_id: str
     rollout_id: str
     event_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class EventRow(_ScopedRow):
+    """One rollout event: its scope, and the scalar fields of its payload.
+
+    Payloads share the columns ``duration``, ``stop_reason``, ``done`` and ``error``, so the meaning of those
+    follows ``event_type``. Columns of other payloads are null.
+    """
+
     event_type: str
     harness: str | None = None
     trace_mode: str | None = None
@@ -131,19 +137,9 @@ class EventRow:
 
 
 @dataclass(frozen=True, slots=True)
-class MessageRow:
+class MessageRow(_ScopedRow):
     """One message of a task attempt's transcript, or the options of one conversation, as JSON in ``content``."""
 
-    key_column: ClassVar[str] = "timestamp_ms"
-
-    timestamp_ms: int
-    run_id: str
-    run_attempt_id: str
-    phase: str | None
-    step: int | None
-    task_id: str
-    rollout_id: str
-    event_index: int
     message_index: int
     kind: str
     role: str | None
@@ -174,7 +170,7 @@ class FinelogRolloutLog:
         )
 
     def flush(self, timeout: float) -> tuple[FlushResult, FlushResult]:
-        """Wait up to ``timeout`` for the queued rows of each table, and log a table that lost rows.
+        """Wait up to ``timeout`` for the queued rows of each table, and log a table that Finelog did not confirm.
 
         This blocks, so call it off the event loop. Call it before the client closes: the close of a client
         waits only about 10 seconds for queued rows.
@@ -198,34 +194,52 @@ def _encoded(value: object) -> str:
     return json.dumps(value, default=repr)
 
 
-def _event_messages(event: RolloutEvent) -> list[tuple[ContentKind, dict[str, Any] | None, str]]:
-    """The content of an event as ``(kind, message, JSON)``, in transcript order."""
+@dataclass(frozen=True)
+class _Content:
+    """One row of an event's content: a message, or the options of a conversation, as JSON in ``text``."""
+
+    kind: ContentKind
+    text: str
+    role: str | None = None
+    tool_call_id: str | None = None
+
+
+def _message_content(message: dict[str, Any]) -> _Content:
+    return _Content(ContentKind.MESSAGE, _encoded(message), message.get("role"), message.get("tool_call_id"))
+
+
+def _event_content(event: RolloutEvent) -> list[_Content]:
+    """The content of an event, in transcript order."""
     payload = event.payload
     if isinstance(payload, ConversationStarted):
-        encoded = [(ContentKind.MESSAGE, message, _encoded(message)) for message in payload.messages]
-        return [*encoded, (ContentKind.OPTIONS, None, _encoded(payload.options))]
+        messages = [_message_content(message) for message in payload.messages]
+        return [*messages, _Content(ContentKind.OPTIONS, _encoded(payload.options))]
     if isinstance(payload, ModelTurnCompleted):
-        return [(ContentKind.MESSAGE, payload.message, _encoded(payload.message))]
+        return [_message_content(payload.message)]
     if isinstance(payload, TransitionCompleted):
-        return [(ContentKind.MESSAGE, message, _encoded(message)) for message in payload.observations]
+        return [_message_content(message) for message in payload.observations]
     return []
+
+
+def _scoped_columns(event: RolloutEvent, scope: RolloutScope) -> dict[str, Any]:
+    """The values of the columns that both tables have."""
+    return {
+        "timestamp_ms": int(event.emitted_at * 1000),
+        "run_id": scope.run_id,
+        "run_attempt_id": scope.run_attempt_id,
+        "phase": scope.phase,
+        "step": scope.step,
+        "task_id": event.task_id,
+        "rollout_id": event.run_id,
+        "event_index": event.index,
+    }
 
 
 def _event_row(
     event: RolloutEvent, scope: RolloutScope, *, content_rows: int, content_chars: int, content_captured: bool
 ) -> EventRow:
     payload = event.payload
-    row = EventRow(
-        timestamp_ms=int(event.emitted_at * 1000),
-        run_id=scope.run_id,
-        run_attempt_id=scope.run_attempt_id,
-        phase=scope.phase,
-        step=scope.step,
-        task_id=event.task_id,
-        rollout_id=event.run_id,
-        event_index=event.index,
-        event_type=payload.type.value,
-    )
+    row = EventRow(**_scoped_columns(event, scope), event_type=payload.type.value)
     if content_rows:
         row = replace(row, content_rows=content_rows, content_chars=content_chars, content_captured=content_captured)
     match payload:
@@ -293,39 +307,31 @@ class FinelogObserver:
         self._content_fraction = content_fraction
 
     async def on_event(self, event: RolloutEvent) -> None:
-        messages = _event_messages(event)
-        captured = bool(messages) and _captures_content(event.run_id, self._content_fraction)
+        content = _event_content(event)
+        captured = bool(content) and _captures_content(event.run_id, self._content_fraction)
         row = _event_row(
             event,
             self._scope,
-            content_rows=len(messages),
-            content_chars=sum(len(content) for _, _, content in messages),
+            content_rows=len(content),
+            content_chars=sum(len(item.text) for item in content),
             content_captured=captured,
         )
         self._log.events.write((row,))
-        if captured:
-            self._log.messages.write(self._message_rows(event, messages))
-
-    def _message_rows(
-        self, event: RolloutEvent, messages: list[tuple[ContentKind, dict[str, Any] | None, str]]
-    ) -> list[MessageRow]:
-        return [
-            MessageRow(
-                timestamp_ms=int(event.emitted_at * 1000),
-                run_id=self._scope.run_id,
-                run_attempt_id=self._scope.run_attempt_id,
-                phase=self._scope.phase,
-                step=self._scope.step,
-                task_id=event.task_id,
-                rollout_id=event.run_id,
-                event_index=event.index,
-                message_index=index,
-                kind=kind.value,
-                role=None if message is None else message.get("role"),
-                tool_call_id=None if message is None else message.get("tool_call_id"),
-                content=content[:MAX_MESSAGE_CHARS],
-                content_chars=len(content),
-                truncated=len(content) > MAX_MESSAGE_CHARS,
-            )
-            for index, (kind, message, content) in enumerate(messages)
-        ]
+        if not captured:
+            return
+        scoped = _scoped_columns(event, self._scope)
+        self._log.messages.write(
+            [
+                MessageRow(
+                    **scoped,
+                    message_index=index,
+                    kind=item.kind.value,
+                    role=item.role,
+                    tool_call_id=item.tool_call_id,
+                    content=item.text[:MAX_MESSAGE_CHARS],
+                    content_chars=len(item.text),
+                    truncated=len(item.text) > MAX_MESSAGE_CHARS,
+                )
+                for index, item in enumerate(content)
+            ]
+        )

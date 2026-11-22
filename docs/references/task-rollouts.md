@@ -520,9 +520,10 @@ Every row has the scope: `run_id` and `run_attempt_id` are the `run_id` and `att
 `marin.rollout_runs`, which has the producer, the model, and the job of a run. `phase` and `step` place the task
 attempt in the run. `rollout_id` is the engine's `run_id`, so give each task attempt a unique one.
 
-A payload column of the events table has the name of the payload field, so its meaning follows `event_type`:
-`duration`, `stop_reason`, `done`, and `error` belong to the event of the row. `failed_operation` is the
-`operation` of `AttemptEnded`, and `trace_mode` is the `trace` of `AttemptStarted`.
+In the events table, payloads share the columns `duration`, `stop_reason`, `done`, and `error`, so the meaning
+of those follows `event_type`. Other columns name their payload: `tool_call_id` and `tool_name` are the `call_id`
+and `name` of `ToolCallCompleted`, `grade_status` and `grade_failure` the `status` and `failure` of `Graded`,
+`failed_operation` the `operation` of `AttemptEnded`, and `trace_mode` the `trace` of `AttemptStarted`.
 
 To read a transcript, order the message rows of one `rollout_id` by `event_index`, then `message_index`.
 `ConversationStarted` writes every message of the first request, `ModelTurnCompleted` the new assistant message,
