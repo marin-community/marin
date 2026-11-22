@@ -3,9 +3,9 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
-import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 from experiments.grug.moe.optimizer import (

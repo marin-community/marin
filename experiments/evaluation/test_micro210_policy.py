@@ -32,7 +32,6 @@ from experiments.evaluation.micro210 import (
     run_micro210,
     validate_judge_availability,
 )
-from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,

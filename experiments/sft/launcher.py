@@ -78,7 +78,6 @@ from typing import Protocol, runtime_checkable
 
 import click
 import draccus
-import jax.numpy as jnp
 import jmp
 from fray.current_client import current_client
 from fray.types import ANY_REGION, CpuConfig, Entrypoint, GpuConfig, JobRequest, ResourceConfig, create_environment

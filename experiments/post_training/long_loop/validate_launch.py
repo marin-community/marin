@@ -21,6 +21,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import get_secret
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
+from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
 from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
 from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
 from skyrl_train.rollouts.agent_runtime import InstalledAgentSettings
@@ -28,7 +29,6 @@ from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
 from skyrl_train.rollouts.workers import WorkerShard
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
-from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
 
 
 async def validate_rollout_worker(launch) -> dict:

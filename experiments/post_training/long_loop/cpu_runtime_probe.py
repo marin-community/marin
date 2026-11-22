@@ -13,13 +13,13 @@ from pathlib import Path
 import ray
 from omegaconf import OmegaConf
 from skyrl_train import objective  # noqa: F401 - register runtime policy losses
+from skyrl_train.config.driver_validation import validate_cfg
 from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.dynamic_sampling import GroupSelectionResult
 from skyrl_train.rollouts.buffer import GroupRewards, PayloadReference, RolloutBuffer, RolloutVerdict
 from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
 from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.tokenizer import tokenizer_from_config
-from skyrl_train.config.driver_validation import validate_cfg
 
 
 async def probe(compiled: Path, data_root: Path, destination: Path) -> None:

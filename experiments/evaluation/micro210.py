@@ -36,7 +36,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import require_secret, resolve_secret_spec
+from rigging.secrets import require_secret
 from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig

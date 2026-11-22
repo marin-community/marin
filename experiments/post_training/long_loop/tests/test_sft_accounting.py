@@ -41,9 +41,7 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     # Unpacked transcripts must fit the sequence length: over-long documents raise
     # instead of being silently truncated, so the unpacked axis uses fitting sizes.
     sizes = [2, 6, 19, 25, 9] if pack else [2, 6, 9, 10, 9]
-    documents = [
-        np.asarray([1, 7, 3, 4] + [50 + i] * size + [9], dtype=np.int32) for i, size in enumerate(sizes)
-    ]
+    documents = [np.asarray([1, 7, 3, 4] + [50 + i] * size + [9], dtype=np.int32) for i, size in enumerate(sizes)]
     chat = tmp_path / "chat"
     replay = tmp_path / "replay"
     with SerialCacheWriter(str(chat), {"input_ids": np.empty(0, dtype=np.int32)}) as writer:

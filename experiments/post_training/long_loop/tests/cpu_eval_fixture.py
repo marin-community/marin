@@ -23,8 +23,8 @@ from rolloutengine.test_support import arithmetic_task, rollout_spec
 from skyrl_gym.task_factories import episode_factories
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
-from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.inference_engines.vllm.stats import InferenceStatsSnapshot
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.task_projections import WholeTaskProjection

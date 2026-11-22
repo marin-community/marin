@@ -28,8 +28,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.storage_path import prefix_join
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.micro210 import Micro210Run, micro210_step
 from experiments.evaluation.micro210_policy import Micro210Model
@@ -244,9 +243,7 @@ def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path 
         if issubclass(dependency.artifact_type, SkyRLRun):
             write_artifact(
                 {
-                    "hf_model_uri": (
-                        "s3://test/census-policy" if step.run is run_judged else prefix_join(root, "policy")
-                    ),
+                    "hf_model_uri": "s3://test/census-policy" if step.run is run_judged else prefix_join(root, "policy"),
                     "global_step": 2,
                     "tokenizer_uri": "Qwen/Qwen2.5-0.5B-Instruct",
                     "tokenizer_revision": "pinned",

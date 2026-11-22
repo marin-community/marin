@@ -490,7 +490,9 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             final = answer.rsplit("\n", 1)[-1].strip()
             completed_lines = {line.strip() for line in answer.splitlines()}
             observed = {
-                label for label in labels if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+                label
+                for label in labels
+                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
             }
         if final not in labels or observed != {final}:
             if parse_attempt + 1 < (spec.parse_attempts or 1):
