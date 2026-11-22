@@ -2,12 +2,14 @@
 
 November 21, 2026 (PST).
 
-Diagnostic BATCH smoke `2026.11.21.9` is submitted from
-`a7c751443ffbc55ca5e8b3603d0e41c09af17d3d`. At 18:55 PST its CPU coordinator
-was running, with no GPU child yet discovered. Its accepted bundle matches all
-4,583 frozen entries, including 43 required runtime files. It adds compiler
-memory evidence before the update; current-source accelerator acceptance is
-pending.
+Diagnostic BATCH smoke `2026.11.21.9`, from
+`a7c751443ffbc55ca5e8b3603d0e41c09af17d3d`, initialized all four full-model
+H100 learners, byte-verified initial publication, and saved GPU compiler and
+allocator evidence before its first update. That update failed requesting a
+41.05-GiB temporary arena per device. Each allocator had enough aggregate headroom but
+could provide no free block larger than 32 GiB. The evidence supports
+fragmentation of the growing BFC pool as the immediate blocker. A remedy is
+under review; no completed optimizer update is established.
 
 BATCH smoke `2026.11.21.8`, from
 `233030789c6afd6aa61d315a001ce65ac7436007`, initialized the full 67B Snowball
@@ -75,8 +77,8 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `2026.11.21.8` reports all four native process identities, GPU backend, H100 80GB devices, 67,078,882,816 installed parameters, and the expected 32-device data4/expert8 mesh. Its first compiled train step failed requesting 41.05 GiB. | Diagnose the train-memory failure and complete two real parameter updates with the pinned CUDA kernels. |
-| Publication and resume | Smoke `2026.11.21.8` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. The preceding `.7` smoke completed the 100-task baseline evaluation. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
+| Actual H100 | Smoke `2026.11.21.9` reports all four native process identities, GPU backend, H100 80GB devices, 67,078,882,816 installed parameters, and the expected 32-device data4/expert8 mesh. Compiler and allocator receipts identify the first train step's contiguous arena allocation failure. | Validate the allocator remedy and complete two real parameter updates with the pinned CUDA kernels. |
+| Publication and resume | Smoke `2026.11.21.9` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. The preceding `.7` smoke completed the 100-task baseline evaluation. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
@@ -328,9 +330,56 @@ Two-process checkpoint continuation and independent source review pass.
 Diagnostic smoke `2026.11.21.9` uses coordinator
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.21.9-coordinator-9066931e`,
 submitted at `2026-11-22T02:53:39.792Z`. It has verified BATCH priority and zero
-automatic failure retries. Its CPU coordinator is running; GPU execution has
-not yet been observed. The local checks do not establish its GPU fit or explain
-the earlier allocation failure.
+automatic failure retries. Both jobs are failed, with zero preemptions. All
+five GPU pods are absent; the CPU coordinator pod remains terminal `Failed`.
+Head and coordinator task archives are empty, with sibling archives unreported.
+Original trainer and driver exceptions were fetched separately.
+
+Its child suffix was `users-dlwh-checkpoints-snowball-inventory-2026.11.21.9-af1cfc374bb8`.
+Both accepted bundles match all 4,583 frozen entries, including 43 required
+runtime files. The executed inputs, native configuration, allocation, and Ray
+settings match the freeze. All four native H100 processes initialized the full
+model and all eight initial receivers compared 19,687,358,464 bytes each with
+zero mismatches. No completed update or checkpoint continuation followed.
+
+The child failed in its first compiled update. All four hosts uploaded their
+pre-update compiler and allocator receipts. The scheduled optimized HLO,
+buffer assignment, and memory report were fetched for rank zero, with numeric
+receipts fetched for every rank. The
+[rank-zero receipt](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D14d%2Fxla-dumps%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.21.9-af1cfc374bb8%2Fprocess-0%2Fpid-16431%2Fbefore-update.json)
+is at
+`s3://marin-us-east-02a/tmp/ttl=14d/xla-dumps/users-dlwh-checkpoints-snowball-inventory-2026.11.21.9-af1cfc374bb8/process-0/pid-16431/before-update.json`.
+
+All values below are per device. Compiled memory accounting is identical across
+all four ranks.
+
+| Quantity | Observed GPU value |
+| --- | --- |
+| Compiled temporary arena, each device | 44,076,557,280 bytes (41.04949 GiB) |
+| Rounded failed allocation | 44,076,557,312 bytes |
+| Largest free block, every device | 32 GiB |
+| Aggregate allocator headroom | 43.072–43.170 GiB |
+| Existing pool size | 64.00195 GiB |
+| Allocator limit | 71.26367 GiB |
+| Remaining pool growth within the limit | 7.26172 GiB |
+| Compiled allocation accounting, with state aliases | 68.95833 GiB |
+
+The failed request matches buffer-assignment allocation 3482, the compiled
+temporary arena, rather than one tensor of that size. Failure snapshots retain
+the same pool and largest free block. Even combining the largest free block
+with all remaining growth would provide only 39.26172 GiB. Independent review
+therefore supports a contiguity/region-growth failure. JAX documents the
+fragmentation risk of [disabling preallocation](https://docs.jax.dev/en/latest/gpu_memory_allocation.html).
+This is not proof that every later training operation fits: measured live
+memory plus the arena leaves only 2.023–2.121 GiB of optimistic headroom.
+
+The candidate remedy keeps BFC and enables preallocation at the same 0.90
+memory limit. This deliberately changes the earlier disabled-preallocation
+setting to address the measured pool fragmentation. It changes no training
+math, kernels, precision, geometry, or numerical tolerance. A fresh H100 run
+must still prove that the resulting pool can serve the update and subsequent
+operations; eliminating this blocker alone does not qualify the full loop.
+No such run has been submitted.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;
