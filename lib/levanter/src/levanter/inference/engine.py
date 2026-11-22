@@ -1450,16 +1450,20 @@ class InferenceEngine:
         for cached in reversed(self._cached_prompts):
             # Leave one query so prefill can compute next-token logits.
             limit = min(len(tokens) - 1, len(cached.tokens))
-            mismatches = np.flatnonzero(tokens[:limit] != cached.tokens[:limit])
-            count = (int(mismatches[0]) if mismatches.size else limit) // page_size
+            if limit // page_size <= len(pages):
+                continue
+            mismatches = tokens[:limit] != cached.tokens[:limit]
+            first = int(np.argmax(mismatches))
+            count = (first if mismatches[first] else limit) // page_size
             if window_residency is not None and count > len(pages):
                 # A textual match can resume only where the previous window is resident.
                 resident = window_residency[cached.pages[:count]] != INVALID
-                boundaries = np.arange(1, count + 1)
-                unavailable = np.pad(np.cumsum(~resident, dtype=np.int32), (1, 0))
-                valid = unavailable[boundaries] == unavailable[np.maximum(boundaries - tail_pages, 0)]
-                eligible = boundaries[valid]
-                count = int(eligible[-1]) if eligible.size else 0
+                if not resident[-tail_pages:].all():
+                    boundaries = np.arange(1, count + 1)
+                    unavailable = np.pad(np.cumsum(~resident, dtype=np.int32), (1, 0))
+                    valid = unavailable[boundaries] == unavailable[np.maximum(boundaries - tail_pages, 0)]
+                    eligible = boundaries[valid]
+                    count = int(eligible[-1]) if eligible.size else 0
             if count > len(pages):
                 pages = cached.pages[:count]
         return pages

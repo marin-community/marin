@@ -971,6 +971,12 @@ the wide contraction tile diverged at the sixth greedy token.
 The original contraction order remains in the branch.
 [Wide contraction replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v35-80-contexts-expert-contraction) · [Generation check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-expert-output-check-20261122-v1)
 
+A fixed-trajectory diagnostic scored the same 195 continuation
+positions against all expert layouts without changing their input
+history. The largest absolute log-probability difference with
+the wide tile was 0.00391.
+[Fixed-trajectory diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-expert-fixed-trajectory-20261122-v2)
+
 With the experimental wide contraction, packing experts at 80
 contexts reached 537.10 output tok/s. Keeping the second retained
 window span as well reached 538.58, 2.0% below the strongest compiled
@@ -998,6 +1004,21 @@ wide-tile combination on those same turns, p90 TTFT fell from
 3.75 to 3.24 s and active decode fell from 35.90 to 35.32 tok/s.
 The primed serial medians were within 4 ms of compiled vLLM.
 [Original-contraction replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v38-80-contexts-packed-experts-standard-contraction)
+
+Among successful replay requests, the time-weighted p90 number of
+requests awaiting a first token was seven on native v5p-8 versus three
+on compiled vLLM. The native v6e-8 run with the lowest measured p90 TTFT
+had five waiting versus three on vLLM. At p90, the corresponding
+counts for requests already generating were 22 versus 22 on v5p-8
+and 20 versus 21 on v6e-8. This measures client-observed first-token
+backlog, including prefill time.
+[v5p-8 compiled repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v5-repeat-cpu-loader) · [v6e-8 native replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v25-32-contexts-2880-window-pages)
+
+In a local CPU microbenchmark with 80 cached 48,000-token prompts,
+finding only the first mismatching token reduced median comparison time
+from 3.66 to 0.60 ms. The updated prompt lookup selected identical pages
+in 4,000 randomized comparisons, with and without a sliding-window
+residency map.
 
 One packed v5p trace ran 16 concurrent sequences at 51,870 input tokens.
 Its 260 ms device round spent about 98 ms in the seven full-attention
