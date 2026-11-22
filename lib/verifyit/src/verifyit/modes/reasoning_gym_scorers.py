@@ -10,6 +10,8 @@ from collections import Counter
 from collections.abc import Callable
 from fractions import Fraction
 
+from verifyit.grade import InvalidTask
+
 MAX_EXPRESSION_LENGTH = 256
 COIN_FLIP_RELATIVE_DENOMINATOR = 1_000_000
 
@@ -36,21 +38,31 @@ def _puzzle24_value(node: ast.expr) -> tuple[Fraction, list[int]]:
 
 
 def _score_puzzle24(answer: str, entry: dict) -> float:
+    given_numbers = entry["metadata"].get("numbers")
+    if (
+        not isinstance(given_numbers, list)
+        or len(given_numbers) != 4
+        or any(type(number) is not int for number in given_numbers)
+    ):
+        raise InvalidTask("puzzle24 entry requires four integer numbers")
     if len(answer) > MAX_EXPRESSION_LENGTH:
         return 0.0
     try:
-        value, numbers = _puzzle24_value(ast.parse(answer, mode="eval").body)
+        value, used_numbers = _puzzle24_value(ast.parse(answer, mode="eval").body)
     except (SyntaxError, ValueError, ZeroDivisionError, RecursionError):
         return 0.0
-    return float(Counter(numbers) == Counter(entry["metadata"]["numbers"]) and value == 24)
+    return float(Counter(used_numbers) == Counter(given_numbers) and value == 24)
 
 
 def _score_coin_flip(answer: str, entry: dict) -> float:
+    try:
+        expected = Fraction(entry["answer"].replace(",", ""))
+    except (AttributeError, ValueError, ZeroDivisionError) as error:
+        raise InvalidTask("coin_flip reference probability is malformed") from error
     if len(answer) > MAX_EXPRESSION_LENGTH:
         return 0.0
     try:
         candidate = Fraction(answer.replace(",", ""))
-        expected = Fraction(entry["answer"].replace(",", ""))
     except (ValueError, ZeroDivisionError):
         return 0.0
     return float(abs(candidate - expected) <= abs(expected) / COIN_FLIP_RELATIVE_DENOMINATOR)
@@ -87,12 +99,17 @@ def score_reasoning_gym_reply(dataset: str, answer: str, entry: dict, upstream: 
     if dataset == "coin_flip":
         return _score_coin_flip(answer, entry)
     if dataset == "game_of_life_halting":
-        expected = entry["answer"].strip().casefold()
+        reference = entry["answer"]
+        if not isinstance(reference, str) or reference.strip().casefold() not in {"true", "false"}:
+            raise InvalidTask("game_of_life_halting reference answer must be True or False")
+        expected = reference.strip().casefold()
         candidate = answer.strip().casefold()
         return float(candidate in {"true", "false"} and candidate == expected)
     if dataset == "propositional_logic":
-        expected = entry["metadata"]["example_answer"]
-        if not isinstance(expected, str) or len(answer) > MAX_EXPRESSION_LENGTH:
+        expected = entry["metadata"].get("example_answer")
+        if not isinstance(expected, str) or not expected.strip():
+            raise InvalidTask("propositional_logic entry requires an example answer")
+        if len(answer) > MAX_EXPRESSION_LENGTH:
             return 0.0
         return float(bool(answer.strip()) and _formula_text(answer) == _formula_text(expected))
     if dataset == "puzzle24":

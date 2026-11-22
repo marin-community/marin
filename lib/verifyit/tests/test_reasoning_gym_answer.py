@@ -81,6 +81,12 @@ def test_coin_flip_accepts_equivalent_probability():
     assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, "1/8192") == 1.0
 
 
+def test_coin_flip_malformed_reference_is_an_invalid_task():
+    entry = {**reasoning_gym.create_dataset("coin_flip", size=1, seed=42)[0], "answer": "not a probability"}
+    with pytest.raises(InvalidTask, match="coin_flip reference probability"):
+        grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, "0")
+
+
 def test_complex_arithmetic_rejects_spaced_nan():
     entry = reasoning_gym.create_dataset("complex_arithmetic", size=1, seed=42)[0]
     assert grade_reasoning_gym.score_reasoning_gym_answer("complex_arithmetic", entry, "N a N") == 0.0
