@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 import datasets
 import pyarrow.parquet as pq
@@ -21,6 +20,7 @@ from safetensors import safe_open
 
 GRUG_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MASK_TOKEN = "<|finetune_right_pad_id|>"
+DRAFT_CONFIG_FILE = "draft_config.json"
 EMBEDDING = "model.embed_tokens.weight"
 LM_HEAD = "lm_head.weight"
 FINAL_NORM = "model.norm.weight"
@@ -51,6 +51,8 @@ class DraftRecipe:
     max_steps: int
     trainer_ranks: int
     teacher_replicas: int
+    cross_entropy_weight: float
+    total_variation_weight: float
     draft_vocab_size: int = 32000
     draft_layers: int = 3
     block_size: int = 8
@@ -82,13 +84,15 @@ def file_sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _require_sha256(value: str) -> None:
+def require_sha256(value: str) -> None:
+    """Require a lowercase hexadecimal SHA-256 digest."""
+
     if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
         raise ValueError(f"Expected a lowercase SHA-256 digest, got {value!r}")
 
 
 def verify_sha256(path: Path, expected: str) -> None:
-    _require_sha256(expected)
+    require_sha256(expected)
     if file_sha256(path) != expected:
         raise ValueError(f"SHA-256 mismatch for {path}")
 
@@ -106,12 +110,14 @@ def _relative_file(root: Path, name: str) -> Path:
 def _bundle_files(root: Path, files: dict[str, str]) -> dict[str, Path]:
     result = {}
     for name, digest in files.items():
-        _require_sha256(digest)
+        require_sha256(digest)
         result[name] = _relative_file(root, name)
     return result
 
 
 def tensor_files(root: Path) -> dict[str, str]:
+    """Map tensor names to relative safetensors filenames."""
+
     index = root / "model.safetensors.index.json"
     if index.is_file():
         return json.loads(index.read_text())["weight_map"]
@@ -124,11 +130,7 @@ def _tensor_shape(root: Path, files: dict[str, str], name: str) -> tuple[int, ..
         return tuple(weights.get_slice(name).get_shape())
 
 
-def inspect_teacher(
-    root: Path, manifest_sha256: str, recipe: DraftRecipe, *, verify_weights: bool = False
-) -> dict[str, Any]:
-    """Validate the exported checkpoint and build its Qwen3 draft decoder config."""
-
+def _verified_teacher_config(root: Path, manifest_sha256: str, verify_weights: bool) -> dict:
     manifest = root / "dspark-teacher.json"
     verify_sha256(manifest, manifest_sha256)
     hashes = json.loads(manifest.read_text())
@@ -145,7 +147,40 @@ def inspect_teacher(
         if verify_weights or path.suffix != ".safetensors":
             verify_sha256(path, hashes[name])
 
-    target = json.loads(files["config.json"].read_text())
+    missing = set(tensor_files(root).values()) - files.keys()
+    if missing:
+        raise ValueError(f"Teacher manifest is missing weight shards: {sorted(missing)}")
+    return json.loads(files["config.json"].read_text())
+
+
+def _check_teacher_tensors(root: Path, shape: GrugShape) -> None:
+    weights = tensor_files(root)
+    for layer in range(shape.num_hidden_layers):
+        if f"model.layers.{layer}.input_layernorm.weight" not in weights:
+            raise ValueError(f"Teacher export is missing layer {layer}")
+    gate_down = _tensor_shape(root, weights, GATE_DOWN)
+    if len(gate_down) != 2 or gate_down[1] != shape.hidden_size:
+        raise ValueError(f"Unexpected teacher final gate shape {gate_down}")
+    for name, expected in {
+        EMBEDDING: (shape.vocab_size, shape.hidden_size),
+        LM_HEAD: (shape.vocab_size, shape.hidden_size),
+        FINAL_NORM: (shape.hidden_size,),
+        GATE_UP: (shape.hidden_size, gate_down[0]),
+    }.items():
+        if _tensor_shape(root, weights, name) != expected:
+            raise ValueError(f"Unexpected shape for teacher tensor {name}, expected {expected}")
+
+
+def inspect_teacher(
+    root: Path, manifest_sha256: str, recipe: DraftRecipe, *, verify_weights: bool = False
+) -> dict[str, str | int | float | bool | None]:
+    """Validate teacher metadata, then return the matching Qwen3 decoder config.
+
+    Read weight headers for tensor names and shapes. Set verify_weights to
+    verify every shard digest before training.
+    """
+
+    target = _verified_teacher_config(root, manifest_sha256, verify_weights)
     if (
         target["model_type"] != "grug_moe"
         or target["architectures"] != [GRUG_ARCHITECTURE]
@@ -168,25 +203,7 @@ def inspect_teacher(
     if recipe.max_sequence_length >= target["max_position_embeddings"]:
         raise ValueError("Teacher needs context for the full prefill row and one output token")
 
-    weights = tensor_files(root)
-    missing = set(weights.values()) - files.keys()
-    if missing:
-        raise ValueError(f"Teacher manifest is missing weight shards: {sorted(missing)}")
-    # Check the unsharded index entries for every layer and the frozen logits head.
-    for layer in range(shape.num_hidden_layers):
-        if f"model.layers.{layer}.input_layernorm.weight" not in weights:
-            raise ValueError(f"Teacher export is missing layer {layer}")
-    gate_down = _tensor_shape(root, weights, GATE_DOWN)
-    if len(gate_down) != 2 or gate_down[1] != shape.hidden_size:
-        raise ValueError(f"Unexpected teacher final gate shape {gate_down}")
-    for name, expected in {
-        EMBEDDING: (shape.vocab_size, shape.hidden_size),
-        LM_HEAD: (shape.vocab_size, shape.hidden_size),
-        FINAL_NORM: (shape.hidden_size,),
-        GATE_UP: (shape.hidden_size, gate_down[0]),
-    }.items():
-        if _tensor_shape(root, weights, name) != expected:
-            raise ValueError(f"Unexpected shape for teacher tensor {name}, expected {expected}")
+    _check_teacher_tensors(root, shape)
 
     tokenizer = load_tokenizer(str(root))
     if not tokenizer.chat_template or tokenizer.vocab_size > shape.vocab_size:
@@ -234,6 +251,8 @@ def _chat_rows(files: dict[str, Path]) -> Iterator[dict]:
 def _tokenized_rows(
     files: dict[str, Path], processor: ChatProcessor, recipe: DraftRecipe
 ) -> Iterator[tuple[bytes, dict]]:
+    """Yield each clipped token row and its token-ID digest for overlap checks."""
+
     for batch in batched(_chat_rows(files), 64):
         for row in processor(batch):
             ids = row["input_ids"][: recipe.max_sequence_length]
@@ -315,7 +334,7 @@ def prepare_data(
         train_ratio = (len(train) + 0.5) / (len(train) + len(val))
         datasets.concatenate_datasets([train, val]).save_to_disk(str(prepared / "dataset"))
 
-        (prepared / "draft_config.json").write_text(json.dumps(decoder, indent=2) + "\n")
+        (prepared / DRAFT_CONFIG_FILE).write_text(json.dumps(decoder, indent=2) + "\n")
         (prepared / "token_frequencies.json").write_text(json.dumps(frequencies, sort_keys=True) + "\n")
         (prepared / "splits.json").write_text(
             json.dumps({"train": len(train), "validation": len(val), "train_ratio": train_ratio}, indent=2) + "\n"

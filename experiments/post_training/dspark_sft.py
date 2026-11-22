@@ -15,8 +15,14 @@ from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower
 from marin.execution.step_runner import StepRunner
-from marin.training.dspark import SPECULATORS_REVISION, VLLM_SOURCE_COMMIT, LocalGpuRuntime, train_and_export
-from marin.training.dspark_data import DraftRecipe, GrugShape, inspect_mix, inspect_teacher, prepare_data
+from marin.training.dspark import (
+    SPECULATORS_REVISION,
+    VLLM_SOURCE_COMMIT,
+    LocalGpuRuntime,
+    TrainingProvenance,
+    train_and_export,
+)
+from marin.training.dspark_data import DraftRecipe, GrugShape, inspect_mix, inspect_teacher, prepare_data, require_sha256
 from rigging.filesystem.cluster_config import marin_prefix
 
 
@@ -75,6 +81,8 @@ class OfflineDSpark:
             max_steps=self.max_steps,
             trainer_ranks=self.trainer_ranks,
             teacher_replicas=self.teacher_replicas,
+            cross_entropy_weight=0.1,
+            total_variation_weight=0.9,
             seed=self.seed,
         )
 
@@ -90,8 +98,7 @@ def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> 
     ):
         if not Path(path).is_absolute():
             raise ValueError(f"The staged {name} directory must be an absolute POSIX path")
-        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-            raise ValueError(f"The {name} manifest must be pinned by SHA-256")
+        require_sha256(digest)
 
     family = config.teacher.family.value
     recipe = config.training_recipe()
@@ -102,8 +109,8 @@ def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> 
         config={"export_identity": config.teacher.identity},
     )
     mix = ArtifactStep.adopt(f"dspark/mixes/{config.data.manifest_sha256}", _RECIPE_VERSION, config.data.directory)
-    inputs = (config.teacher.identity, config.teacher.manifest_sha256, config.data.manifest_sha256, recipe)
-    data_key = hashlib.sha256(canonical_json(inputs).encode()).hexdigest()
+    provenance = TrainingProvenance(config.teacher.identity, config.teacher.manifest_sha256, config.data.manifest_sha256)
+    data_key = hashlib.sha256(canonical_json((provenance, recipe)).encode()).hexdigest()
     draft_key = hashlib.sha256(canonical_json((data_key, SPECULATORS_REVISION, VLLM_SOURCE_COMMIT)).encode()).hexdigest()
     prepared = apply(
         f"dspark/data/{family}/{data_key}",
@@ -121,10 +128,8 @@ def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> 
         return {
             "output": ctx.output_path,
             "teacher": ctx.artifact_path(teacher),
-            "teacher_identity": config.teacher.identity,
-            "teacher_sha256": config.teacher.manifest_sha256,
+            "provenance": provenance,
             "prepared": ctx.artifact_path(prepared),
-            "mix_sha256": config.data.manifest_sha256,
             "recipe": recipe,
             "runtime": ctx.runtime_arg("runtime"),
         }
@@ -146,7 +151,7 @@ def artifacts(config: OfflineDSpark, runtime: LocalGpuRuntime | None = None) -> 
 @click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
 @click.option("--runtime", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 def main(config: Path, stage: str, runtime: Path | None) -> None:
-    """Build the offline DSpark artifact from a typed JSON recipe."""
+    """Plan, inspect, prepare, or train offline DSpark from a JSON recipe."""
 
     if not Path(marin_prefix()).is_absolute():
         raise click.UsageError("Set MARIN_PREFIX to an absolute artifact directory on the execution host")

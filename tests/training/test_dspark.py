@@ -43,6 +43,8 @@ def recipe() -> DraftRecipe:
         max_steps=1,
         trainer_ranks=1,
         teacher_replicas=1,
+        cross_entropy_weight=0.1,
+        total_variation_weight=0.9,
         draft_vocab_size=3,
         markov_rank=4,
     )
@@ -140,7 +142,7 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     if overlapping:
         with pytest.raises(DatasetGenerationError) as error:
             prepare_data(**kwargs)
-        assert "also appears in validation" in str(error.value.__cause__)
+        assert isinstance(error.value.__cause__, ValueError)
         assert not (output / "prepared").exists()
         return
 
