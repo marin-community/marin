@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import httpx
+import torch
 from iris.cluster.client.job_info import get_job_info
 from marin.inference.backend import ModelSpec
 from marin.inference.config import ServingGeometry, VllmEngineConfig
@@ -22,18 +23,70 @@ from marin.inference.iris_vllm import (
 )
 from marin.inference.vllm_backend import VllmBackend
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from safetensors.torch import load_file
 from skyrl_train.inference_engines.base import request_id_for_session
 from skyrl_train.io import io
 
 from experiments.post_training.long_loop.throughput import graph_capture_observed, write_json
-from experiments.post_training.mochi_eagle3 import TARGET_IDENTITY, TARGET_URI, TOKENIZER, TOKENIZER_REVISION
+from experiments.post_training.mochi_eagle3 import (
+    AUXILIARY_LAYERS,
+    TARGET_IDENTITY,
+    TARGET_URI,
+    TOKENIZER,
+    TOKENIZER_REVISION,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def qualify_windows(spec: dict, results: list[dict]) -> list[dict]:
+    """Check two regional feature windows against their exact generated trajectories."""
+    requests = {row["request_id"]: row for row in results}
+    checked = []
+    root = StoragePath(spec["output"]) / "captures"
+    with tempfile.TemporaryDirectory(prefix="mochi-eagle3-window-check-") as scratch:
+        for rank in range(spec["geometry"]["data_parallel_size"]):
+            directory = root / f"rank-{rank:05d}"
+            manifest = json.loads((directory / "manifest.json").read_text())
+            if manifest["target_revision"] != TARGET_IDENTITY or manifest["aux_layer_ids"] != AUXILIARY_LAYERS:
+                raise ValueError(f"Capture rank {rank} target or auxiliary slots changed")
+            if manifest["head_input_semantics"] != "post_final_norm_target_lm_head_input":
+                raise ValueError("Training requires the post-final-norm target head input")
+            for window in manifest["windows"]:
+                if len(checked) == 2:
+                    break
+                request_id = window["request_id"].removeprefix("cmpl-").removesuffix("-0")
+                request = json.loads(StoragePath(requests[request_id]["artifact"]).read_text())
+                trajectory = torch.tensor(request["prompt_token_ids"] + request["output_token_ids"])
+                path = Path(scratch) / "window.safetensors"
+                (directory / window["path"]).download_to(str(path))
+                tensors = load_file(path)
+                positions = tensors["position_ids"]
+                if not torch.equal(tensors["input_ids"], trajectory[positions]):
+                    raise ValueError("Captured token IDs differ from the generated trajectory")
+                if not torch.equal(tensors["loss_mask"], positions >= len(request["prompt_token_ids"])):
+                    raise ValueError("Capture loss mask includes prompt or excludes continuation tokens")
+                for name, width in (("hidden_states", 18432), ("head_input_hidden_states", 6144)):
+                    if tensors[name].shape != (positions.numel(), width) or not torch.isfinite(tensors[name]).all():
+                        raise ValueError(f"Invalid captured feature tensor: {name}")
+                checked.append(
+                    {
+                        "request_id": request_id,
+                        "tokens": positions.numel(),
+                        "first_position": int(positions[0]),
+                        "last_position": int(positions[-1]),
+                        "supervised_tokens": int(tensors["loss_mask"].sum()),
+                    }
+                )
+    if len(checked) != 2:
+        raise ValueError(f"Need two qualified target sequences, got {len(checked)}")
+    return checked
 
 
 async def generate(base_url: str, spec: dict) -> None:
     """Retain exact Mochi continuations and seal bounded per-rank verifier features."""
     rows = [json.loads(line) for line in StoragePath(spec["prompts"]).read_text().splitlines()]
+    rows = rows[: spec["prompt_count"]]
     semaphore = asyncio.Semaphore(spec["concurrency"])
     async with httpx.AsyncClient(timeout=spec["request_timeout"], limits=httpx.Limits(max_connections=1024)) as client:
 
@@ -65,9 +118,15 @@ async def generate(base_url: str, spec: dict) -> None:
                     "finish_reason": choice["finish_reason"],
                     "target_identity": TARGET_IDENTITY,
                 }
-                write_json(spec["output"], f"continuations/{index:06d}.json", result)
+                artifact_name = f"continuations/{index:06d}.json"
+                write_json(spec["output"], artifact_name, result)
                 logger.info("Published continuation %d/%d (%d tokens)", index + 1, len(rows), len(choice["token_ids"]))
-                return {"identity": row["identity"], "tokens": len(choice["token_ids"])}
+                return {
+                    "identity": row["identity"],
+                    "tokens": len(choice["token_ids"]),
+                    "request_id": request_id,
+                    "artifact": prefix_join(spec["output"], artifact_name),
+                }
 
         started = await client.post(
             f"{base_url.removesuffix('/v1')}/collective_rpc",
@@ -94,12 +153,12 @@ async def generate(base_url: str, spec: dict) -> None:
             json={"method": "seal_mochi_capture", "args": [prefix_join(spec["output"], "captures")], "timeout": 1800},
         )
         sealed.raise_for_status()
-        filesystem = StoragePath(spec["output"]) / "captures"
-        for rank in range(spec["geometry"]["data_parallel_size"]):
-            manifest = json.loads((filesystem / f"rank-{rank:05d}/manifest.json").read_text())
-            if manifest["target_revision"] != TARGET_IDENTITY:
-                raise ValueError(f"Capture rank {rank} target identity changed")
-        write_json(spec["output"], "generation.json", {"spec": spec, "requests": results, "seal": sealed.json()})
+        checked = await asyncio.to_thread(qualify_windows, spec, results)
+        write_json(
+            spec["output"],
+            "generation.json",
+            {"spec": spec, "requests": results, "seal": sealed.json(), "qualified_windows": checked},
+        )
 
 
 def run(spec: dict) -> None:
@@ -107,11 +166,18 @@ def run(spec: dict) -> None:
     info = get_job_info()
     if info is None:
         raise RuntimeError("Run regional capture in Iris")
+    # The GPU-only vLLM package is optional in the CPU coordinator environment.
+    from vllm.config import CompilationConfig  # noqa: PLC0415
+
     if not spec["output"].startswith("s3://marin-us-east-08a/"):
         raise ValueError("Mochi captures must remain in regional 08a S3")
     if (StoragePath(spec["output"]) / "generation.json").exists():
         raise FileExistsError("Completed capture output already exists")
     geometry = ServingGeometry(**spec["geometry"])
+    compilation = CompilationConfig(mode=3, cudagraph_mode="PIECEWISE")
+    compilation.set_splitting_ops_for_v1("allgather_reducescatter", data_parallel_size=geometry.data_parallel_size)
+    assert compilation.splitting_ops is not None
+    compilation.splitting_ops.append("vllm::grug_moe_short_conv")
     model = ModelSpec(
         weights=TARGET_URI,
         api_model="mochi",
@@ -144,11 +210,7 @@ def run(spec: dict) -> None:
                     {
                         "mode": 3,
                         "cudagraph_mode": "PIECEWISE",
-                        "splitting_ops": [
-                            "vllm::unified_attention_with_output",
-                            "vllm::unified_kv_cache_update",
-                            "vllm::grug_moe_short_conv",
-                        ],
+                        "splitting_ops": compilation.splitting_ops,
                     }
                 ),
                 "--speculative-config",
