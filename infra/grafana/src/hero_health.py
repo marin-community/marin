@@ -7,7 +7,7 @@ Beyond the progress and loss rules: the telemetry path itself, the optimizer, Mo
 routing, throughput, evaluation, and Iris retries. One `levanter.metrics` scan per
 bridge cache interval feeds all three projections; evaluation history comes from
 W&B instead (see `EvalHistory`). The telemetry and optimizer
-ones page; the health one announces in Slack without opening a triage session.
+ones page; the health one announces in Slack and opens a default operator session.
 See docs/ops/hero-run-health-alerts.md.
 """
 
