@@ -25,7 +25,7 @@ from marin.inference.vllm_backend import VllmBackend
 from marin.inference.vllm_server import VllmEnvironment
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from safetensors.torch import load_file
-from skyrl_train.inference_engines.base import request_id_for_session
+from skyrl_train.inference_engines.base import request_group_from_id, request_id_for_session
 from skyrl_train.io import io
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
 
@@ -44,7 +44,9 @@ logger = logging.getLogger(__name__)
 
 def qualify_windows(spec: dict, results: list[dict]) -> list[dict]:
     """Check two regional feature windows against their exact generated trajectories."""
-    requests = {row["request_id"]: row for row in results}
+    requests = {request_group_from_id(row["request_id"]): row for row in results}
+    if len(requests) != len(results):
+        raise ValueError("Capture qualification requires one continuation per canonical prompt group")
     checked = []
     root = StoragePath(spec["output"]) / "captures"
     with tempfile.TemporaryDirectory(prefix="mochi-eagle3-window-check-") as scratch:
@@ -58,8 +60,9 @@ def qualify_windows(spec: dict, results: list[dict]) -> list[dict]:
             for window in manifest["windows"]:
                 if len(checked) == 2:
                     break
-                request_id = window["request_id"].removeprefix("cmpl-").removesuffix("-0")
-                request = json.loads(StoragePath(requests[request_id]["artifact"]).read_text())
+                result = requests[window["group_id"]]
+                request_id = result["request_id"]
+                request = json.loads(StoragePath(result["artifact"]).read_text())
                 trajectory = torch.tensor(request["prompt_token_ids"] + request["output_token_ids"])
                 path = Path(scratch) / "window.safetensors"
                 (directory / window["path"]).download_to(str(path))
