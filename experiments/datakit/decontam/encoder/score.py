@@ -22,7 +22,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from experiments.datakit.decontam.encoder.train import missing_hint, text_normalize
+from experiments.datakit.decontam.encoder.train import RIGHT_CHARS, pair_left, text_normalize
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,6 @@ def main() -> None:
     parser.add_argument("--pairs", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-length", type=int, default=1024)
-    parser.add_argument("--hint", action="store_true", help="the model was trained with the missing-words hint")
     args = parser.parse_args()
     torch.backends.cuda.enable_cudnn_sdp(False)
     frames = []
@@ -52,11 +51,13 @@ def main() -> None:
         with path.open("rb") as source:
             frames.append(pq.read_table(io.BytesIO(source.read())).to_pandas())
     pairs = pd.concat(frames, ignore_index=True)
-    left = pairs["question"] + np.where(pairs["answer"] != "", "\n" + pairs["answer"], "")
-    lefts = [text_normalize(text)[:1500] for text in left]
-    rights = [text_normalize(text)[:6000] for text in pairs["right"]]
-    if args.hint:
-        lefts = [text + missing_hint(text, right) for text, right in zip(lefts, rights, strict=True)]
+    rights = [text_normalize(text)[:RIGHT_CHARS] for text in pairs["right"]]
+    lefts = [
+        pair_left(question, list(choices), answer, right)
+        for question, choices, answer, right in zip(
+            pairs["question"], pairs["choices"], pairs["answer"], rights, strict=True
+        )
+    ]
     directory = fetch_model(args.model)
     tokenizer = AutoTokenizer.from_pretrained(directory)
     model = AutoModelForSequenceClassification.from_pretrained(directory).to("cuda").eval()

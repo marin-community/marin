@@ -87,7 +87,7 @@ def _is_passage(key: str) -> bool:
     return name in _PASSAGE_FIELDS or "passage" in name or "context" in name
 
 
-def _shared_values(docs: list[Any]) -> set[str]:
+def shared_values(docs: list[Any]) -> set[str]:
     """String values that more than one doc of a task holds: shared passages and labels, not questions."""
     seen: Counter[str] = Counter()
     for doc in docs:
@@ -194,7 +194,7 @@ def _structured_target(target: Any, doc: Any) -> Any:
     return target
 
 
-def _lmh_item(leaf: str, record_id: str, task: Any, doc: Any, shared: set[str]) -> dict[str, Any]:
+def lmh_item(leaf: str, record_id: str, task: Any, doc: Any, shared: set[str]) -> dict[str, Any]:
     reasons = []
     try:
         rendered = task.doc_to_text(doc)
@@ -303,9 +303,9 @@ def lmh_rows(task_names: list[str], leaves_of: dict[str, list[str]]) -> Iterator
                 yield leaf, [], "leaf not loaded or no docs"
                 continue
             split, docs = chosen
-            shared = _shared_values(docs)
+            shared = shared_values(docs)
             yield leaf, [
-                _lmh_item(leaf, f"{leaf}-{split}-{index}", task, doc, shared) for index, doc in enumerate(docs)
+                lmh_item(leaf, f"{leaf}-{split}-{index}", task, doc, shared) for index, doc in enumerate(docs)
             ], ""
 
 

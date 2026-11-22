@@ -3,7 +3,7 @@
 
 """Fine-tune a pretrained multilingual encoder to say whether `right` contains `left`.
 
-`left` is an eval item (question, then answer); `right` is record text. With ``--heads 2`` the
+`left` is an eval item and `right` is record text (see ``pair_left``). With ``--heads 2`` the
 model has two outputs: the record holds the question, and the record holds the question with
 its answer. With ``--heads 1`` it has one output: the judges' "contaminated" label.
 Results (metrics, test scores, model) go to ``--output``.
@@ -25,8 +25,12 @@ import torch
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
+from experiments.datakit.decontam.encoder.labels import TRAINING_COLUMNS
+
 _SPACE = re.compile(r"\s+")
 TARGET_PRECISION = 0.95
+# One in this many train items of the real label sets goes to the dev split.
+DEV_EVERY = 4
 
 
 def text_normalize(text: str) -> str:
@@ -35,19 +39,31 @@ def text_normalize(text: str) -> str:
 
 
 _TOKEN = re.compile(r"\w+")
+# Most missing words that the hint lists.
 MISSING_SHOWN = 32
+LEFT_CHARS = 1500
+RIGHT_CHARS = 6000
 
 
-def missing_hint(left: str, right: str) -> str:
-    """The words and numbers of *left* that *right* does not hold, as a line the model reads."""
+def _missing(text: str, present: set[str]) -> str:
+    missing = list(dict.fromkeys(token for token in _TOKEN.findall(text.lower()) if token not in present))
+    return " ".join(missing[:MISSING_SHOWN]) if missing else "none"
+
+
+def pair_left(question: str, choices: list[str], answer: str, right: str) -> str:
+    """The `left` text of a pair: the item, then the words of the item that *right* lacks.
+
+    The item is the question, a ``[choices]`` line and an ``[answer]`` line, normalized and cut to
+    ``LEFT_CHARS``. The hint lists the missing question and choice words on a ``[missing]`` line and
+    the missing answer words on an ``[answer missing]`` line, so that an answer the record does not
+    show does not count against the question.
+    """
+    answer = answer or ""
+    item = text_normalize(question) + ("\n[choices] " + " | ".join(map(text_normalize, choices)) if choices else "")
+    left = (item + ("\n[answer] " + text_normalize(answer) if answer else ""))[:LEFT_CHARS]
     present = set(_TOKEN.findall(right.lower()))
-    missing, seen = [], set()
-    for token in _TOKEN.findall(left.lower()):
-        if token not in present and token not in seen:
-            seen.add(token)
-            missing.append(token)
-    shown = " ".join(missing[:MISSING_SHOWN]) if missing else "none"
-    return f"\n[missing] {shown}"
+    answer_missing = _missing(answer, present) if answer else "none"
+    return f"{left}\n[missing] {_missing(' '.join([question, *choices]), present)}\n[answer missing] {answer_missing}"
 
 
 def read_parquet(path: str) -> pd.DataFrame:
@@ -57,32 +73,29 @@ def read_parquet(path: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def load(
-    data: str, synthetic_name: str, extra: list[str], hint: bool
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     judged = read_parquet(f"{data}/judged_pairs_v2.parquet")
-    judged["left"] = judged["question"] + np.where(judged["answer"] != "", "\n" + judged["answer"], "")
     judged["source"], judged["kind"], judged["eval"] = "judged", judged["judges"], ""
     synthetic = read_parquet(f"{data}/{synthetic_name}")
-    synthetic["source"], synthetic["item"] = "synthetic", synthetic["eval"] + ":" + synthetic["left"].str.slice(0, 80)
-    columns = ["left", "right", "label", "label_q", "label_qa", "split", "source", "kind", "item", "eval"]
-    frames = [judged[columns], synthetic[columns]]
+    synthetic["source"] = "synthetic"
+    frames = [judged[TRAINING_COLUMNS], synthetic[TRAINING_COLUMNS]]
     for path in extra:
         # More labeled pairs, for example judged stage-1 candidates, with the same columns.
-        frames.append(read_parquet(path)[columns])
+        frames.append(read_parquet(path)[TRAINING_COLUMNS])
     frame = pd.concat(frames, ignore_index=True)
-    frame["left"] = frame["left"].map(text_normalize).str.slice(0, 1500)
-    frame["right"] = frame["right"].map(text_normalize).str.slice(0, 6000)
-    if hint:
-        frame["left"] = [
-            left + missing_hint(left, right) for left, right in zip(frame["left"], frame["right"], strict=True)
-        ]
-    # Thresholds come from pairs that the judges labeled, never from silver or synthetic pairs.
-    judged_sources = frame["source"].eq("judged") | frame["source"].str.startswith("set")
-    rng = random.Random(0)
-    judged_train = sorted(frame.loc[(frame.split == "train") & judged_sources, "item"].unique())
-    dev_items = set(rng.sample(judged_train, len(judged_train) // 8))
-    dev = frame[judged_sources & frame["item"].isin(dev_items)]
+    frame["right"] = frame["right"].map(text_normalize).str.slice(0, RIGHT_CHARS)
+    frame["left"] = [
+        pair_left(question, list(choices), answer, right)
+        for question, choices, answer, right in zip(
+            frame["question"], frame["choices"], frame["answer"], frame["right"], strict=True
+        )
+    ]
+    # The threshold comes from judge-labeled real stage-1 candidates (the label sets), whose share of
+    # copies matches what stage 2 sees; never from silver, synthetic or the older judged pairs.
+    real = frame["source"].str.startswith("set")
+    real_train = sorted(frame.loc[(frame.split == "train") & real, "item"].unique())
+    dev_items = set(random.Random(0).sample(real_train, len(real_train) // DEV_EVERY))
+    dev = frame[real & frame["item"].isin(dev_items)]
     train = frame[(frame.split == "train") & ~frame.index.isin(dev.index)]
     return train, dev, frame[frame.split == "test"]
 
@@ -148,40 +161,27 @@ def metrics(scores: np.ndarray, labels: np.ndarray, threshold: float) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="jhu-clsp/mmBERT-small")
+    parser.add_argument("--model", required=True, help="pretrained encoder, for example jhu-clsp/mmBERT-base")
     parser.add_argument("--heads", type=int, choices=[1, 2], default=2)
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=1024)
-    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--lr", type=float, default=3e-5)
     parser.add_argument("--data", required=True, help="directory with judged_pairs_v2.parquet and the synthetic pairs")
-    parser.add_argument("--synthetic", default="synthetic_pairs_v2.parquet")
-    parser.add_argument("--hint", action="store_true", help="add the words of left that right lacks to left")
-    parser.add_argument("--synthetic-max", type=int, default=0, help="keep at most this many synthetic training pairs")
-    parser.add_argument(
-        "--judged-repeat", type=int, default=1, help="repeat the non-synthetic training pairs this many times"
-    )
+    parser.add_argument("--synthetic", required=True, help="file name in --data of the generic synthetic pairs")
     parser.add_argument("--extra", action="append", default=[], help="parquet of more labeled pairs")
+    parser.add_argument("--seed", type=int, default=0, help="seed of the training order and the output layer")
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    random.seed(0)
-    torch.manual_seed(0)
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
         # The cuDNN attention backend builds no plan for these padded bf16 batches; the others do.
         torch.backends.cuda.enable_cudnn_sdp(False)
     label_columns = ["label_q", "label_qa"] if args.heads == 2 else ["label"]
-    train, dev, test = load(args.data, args.synthetic, args.extra, args.hint)
-    synthetic = train[train.source == "synthetic"]
-    if args.synthetic_max and len(synthetic) > args.synthetic_max:
-        synthetic = synthetic.sample(args.synthetic_max, random_state=0)
-    # Repeat only the pairs that the judges labeled; silver and synthetic pairs appear once.
-    labeled = train["source"].eq("judged") | train["source"].str.startswith("set")
-    train = pd.concat(
-        [synthetic, train[~labeled & (train.source != "synthetic")]] + [train[labeled]] * args.judged_repeat,
-        ignore_index=True,
-    )
+    train, dev, test = load(args.data, args.synthetic, args.extra)
     print("train", len(train), "dev", len(dev), "test", len(test), "device", device, flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(label_columns)).to(device)
@@ -224,7 +224,7 @@ def main() -> None:
     dev_scores, test_scores = predict(dev), predict(test)
     rate = (len(dev) + len(test)) / (time.time() - started)
     results: dict = {
-        "hint": args.hint,
+        "seed": args.seed,
         "heads": args.heads,
         "model": args.model,
         "max_length": args.max_length,

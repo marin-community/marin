@@ -8,6 +8,10 @@ where the record holds at least 90% of the question's words, because copies are 
 judged copies so far were there; the rest are spread over the classifier's score range. Both
 groups are spread over eval families.
 
+``silver``: silver negatives, real candidates whose record holds less than 80% of the
+question's words. About 1% of judged pairs in that range were copies (5 of 561 in sets 11
+and 12), so these labels are noisy but cheap.
+
 ``merge``: join two judges' labels (see RUBRIC.md). A pair is contaminated when both judges say
 ``COPY`` or ``EDITED``, and clean when both say ``VARIANT``, ``GENERIC`` or ``UNRELATED``; other
 pairs are dropped. ``label_qa`` is 1 when both judges say the answer is shown. Items are split
@@ -34,6 +38,7 @@ SCORE_BINS = (0, 0.3, 0.9, 1.01)
 CONTAMINATED = frozenset({"COPY", "EDITED"})
 CLEAN = frozenset({"VARIANT", "GENERIC", "UNRELATED"})
 TEST_SHARE = 0.4
+SILVER_OVERLAP = 0.8
 _WORD = re.compile(r"\w+")
 
 
@@ -103,6 +108,23 @@ def judge_labels(directory: Path, judge: str) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("uid")[["label", "answer", "note"]].add_prefix(f"{judge}_")
 
 
+# Columns of every training data file; the trainer builds `left` from question, choices and answer.
+TRAINING_COLUMNS = [
+    "question",
+    "choices",
+    "answer",
+    "right",
+    "label",
+    "label_q",
+    "label_qa",
+    "split",
+    "source",
+    "kind",
+    "item",
+    "eval",
+]
+
+
 def merge(pairs: pd.DataFrame, first: pd.DataFrame, second: pd.DataFrame, name: str) -> pd.DataFrame:
     """Training rows from the pairs both judges agree on; columns of the trainer's input."""
     frame = pairs.set_index("uid").join(first, how="inner").join(second, how="inner")
@@ -125,29 +147,56 @@ def merge(pairs: pd.DataFrame, first: pd.DataFrame, second: pd.DataFrame, name: 
     items = frame["item"].unique()
     test_items = set(np.random.default_rng(11).choice(items, int(len(items) * TEST_SHARE), replace=False))
     frame["split"] = np.where(frame["item"].isin(test_items), "test", "train")
-    frame["left"] = frame["question"] + np.where(frame["answer"] != "", "\n" + frame["answer"], "")
     frame["source"] = name
     frame["kind"] = a[frame.index] + "/" + b[frame.index]
-    columns = ["left", "right", "label", "label_q", "label_qa", "split", "source", "kind", "item", "eval"]
-    return frame.reset_index()[["uid", *columns]]
+    return frame.reset_index()[["uid", *TRAINING_COLUMNS]]
+
+
+def silver(pairs: pd.DataFrame, excluded: set[str], size: int, seed: int) -> pd.DataFrame:
+    pairs = pairs[~pairs["item"].isin(excluded)]
+    overlap = np.array([word_overlap(q, r) for q, r in zip(pairs["question"], pairs["right"], strict=True)])
+    frame = pairs[overlap < SILVER_OVERLAP].sample(frac=1, random_state=seed).head(size).copy()
+    frame["label"] = frame["label_q"] = frame["label_qa"] = 0
+    frame["split"], frame["source"], frame["kind"] = "train", "silver", f"overlap<{SILVER_OVERLAP}"
+    return frame.reset_index(drop=True)[TRAINING_COLUMNS]
+
+
+def _read(path: str) -> pd.DataFrame:
+    with StoragePath(path).open("rb") as source:
+        return pd.read_parquet(io.BytesIO(source.read()))
+
+
+def _write(frame: pd.DataFrame, path: str) -> None:
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer)
+    with StoragePath(path).open("wb") as sink:
+        sink.write(buffer.getvalue())
 
 
 def main() -> None:
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("step", choices=["sample", "merge"])
-    parser.add_argument("--set", required=True, help="local directory of the label set")
-    parser.add_argument("--scored", help="sample: scored stage-1 pairs (parquet)")
+    parser.add_argument("step", choices=["sample", "merge", "silver"])
+    parser.add_argument("--set", help="sample, merge: local directory of the label set")
+    parser.add_argument("--scored", help="sample, silver: scored stage-1 pairs (parquet)")
+    parser.add_argument(
+        "--exclude-items", nargs="*", default=[], help="sample, silver: parquet files with an item column"
+    )
+    parser.add_argument("--size", type=int, default=20000, help="silver: pairs kept")
     parser.add_argument("--high", type=int, default=600, help="sample: pairs with high word overlap")
     parser.add_argument("--other", type=int, default=300, help="sample: pairs spread over scores")
     parser.add_argument("--batches", type=int, default=6, help="sample: judge batches")
     parser.add_argument("--judges", nargs=2, default=["codex", "claude"], help="merge: judge label directories")
-    parser.add_argument("--output", help="merge: training rows (parquet)")
+    parser.add_argument("--output", help="merge, silver: training rows (parquet)")
     args = parser.parse_args()
+    excluded = {item for path in args.exclude_items for item in _read(path)["item"]}
+    if args.step == "silver":
+        _write(silver(_read(args.scored), excluded, args.size, seed=0), args.output)
+        return
     directory = Path(args.set)
     if args.step == "sample":
-        with StoragePath(args.scored).open("rb") as source:
-            pairs = pd.read_parquet(io.BytesIO(source.read()))
+        pairs = _read(args.scored)
+        pairs = pairs[~pairs["item"].isin(excluded)]
         chosen = sample(pairs, args.high, args.other)
         write_batches(chosen, directory, args.batches)
         logger.info(
@@ -159,10 +208,7 @@ def main() -> None:
         return
     pairs = pd.read_parquet(directory / "pairs.parquet")
     rows = merge(pairs, *(judge_labels(directory, judge) for judge in args.judges), directory.name)
-    buffer = io.BytesIO()
-    rows.to_parquet(buffer)
-    with StoragePath(args.output).open("wb") as sink:
-        sink.write(buffer.getvalue())
+    _write(rows, args.output)
     logger.info("wrote %d rows: %s", len(rows), rows.groupby(["split", "label", "label_qa"]).size().to_dict())
 
 

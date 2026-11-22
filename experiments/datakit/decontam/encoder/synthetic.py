@@ -131,15 +131,13 @@ def holds_answer(item: dict[str, Any], inserted: str) -> int:
     return int(at >= 0 and bool(answer) and text.find(answer, at) >= 0)
 
 
-def _left(item: dict[str, Any]) -> str:
-    return item["question"] + ("\n" + item["answer"] if item["answer"] else "")
-
-
 def _row(item: dict[str, Any], right: str, kind: str, label: int, label_q: int, label_qa: int) -> dict[str, Any]:
     return {
         "eval": item["eval"],
         "item": item.get("id", ""),
-        "left": _left(item),
+        "question": item["question"],
+        "choices": list(item["choices"]),
+        "answer": item["answer"] or "",
         "right": right,
         "kind": kind,
         "label": label,

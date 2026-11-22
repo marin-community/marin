@@ -7,26 +7,19 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from experiments.datakit.decontam.encoder import rarest_key
-from experiments.datakit.decontam.encoder.items import (
-    _lmh_item,
-    _option_fields,
-    _parsed_options,
-    _shared_values,
-    _target_text,
-    _without_labels,
-)
+from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.synthetic import generic_pairs
 from experiments.datakit.decontam.encoder.text_keys import (
     WINDOW,
     hit_indices,
-    readings,
     record_hit_indices,
     text_stream,
     window_hashes,
 )
-from experiments.datakit.decontam.encoder.train import missing_hint
+from experiments.datakit.decontam.encoder.train import pair_left
 
 
 def test_text_stream_ignores_case_spacing_markup_and_latex_commands():
@@ -55,11 +48,6 @@ def test_a_copy_inside_json_once_or_twice_holds_every_window_of_the_item():
         assert len(record_hit_indices("Data: " + record, keys)) == len(keys)
 
 
-def test_readings_stop_when_no_escape_is_left():
-    assert readings("plain text") == ["plain text"]
-    assert len(readings(json.dumps(json.dumps("a\nb")))) == 3
-
-
 class _Task:
     def __init__(self, text, target, choices=None):
         self.OUTPUT_TYPE = "multiple_choice" if choices is not None else "generate_until"
@@ -75,23 +63,36 @@ class _Task:
         return self._choices(doc)
 
 
-def test_option_texts_come_from_list_named_or_numbered_fields():
-    labels = ["A", "B"]
-    assert _option_fields({"choices": ["x", "y"]}, labels) == ["x", "y"]
-    assert _option_fields({"A": "6", "B": "12"}, labels) == ["6", "12"]
-    assert _option_fields({"option1": "red", "option2": "blue"}, labels) == ["red", "blue"]
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"question": "2 x 3?", "choices": ["6", "12"]},
+        {"question": "2 x 3?", "A": "6", "B": "12"},
+        {"question": "2 x 3?", "option1": "6", "option2": "12"},
+    ],
+)
+def test_lettered_choices_read_the_option_texts_of_the_doc(doc):
+    task = _Task(lambda d: f"{d['question']}\nA. 6\nB. 12\nAnswer:", lambda d: 0, lambda d: ["A", "B"])
+    item = lmh_item("e", "e-0", task, doc, set())
+    assert item["choices"] == ["6", "12"] and item["answer"] == "6"
 
 
-def test_parsed_options_keep_the_first_complete_run_and_read_bullets():
-    prompt = "Options:\n(A) deadpoel\n(B) deadfool\nA: Let's think step by step."
-    assert _parsed_options(prompt) == (["A", "B"], ["deadpoel", "deadfool"])
-    assert _parsed_options("Do you return?\nOptions:\n- Yes\n- No\nA:") == (["A", "B"], ["Yes", "No"])
+def test_choices_written_with_their_own_letters_lose_the_letters():
+    agieval = _Task(lambda d: d["query"], lambda d: 1, lambda d: d["choices"])
+    item = lmh_item("agieval", "agieval-0", agieval, {"query": "How far?", "choices": ["(A)2.5 m", "(B)5 m"]}, set())
+    assert item["choices"] == ["2.5 m", "5 m"] and item["answer"] == "5 m"
 
 
-def test_choices_lose_their_own_letters_and_structured_targets_become_text():
-    assert _without_labels(["(A)2.5 m", "(B)5 m"]) == ["2.5 m", "5 m"]
-    assert _without_labels(["Apple", "Banana"]) == ["Apple", "Banana"]
-    assert _target_text({"number": "", "spans": ["Tom Brady"], "worker_id": "W1"}) == "Tom Brady"
+def test_options_written_in_the_prompt_are_parsed_and_a_letter_target_names_one():
+    bbh = _Task(lambda d: "Q: " + d["input"] + "\nA: Let's think step by step.", lambda d: "(B)")
+    doc = {"input": "Which is the humorous edit?\nOptions:\n(A) deadpoel\n(B) deadfool"}
+    item = lmh_item("bbh", "bbh-0", bbh, doc, set())
+    assert item["choices"] == ["deadpoel", "deadfool"] and item["answer"] == "deadfool"
+    bullets = _Task(lambda d: d["input"] + "\nA:", lambda d: "Yes")
+    assert lmh_item("bbh", "bbh-1", bullets, {"input": "Do you return?\nOptions:\n- Yes\n- No"}, set())["choices"] == [
+        "Yes",
+        "No",
+    ]
 
 
 def test_item_question_is_the_prompt_without_the_shared_passage():
@@ -110,19 +111,16 @@ def test_item_question_is_the_prompt_without_the_shared_passage():
         lambda d: int(d["correct_answer_num"]) - 1,
         lambda d: ["A", "B"],
     )
-    item = _lmh_item("belebele", "belebele-test-0", task, docs[0], _shared_values(docs))
+    item = lmh_item("belebele", "belebele-test-0", task, docs[0], shared_values(docs))
     assert item["passage"] == docs[0]["passage"]
     assert "Safaris" not in item["question"] and "Which animals 0?" in item["question"]
     assert item["choices"] == ["Lions", "Giraffes"] and item["answer"] == "Giraffes"
 
 
-def test_minimal_pair_and_letter_targets_resolve_to_text():
+def test_a_minimal_pair_item_is_its_correct_sentence():
     pair = _Task(lambda d: "", lambda d: 0, lambda d: [d["good"], d["bad"]])
-    item = _lmh_item("blimp", "blimp-0", pair, {"good": "The cats sleep.", "bad": "The cats sleeps."}, set())
+    item = lmh_item("blimp", "blimp-0", pair, {"good": "The cats sleep.", "bad": "The cats sleeps."}, set())
     assert item["question"] == "The cats sleep."
-    bbh = _Task(lambda d: "Q: " + d["input"] + "\nA:", lambda d: "(B)")
-    item = _lmh_item("bbh", "bbh-0", bbh, {"input": "Pick one\nOptions:\n(A) left\n(B) right"}, set())
-    assert item["choices"] == ["left", "right"] and item["answer"] == "right"
 
 
 def test_a_target_template_that_renders_key_names_reads_the_field_values():
@@ -140,7 +138,7 @@ def test_a_target_template_that_renders_key_names_reads_the_field_values():
             "hit_id": "H",
         },
     }
-    assert _lmh_item("drop", "drop-0", drop, doc, set())["answer"] == "Tom Brady"
+    assert lmh_item("drop", "drop-0", drop, doc, set())["answer"] == "Tom Brady"
 
 
 def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overlap(tmp_path: Path):
@@ -163,11 +161,6 @@ def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overl
     assert keys.loc["b", "key1_hash"] == 0
 
 
-def test_missing_hint_lists_the_words_of_left_that_right_lacks():
-    assert missing_hint("orbit of radius R takes 15 days", "orbit of radius R takes 17 days") == "\n[missing] 15"
-    assert missing_hint("same words", "same words here") == "\n[missing] none"
-
-
 def test_synthetic_labels_separate_the_question_from_the_item():
     items = [
         {
@@ -186,3 +179,12 @@ def test_synthetic_labels_separate_the_question_from_the_item():
     assert labels.loc["same_question"].tolist() == [0, 1, 0]
     assert labels.loc["question_only"].tolist() == [1, 1, 0]
     assert rows.loc[rows["kind"].str.startswith("variant"), ["label", "label_q", "label_qa"]].eq(0).all().all()
+
+
+def test_missing_answer_words_stay_out_of_the_question_hint():
+    question = "def common(l1: list, l2: list):\n    Return sorted unique common elements."
+    right = "```py\ndef common(l1: list, l2: list):\n    Return sorted unique common elements.```"
+    left = pair_left(question, [], "def check(candidate): assert candidate", right)
+    assert left.endswith("\n[missing] none\n[answer missing] check candidate assert")
+    stem_only = pair_left("What is the GDP deflator?", ["A price index", "A tax"], "", "What is the GDP deflator?")
+    assert "[choices] A price index | A tax" in stem_only and "[missing] a price index tax" in stem_only
