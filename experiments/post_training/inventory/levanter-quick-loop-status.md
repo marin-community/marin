@@ -7,13 +7,14 @@ publication, subsequent generation, exact native checkpoint continuation, and
 the matched 25-update comparison remain unverified.
 
 BATCH smoke `2026.11.21.13` is running from
-`cb3fd4e7d767e52f0409ecb0b0fda5b98902e957`, configured to disable NumPy's
-hugepage advisory in native children. At 23:17 PST all five GPU tasks were
-running; both accepted bundles match all 4,583 frozen entries, including 43
-required runtime files, and the executed configuration matches the preflight.
-All five physical hosts changed, so improved loading would not isolate the
-policy's effect from placement. Effective Linux policy and full-model
-initialization, publication, updates, and resume remain pending.
+`cb3fd4e7d767e52f0409ecb0b0fda5b98902e957`. By the 23:27 PST check, all four
+native learners had initialized the full 67,078,882,816-parameter model across
+32 H100s with data4/expert8. Every native receipt confirms NumPy 2.3.5 on Linux
+with the advisory disabled, and VMM at 0.90 with preallocation off. Both
+accepted bundles match all 4,583 frozen entries, including 43 required runtime
+files, and the executed configuration matches the preflight. All five physical
+hosts changed, so improved loading does not isolate the policy's effect from
+placement. Publication, updates, and resume remain pending at this check.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
@@ -142,7 +143,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | Gate | Observed result | Remaining proof |
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
-| Actual H100 | Smoke `2026.11.21.10` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, and BFC preallocation at the expected per-device limit. It fails on NCCL allocation during initial publication. The earlier `.9` source reached its first train step and failed a contiguous arena allocation. | Qualify memory management through publication and two real parameter updates with the pinned CUDA kernels. |
+| Actual H100 | Smoke `2026.11.21.13` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, effective NumPy advisory disabled on Linux, and VMM at 0.90 with preallocation off. Standard JAX memory counters are unavailable for VMM; this is an observed policy, not a measured allocator cap. | Qualify memory management through publication and two real parameter updates with the pinned CUDA kernels. |
 | Publication and resume | Earlier smoke `2026.11.21.9` passed initial model-version-zero byte comparisons on all eight receivers, with generation stamped 1. Smoke `.10` records no completed initial payload. CPU Gloo replay and four fresh-process native checkpoint transactions passed exact model, Adam, RNG, step, and model-averaging fingerprints. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh learner processes restoring exact state, and a further update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
