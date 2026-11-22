@@ -23,12 +23,15 @@ class PreparedLocalImage:
     user: str | None
 
 
-def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -> PreparedLocalImage:
+def prepare_local_image(
+    image: PreparedImage, directory: Path, *, umoci: Path, owner: tuple[int, int] | None = None
+) -> PreparedLocalImage:
     """Unpack a pinned image into a new private bundle using rootless umoci.
 
     The caller owns the entire bundle directory, including cleanup after failure.
     Image resolution and builds belong to trusted host preparation, before this
-    step; no container daemon or image fetching runs in the guest.
+    step; no container daemon or image fetching runs in the guest. ``owner`` maps
+    the image's root account to a chosen host UID and GID.
     """
     if directory.exists() or directory.is_symlink():
         raise FileExistsError(directory)
@@ -45,9 +48,14 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
     workdir = process.get("WorkingDir") or "/"
     if not PurePosixPath(workdir).is_absolute() or "\0" in workdir:
         raise ValueError("OCI working directory must be absolute")
+    arguments = [str(umoci), "unpack", "--rootless"]
+    if owner is not None:
+        uid, gid = owner
+        arguments.extend((f"--uid-map=0:{uid}:1", f"--gid-map=0:{gid}:1"))
+    arguments.extend(("--image", f"{image.layout}:{OCI_TAG}", str(directory)))
     try:
         subprocess.run(
-            [str(umoci), "unpack", "--rootless", "--image", f"{image.layout}:{OCI_TAG}", str(directory)],
+            arguments,
             check=True,
             capture_output=True,
         )

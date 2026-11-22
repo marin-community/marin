@@ -1447,15 +1447,15 @@ class LocalMachineFactory:
                 if isinstance(source, PreparedImage)
                 else await asyncio.to_thread(self.image_cache.prepare, source)
             )
-            return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            return await asyncio.to_thread(
+                prepare_local_image, prepared, bundle, umoci=self.umoci, owner=self._bwrap_user
+            )
 
         preparation = asyncio.create_task(prepare())
         try:
             image = await asyncio.shield(preparation)
             if image.user not in (None, "", "0", "0:0"):
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
-            if self._bwrap_user is not None:
-                image.root.chown(*self._bwrap_user)
             effective = replace(spec, workdir=spec.workdir or image.workdir)
             machine = LocalMachine(
                 effective,
