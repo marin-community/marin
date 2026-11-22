@@ -215,6 +215,119 @@ def test_native_child_import_time_stdout_does_not_corrupt_response(tmp_path, cap
     assert "native startup stdout" in capfd.readouterr().out
 
 
+@pytest.mark.parametrize("watched_writable", [True, False])
+def test_native_finalization_watchdog_survives_atexit_without_forcing_exit(tmp_path, watched_writable):
+    if not watched_writable:
+        (tmp_path / "watched").write_text("A real file prevents the diagnostic directory from being created.")
+    script = """
+import atexit
+import threading
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime
+
+def delayed_cleanup():
+    # Reproduce a finalizer still running after the shutdown acknowledgement.
+    # The native watchdog must sample it without changing the eventual exit0.
+    threading.Event().wait(3.5)
+
+atexit.register(delayed_cleanup)
+runtime = NativePolicyRuntime()
+runtime.settings = {
+    'runtime': {'validate_checkpoint_roundtrip': True},
+    'distributed': {'process_id': 7},
+}
+runtime.close()
+runtime.close()
+runtime.prepare_process_exit('shutdown')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={
+            **os.environ,
+            "JAX_PLATFORMS": "must-not-initialize-during-cleanup",
+            "SKYRL_DEBUG_ARTIFACT_DIR": str(tmp_path / "watched"),
+            "IRIS_OUTPUT_DIR": str(tmp_path / "iris-fallback"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    receipts = [
+        json.loads(line.split(" ", 1)[1])
+        for line in result.stderr.splitlines()
+        if line.startswith("native_shutdown_receipt ")
+    ]
+    final = next(row for row in receipts if row["event"] == "process_exit_begin")
+    assert final["process_id"] == 7
+    if watched_writable:
+        assert final["trace_scope"] == "watched_debug_artifacts"
+        traces = list((tmp_path / "watched").glob("native-finalization/*/atexit-stack.txt"))
+        assert len(traces) == 1
+        assert str(traces[0]) == final["trace_path"]
+        assert "delayed_cleanup" in traces[0].read_text()
+    else:
+        assert final["trace_scope"] == "stderr_fallback"
+        assert final["trace_path"] == "stderr"
+        assert "delayed_cleanup" in result.stderr
+    assert not (tmp_path / "iris-fallback").exists()
+
+
+@pytest.mark.parametrize("stderr_kind", ["closed", "unsupported", "missing"])
+@pytest.mark.parametrize("deleted_buffer", [False, True])
+def test_native_cleanup_without_diagnostic_sinks_preserves_resource_result(tmp_path, stderr_kind, deleted_buffer):
+    blocked = tmp_path / "blocked-artifacts"
+    blocked.write_text("This file prevents creation of the finalization artifact directory.")
+    script = """
+import gc
+import io
+import json
+import sys
+import weakref
+import jax
+import numpy as np
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime
+
+runtime = NativePolicyRuntime()
+runtime.settings = {'runtime': {'validate_checkpoint_roundtrip': True}}
+runtime.state = {'owned_buffer': jax.device_put(np.ones((2, 2), dtype=np.float32))}
+buffer = weakref.ref(runtime.state['owned_buffer'])
+if DELETED_BUFFER:
+    runtime.state['owned_buffer'].delete()
+original_stderr = sys.stderr
+sys.stderr = None if STDERR_KIND == 'missing' else io.StringIO()
+if STDERR_KIND == 'closed':
+    sys.stderr.close()
+try:
+    try:
+        runtime.dispatch('shutdown', {})
+        status = 'success'
+    except ExceptionGroup:
+        status = 'cleanup_error'
+    runtime.close()
+    runtime.prepare_process_exit('shutdown')
+finally:
+    sys.stderr = original_stderr
+gc.collect()
+print(json.dumps({'status': status, 'owned_buffer_released': buffer() is None}))
+""".replace(
+        "DELETED_BUFFER", repr(deleted_buffer)
+    ).replace(
+        "STDERR_KIND", repr(stderr_kind)
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "JAX_PLATFORMS": "cpu", "SKYRL_DEBUG_ARTIFACT_DIR": str(blocked)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "status": "cleanup_error" if deleted_buffer else "success",
+        "owned_buffer_released": True,
+    }
+
+
 @pytest.mark.parametrize("require_accelerator", [True, False])
 @pytest.mark.parametrize("allocator,preallocate,numpy_policy", [("bfc", True, None), ("vmm", False, False)])
 def test_native_child_backend_intent_overrides_inherited_coordinator_platform(
@@ -754,7 +867,13 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             expected = _same_request(children, "train", payload)
         expected_scores = _same_request(children, "forward", payload)[0]["output"]
         expected_state = _same_request(children, "state_fingerprints", {})
-        _same_request(children, "shutdown", {})
+        if projection_dtype == "float32":
+            # Coordinator EOF must finish owned resources and exit naturally too.
+            for child in children:
+                child.process.stdin.close()
+            assert all(child.process.wait(timeout=5) == 0 for child in children)
+        else:
+            _same_request(children, "shutdown", {})
         assert all(child.process.returncode == 0 for child in children)
 
     with _learner_processes(config, process_count) as (children, _, _):

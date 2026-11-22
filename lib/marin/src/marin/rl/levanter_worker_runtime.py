@@ -5,9 +5,12 @@
 
 import argparse
 import asyncio
+import atexit
 import contextlib
 import ctypes
 import dataclasses
+import faulthandler
+import gc
 import hashlib
 import json
 import math
@@ -52,6 +55,7 @@ from marin.rl.levanter_publication import SnowballPublication
 from marin.rl.levanter_worker_protocol import read_frame, write_frame
 
 _DIAGNOSTIC_STALL_SECONDS = 120.0
+_FINALIZATION_TRACE_SECONDS = 3.0
 
 
 def _diagnostic_receipt(event: str, **fields) -> None:
@@ -353,11 +357,13 @@ class NativePolicyRuntime:
         self.source_identity = None
         self._compiler_evidence = None
         self.numpy_allocation_policy = None
+        self._closed = False
 
     def initialize(self, config: dict) -> dict:
         if self.trainer is not None:
             raise RuntimeError("Learner is already initialized")
         self.settings = config
+        self._closed = False
         self.numpy_allocation_policy = _numpy_allocation_policy(config["runtime"].get("numpy_madvise_hugepage"))
         _validate_allocator(config)
         if config["runtime"].get("validate_checkpoint_roundtrip", False):
@@ -461,13 +467,14 @@ class NativePolicyRuntime:
 
     @contextlib.contextmanager
     def request_diagnostics(self, method: str):
-        enabled = method in ("model_fingerprint", "train") and self.settings.get("runtime", {}).get(
+        enabled = method in ("model_fingerprint", "train", "shutdown", "eof") and self.settings.get("runtime", {}).get(
             "validate_checkpoint_roundtrip", False
         )
         if not enabled:
             yield
             return
         main_ident = threading.main_thread().ident
+        receipt = self.shutdown_receipt if method in ("shutdown", "eof") else _diagnostic_receipt
         finished = threading.Event()
         guard = threading.Lock()
         request_id = f"{os.getpid()}:{time.monotonic_ns()}"
@@ -481,7 +488,7 @@ class NativePolicyRuntime:
                 captured_wall, captured_monotonic = time.time_ns(), time.monotonic_ns()
             # Logging may finish after request_end; the request ID and capture time
             # identify this snapshot without making the main thread wait on stderr.
-            _diagnostic_receipt(
+            receipt(
                 "request_stalled",
                 method=method,
                 request_id=request_id,
@@ -492,7 +499,7 @@ class NativePolicyRuntime:
 
         timer = threading.Timer(_DIAGNOSTIC_STALL_SECONDS, stalled)
         timer.daemon = True
-        _diagnostic_receipt("request_begin", method=method, request_id=request_id)
+        receipt("request_begin", method=method, request_id=request_id)
         timer.start()
         try:
             yield
@@ -500,7 +507,7 @@ class NativePolicyRuntime:
             with guard:
                 finished.set()
             timer.cancel()
-            _diagnostic_receipt("request_end", method=method, request_id=request_id)
+            receipt("request_end", method=method, request_id=request_id)
 
     def _projection_profile(self, payload: dict) -> tuple[dict, FixedCEPlan]:
         """Describe the closed Snowball/BF16/XLA execution, without tracing attention or CE."""
@@ -880,11 +887,135 @@ class NativePolicyRuntime:
         raise ValueError(f"Unknown publication operation {method}")
 
     def close(self) -> None:
+        """Finish owned device work before acknowledging shutdown or returning on EOF."""
+        if self._closed:
+            return
+        self._closed = True
+        had_device_state = self.state is not None or self.trainer is not None
+        problems = []
+        for phase, operation in (
+            ("synchronize", self._synchronize),
+            ("trainer_exit", self._finish_trainer),
+            ("release_owned_resources", self._release_owned_resources),
+            ("clear_jax_caches", jax.clear_caches if had_device_state else lambda: None),
+            ("collect_python_resources", gc.collect),
+            ("distributed_shutdown", self._shutdown_distributed),
+        ):
+            try:
+                with self._shutdown_phase(phase):
+                    operation()
+            except Exception as error:
+                problems.append(error)
+        if problems:
+            raise ExceptionGroup("Native learner cleanup failed", problems)
+
+    def _synchronize(self) -> None:
+        # Rejected initialization must not turn cleanup into backend creation.
+        if self.state is not None:
+            jax.block_until_ready(self.state)
+        if self.state is not None or self.trainer is not None:
+            jax.effects_barrier()
+
+    def _finish_trainer(self) -> None:
         if self.trainer is not None:
             self.trainer.__exit__(None, None, None)
-            self.trainer = None
+
+    def _release_owned_resources(self) -> None:
+        self.publisher = None
+        self.learner = None
+        self.state = None
+        self.trainer = None
+        self._compiler_evidence = None
+
+    def _shutdown_distributed(self) -> None:
         if jax.distributed.is_initialized():
             jax.distributed.shutdown()
+
+    def shutdown_receipt(self, event: str, **fields) -> None:
+        if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False):
+            return
+        if sys.stderr is None:
+            return
+        # No JAX calls here: this also runs after distributed shutdown and on
+        # rejected initialization, when querying the backend would be unsafe.
+        try:
+            print(
+                "native_shutdown_receipt "
+                + json.dumps(
+                    {
+                        "event": event,
+                        "pid": os.getpid(),
+                        "process_id": self.settings.get("distributed", {}).get("process_id"),
+                        "thread_id": threading.get_ident(),
+                        "time_ns": time.time_ns(),
+                        "monotonic_ns": time.monotonic_ns(),
+                        **fields,
+                    }
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception:
+            # A broken diagnostic stream must not skip cleanup or mask its error.
+            pass
+
+    @contextlib.contextmanager
+    def _shutdown_phase(self, phase: str):
+        self.shutdown_receipt("cleanup_phase_begin", phase=phase)
+        try:
+            yield
+        except BaseException as error:
+            self.shutdown_receipt("cleanup_phase_error", phase=phase, error_type=type(error).__name__)
+            raise
+        else:
+            self.shutdown_receipt("cleanup_phase_end", phase=phase)
+
+    def prepare_process_exit(self, reason: str) -> None:
+        """Arm a non-exiting native watchdog that survives Python atexit cleanup."""
+        if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False):
+            return
+        scope = "watched_debug_artifacts"
+        destination = os.environ.get("SKYRL_DEBUG_ARTIFACT_DIR")
+        if not destination:
+            scope = "iris_output_fallback"
+            destination = os.environ.get("IRIS_OUTPUT_DIR")
+        if not destination:
+            scope = "local_temporary_fallback"
+            destination = tempfile.gettempdir()
+        try:
+            directory = os.path.join(destination, "native-finalization", str(os.getpid()))
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, "atexit-stack.txt")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        except (OSError, ValueError) as error:
+            path, scope = "stderr", "stderr_fallback"
+            self.shutdown_receipt("finalization_trace_open_error", error_type=type(error).__name__)
+            try:
+                descriptor = sys.stderr.fileno()
+            except Exception:
+                # No usable diagnostic sink remains. Cleanup and the actual
+                # process-exit contract still apply without an observer.
+                return
+        # Deliberately keep the low-level descriptor until real process exit.
+        # A local file object would close before atexit. The native timer does
+        # not keep a healthy process alive or change the parent's exit deadline.
+        try:
+            faulthandler.dump_traceback_later(_FINALIZATION_TRACE_SECONDS, file=descriptor, repeat=False, exit=False)
+        except Exception as error:
+            if path != "stderr":
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+            self.shutdown_receipt("finalization_trace_arm_error", error_type=type(error).__name__)
+            return
+        atexit.register(self.shutdown_receipt, "python_atexit_begin")
+        self.shutdown_receipt(
+            "process_exit_begin",
+            reason=reason,
+            trace_path=path,
+            trace_scope=scope,
+            trace_after_seconds=_FINALIZATION_TRACE_SECONDS,
+            trace_threads="faulthandler maximum 100 threads, 100 frames per thread; no locals",
+        )
 
     def dispatch(self, method: str, payload: dict):
         if method == "initialize":
@@ -938,16 +1069,25 @@ def main() -> None:
             try:
                 request = read_frame(incoming)
             except EOFError:
-                runtime.close()
+                with runtime.request_diagnostics("eof"):
+                    runtime.close()
+                runtime.prepare_process_exit("eof")
                 return
             try:
                 with runtime.request_diagnostics(request["method"]):
                     result = runtime.dispatch(request["method"], request["payload"])
-            except Exception:
+            except Exception as error:
+                try:
+                    runtime.close()
+                except Exception as cleanup_error:
+                    error.add_note(f"Additional learner cleanup failed: {cleanup_error!r}")
                 write_frame(outgoing, {"result": None, "error": traceback.format_exc()})
                 raise
+            if request["method"] == "shutdown":
+                runtime.prepare_process_exit("shutdown")
             write_frame(outgoing, {"result": result, "error": None})
             if request["method"] == "shutdown":
+                runtime.shutdown_receipt("shutdown_ack_written")
                 return
 
 
