@@ -1067,6 +1067,7 @@ def test_default_profile_matches_baseline():
 
 def test_bubblewrap_profile_changes_only_apparmor_and_stamps_task_profile():
     request = make_run_req("/job/task-0")
+    request.environment.env_vars["IRIS_CONTAINER_PROFILE"] = "CONTAINER_PROFILE_DEFAULT"
     default_pod = _build_pod_manifest(request, pod_config())
     request.container_profile = job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
     bubblewrap_pod = _build_pod_manifest(request, pod_config())
