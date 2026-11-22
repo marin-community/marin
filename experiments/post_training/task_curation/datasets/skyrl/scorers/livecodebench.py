@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 import signal
+import struct
 
 from io import BytesIO, StringIO
 from unittest.mock import patch, mock_open
@@ -455,8 +456,20 @@ class _ChildMessage(StrEnum):
     ERROR = "error"
 
 
+_FRAME_LENGTH = struct.Struct("!Q")
+"""The length prefix of each message a verifier child writes to its parent's pipe."""
+_PIPE_READ_BYTES = 1 << 20
+"""The most one read takes from the pipe: a length prefix the program wrote can be arbitrarily large."""
+
+
 def _message(*fields) -> bytes:
     return json.dumps(fields).encode()
+
+
+def _send(connection, message: bytes) -> None:
+    frame = memoryview(_FRAME_LENGTH.pack(len(message)) + message)
+    while frame:
+        frame = frame[os.write(connection.fileno(), frame) :]
 
 
 class _ChildProgram:
@@ -466,13 +479,21 @@ class _ChildProgram:
         self._connection = connection
         self._deadline = deadline
 
+    def _read(self, size: int) -> bytes:
+        # The program can reach the pipe and write part of a message, so every read waits only until the deadline.
+        data = bytearray()
+        while len(data) < size:
+            if not self._connection.poll(max(0.0, self._deadline - time.monotonic())):
+                raise _VerifierChildLost
+            chunk = os.read(self._connection.fileno(), min(size - len(data), _PIPE_READ_BYTES))
+            if not chunk:
+                raise _VerifierChildLost
+            data += chunk
+        return bytes(data)
+
     def _receive(self) -> Any:
-        if not self._connection.poll(max(0.0, self._deadline - time.monotonic())):
-            raise _VerifierChildLost
-        try:
-            return json.loads(self._connection.recv_bytes())
-        except EOFError as error:
-            raise _VerifierChildLost from error
+        (size,) = _FRAME_LENGTH.unpack(self._read(_FRAME_LENGTH.size))
+        return json.loads(self._read(size))
 
     def compiled(self) -> bool:
         """Whether the program compiled and defines the tested function; raises what compiling raised."""
@@ -907,15 +928,15 @@ def _run_program_in_subprocess(generation, fn_name, all_inputs, connection, time
     try:
         method = _program_method(generation, fn_name, timeout)
     except Exception as e:
-        connection.send_bytes(_message(_ChildMessage.SETUP_ERROR, str(e)))
+        _send(connection, _message(_ChildMessage.SETUP_ERROR, str(e)))
         return
     if method is None:
-        connection.send_bytes(_message(_ChildMessage.MISSING))
+        _send(connection, _message(_ChildMessage.MISSING))
         return
-    connection.send_bytes(_message(_ChildMessage.READY))
+    _send(connection, _message(_ChildMessage.READY))
     code_type = CODE_TYPE.standard_input if fn_name is None else CODE_TYPE.call_based
     for test_input in _call_arguments(all_inputs) if code_type is CODE_TYPE.call_based else all_inputs:
-        connection.send_bytes(_program_output(method, test_input, code_type, timeout))
+        _send(connection, _program_output(method, test_input, code_type, timeout))
 
 
 def lcb_execution_result(

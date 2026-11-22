@@ -276,7 +276,9 @@ import json, sys
 sys.path.insert(0, sys.argv[1])
 import livecodebench
 tests = json.loads(livecodebench.normalize_lcb_ground_truth(json.loads(sys.argv[2])))
-print(json.dumps(livecodebench.compute_score(sys.stdin.read(), tests)[1]))
+bound = json.loads(sys.argv[3])
+limits = None if bound is None else livecodebench.VerifierLimits(total_timeout_seconds=bound)
+print(json.dumps(livecodebench.compute_score(sys.stdin.read(), tests, limits=limits)[1]))
 """
 
 STDIN_ADD = [
@@ -321,6 +323,16 @@ for item in gc.get_objects():
         os._exit(0)"""
 """Sends a passing verdict over the verifier child's pipe and exits before any comparison."""
 
+STALLS_MID_MESSAGE = """import gc, os, signal, time
+from multiprocessing.connection import Connection
+
+signal.signal(signal.SIGALRM, signal.SIG_IGN)
+for item in gc.get_objects():
+    if isinstance(item, Connection) and item.writable:
+        os.write(item.fileno(), bytes(1))
+        time.sleep(600)"""
+"""Writes the first byte of a message to the verifier child's pipe, then stalls with the per-test alarm ignored."""
+
 EQUAL_TO_EVERYTHING = """class _Any:
     def __eq__(self, other):
         return True
@@ -338,14 +350,25 @@ class Solution:
         return _Int(0)"""
 
 
-def livecodebench_reward(tmp_path: Path, cases: list[dict], program: str) -> float:
+def livecodebench_reward(
+    tmp_path: Path, cases: list[dict], program: str, total_timeout_seconds: float | None = None
+) -> float:
     LIVECODEBENCH.skip_if_unavailable()
     tests = LIVECODEBENCH.stage(tmp_path)
     result = subprocess.run(
-        (sys.executable, "-I", "-c", LIVECODEBENCH_CHECK, str(tests), json.dumps(cases)),
+        (
+            sys.executable,
+            "-I",
+            "-c",
+            LIVECODEBENCH_CHECK,
+            str(tests),
+            json.dumps(cases),
+            json.dumps(total_timeout_seconds),
+        ),
         input=f"```python\n{program}\n```",
         capture_output=True,
         text=True,
+        timeout=None if total_timeout_seconds is None else total_timeout_seconds + 60,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.splitlines()[-1])
@@ -376,6 +399,10 @@ def test_livecodebench_program_cannot_read_expected_outputs_or_decide_comparison
     cases: list[dict], program: str, reward: float, tmp_path: Path
 ):
     assert livecodebench_reward(tmp_path, cases, program) == reward
+
+
+def test_livecodebench_program_that_stalls_mid_message_fails_at_the_deadline(tmp_path: Path):
+    assert livecodebench_reward(tmp_path, STDIN_ADD, STALLS_MID_MESSAGE, total_timeout_seconds=10.0) == 0.0
 
 
 @pytest.mark.parametrize(
