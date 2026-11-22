@@ -46,7 +46,13 @@ def config(tmp_path, monkeypatch):
         ("R2_KEY_SECRET", "r2-secret"),
     ]:
         monkeypatch.setenv(name, value)
-    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CW_S3_ENDPOINT", "R2_S3_ENDPOINT"):
+    for name in (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "CW_S3_ENDPOINT",
+        "R2_S3_ENDPOINT",
+    ):
         monkeypatch.delenv(name, raising=False)
     with use_data_config(load_cluster_config("test")):
         yield
@@ -102,6 +108,18 @@ def test_credentials_come_from_the_variables_the_backend_declares(config, monkey
     s3fs.S3FileSystem.clear_instance_cache()
     with pytest.raises(MissingCredentials, match="CW_KEY_ID"):
         filesystem_for("s3://marin-cw/x")
+
+
+def test_coreweave_bucket_uses_iris_aws_profile(config, monkeypatch, tmp_path):
+    credentials = tmp_path / "credentials"
+    credentials.write_text("[iris]\naws_access_key_id = iris-key\naws_secret_access_key = iris-secret\n")
+    monkeypatch.delenv("CW_KEY_ID")
+    monkeypatch.delenv("CW_KEY_SECRET")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    monkeypatch.setenv("AWS_PROFILE", "iris")
+
+    fs, _ = filesystem_for("s3://marin-cw/model/config.json")
+    assert (fs.key, fs.secret, fs.client_kwargs["region_name"]) == ("iris-key", "iris-secret", "US-EAST-02A")
 
 
 def test_gcs_is_not_an_s3_backend(config):

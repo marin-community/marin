@@ -281,18 +281,6 @@ heads. The pinned vLLM adapter needs `NEW_MODEL_DESIGN=1` to build its
 full tensor and expert mesh. Its legacy mesh rejected eight devices with
 TP4. [Legacy mesh failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-vllm-v6e8-20261121-v1) · [vLLM mesh retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-vllm-v6e8-20261121-v2)
 
-Compiled vLLM completed 25 AgentX turns at 46.17 output tokens/s with
-518 ms streamed p90 TTFT. Its one-token prefill grid completed all 60
-requests, including warmups. [vLLM v6e-8 measurements](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-vllm-v6e8-20261121-v2)
-
-| Input tokens | vLLM fresh (s) | vLLM primed (s) |
-| ---: | ---: | ---: |
-| 2,048 | 0.058 | 0.032 |
-| 8,192 | 0.184 | 0.039 |
-| 32,768 | 0.734 | 0.064 |
-| 51,840 | 1.226 | 0.081 |
-| 64,512 | 1.539 | 0.093 |
-
 Native checkpoint conversion initially requested 36.40 GiB of HBM
 temporaries per chip with 31.24 GiB available. The retry uses
 `--layerwise-load`, which invokes the same Snowball conversion for each
@@ -306,6 +294,25 @@ successful two-token completion. The next prefill bucket used a scanned
 layer loop and requested 39.56 GiB of HBM temporaries per chip. The
 full-context retry sets `--max-unrolled-prefill-tokens 65536` to avoid the
 runtime stack of layer weights. [Static-layer retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v3)
+
+With static layers, native completed both full benchmarks on v6e-8.
+Native completed 29 AgentX turns and produced 64.14 output tokens/s.
+vLLM completed 25 turns at 46.17 output tokens/s. On the 25 common
+turns, both emitted 8,311 output tokens with the same count for every
+turn. Native active decode was 184.28 tokens/s and streamed p90 TTFT was
+603 ms. vLLM active decode was 98.01 tokens/s and p90 TTFT was 518 ms.
+[Native v6e-8 measurements](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v6e8-20261121-v3) · [vLLM v6e-8 measurements](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-vllm-v6e8-20261121-v2)
+
+Both prefill grids completed all 60 requests, including warmups. Fresh
+native prefill was within 4% of vLLM at 32,768 tokens and above.
+
+| Input tokens | Native fresh / primed (s) | vLLM fresh / primed (s) |
+| ---: | ---: | ---: |
+| 2,048 | 0.102 / 0.070 | 0.058 / 0.032 |
+| 8,192 | 0.204 / 0.076 | 0.184 / 0.039 |
+| 32,768 | 0.761 / 0.094 | 0.734 / 0.064 |
+| 51,840 | 1.196 / 0.106 | 1.226 / 0.081 |
+| 64,512 | 1.552 / 0.113 | 1.539 / 0.093 |
 
 ## H100 AgentX comparison
 
@@ -329,6 +336,11 @@ native throughput to 48.73 output tokens/s overall, 17% below vLLM's
 same count on every turn. Native and vLLM active decode were 117.00 and
 164.79 tokens/s, respectively. Streamed p90 TTFT was 914.53 ms on native
 and 942.61 ms on vLLM. [Selected expert kernel run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v7-static-experts) · [Static KV write run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v8-static-kv)
+
+A clean rerun with the selected expert kernel and static KV writes measured
+48.61 output tokens/s overall, 116.58 active decode tokens/s, and
+906.13 ms streamed p90 TTFT on the same 26 turns. It again matched all
+9,092 output token counts. [Clean H100 rerun](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v12-clean)
 
 ## What works
 

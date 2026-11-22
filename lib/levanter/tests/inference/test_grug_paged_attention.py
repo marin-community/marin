@@ -12,6 +12,7 @@ from jax.experimental.pallas import tpu as pltpu
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention, ragged_paged_attention_append
+from levanter.grug.attention._paged_gpu import gpu_paged_attention
 
 _SUPPORTS_RPA_V3 = jax.default_backend() == "tpu" and pltpu.get_tpu_info().chip_version in (
     pltpu.ChipVersion.TPU_V5P,
@@ -89,6 +90,55 @@ def test_grug_paged_attention_explicit_head_sharding_matches_reference(num_devic
         )
     np.testing.assert_allclose(actual, _dense_reference(args, 5, None, 0.17), atol=1e-5, rtol=1e-5)
     assert actual.sharding == sharded[0].sharding
+
+
+@pytest.mark.parametrize("window", [None, 257])
+def test_grug_gpu_split_decode_matches_reference_in_interpret_mode(window):
+    rng = np.random.default_rng(37)
+    args = _PagedCase(
+        jnp.asarray(rng.normal(size=(4, 1, 4, 128)), jnp.bfloat16),
+        jnp.asarray(rng.normal(size=(8, 128, 2, 128)), jnp.bfloat16),
+        jnp.array([643], jnp.int32),
+        jnp.array([[6, 1, 3, 2, 5, 4, -1]], jnp.int32),
+        jnp.array([0, 1], jnp.int32),
+        jnp.array(1, jnp.int32),
+    )
+    upper = jnp.array([643, 0, 0, 0], jnp.int32)
+    lower = jnp.zeros_like(upper) if window is None else jnp.maximum(0, upper - window)
+    bounds = jnp.stack((lower, upper), axis=-1)
+    pages = jnp.broadcast_to(jnp.maximum(args.page_indices, 0), (args.q.shape[0], args.page_indices.shape[1]))
+    scale = 128**-0.5
+    with jax.default_device(jax.devices("cpu")[0]):
+        actual = jax.jit(partial(gpu_paged_attention, max_splits=16, interpret=True))(
+            args.q, args.kv_pages, pages, bounds, scale
+        )
+    expected = _dense_reference(args, window, None, scale)
+    np.testing.assert_allclose(actual.astype(jnp.float32), expected.astype(np.float32), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="CUDA paged attention")
+@pytest.mark.parametrize("window", [None, 129])
+@pytest.mark.parametrize("query_capacity, query_length", [(8, 1), (256, 31)])
+def test_grug_gpu_paged_attention_matches_reordered_cached_prefix(window, query_capacity, query_length):
+    rng = np.random.default_rng(37)
+    pages = rng.normal(size=(8, 128, 2, 128))
+    pages[0] = np.nan  # Unallocated page used as a dummy by gathers.
+    pages[4, 3:] = np.nan  # Last allocated page extends past the live sequence.
+    args = _PagedCase(
+        jnp.asarray(rng.normal(size=(query_capacity, 1, 4, 128)), jnp.bfloat16),
+        jnp.asarray(pages, jnp.bfloat16),
+        jnp.array([643], jnp.int32),
+        jnp.array([[6, 1, 3, 2, 5, 4, -1, -1]], jnp.int32),
+        jnp.array([0, query_length], jnp.int32),
+        jnp.array(1, jnp.int32),
+    )
+    scale = 128**-0.5
+    actual = jax.jit(partial(ragged_paged_attention, implementation="gpu", sm_scale=scale, sliding_window=window))(
+        *args
+    )
+    expected = _dense_reference(args, window, None, scale)
+    np.testing.assert_allclose(actual.astype(jnp.float32), expected.astype(np.float32), atol=2e-4, rtol=8e-3)
+    np.testing.assert_array_equal(actual[query_length:], jnp.zeros_like(actual[query_length:]))
 
 
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")

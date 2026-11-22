@@ -39,6 +39,7 @@ import aiohttp
 import fsspec
 import s3fs
 from aiobotocore.httpsession import AIOHTTPSession
+from botocore.credentials import SharedCredentialProvider
 
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
@@ -188,10 +189,11 @@ def configure_coreweave_s3() -> None:
 
 
 def s3_credentials(store: StoreType) -> tuple[str, str] | None:
-    """The ``(key_id, secret)`` pair for *store*, or ``None`` when neither pair is complete.
+    """Resolve a store's key and secret, including the Iris CoreWeave native AWS profile.
 
     Reads the variables the backend's :class:`~rigging.filesystem.cluster_config.StoreConfig` names, then
-    the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY``. Callers that cannot
+    the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` and the CoreWeave job's
+    native AWS shared profile. Callers that cannot
     proceed without credentials raise their own error, so a browser can list the buckets it
     *can* reach instead of failing on the first unconfigured backend.
 
@@ -201,9 +203,18 @@ def s3_credentials(store: StoreType) -> tuple[str, str] | None:
     config = store_config(store)
     key = os.environ.get(config.key_id_env) or os.environ.get("AWS_ACCESS_KEY_ID")
     secret = os.environ.get(config.key_secret_env) or os.environ.get("AWS_SECRET_ACCESS_KEY")
-    if not key or not secret:
-        return None
-    return key, secret
+    if key and secret:
+        return key, secret
+    # Iris projects CoreWeave credentials through AWS_SHARED_CREDENTIALS_FILE.
+    if store == StoreType.COREWEAVE and (filename := os.environ.get("AWS_SHARED_CREDENTIALS_FILE")):
+        credentials = SharedCredentialProvider(
+            creds_filename=filename, profile_name=os.environ.get("AWS_PROFILE", "default")
+        ).load()
+        if credentials is not None:
+            frozen = credentials.get_frozen_credentials()
+            if frozen.access_key and frozen.secret_key:
+                return frozen.access_key, frozen.secret_key
+    return None
 
 
 def s3_endpoint(store: StoreType) -> str:

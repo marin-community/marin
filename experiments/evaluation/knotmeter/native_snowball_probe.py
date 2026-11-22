@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replay the pinned one-lane 64K AgentX diagnostic against native Snowball on v5p-8."""
+"""Replay the pinned 64K AgentX diagnostic against native Snowball on one accelerator host."""
 
 import argparse
 import dataclasses
@@ -130,9 +130,10 @@ def main() -> None:
     benchmark.add_argument("--workload")
     benchmark.add_argument("--prefill-only", action="store_true")
     parser.add_argument("--measure-prefill", action="store_true", help="Also measure prefill after AgentX")
-    parser.add_argument("--chips", type=int, choices=(4, 8), default=4)
+    parser.add_argument("--accelerator", choices=("tpu", "h100x8"), default="tpu")
+    parser.add_argument("--chips", type=int, choices=(4, 8))
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
-    parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3"), default="tpu_fp32")
+    parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3", "gpu", "reference"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
@@ -151,14 +152,22 @@ def main() -> None:
     series = load_series(SERIES)
     assert (series["max_context"], series["duration"]) == (65536, 180)
     devices = jax.devices()
-    if len(devices) != args.chips or any(device.platform != "tpu" for device in devices):
-        raise RuntimeError(f"Expected {args.chips} TPU devices, got {devices}")
+    if args.accelerator == "h100x8":
+        expert_shards, platform, device_kind = 8, "gpu", "H100"
+        if args.chips not in (None, expert_shards):
+            parser.error("--accelerator h100x8 requires eight devices")
+    else:
+        expert_shards, platform, device_kind = args.chips or 4, "tpu", "TPU"
+    if len(devices) != expert_shards or any(
+        device.platform != platform or device_kind not in device.device_kind for device in devices
+    ):
+        raise RuntimeError(f"Expected {expert_shards} {device_kind} devices, got {devices}")
 
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     workload = read_record(args.workload) if args.workload else None
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bf16,c=bf16"),
-        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": args.chips, "context": 1}),
+        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": expert_shards, "context": 1}),
         use_explicit_mesh_axes=True,
     )
     service = InferenceEngineConfig(
@@ -166,14 +175,14 @@ def main() -> None:
         max_seqs=1,
         max_seqs_in_prefill=1,
         max_queued_tokens=32,
-        max_tokens_per_round=args.chips,  # Pad the one active decode token to the expert mesh.
+        max_tokens_per_round=expert_shards,  # Pad the one active decode token to the expert mesh.
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         prefix_cache=args.prefix_cache,
     )
     service = dataclasses.replace(service, max_pages=service.max_pages_per_seq * args.kv_cache_contexts)
     config = InferenceServerConfig(trainer=trainer, model_name=series["model"], service=service)
 
-    with tempfile.TemporaryDirectory(prefix="agentx-native-tpu-") as workdir:
+    with tempfile.TemporaryDirectory(prefix="agentx-native-") as workdir:
         bundle = Path(workdir) / "bundle"
         if workload is not None:
             restore_workload(workload, bundle)
@@ -237,7 +246,7 @@ def main() -> None:
             "devices": [device.device_kind for device in devices],
             "jax_version": jax.__version__,
             "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS"),
-            "mesh": {"model": 1, "expert": args.chips},
+            "mesh": {"model": 1, "expert": expert_shards},
             "max_pages": service.max_pages,
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,

@@ -74,6 +74,8 @@ class KvPageCache(PageCache):
         batch_info: PageBatchInfo,
         new_k: NamedArray,  # [Tok, KvHeads, HeadDim]
         new_v: NamedArray,  # [Tok, KvHeads, HeadDim]
+        *,
+        max_active_tokens: int | None = None,
     ) -> "KvPageCache":
         """Append keys and values to the cache based on *batch_info*."""
         page_size = self.kv_pages.array.shape[1]
@@ -93,6 +95,7 @@ class KvPageCache(PageCache):
             new_k.array,
             new_v.array,
             K,
+            max_active_tokens=max_active_tokens,
         )
         updated = NamedArray(updated, self.kv_pages.axes)
         return dataclasses.replace(self, kv_pages=updated)
@@ -166,8 +169,8 @@ def _interleave_kv(new_k, new_v):
 
 
 @named_call
-@functools.partial(jax.jit, donate_argnums=(0,))
-def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
+@functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("max_active_tokens",))
+def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K, *, max_active_tokens: int | None = None):
     """
     Update interleaved key/value pages with new tokens.
 
@@ -175,6 +178,7 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
     t_pages, t_slots: [T] int32  (only first K are valid)
     new_k, new_v: [T, H, D]
     K: int32 scalar = number of valid updates (num_new_tokens)
+    max_active_tokens: static upper bound on K
     """
     kv_ev = _interleave_kv(new_k.astype(kv_pages.dtype), new_v.astype(kv_pages.dtype))  # [T, 2H, D]
     cache_sharding = jax.typeof(kv_pages).sharding
@@ -183,6 +187,10 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
         # Match the cache's trailing dimensions before selecting a token and inserting page/slot axes.
         update_spec = cache_sharding.spec.update(partitions=(None, *cache_sharding.spec[2:]))
         kv_ev = jax.reshard(kv_ev, cache_sharding.update(spec=update_spec))
+
+    if max_active_tokens == 1:
+        page = jnp.where(K > 0, t_pages[0], kv_pages.shape[0])
+        return kv_pages.at[page, t_slots[0]].set(kv_ev[0], mode="drop")
 
     if t_pages.shape[0] <= _SEQUENTIAL_UPDATE_TOKEN_LIMIT:
         # On TPU, a scatter can reformat the whole cache even for one decode token.

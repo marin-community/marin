@@ -21,6 +21,7 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.selected_gpu import selected_expert_mlp, supports_selected_matvec
 
 
 def _moe_mlp_ep_ring_local(
@@ -150,6 +151,7 @@ def _moe_mlp_ep_small_local(
     w_down: jax.Array,
     *,
     activation: Callable[[jax.Array], jax.Array],
+    max_active_tokens: int | None = None,
 ) -> jax.Array:
     """Evaluate active routes in a small decode batch with capacity for every assignment."""
     width, top_k = x.shape[1], selected.shape[1]
@@ -164,7 +166,12 @@ def _moe_mlp_ep_small_local(
         ),
         axis=1,
     )
-    payload = jax.lax.all_gather(payload, "expert", tiled=True)
+    local_valid = token_valid[:, None]
+    if max_active_tokens == 1:
+        # Only one rank contributes an active row, so no rank metadata is needed.
+        payload = jax.lax.psum(jnp.where(local_valid, payload, 0), "expert")
+    else:
+        payload = jax.lax.all_gather(payload, "expert", tiled=True)
     x = payload[:, :width].astype(x.dtype)
     selected = payload[:, width : width + top_k].astype(selected.dtype)
     weights = payload[:, width + top_k : width + 2 * top_k].astype(weights.dtype)
@@ -173,6 +180,18 @@ def _moe_mlp_ep_small_local(
     shard_start = jax.lax.axis_index("expert") * w_gate.shape[0]
     local_experts = selected - shard_start
     local_mask = token_valid[:, None] & (local_experts >= 0) & (local_experts < w_gate.shape[0])
+    if max_active_tokens == 1 and jax.default_backend() == "gpu" and supports_selected_matvec(width, w_gate.shape[-1]):
+        result = selected_expert_mlp(
+            x[0],
+            jnp.where(local_mask[0], local_experts[0], -1),
+            weights[0],
+            w_gate,
+            w_up,
+            w_down,
+            activation=activation,
+        )
+        return jnp.where(local_valid, jax.lax.psum(result[None], "expert"), 0)
+
     assignments = jnp.nonzero(local_mask.reshape(-1), size=tokens * top_k)[0]
     assignment_count = jnp.sum(local_mask, dtype=jnp.int32)
 
@@ -187,4 +206,6 @@ def _moe_mlp_ep_small_local(
         return jax.lax.dynamic_update_index_in_dim(outputs, previous + down * weights[token, route], token, axis=0)
 
     local_output = jax.lax.fori_loop(0, assignment_count, apply, jnp.zeros_like(x))
+    if max_active_tokens == 1:
+        return jnp.where(local_valid, jax.lax.psum(local_output, "expert"), 0)
     return jax.lax.psum_scatter(local_output, "expert", scatter_dimension=0, tiled=True)
