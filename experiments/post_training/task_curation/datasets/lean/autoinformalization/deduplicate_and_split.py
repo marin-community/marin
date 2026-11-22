@@ -37,7 +37,6 @@ from experiments.post_training.task_curation.datasets.lean.lean_problem_similari
     jaccard,
     ngrams,
     normalized_text,
-    row_key,
     statement_key,
     statement_ngrams,
 )
@@ -55,6 +54,7 @@ EVAL_MODULUS = 20
 SPLIT_SALT = "numina-autoinformalization-v1"
 GROUND_TRUTH_RANK = {"complete": 0, "with_sorry": 1, "statement": 2}
 PROOF_TRAIN_UUIDS = frozenset(key.split(":", 1)[0] for key in PASSING_PROOFS)
+DEDUP_FILE = Path(__file__).with_name("dedup.json")
 
 
 class Components:
@@ -73,9 +73,36 @@ class Components:
             self.parent[max(left, right)] = min(left, right)
 
 
+def row_key(row: Mapping[str, Any]) -> str | None:
+    """Identify one formal-statement/problem pair while retaining its source UUID."""
+    uuid, formal, problem = (row.get(name) for name in ("uuid", "formal_statement", "problem"))
+    if not all(isinstance(value, str) and value.strip() for value in (uuid, formal, problem)):
+        return None
+    digest = hashlib.sha256(f"{formal}\0{problem}".encode()).hexdigest()
+    index = row.get("_numina_index")
+    location = f"{index}:" if isinstance(index, int) else ""
+    return f"{location}{uuid}:{digest[:12]}"
+
+
 def split_for(key: str) -> str:
     digest = hashlib.sha256(f"{SPLIT_SALT}:{key}".encode()).digest()
     return "eval" if int.from_bytes(digest[:4]) % EVAL_MODULUS == 0 else "train"
+
+
+def cluster_splits(manifest: Mapping[str, Any]) -> tuple[dict[str, str], frozenset[str]]:
+    """Return the split of every clustered row and the exact duplicates the manifest removes."""
+    splits = {
+        key: cluster["split"]
+        for cluster in manifest["clusters"]
+        for key in (*cluster["kept"], *(item["row"] for item in cluster["removed"]))
+    }
+    removed = frozenset(item["row"] for cluster in manifest["clusters"] for item in cluster["removed"])
+    return splits, removed
+
+
+def row_split(key: str, uuid: str, clustered: Mapping[str, str]) -> str:
+    """Keep a cluster's split, send proof-training rows to train, and hash the rest."""
+    return clustered.get(key, "train" if uuid in PROOF_TRAIN_UUIDS else split_for(key))
 
 
 def human_statement_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -107,10 +134,9 @@ def candidate_pairs(grams: Sequence[frozenset[tuple[str, ...]]]) -> set[tuple[in
             postings[gram].append(index)
     pairs = set()
     for left, row in enumerate(grams):
-        selected = sorted(row, key=lambda gram: (frequency[gram], gram))[:RARE_NGRAMS]
-        for gram in selected:
-            if frequency[gram] > MAX_NGRAM_FREQUENCY:
-                continue
+        # An n-gram unique to this row cannot pair it with another row, so skip it before the seed cap.
+        shared = [gram for gram in row if 1 < frequency[gram] <= MAX_NGRAM_FREQUENCY]
+        for gram in sorted(shared, key=lambda gram: (frequency[gram], gram))[:RARE_NGRAMS]:
             pairs.update((left, right) for right in postings[gram] if left < right)
     return pairs
 
@@ -225,16 +251,9 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
             }
         )
     records.sort(key=lambda record: record["id"])
-    clustered = {
-        key: record["split"]
-        for record in records
-        for key in (*record["kept"], *(item["row"] for item in record["removed"]))
-    }
-    removed = {item["row"] for record in records for item in record["removed"]}
+    clustered, removed = cluster_splits({"clusters": records})
     split_counts = Counter(
-        clustered.get(key, "train" if key in proof_train_rows else split_for(key))
-        for key in row_keys
-        if key not in removed
+        row_split(key, row["uuid"], clustered) for key, row in zip(row_keys, selected, strict=True) if key not in removed
     )
     return {
         "input": dict(input_record or {}),
@@ -260,7 +279,7 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("parquet", type=Path)
-    parser.add_argument("--output", type=Path, default=Path(__file__).with_name("dedup.json"))
+    parser.add_argument("--output", type=Path, default=DEDUP_FILE)
     args = parser.parse_args()
     manifest = build_manifest(
         pq.read_table(args.parquet).to_pylist(),

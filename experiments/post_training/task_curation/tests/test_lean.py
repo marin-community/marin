@@ -17,10 +17,7 @@ from experiments.post_training.task_curation.datasets.lean.autoinformalization i
 from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
     deduplicate_and_split as numina_autoinformalization_manifest,
 )
-from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import (
-    assigned_split,
-    human_statement,
-)
+from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import human_statement
 from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import (
     sources as informalization_sources,
 )
@@ -353,8 +350,8 @@ def test_only_rows_with_a_human_statement_and_proof_are_selected():
 
 def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monkeypatch):
     row = numina_row(ground_truth_type="statement")
-    monkeypatch.setattr(auto, "ACCEPTED_ROWS", frozenset({auto.row_key(row)}))
-    pipeline = INFORMALIZATION[assigned_split(row)]
+    monkeypatch.setattr(auto, "TASK_SPLITS", {auto.row_key(row): "train"})
+    pipeline = INFORMALIZATION["train"]
     task = converted_task(pipeline, row, inputs=prime_inputs(tmp_path))
     prompt = task.context.events[0]
     assert isinstance(prompt, TextMessage)
@@ -373,8 +370,8 @@ def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monk
 
 def test_auto_informalization_selects_only_rows_with_a_frozen_no_decision(monkeypatch):
     row = numina_row(ground_truth_type="statement")
-    monkeypatch.setattr(auto, "ACCEPTED_ROWS", frozenset({auto.row_key(row)}))
-    pipeline = INFORMALIZATION[assigned_split(row)]
+    monkeypatch.setattr(auto, "TASK_SPLITS", {auto.row_key(row): "train"})
+    pipeline = INFORMALIZATION["train"]
     assert pipeline.source.select(row, None)
     changed = {**row, "problem": "Find the value of n + 0."}
     assert not auto.is_train_row(changed, None)

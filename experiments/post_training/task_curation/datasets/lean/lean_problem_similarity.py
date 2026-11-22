@@ -3,17 +3,14 @@
 
 """Shared comparison primitives for informal problems and Lean theorem statements.
 
-This module normalizes prose and theorem types, creates stable row fingerprints and token n-grams,
+This module normalizes prose and theorem types, creates token n-grams,
 and computes Jaccard similarity. ``autoinformalization/deduplicate_and_split.py`` and ``eval_overlap.py`` share
 these operations so their text and Lean comparisons follow the same rules. It does not decide which
 rows to remove or how to split them.
 """
 
-import hashlib
 import re
 import unicodedata
-from collections.abc import Mapping
-from typing import Any
 
 from experiments.post_training.task_curation.datasets.lean.lean_grade import TARGET_NAME, without_comments
 
@@ -25,17 +22,6 @@ IDENTIFIER = re.compile(r"[^\W\d]\w*'*")
 TEXT_TOKEN = re.compile(r"\\[a-z]+|[^\W_]+|[=+*/<>^-]")
 LEAN_TOKEN = re.compile(r"#\d+|[^\W\d]\w*'*|\d+(?:\.\d+)?|:=|↔|→|∀|∃|[=+*/<>^:-]")
 LATEX_LAYOUT = re.compile(r"\\(?:left|right|displaystyle|quad|qquad|textbf|mathrm|textrm|text|operatorname)\b")
-
-
-def row_key(row: Mapping[str, Any]) -> str | None:
-    """Identify one formal-statement/problem pair while retaining its source UUID."""
-    uuid, formal, problem = (row.get(name) for name in ("uuid", "formal_statement", "problem"))
-    if not all(isinstance(value, str) and value.strip() for value in (uuid, formal, problem)):
-        return None
-    digest = hashlib.sha256(f"{formal}\0{problem}".encode()).hexdigest()
-    index = row.get("_numina_index")
-    location = f"{index}:" if isinstance(index, int) else ""
-    return f"{location}{uuid}:{digest[:12]}"
 
 
 def statement_key(declaration: str) -> str | None:

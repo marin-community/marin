@@ -21,42 +21,24 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.spec import RUBRIC_LABELS, JudgePromptFormat, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import (
-    PROOF_TRAIN_UUIDS,
-    split_for,
-)
-from experiments.post_training.task_curation.datasets.lean.lean_problem_similarity import row_key
+from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import row_key
 from experiments.post_training.task_curation.datasets.lean.numina import (
     NUMINA_FILE,
     NUMINA_REPO,
     NUMINA_REVISION,
     PRIME_LISTS,
     excluded_by_prime,
-    is_human_statement_row,
     prime_list_source,
     statement_row_contract,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-MANIFEST_FILE = Path(__file__).with_name("dedup.json")
-MANIFEST = json.loads(MANIFEST_FILE.read_text())
 QUALITY_FILE = Path(__file__).with_name("tasks.json")
 QUALITY = json.loads(QUALITY_FILE.read_text())
-ACCEPTED_ROWS = frozenset(QUALITY["accepted"])
+TASK_SPLITS = {key: split for split, keys in QUALITY["tasks"].items() for key in keys}
+"""The split of every selected row, keyed by ``row_key``."""
 JUDGE_OUTPUT_TOKENS = 4096
-EXCLUDED_TYPES = {"MCQ", "math-word-problem"}
-REMOVED_ROWS = frozenset(item["row"] for cluster in MANIFEST["clusters"] for item in cluster["removed"])
-CLUSTER_SPLITS = {
-    key: cluster["split"]
-    for cluster in MANIFEST["clusters"]
-    for key in (*cluster["kept"], *(item["row"] for item in cluster["removed"]))
-}
-CLUSTER_IDS = {
-    key: cluster["id"]
-    for cluster in MANIFEST["clusters"]
-    for key in (*cluster["kept"], *(item["row"] for item in cluster["removed"]))
-}
 
 INSTRUCTIONS = """Translate the Lean 4 theorem statement below into a self-contained natural-language
 mathematical problem.
@@ -94,14 +76,6 @@ Multiple-choice options and option letters are optional; their omission alone is
 The human reference is also the golden control; a failed control indicates an inconsistent pair or judge contract."""
 
 
-def assigned_split(row: dict[str, Any]) -> str | None:
-    """Return the split, or None for invalid inputs and removed duplicates."""
-    key = row_key(row)
-    if key is None or key in REMOVED_ROWS:
-        return None
-    return CLUSTER_SPLITS.get(key, "train" if row["uuid"] in PROOF_TRAIN_UUIDS else split_for(key))
-
-
 def indexed_rows(path: StoragePath, _context: ConversionContext | None) -> Iterator[dict[str, Any]]:
     """Stream the pinned parquet with its stable row position available to the split manifest."""
     index = 0
@@ -113,20 +87,12 @@ def indexed_rows(path: StoragePath, _context: ConversionContext | None) -> Itera
                 index += 1
 
 
-def eligible_pair(row: dict[str, Any], context: ConversionContext | None) -> bool:
-    return (
-        is_human_statement_row(row, context)
-        and row.get("question_type") not in EXCLUDED_TYPES
-        and row_key(row) in ACCEPTED_ROWS
-    )
+def is_train_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
+    return TASK_SPLITS.get(row_key(row)) == "train"
 
 
-def is_train_row(row: dict[str, Any], context: ConversionContext | None) -> bool:
-    return eligible_pair(row, context) and assigned_split(row) == "train"
-
-
-def is_eval_row(row: dict[str, Any], context: ConversionContext | None) -> bool:
-    return eligible_pair(row, context) and assigned_split(row) == "eval"
+def is_eval_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
+    return TASK_SPLITS.get(row_key(row)) == "eval"
 
 
 def formal_source(prefix: str, statement: str) -> str:
@@ -157,18 +123,16 @@ def convert(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejecti
     contract = statement_row_contract(data, lambda uuid: excluded_by_prime(uuid, context))
     if isinstance(contract, ImportRejection):
         return contract
-    if not eligible_pair(data, context):
+    split = TASK_SPLITS.get(row_key(data))
+    if split is None:
         return unsupported("quality_not_cleared", "The row is absent from the active selection")
     formal = formal_source(contract.prefix, contract.statement)
-    key = row_key(data)
-    assert key is not None
     spec = judge_spec(formal, data["problem"])
     package = verifyit_package(spec, environment=required_grader_environment(context))
     prompt = TextMessage(role="user", content=INSTRUCTIONS.format(formal=formal))
     evidence = {
         **{name: data[name] for name in ("uuid", "source", "problem_type", "question_type", "exam") if name in data},
-        "dedup_cluster": CLUSTER_IDS.get(key),
-        "split": assigned_split(data),
+        "split": split,
         "contract": asdict(contract),
     }
     task = conversation_task(row, events=(prompt,), package=package, evidence=evidence)
@@ -186,7 +150,6 @@ CONTROLS = Controls(golden=human_statement)
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:
-    counts = QUALITY["task_counts"]
     return [
         RlDataSource(
             pipeline=process_rows,
@@ -204,7 +167,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "single-turn",
                     "license:apache-2.0",
                 ),
-                count=counts[split],
+                count=len(QUALITY["tasks"][split]),
                 notes="Human-written Lean statements translated to natural language with binary semantic reward.",
             ),
             config=CurationRecipe(
@@ -218,7 +181,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     read=indexed_rows,
                 ),
                 convert=convert,
-                version=f"8-{QUALITY['report_sha256']}",
+                version=f"9-{QUALITY['report_sha256']}",
                 intended_use=intended_use,
                 rubric=REVIEW_RUBRIC,
                 controls=CONTROLS,

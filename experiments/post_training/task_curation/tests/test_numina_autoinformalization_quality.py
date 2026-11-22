@@ -3,6 +3,7 @@
 
 """Regression checks for the offline quality build and its input boundaries."""
 
+import copy
 import csv
 import hashlib
 import json
@@ -12,10 +13,7 @@ import pytest
 
 from experiments.post_training.task_curation.datasets.lean.autoinformalization import build_task_selection as quality
 
-
-def write_records(path, records):
-    lines = (json.dumps(record) + "\n" for record in records)
-    path.write_text("".join(lines))
+REPORT = "numina_autoinformalization_row_quality_report.csv"
 
 
 def report_row(key, label="no"):
@@ -36,143 +34,107 @@ def report_row(key, label="no"):
     }
 
 
-def test_one_offline_command_builds_both_artifacts_and_filters_rejected_rows(tmp_path, monkeypatch):
-    rows = [report_row(str(i)) for i in range(4)]
-    rows[-1].update(included=False, cause="answer_disclosed", disclosure="yes")
-    labels = tmp_path / "labels.jsonl"
-    golden = tmp_path / "golden.jsonl"
-    write_records(labels, [dict(row=r["row_key"], label=r["disclosure"]) for r in rows])
-    records = [
+def reviewer_records(rows, verdicts, note="Reviewer note"):
+    return [
+        dict(
+            numina_row=r["numina_row"],
+            uuid=r["uuid"],
+            golden_control=verdict,
+            cause="judge_wrong" if verdict == "FAIL" else "",
+            note=note,
+        )
+        for r, verdict in zip(rows, verdicts, strict=True)
+    ]
+
+
+def gemini_records(rows, verdicts, note="Gemini note"):
+    return [
         dict(
             row_key=r["row_key"],
             golden_control=verdict,
-            note="Test verdict",
-            judge_model="offline",
+            note=note,
             formal_sha256=r["formal_sha256"],
+            judge_model="offline",
             judge_spec_sha256=quality.spec_digest(
                 quality.golden_spec(r["formal"], r["reference"], 2048 if i == 1 else 1024)
             ),
         )
-        for i, (r, verdict) in enumerate(zip(rows[:3], ("PASS", "FAIL", "MALFORMED"), strict=True))
+        for i, (r, verdict) in enumerate(zip(rows, verdicts, strict=True))
     ]
-    write_records(golden, records)
+
+
+def use_inputs(monkeypatch, rows, reviewer, gemini):
+    inputs = {
+        "labels": [dict(row_key=r["row_key"], label=r["disclosure"]) for r in rows],
+        "reviewer": reviewer,
+        "gemini": gemini,
+    }
     monkeypatch.setattr(quality, "source_rows", lambda *_: [dict(r) for r in rows])
+    monkeypatch.setattr(quality, "read_input", lambda name: copy.deepcopy(inputs[name]))
+    return inputs
+
+
+def read_report(output):
+    with (output / REPORT).open(newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+def test_one_offline_command_builds_both_artifacts_and_filters_rejected_rows(tmp_path, monkeypatch):
+    rows = [report_row(str(i)) for i in range(4)]
+    rows[-1].update(included=False, cause="answer_disclosed", disclosure="yes")
+    gemini = gemini_records(rows[:3], ("PASS", "FAIL", "MALFORMED"))
+    inputs = use_inputs(monkeypatch, rows, reviewer_records(rows[:3], ("PASS",) * 3), gemini)
     out = tmp_path / "output"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "quality",
-            "source.parquet",
-            "--prime-lists",
-            str(tmp_path),
-            "--labels",
-            str(labels),
-            "--golden",
-            str(golden),
-            "--output-dir",
-            str(out),
-        ],
-    )
+    argv = ["quality", "source.parquet", "--prime-lists", str(tmp_path), "--output-dir", str(out)]
+    monkeypatch.setattr(sys, "argv", argv)
     quality.main()
     manifest = json.loads((out / "tasks.json").read_text())
-    assert manifest["accepted"] == ["0"]
-    assert manifest["task_counts"] == {"train": 1, "eval": 0}
-    with (out / "numina_autoinformalization_row_quality_report.csv").open(newline="") as stream:
-        result = list(csv.DictReader(stream))
+    assert manifest["tasks"] == {"train": ["0"], "eval": []}
+    result = read_report(out)
     assert [r["included"] for r in result] == ["True", "False", "False", "False"]
     assert [r["cause"] for r in result] == ["", "golden_failed", "judge_malformed", "answer_disclosed"]
-    before = (out / "numina_autoinformalization_row_quality_report.csv").read_bytes()
-    write_records(golden, records[:-1])
+    before = (out / REPORT).read_bytes()
+    inputs["gemini"] = gemini[:-1]
     with pytest.raises(ValueError, match="Missing golden"):
         quality.main()
-    assert (out / "numina_autoinformalization_row_quality_report.csv").read_bytes() == before
-    records[-1]["formal_sha256"] = "changed"
-    write_records(golden, records)
+    assert (out / REPORT).read_bytes() == before
+    inputs["gemini"] = copy.deepcopy(gemini)
+    inputs["gemini"][-1]["formal_sha256"] = "changed"
     with pytest.raises(ValueError, match="different formal"):
         quality.main()
 
 
-@pytest.mark.parametrize("kind", ["MCQ", "math-word-problem"])
-def test_type_exclusion_precedes_the_frozen_label(monkeypatch, kind):
-    row = {
-        "author": "human",
-        "uuid": "example",
-        "formal_statement": "theorem t : True",
-        "problem": "Find n.",
-        "question_type": kind,
-    }
-    monkeypatch.setattr(quality.auto, "ACCEPTED_ROWS", {quality.row_key(row)})
-    assert not quality.auto.is_train_row(row, None)
-    assert not quality.auto.is_eval_row(row, None)
-
-
-def test_reviewer_csv_selects_only_passes_and_preserves_provenance(tmp_path, monkeypatch):
+def test_reviewer_verdicts_keep_their_provenance(tmp_path, monkeypatch):
     rows = [report_row(str(i)) for i in range(3)]
-    monkeypatch.setattr(quality, "source_rows", lambda *_: [dict(r) for r in rows])
-    labels = tmp_path / "labels.jsonl"
-    write_records(labels, [dict(row=r["row_key"], label="no") for r in rows])
-    golden = tmp_path / "review.csv"
-    fields = ("numina_row", "uuid", "golden_control", "cause", "note")
-    records = [
-        dict(
-            numina_row=r["numina_row"],
-            uuid=r["uuid"],
-            golden_control=label,
-            cause="judge_wrong" if label == "FAIL" else "",
-            note="Reviewer note",
-        )
-        for r, label in zip(rows, ("PASS", "FAIL", "MALFORMED"), strict=True)
-    ]
-
-    def write_csv():
-        with golden.open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, fields)
-            writer.writeheader()
-            writer.writerows(records)
-
-    write_csv()
+    reviewer = reviewer_records(rows, ("PASS", "FAIL", "MALFORMED"))
+    inputs = use_inputs(monkeypatch, rows, reviewer, gemini_records(rows, ("PASS",) * 3))
     output = tmp_path / "out"
-    manifest = quality.build(tmp_path / "raw", tmp_path, labels, golden, output)
-    assert manifest["accepted"] == ["0"]
-    assert manifest["golden_format"] == "reviewer_csv"
-    assert manifest["judge_models"] == []
-    with (output / "numina_autoinformalization_row_quality_report.csv").open(newline="") as stream:
-        report = list(csv.DictReader(stream))
+    manifest = quality.build(tmp_path / "raw", tmp_path, output)
+    assert manifest["tasks"] == {"train": ["0"], "eval": []}
+    assert manifest["golden_format"] == "intersection"
+    assert manifest["judge_models"] == ["offline"]
+    report = read_report(output)
     assert report[1]["golden_cause"] == "judge_wrong"
     assert report[1]["included"] == "False"
     assert report[0]["judge_spec_sha256"] == ""
-    records[0]["uuid"] = "wrong-source"
-    write_csv()
+    inputs["reviewer"][0]["uuid"] = "wrong-source"
     with pytest.raises(ValueError, match="Unknown golden CSV"):
-        quality.build(tmp_path / "raw", tmp_path, labels, golden, output)
+        quality.build(tmp_path / "raw", tmp_path, output)
 
 
 def test_intersection_excludes_rows_rejected_by_either_control(tmp_path, monkeypatch):
     rows = [report_row(str(i)) for i in range(4)]
-    monkeypatch.setattr(quality, "source_rows", lambda *_: [dict(r) for r in rows])
-    labels = tmp_path / "labels.jsonl"
-    write_records(labels, [dict(row=r["row_key"], label="no") for r in rows])
-    files = []
-    for name, verdicts in [
-        ("first", ("PASS", "PASS", "FAIL", "PASS")),
-        ("second", ("PASS", "FAIL", "PASS", "MALFORMED")),
-    ]:
-        path = tmp_path / (name + ".csv")
-        with path.open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, ("numina_row", "uuid", "golden_control", "cause", "note"))
-            writer.writeheader()
-            writer.writerows(
-                dict(numina_row=r["numina_row"], uuid=r["uuid"], golden_control=v, cause="", note=name + " explanation")
-                for r, v in zip(rows, verdicts, strict=True)
-            )
-        files.append(path)
+    use_inputs(
+        monkeypatch,
+        rows,
+        reviewer_records(rows, ("PASS", "PASS", "FAIL", "PASS"), note="first explanation"),
+        gemini_records(rows, ("PASS", "FAIL", "PASS", "MALFORMED"), note="second explanation"),
+    )
     output = tmp_path / "out"
-    result = quality.build_intersection(tmp_path / "raw", tmp_path, labels, *files, output)
-    assert result["accepted"] == ["0"]
+    result = quality.build(tmp_path / "raw", tmp_path, output)
+    assert result["tasks"] == {"train": ["0"], "eval": []}
     assert len(result["golden_inputs"]) == 2
-    with (output / "numina_autoinformalization_row_quality_report.csv").open() as stream:
-        report = list(csv.DictReader(stream))
+    report = read_report(output)
     assert [(r["primary_verdict"], r["required_verdict"], r["included"]) for r in report] == [
         ("PASS", "PASS", "True"),
         ("PASS", "FAIL", "False"),
@@ -181,3 +143,14 @@ def test_intersection_excludes_rows_rejected_by_either_control(tmp_path, monkeyp
     ]
     assert report[0]["note"] == "first explanation"
     assert report[0]["required_note"] == "second explanation"
+
+
+def test_bucket_inputs_must_match_their_pinned_digest(tmp_path, monkeypatch):
+    data = b"row_key,label\n0,no\n"
+    (tmp_path / "labels.csv").write_bytes(data)
+    monkeypatch.setattr(quality, "BUCKET", str(tmp_path))
+    monkeypatch.setattr(quality, "INPUTS", {"labels": ("labels.csv", hashlib.sha256(data).hexdigest())})
+    assert quality.read_input("labels") == [{"row_key": "0", "label": "no"}]
+    monkeypatch.setattr(quality, "INPUTS", {"labels": ("labels.csv", hashlib.sha256(b"other").hexdigest())})
+    with pytest.raises(ValueError, match="pinned SHA-256"):
+        quality.read_input("labels")
