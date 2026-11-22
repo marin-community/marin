@@ -4,6 +4,7 @@
 """Exact source exclusions retain distinct contracts and stable canonical task IDs."""
 
 import json
+import sqlite3
 from dataclasses import replace
 
 import pyarrow.parquet as pq
@@ -11,8 +12,9 @@ import pytest
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from taskcompendium.identity import task_identity
+from taskcompendium.identity import task_identity, task_spec_json
 from taskcompendium.models import ResourceGroups, Source, TaskSpec
+from taskcompendium.pipeline import deduplication
 from taskcompendium.pipeline.conversion import ConvertedRow
 from taskcompendium.pipeline.deduplication import deduplicate_population, unique_documents, unique_task_indices
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
@@ -128,3 +130,31 @@ def test_deduplication_partitions_by_population_size_and_preserves_payloads(tmp_
     assert {row.raw.id: row.result.task.model_dump(mode="json") for row in retained} == expected
     drops = [row for path in (tmp_path / "dedup/drops").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
     assert drops == [{"task_id": "task-0000", "kept_id": "duplicate", "reason": "DUPLICATE_WITHIN_SOURCE"}]
+
+
+def test_unique_documents_preserves_payloads_above_sqlite_value_limit(monkeypatch):
+    original_connect = sqlite3.connect
+
+    def limited_database(*args, **kwargs):
+        database = original_connect(*args, **kwargs)
+        database.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 4096)
+        return database
+
+    monkeypatch.setattr(deduplication.sqlite3, "connect", limited_database)
+    first = contract("z").model_copy(
+        update={"resources": ResourceGroups(oracle=(inline_resource("large-reference", b"reference" * 8192),))}
+    )
+    duplicate = first.model_copy(update={"id": "a"})
+    other = first.model_copy(
+        update={
+            "id": "other",
+            "resources": ResourceGroups(oracle=(inline_resource("large-reference", b"other" * 8192),)),
+        }
+    )
+    runtime = {"preserved": "allocation-evidence" * 1024}
+    dropped = []
+    kept = list(
+        unique_documents(((task.model_dump(mode="json"), runtime) for task in (first, other, duplicate)), dropped.append)
+    )
+    assert kept == [(json.loads(task_spec_json(task)), runtime) for task in (duplicate, other)]
+    assert dropped == [{"task_id": "z", "kept_id": "a", "reason": "DUPLICATE_WITHIN_SOURCE"}]

@@ -320,13 +320,12 @@ def unique_documents(
     """Deduplicate a complete population on disk before yielding its first retained task."""
     with TemporaryDirectory(prefix="task-dedup-") as scratch:
         with closing(sqlite3.connect(str(Path(scratch) / "tasks.sqlite"))) as database:
-            database.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, contract TEXT, document TEXT, runtime TEXT)")
-            for document, runtime in documents:
+            database.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, contract TEXT, payload INTEGER)")
+            for index, (document, runtime) in enumerate(documents):
                 task = TaskSpec.model_validate_json(json.dumps(document))
-                database.execute(
-                    "INSERT INTO tasks VALUES (?, ?, ?, ?)",
-                    (task.id, task_identity(task), task_spec_json(task), json.dumps(runtime)),
-                )
+                (Path(scratch) / f"{index}.task.json").write_text(task_spec_json(task))
+                (Path(scratch) / f"{index}.runtime.json").write_text(json.dumps(runtime))
+                database.execute("INSERT INTO tasks VALUES (?, ?, ?)", (task.id, task_identity(task), index))
             database.execute("CREATE INDEX contracts ON tasks(contract)")
             database.execute("CREATE TABLE kept AS SELECT contract, MIN(id) AS id FROM tasks GROUP BY contract")
             database.execute("CREATE UNIQUE INDEX kept_contracts ON kept(contract)")
@@ -334,7 +333,8 @@ def unique_documents(
                 "SELECT t.id, k.id FROM tasks t JOIN kept k ON t.contract = k.contract WHERE t.id != k.id ORDER BY t.id"
             ):
                 dropped({"task_id": identifier, "kept_id": canonical, "reason": DUPLICATE_WITHIN_SOURCE})
-            for document, runtime in database.execute(
-                "SELECT t.document, t.runtime FROM tasks t JOIN kept k ON t.id = k.id ORDER BY t.id"
-            ):
-                yield json.loads(document), json.loads(runtime)
+            for (index,) in database.execute("SELECT t.payload FROM tasks t JOIN kept k ON t.id = k.id ORDER BY t.id"):
+                yield (
+                    json.loads((Path(scratch) / f"{index}.task.json").read_text()),
+                    json.loads((Path(scratch) / f"{index}.runtime.json").read_text()),
+                )
