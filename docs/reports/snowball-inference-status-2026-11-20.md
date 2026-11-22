@@ -8,31 +8,25 @@ fixture. Full-model learner replay parity and external rollout/learner
 integration remain open.
 
 The full BF16 67B checkpoint completed matched 64K AgentX replays at 128
-offered clients. Each TPU comparison ran both backends on the same
-physical slice. The H100 comparison uses the repeat runs on eight
-80 GB GPUs.
+offered clients. The highest-throughput native configuration meeting the
+20% loaded p90 TTFT target on each platform was faster than compiled vLLM.
+The table compares runs on separate workers of the same hardware type.
+The H100 runs used eight 80 GB GPUs each.
 
 | Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM loaded p90 TTFT |
 | --- | ---: | ---: | ---: |
-| [v5p-8](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v53-clean-retained-prompts) | 549.71 | 539.58 | 1.850 / 1.526 s |
-| [v6e-8 native](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v24-256-token-prefill-bucket) and [compiled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat) | 591.75 | 554.00 | 2.15 / 1.31 s |
+| [v5p-8 native](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v54-96-contexts-5120-window-pages) and [compiled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v5-repeat-cpu-loader) | 575.55 | 549.46 | 1.373 / 1.339 s |
+| [v6e-8 native](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v35-four-round-unchunked) and [compiled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat) | 583.52 | 554.00 | 1.498 / 1.307 s |
 | [8× H100 native](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v29-singleton-repeat) and [compiled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-vllm-c128-20261122-v3-repeat) | 621.18 | 590.24 | 1.01 / 1.43 s |
 
-The same TPU runs measured serial HTTP prefill at five lengths. At
+Separate same-slice comparisons measured serial HTTP prefill at five lengths. At
 64,512 fresh prompt tokens, native processed 34.5k versus 33.2k prompt
 tok/s on v5p-8 and 47.9k versus 43.8k on v6e-8. Primed median TTFT
 at that length was 107 versus 113 ms on v5p-8 and 86 versus 85 ms on
-v6e-8. Paired active decode was higher on native on all three hardware
-types.
-
-The four-step v6e-8 run reached 583.52 output tok/s and 1.50 s p90
-TTFT, 14.6% above compiled vLLM p90 on the same platform. The H100
-repeat also met the 20% p90 target. A larger native prompt index
-reached 555.12 output tok/s on v5p-8, above the strongest vLLM repeat
-at 549.46. Its p90 TTFT was 2.39 s. The clean 96-context same-slice
-repeat was 1.9% ahead in throughput and 19 ms above the 20% p90
-cutoff of 1.831 s.
-[80-context throughput trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v51-retain-512-prompts) · [96-context same-slice repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v53-clean-retained-prompts)
+v6e-8. Paired active decode in the AgentX configurations above was
+41.33 versus 35.69 tok/s on v5p-8, 38.93 versus 36.35 on v6e-8, and
+72.91 versus 53.97 on H100.
+[v5p-8 same-slice prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v53-clean-retained-prompts) · [v6e-8 same-slice native prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v24-256-token-prefill-bucket) · [v6e-8 compiled prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat)
 
 The initial publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -1154,6 +1148,23 @@ paired p90 TTFT was 1.862 versus 1.529 s. Across all successful turns,
 p90 was 1.850 versus 1.526 s. Fresh 64,512-token TTFT was 1.871 versus
 1.942 s. The corresponding primed medians were 107 versus 113 ms.
 [Published-engine same-slice repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v53-clean-retained-prompts)
+
+Increasing the sliding-window pool from 4,096 to 5,120 pages at 96
+logical contexts reached 575.55 output tok/s and 1.373 s p90 TTFT
+on a separate v5p-8 worker in `us-central1-a`. Compared with the best
+compiled repeat, output throughput rose by 4.7% and p90 TTFT was
+2.6% higher. All 390 paired output lengths matched, active decode
+was 41.33 versus 35.69 tok/s, and profiling reported zero errors.
+Fresh and primed 64,512-token medians were 1.873 s and 115 ms, versus
+1.944 s and 115 ms for that compiled repeat. The window-residency loss
+fell from 4.5% of prompt tokens in the 4,096-page diagnostic to 0.6%.
+[5,120-page replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v54-96-contexts-5120-window-pages) · [Strongest compiled repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v5-repeat-cpu-loader)
+
+Use the v5p-8 settings above with `--kv-cache-contexts 96`,
+`--window-cache-pages 5120`, `--window-cache-retained-spans 2`,
+`--max-retained-prompts 512`, `--max-rounds 8`, `--layerwise-load`,
+`--pack-expert-weights`, and `--prefill-buckets 256 512 1024 2048
+4096 8192 16384 32768 49152` to reproduce the 5,120-page configuration.
 
 An experimental FIFO policy emitted the first tokens for a leading
 group of requests with at most 2,048 uncached tokens before prefilling
