@@ -967,13 +967,13 @@ def harness_response_language(text: str, params: dict) -> tuple[bool, str]:
     language = params.get("language")
     if not isinstance(language, str) or not language:
         return False, "missing language"
-    try:
-        from langdetect import DetectorFactory, detect  # noqa: PLC0415
+    from langdetect import DetectorFactory, LangDetectException, detect  # noqa: PLC0415
 
+    try:
         DetectorFactory.seed = LANGUAGE_DETECTOR_SEED
         detected = detect(text)
-    except Exception as error:
-        return False, f"language detection failed: {type(error).__name__}"
+    except LangDetectException:
+        return False, "language detection failed"
     return detected == language.lower(), f"expected={language.lower()} detected={detected}"
 
 

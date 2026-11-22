@@ -224,7 +224,7 @@ def test_harness_response_language_uses_detector(language, response, detected, e
     def detect(text):
         return detected if factory.seed == 0 else "unknown"
 
-    detector.__dict__.update({"DetectorFactory": factory, "detect": detect})
+    detector.__dict__.update({"DetectorFactory": factory, "LangDetectException": ValueError, "detect": detect})
     monkeypatch.setitem(sys.modules, "langdetect", detector)
     spec = InstructionSpec(
         (Constraint("language:response_language", {"language": language}),), InstructionProfile.HARNESS, ""
@@ -235,15 +235,29 @@ def test_harness_response_language_uses_detector(language, response, detected, e
 def test_harness_response_language_detector_error_fails_closed(monkeypatch):
     detector = ModuleType("langdetect")
 
-    def fail_detection(text):
-        raise ValueError("no language features")
+    class DetectorError(Exception):
+        pass
 
-    detector.__dict__.update({"DetectorFactory": SimpleNamespace(seed=None), "detect": fail_detection})
+    def fail_detection(text):
+        raise DetectorError("no language features")
+
+    detector.__dict__.update(
+        {"DetectorFactory": SimpleNamespace(seed=None), "LangDetectException": DetectorError, "detect": fail_detection}
+    )
     monkeypatch.setitem(sys.modules, "langdetect", detector)
     spec = InstructionSpec(
         (Constraint("language:response_language", {"language": "de"}),), InstructionProfile.HARNESS, ""
     )
     assert grade_source_instructions(spec, "This is an English text about Die Antwoord.").reward == 0.0
+
+
+def test_harness_response_language_missing_detector_is_infrastructure_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langdetect", None)
+    spec = InstructionSpec(
+        (Constraint("language:response_language", {"language": "de"}),), InstructionProfile.HARNESS, ""
+    )
+    with pytest.raises(ModuleNotFoundError):
+        grade_source_instructions(spec, "Das ist ein deutscher Satz.")
 
 
 REQUEST = "explain the context, code and theory behind the paper Identifying Candidate Spaces for Advert Implantation."

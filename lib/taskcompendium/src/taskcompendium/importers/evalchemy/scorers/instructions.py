@@ -85,6 +85,10 @@ def loose_responses(response: str) -> tuple[str, ...]:
 def grade_source_instructions(spec: InstructionSpec, response: str) -> Reward:
     """Retain per-instruction flags, weights and category evidence for later reduction."""
     validate_source_instructions(spec)
+    if spec.profile is InstructionProfile.HARNESS and any(
+        constraint.name == "language:response_language" for constraint in spec.constraints
+    ):
+        import_module("langdetect")
     metrics: dict[str, float] = {}
     weights: dict[str, int] = {}
     reducer_inputs: dict[str, bool | list[bool]] = {}
