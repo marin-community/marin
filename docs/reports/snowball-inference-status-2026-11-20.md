@@ -7,17 +7,26 @@ one-token chunks on the long-request fixture and 1.79× on the mixed-request
 fixture. Full-model learner replay parity and external rollout/learner
 integration remain open.
 
-The full BF16 67B checkpoint completed the matched 64K AgentX replay at
-128 offered clients on v5p-8, v6e-8, and eight H100s. Native reached
-443.29 output tok/s on v5p-8 and 533.04 on v6e-8. Compiled vLLM reached
-538.33 and 531.50 respectively. On eight H100s, two native replicas with
-singleton decode reached 616.68–621.18 output tok/s versus 590.24–593.09
-for compiled vLLM.
-Native p90 time to first token was 0.96–1.01 s versus 1.43–1.44 s. At
-64,512 fresh prompt tokens, native HTTP prefill reached 35.5k prompt tok/s on v5p-8 and 42.2k on v6e-8
-versus 33.1k and 42.4k for vLLM.
+The full BF16 67B checkpoint completed matched 64K AgentX replays at 128
+offered clients on v5p-8, v6e-8, and eight H100s. The table shows the best
+completed throughput on each backend and p90 HTTP time to first token
+from the same runs. The v5p-8 native row uses a prepacked expert
+prototype.
 
-This publication snapshots accepted code at
+| Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM p90 TTFT |
+| --- | ---: | ---: | ---: |
+| v5p-8 | 526.85 | 549.46 | 3.66 / 1.34 s |
+| v6e-8 | 600.63 | 554.00 | 2.03 / 1.31 s |
+| 8× H100 | 621.18 | 593.09 | 1.01 / 1.44 s |
+
+The v6e-8 same-worker repeat reached 595.38 versus 554.00 output tok/s.
+For serial raw HTTP prefill at 64,512 fresh prompt tokens, native reached
+35.1k versus 33.2k prompt tok/s on v5p-8 and 48.2k versus 43.8k on v6e-8.
+The five primed serial medians on each TPU type were within 5 ms of
+compiled vLLM. Loaded TPU TTFT and v5p-8 AgentX throughput still trail
+compiled vLLM.
+
+The initial publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
 and recorded results. It contains 42 inference commits after the shared ancestor
 `7405c96fe6ea3675d5a1bf7977d406cfc3887243`. At publication preflight, upstream
@@ -899,6 +908,39 @@ errors in either run. On those turns, active decode was 32.13 versus
 35.48 tok/s.
 [Native trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v29-32-row-expert-tiles) · [Compiled vLLM repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v5-repeat-cpu-loader)
 
+Increasing the v5p-8 logical cache from 60 to 80 contexts with the
+64-row expert tiles reached 521.25 output tok/s, 5.1% behind the latest
+compiled run. On 361 shared turns with the 60-context build, active
+decode rose from 30.79 to 32.63 tok/s, median TTFT fell from 1.32 to
+0.95 s, and p90 fell from 3.28 to 3.11 s. These native runs used
+different v5p-8 workers in the same region. The 80-context run matched
+all 366 output lengths paired with vLLM, with zero errors. Primed
+serial medians remained within 2 ms of compiled vLLM.
+[80-context trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v30-live-pins-80-contexts)
+
+Prepacking gate and up expert weights during checkpoint load on
+v5p-8 reached 526.85 output tok/s with 60 contexts, 4.1% behind
+compiled vLLM. On 362 turns common with the separate-weight build
+on another v5p-8, active decode rose from 32.10 to 33.90 tok/s
+and p90 TTFT rose from 3.32 to 3.66 s. All 368 output lengths
+paired with compiled vLLM matched and both runs recorded zero
+profiling errors.
+[Prepacked expert trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v31-prepacked-expert-weights)
+
+Balancing the v5p-8 full-attention TensorCores by context length
+reached 516.31 versus 516.50 output tok/s on the same worker.
+Across 361 common turns, active decode rose from 31.93 to
+32.96 tok/s and p90 TTFT rose from 3.33 to 3.59 s. All paired
+output lengths matched with zero errors.
+[Weighted attention trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v32-balanced-full-attention)
+
+On a v5p-8 expert microbenchmark, a 2,560-element contraction tile
+lowered median time from 0.601 to 0.567 ms at 16 padded rows and
+from 1.826 to 1.504 ms at 2,048 rows. The largest absolute output
+difference from the default 1,024-element tile was 0.000004 with
+BF16 inputs and outputs. There were zero dropped assignments.
+[Contraction tile sweep](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-expert-contraction-20261122-v1)
+
 One packed v5p trace ran 16 concurrent sequences at 51,870 input tokens.
 Its 260 ms device round spent about 98 ms in the seven full-attention
 kernels. The 512-token trace took 157 ms. Limiting internal slots to
@@ -1026,6 +1068,14 @@ run. AgentX p90 TTFT was 2.15 versus 1.31 s. In the raw prefill repeat
 after replay, the three longest primed prompts were within 3 ms of
 vLLM and the two shortest were within 6 ms.
 [256-token replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v24-256-token-prefill-bucket)
+
+Limiting multi-request prefill batches to 8,192 tokens on the same
+worker and allowing larger requests through individually reached 585.60
+output tok/s. On 399 turns common with the 256-token-bucket control,
+active decode moved from 44.24 to 44.72 tok/s and p90 TTFT rose from
+2.15 to 2.79 s. All paired output lengths matched and both runs had
+zero profiling errors.
+[Prefill batch budget trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v26-prefill-batch-budget)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
