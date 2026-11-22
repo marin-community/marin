@@ -15,7 +15,7 @@ qualification evidence.
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 
@@ -31,6 +31,7 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,
+    SourceOrigin,
     SourceReference,
     TaskFormat,
 )
@@ -43,13 +44,19 @@ NONAGENTIC_RELEASE_URL = "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/
 
 AGENTIC_TRAIN_SOURCE = "long-loop-smartie-swesmith"
 AGENTIC_TRAIN_SHA256 = "453552f9d4e1fa27710f9434a303f7ab5ff390c22deb54572f9be885a2a80f5d"
-AGENTIC_VALIDATION_SHA256 = "8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838"
 AGENTIC_MANIFEST_SHA256 = "ec645c79b1d636df20dc0575db5bd7df608eaf0a06203cd63ead8e0c310860b3"
 NONAGENTIC_TRAIN_SHA256 = "c8948b3c13957ee054b4b8b5553127f75c44a50577b5b2b798261e9f8a5abc45"
 NONAGENTIC_MANIFEST_SHA256 = "94f21b06fedc6dce7184e783dab1349f1c14fed05fab3d47fcace61d2386701a"
 
+AGENTIC_TRAIN_FILE = "agentic-train.parquet"
+NONAGENTIC_TRAIN_FILE = "nonagentic-train.parquet"
+"""The two releases' train parquet members: the pools the runs trained on."""
+
+AGENTIC_ROUTE = "agentic"
+NONAGENTIC_ROUTE = "nonagentic"
+"""The routes the long-loop runs' rollout buffers admitted groups through."""
+
 AGENTIC_TRAIN_ROWS = 5608
-AGENTIC_VALIDATION_ROWS = 120
 EURUS_ROWS = 10_317
 NEMOTRON_BLENDS_ROWS = 12_426
 OPEN_SCIENCE_ROWS = 20_790
@@ -67,13 +74,13 @@ REASONING_GYM_SOURCE = (
 
 RELEASE_SOURCE_ROUTES = MappingProxyType(
     {
-        AGENTIC_TRAIN_SOURCE: "agentic",
-        "PRIME-RL/Eurus-2-RL-Data": "nonagentic",
-        "nvidia/Nemotron-RL-Ultra-Training-Blends": "nonagentic",
-        "nvidia/OpenScience": "nonagentic",
-        REASONING_GYM_SOURCE: "nonagentic",
-        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
-        "open-thoughts/TaskTrove": "nonagentic",
+        AGENTIC_TRAIN_SOURCE: AGENTIC_ROUTE,
+        "PRIME-RL/Eurus-2-RL-Data": NONAGENTIC_ROUTE,
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": NONAGENTIC_ROUTE,
+        "nvidia/OpenScience": NONAGENTIC_ROUTE,
+        REASONING_GYM_SOURCE: NONAGENTIC_ROUTE,
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": NONAGENTIC_ROUTE,
+        "open-thoughts/TaskTrove": NONAGENTIC_ROUTE,
     }
 )
 """Each training row's ``data_source`` and the route the runs admitted it through."""
@@ -161,16 +168,22 @@ def verify_release(config: AdoptedRelease) -> dict[str, VerifiedFile]:
     return composition
 
 
-def provenance_counts(fs, path: str) -> Counter:
-    """Count each task spec's ``source.dataset`` across one pinned parquet, streaming."""
-    counts: Counter = Counter()
+def stream_task_specs(fs, path: str) -> Iterator[dict]:
+    """Stream one pinned parquet's task specs, parsed, without storing payloads."""
     with fs.open(path, "rb") as handle:
         for batch in pq.ParquetFile(handle).iter_batches(batch_size=64, columns=["task_spec"]):
             for value in batch.column("task_spec").to_pylist():
-                dataset = json.loads(value).get("source", {}).get("dataset")
-                if dataset is None:
-                    raise ValueError(f"{path}: a task spec carries no source.dataset")
-                counts[dataset] += 1
+                yield json.loads(value)
+
+
+def provenance_counts(fs, path: str) -> Counter:
+    """Count each task spec's ``source.dataset`` across one pinned parquet, streaming."""
+    counts: Counter = Counter()
+    for task in stream_task_specs(fs, path):
+        dataset = task.get("source", {}).get("dataset")
+        if dataset is None:
+            raise ValueError(f"{path}: a task spec carries no source.dataset")
+        counts[dataset] += 1
     return counts
 
 
@@ -230,17 +243,20 @@ def agentic_release() -> RlDataSource[AdoptedRelease]:
     return RlDataSource(
         info=SourceInfo(
             id="Long-Loop RL:agentic-train",
-            title="Long-loop agentic RL train release · swe-verified-20261112-v4",
-            origin="Long-Loop RL",
+            origin=SourceOrigin.MARIN,
+            upstream_dataset="long-loop-rl-agentic-train",
+            upstream_name="Long-loop agentic RL train release",
+            build_path="Adopted RL release",
             family="terminal-agent",
             tags=("agentic", "multi-turn"),
             count=AGENTIC_TRAIN_ROWS,
             notes=(
                 "Adopted round-3 long-loop release: SWE-smith Harbor tasks under the Pi 0.87.0 "
                 "non-root execution overlay, sealed by its own manifest. Every training row's "
-                "data_source is long-loop-smartie-swesmith; the release also carries the 120-row "
-                "held-out validation pool. Qualification rests on the release seal and the "
-                "long-loop launch receipts, not on curation in this repository."
+                "data_source is long-loop-smartie-swesmith. The release also contains a 120-row "
+                "validation.parquet that predates curriculum-owned holdouts; the launch no longer "
+                "consumes it and this record does not adopt it. Qualification rests on the release "
+                "seal and the long-loop launch receipts, not on curation in this repository."
             ),
             task_format=TaskFormat.HARBOR,
         ),
@@ -251,12 +267,11 @@ def agentic_release() -> RlDataSource[AdoptedRelease]:
             manifest_sha256=AGENTIC_MANIFEST_SHA256,
             members=(
                 AdoptedFile(
-                    "agentic-train.parquet",
+                    AGENTIC_TRAIN_FILE,
                     AGENTIC_TRAIN_SHA256,
                     AGENTIC_TRAIN_ROWS,
                     {AGENTIC_TRAIN_SOURCE: AGENTIC_TRAIN_ROWS},
                 ),
-                AdoptedFile("validation.parquet", AGENTIC_VALIDATION_SHA256, AGENTIC_VALIDATION_ROWS),
             ),
         ),
         pipeline=adopt_release,
@@ -268,8 +283,10 @@ def nonagentic_release() -> RlDataSource[AdoptedRelease]:
     return RlDataSource(
         info=SourceInfo(
             id="Long-Loop RL:nonagentic-train",
-            title="Long-loop nonagentic RL train release · smartie-mixed-20261110-v1",
-            origin="Long-Loop RL",
+            origin=SourceOrigin.MARIN,
+            upstream_dataset="long-loop-rl-nonagentic-train",
+            upstream_name="Long-loop nonagentic RL train release",
+            build_path="Adopted RL release",
             family="blend",
             tags=("rlvr", "single-turn"),
             count=NONAGENTIC_TRAIN_ROWS,
@@ -291,7 +308,7 @@ def nonagentic_release() -> RlDataSource[AdoptedRelease]:
             manifest_sha256=NONAGENTIC_MANIFEST_SHA256,
             members=(
                 AdoptedFile(
-                    "nonagentic-train.parquet",
+                    NONAGENTIC_TRAIN_FILE,
                     NONAGENTIC_TRAIN_SHA256,
                     NONAGENTIC_TRAIN_ROWS,
                     {

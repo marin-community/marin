@@ -430,6 +430,8 @@ SOURCE_ID_ALIASES: dict[str, str] = {
     "Task Trove:SWE-Gym__SWE-Gym": "TaskTrove:SWE-Gym__SWE-Gym",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+    "Long-Loop RL:agentic-train": "Marin:long-loop-rl-agentic-train",
+    "Long-Loop RL:nonagentic-train": "Marin:long-loop-rl-nonagentic-train",
 }
 
 
