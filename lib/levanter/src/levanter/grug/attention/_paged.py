@@ -15,16 +15,18 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
+from levanter.grug.attention._paged_gpu import gpu_paged_attention, gpu_paged_prefill
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.ragged_paged_attention_v3 import ragged_paged_attention as tpu_ragged_paged_attention_v3
 
 TPU_HEAD_ALIGNMENT = 128
 FUSED_KV_APPEND_MAX_TOKENS = 8
-PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3"]
+PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3", "gpu"]
 _TPU_KV_HEAD_GROUP = 8
 _FP32_QUERIES_PER_BLOCK = 128
 _FP32_KV_PAGES_PER_BLOCK = 8
 _V5P_VMEM_LIMIT_BYTES = 50_000 * 1024
+_GPU_PAGED_QUERY_LIMIT = 8
 
 
 def ragged_paged_attention(
@@ -56,6 +58,8 @@ def ragged_paged_attention(
             `tpu_fp32` uses FP32 operands in the kernel and preserves the query dtype on output.
             `tpu_v3` uses BF16 KV DMA and FP32 value accumulation on v5p. Small sliding-window
             batches use the compact FP32 kernel.
+            `gpu` uses split-K CUDA attention for small query batches and FA4 for single-sequence
+            BF16 prefill.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. Default TPU dispatch uses the tiled kernel for
@@ -65,10 +69,12 @@ def ragged_paged_attention(
     """
     if implementation is None:
         implementation = "tpu" if jax.default_backend() == "tpu" else "reference"
-    if implementation not in ("tpu", "reference", "tpu_fp32", "tpu_v3"):
+    if implementation not in ("tpu", "reference", "tpu_fp32", "tpu_v3", "gpu"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
     if implementation in ("tpu_fp32", "tpu_v3") and jax.default_backend() != "tpu":
         raise ValueError(f"{implementation} paged attention requires a TPU")
+    if implementation == "gpu" and jax.default_backend() != "gpu":
+        raise ValueError("GPU paged attention requires a CUDA device")
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError("sliding_window must be positive")
     if soft_cap is not None and soft_cap <= 0:
@@ -93,7 +99,12 @@ def ragged_paged_attention(
         )
         backend = _tpu_v3_attention if supports_v3 else fp32
     else:
-        backend = {"tpu": _tpu_attention, "tpu_fp32": fp32, "reference": _reference_attention}[implementation]
+        backend = {
+            "tpu": _tpu_attention,
+            "tpu_fp32": fp32,
+            "reference": _reference_attention,
+            "gpu": _gpu_attention,
+        }[implementation]
     fn = partial(
         backend,
         sm_scale=sm_scale,
@@ -239,6 +250,44 @@ def _query_metadata(q, kv_lens, cu_q_lens, num_seqs) -> _QueryMetadata:
     valid = jnp.any(belongs, axis=0)
     position = kv_lens[seq] - (cu_q_lens[seq + 1] - cu_q_lens[seq]) + token - cu_q_lens[seq]
     return _QueryMetadata(seq, position, valid)
+
+
+def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    bf16 = q.dtype == kv_pages.dtype == jnp.bfloat16
+    if q.shape[0] <= _GPU_PAGED_QUERY_LIMIT and bf16:
+        metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+        upper = jnp.where(metadata.valid, metadata.position + 1, 0)
+        lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+        return gpu_paged_attention(
+            q,
+            kv_pages,
+            jnp.maximum(page_indices[metadata.sequence], 0),
+            jnp.stack((lower, upper), axis=-1),
+            sm_scale,
+            soft_cap=soft_cap,
+        )
+    if page_indices.shape[0] == 1 and bf16 and soft_cap is None and isinstance(sm_scale, (float, int)):
+        return gpu_paged_prefill(
+            q,
+            kv_pages,
+            kv_lens,
+            page_indices[0],
+            cu_q_lens[1],
+            num_seqs,
+            sm_scale=float(sm_scale),
+            sliding_window=sliding_window,
+        )
+    return _reference_attention(
+        q,
+        kv_pages,
+        kv_lens,
+        page_indices,
+        cu_q_lens,
+        num_seqs,
+        sm_scale=sm_scale,
+        sliding_window=sliding_window,
+        soft_cap=soft_cap,
+    )
 
 
 class _ReferenceState(NamedTuple):
