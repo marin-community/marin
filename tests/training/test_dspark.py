@@ -1,0 +1,201 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+from pathlib import Path
+
+import datasets
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from datasets.exceptions import DatasetGenerationError
+from marin.training.dspark import extraction_config, validate_draft
+from marin.training.dspark_data import (
+    EMBEDDING,
+    FINAL_NORM,
+    GATE_DOWN,
+    GATE_UP,
+    GRUG_ARCHITECTURE,
+    GRUG_MASK_TOKEN,
+    LM_HEAD,
+    DraftRecipe,
+    GrugShape,
+    file_sha256,
+    inspect_teacher,
+    prepare_data,
+)
+from safetensors.numpy import save_file
+from tokenizers import AddedToken, Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import WhitespaceSplit
+from transformers import PreTrainedTokenizerFast
+
+
+@pytest.fixture
+def recipe() -> DraftRecipe:
+    return DraftRecipe(
+        shape=GrugShape(16, 4, 2, 1, 8, 8),
+        feature_taps=(1, 3),
+        mask_token_id=7,
+        max_sequence_length=16,
+        max_anchors=8,
+        max_steps=1,
+        trainer_ranks=1,
+        teacher_replicas=1,
+        draft_vocab_size=3,
+        markov_rank=4,
+    )
+
+
+@pytest.fixture
+def teacher(tmp_path: Path, recipe: DraftRecipe) -> Path:
+    root = tmp_path / "teacher"
+    root.mkdir()
+    vocab = {
+        word: index
+        for index, word in enumerate(("[UNK]", "system", "prompt", "answer", "held", "done", "tag", GRUG_MASK_TOKEN))
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = WhitespaceSplit()
+    tokenizer.add_special_tokens([AddedToken(GRUG_MASK_TOKEN, special=True)])
+    hf = PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]")
+    hf.chat_template = (
+        "{% for m in messages %}{% if m.role == 'assistant' %}"
+        "{% generation %}{{ m.content }} {% endgeneration %}"
+        "{% else %}{{ m.content }} {% endif %}{% endfor %}"
+    )
+    hf.save_pretrained(root)
+    (root / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "grug_moe",
+                "architectures": [GRUG_ARCHITECTURE],
+                "hidden_size": 16,
+                "num_hidden_layers": 4,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "head_dim": 8,
+                "vocab_size": 8,
+                "max_position_embeddings": 32,
+                "initializer_range": 0.02,
+                "rms_norm_eps": 1e-5,
+            }
+        )
+    )
+    weights = {
+        EMBEDDING: np.ones((8, 16), dtype=np.float32),
+        LM_HEAD: np.arange(128, dtype=np.float32).reshape(8, 16) / 128,
+        FINAL_NORM: np.ones((16,), dtype=np.float32),
+        GATE_DOWN: np.full((2, 16), 0.25, dtype=np.float32),
+        GATE_UP: np.full((16, 2), 0.5, dtype=np.float32),
+        **{f"model.layers.{i}.input_layernorm.weight": np.ones((16,), dtype=np.float32) for i in range(4)},
+    }
+    save_file(weights, root / "model.safetensors")
+    _seal_teacher(root)
+    return root
+
+
+def _seal_teacher(root: Path) -> None:
+    manifest = root / "dspark-teacher.json"
+    manifest.write_text(json.dumps({p.name: file_sha256(p) for p in root.iterdir() if p != manifest}))
+
+
+def _mix(tmp_path: Path, *, overlapping: bool) -> Path:
+    def chat(prompt: str, answer: str) -> dict:
+        return {
+            "messages": [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": answer},
+            ]
+        }
+
+    train = tmp_path / "train.parquet"
+    val = tmp_path / "val.parquet"
+    pq.write_table(pa.Table.from_pylist([chat("prompt", "answer done")]), train)
+    rows = [chat("held", "tag"), chat("prompt", "answer done" if overlapping else "done")]
+    pq.write_table(pa.Table.from_pylist(rows), val)
+    (tmp_path / "dspark-mix.json").write_text(
+        json.dumps({"train": {train.name: file_sha256(train)}, "validation": {val.name: file_sha256(val)}})
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize("overlapping", [False, True])
+def test_prepare_data_masks_and_holds_out_rendered_rows(
+    tmp_path: Path, teacher: Path, recipe: DraftRecipe, overlapping: bool
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    mix = _mix(tmp_path, overlapping=overlapping)
+    kwargs = dict(
+        output=str(output),
+        teacher=str(teacher),
+        teacher_sha256=file_sha256(teacher / "dspark-teacher.json"),
+        mix=str(mix),
+        mix_sha256=file_sha256(mix / "dspark-mix.json"),
+        recipe=recipe,
+    )
+    if overlapping:
+        with pytest.raises(DatasetGenerationError) as error:
+            prepare_data(**kwargs)
+        assert "also appears in validation" in str(error.value.__cause__)
+        assert not (output / "prepared").exists()
+        return
+
+    prepare_data(**kwargs)
+    prepared = output / "prepared"
+    rows = datasets.load_from_disk(str(prepared / "dataset"))
+    split = json.loads((prepared / "splits.json").read_text())
+    assert int(len(rows) * split["train_ratio"]) == 1
+    assert rows[0] == {"input_ids": [1, 2, 3, 5], "loss_mask": [False, False, True, True], "seq_len": 4}
+    assert rows[1]["input_ids"] == [1, 4, 6]
+    assert json.loads((prepared / "token_frequencies.json").read_text()) == {"3": 1, "5": 1}
+
+
+def test_completed_teacher_rejects_stale_weight_pin(teacher: Path, recipe: DraftRecipe) -> None:
+    pin = file_sha256(teacher / "dspark-teacher.json")
+    weights = teacher / "model.safetensors"
+    payload = weights.read_bytes()
+    weights.write_bytes(payload[:-1] + bytes([payload[-1] ^ 1]))
+    with pytest.raises(ValueError, match="SHA-256"):
+        inspect_teacher(teacher, pin, recipe, verify_weights=True)
+
+
+def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teacher: Path, recipe: DraftRecipe) -> None:
+    decoder = inspect_teacher(teacher, file_sha256(teacher / "dspark-teacher.json"), recipe)
+    speculative, _ = extraction_config(recipe, tmp_path / "hidden_states")
+    assert speculative["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [1, 3, 4]
+    ckpt = tmp_path / "draft"
+    ckpt.mkdir()
+    config = {
+        "speculators_model_type": "dspark",
+        "layer_type": "qwen3",
+        "sample_from_anchor": True,
+        "block_size": 8,
+        "aux_hidden_state_layer_ids": [1, 3],
+        "mask_token_id": 7,
+        "draft_vocab_size": 3,
+        "markov_rank": 4,
+        "markov_head_type": "vanilla",
+        "enable_confidence_head": True,
+        "confidence_head_with_markov": True,
+        "transformer_layer_config": decoder,
+        "speculators_config": {"proposal_methods": [{"speculative_tokens": 8}]},
+    }
+    (ckpt / "config.json").write_text(json.dumps(config))
+    weights = {
+        "fc.weight": np.zeros((16, 32), dtype=np.float32),
+        LM_HEAD: np.zeros((3, 16), dtype=np.float32),
+        "markov_head.markov_w1.weight": np.zeros((8, 4), dtype=np.float32),
+        "markov_head.markov_w2.weight": np.zeros((3, 4), dtype=np.float32),
+        "confidence_head.proj.weight": np.zeros((1, 20), dtype=np.float32),
+        "d2t": np.array([0, 2, 5], dtype=np.int64),
+    }
+    weight_file = ckpt / "model.safetensors"
+    save_file(weights, weight_file)
+    assert validate_draft(ckpt, recipe, np.array([0, 2, 5]))["aux_hidden_state_layer_ids"] == [1, 3]
+    save_file({**weights, "d2t": np.array([0, 3, 7])}, weight_file)
+    with pytest.raises(ValueError, match="vocabulary mapping"):
+        validate_draft(ckpt, recipe, np.array([0, 2, 5]))
