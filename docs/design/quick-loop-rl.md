@@ -520,11 +520,13 @@ the original artifact roots with a repository-local Git tree abbreviation.
   training reward separately from fixed-panel reward. Record failed groups,
   generated and trained tokens, per-step timing, GPU-hours and output receipts.
 
-Both 25-update recipes passed offline preflight on `9e8664df3b` with the
-regional task selection pinned. The Megatron fingerprint is `ef11bf85`.
-The staged Levanter fingerprint is `07afabcc` and uses pinned-host optimizer
-state with the same 80% learner allocator cap as `.15`. Repin its source and
-allocator settings to the accepted smoke before submission.
+Both 25-update recipes passed the artifact main's no-run preflight with
+the regional task selection pinned. The Megatron control retains source
+`9e8664df3b` and fingerprint `ef11bf85`. The prospective Levanter arm
+uses smoke source `3f203da1db` and fingerprint `10242ebf`. It enables
+preallocation and keeps the 80% learner cap and pinned-host optimizer
+state. A clean restore reproduced the authored and composed configuration
+checks. This pin depends on the smoke result.
 After the smoke passes its receipt and weight-change audits, submit the
 Megatron control `2026.11.20.6` first and Levanter `2026.11.20.7` second.
 Use the same regional route and publication verification for both. The
@@ -533,7 +535,7 @@ policy configuration.
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
 ID and the trainer can resume from an existing checkpoint.
-[Frozen launch and audit package][h100-matched-handoff]
+[Archived preallocation-off baseline and audits][h100-matched-handoff]
 
 For each arm, collect Finelog rows for the successful child and its task attempts.
 Match the `WANDB_MIRROR` metrics by optimizer step with rollout and update
@@ -1130,12 +1132,24 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   control on two JAX 0.11.0 learner processes. The receipts cover forward
   scores, three update calls, model, optimizer, RNG and layout fingerprints,
   and exact fresh checkpoint restore. The loader preserves legacy placement
-  for unpartitioned source tensors. Pinned-host Adam, the learner allocator
-  choice, and the full-model GPU run remain open.
+  for unpartitioned source tensors. In a separate two-rank CPU test, split
+  gradient and optimizer execution with pinned-host Adam matched the
+  split-device control across all 137 checkpoint leaves. Both modes
+  restored exactly and reproduced the next update. The original fused path
+  differed from the split path by at most `1.86e-9` in model values and
+  Adam first moments. The learner allocator choice, CUDA transfer cost,
+  and full-model GPU qualification remain open.
   Retain the binary frames and native snapshot install, then qualify the
   ported learner with vLLM. The archived preset uses one turn per episode.
-  Use a separate 67B tool-turn fixture to test continuation and stale KV
-  and prefix rejection across a weight install. [Earlier handoff][launch-handoff]
+  Use a separate 67B tool-turn fixture to test continuation and a live
+  weight install. The current native path resets paged KV on each generation.
+  On CPU, a two-turn fixture rejected a future policy before installation,
+  rejected the old policy and its replay frame after installation, and
+  matched an independently started new-policy process byte for byte.
+  Porting cross-request prefix reuse also requires preserving expert IDs
+  and router thresholds alongside cached pages for training replay.
+  Measure a same-policy hit and a miss on first use of the next policy
+  when that cache is enabled. [Earlier handoff][launch-handoff]
   The primary fixed panel is `eval-lite@2026.11.17.1`. The published 100-task
   Parquet has SHA-256
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
