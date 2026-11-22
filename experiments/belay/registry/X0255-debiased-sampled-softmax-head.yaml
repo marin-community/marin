@@ -40,7 +40,8 @@ trials:
   batch: X0255
   date: '2026-11-22'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0255
-  wandb: []
+  wandb:
+  - belay-X0255-seed0-t
   settings:
     sampled_softmax_shortlist_frac: '0.125'
   commit: cb3d3539f3
