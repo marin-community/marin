@@ -2123,9 +2123,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 expert_implementation = "separate"
             elif sample_indices is None and (replicated_token or tokens.shape[0] == expert_size):
                 expert_implementation = self.config.inference_expert_implementation
-        fused_append_limit = FUSED_KV_APPEND_MAX_TOKENS
-        if sample_indices is not None:
-            fused_append_limit = min(FUSED_KV_PREFILL_MAX_TOKENS, self.config.sliding_window)
+        fused_append_limit = FUSED_KV_APPEND_MAX_TOKENS if sample_indices is None else FUSED_KV_PREFILL_MAX_TOKENS
         kv_append = (
             self.config.inference_kv_append
             if not capture_routes and tokens.shape[0] <= fused_append_limit

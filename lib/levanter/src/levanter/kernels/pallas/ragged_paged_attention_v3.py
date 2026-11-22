@@ -829,13 +829,14 @@ def _ragged_paged_attention_kernel_loop(
                 # Wait for cur bkv
                 offset, update_sz = wait_fetch_bkv(seq_idx, bkv_idx, bkv_sem_idx)
 
-                # Start updating bkv to kv cache if applicable.
-                # Only needed in last bq loop.
-                # KV-share: skip the cache write when update_kv_cache=False
-                # so shared layers don't overwrite the source layer's slot.
                 if update_kv_cache:
+                    write_cache = bq_idx == num_bq - 1
+                    if sliding_window is not None and static_q_len != 1 and q_hbm_ref.shape[1] > sliding_window:
+                        # Write each tile before it leaves the sliding window.
+                        next_window_start = jnp.maximum(processed_q_len + actual_bq_sz - sliding_window, 0)
+                        write_cache |= bkv_idx < next_window_start // bkv_sz
 
-                    @pl.when(jnp.logical_and(update_sz > 0, bq_idx == num_bq - 1))
+                    @pl.when(jnp.logical_and(update_sz > 0, write_cache))
                     def update_cur_bkv_to_cache():
                         start_update_kv_cache(seq_idx, bkv_sem_idx, offset, update_sz)
 
