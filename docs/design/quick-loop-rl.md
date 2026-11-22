@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 8:18 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 8:26 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,7 +16,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first trained publication. | Verify the candidate's terminal receipts and compare it with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. The frozen 25-update `2026.11.20.7` candidate passed its initial panel and first two updates and publications. | Verify the candidate's terminal receipts and compare it with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
@@ -785,6 +785,19 @@ seconds at initialization and 163.672 seconds after update 1. The latter
 included 127.550 seconds to install, compared with about three seconds
 for the control's full verified publication. All eight receivers passed
 at both candidate versions.
+
+Update 2 gives the first warm timing comparison on the exact matched arms.
+It consumed 1.65 million loss tokens with Megatron and 1.62 million with
+Levanter. The four measured phases below account for the early step-time
+gap. These values describe one update in each run.
+
+| Update 2 phase | Megatron seconds | Levanter seconds |
+| --- | ---: | ---: |
+| Rollout group admission | 124.129 | 124.164 |
+| Learner preparation | 5.457 | 28.195 |
+| Policy training | 17.978 | 91.017 |
+| Verified weight publication | 3.053 | 163.769 |
+| Full step | 151.893 | 408.420 |
 
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
