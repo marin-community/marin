@@ -18,9 +18,9 @@ the rows' ``rollout_id``. This module needs the ``marin-finelog`` package, which
 not depend on.
 """
 
+import hashlib
 import json
 import logging
-import zlib
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, ClassVar
@@ -57,7 +57,7 @@ BUFFER_ROWS = 200_000
 MAX_MESSAGE_CHARS = 1024 * 1024
 """The longest stored message. A longer one is cut, so one message cannot fill the buffer or a request."""
 
-_CRC_RANGE = float(1 << 32)
+_HASH_RANGE = float(1 << 64)
 
 
 class ContentKind(StrEnum):
@@ -129,7 +129,7 @@ class EventRow(_ScopedRow):
     turns: int | None = None
     total_tokens: int | None = None
     content_rows: int | None = None
-    """The rows that the event has in the messages table when its content is captured."""
+    """The number of the event's content rows, also when its content is not captured."""
     content_chars: int | None = None
     """The size of those rows' content, also when the content is not captured."""
     content_captured: bool | None = None
@@ -173,7 +173,7 @@ class FinelogRolloutLog:
         """Wait up to ``timeout`` for the queued rows of each table, and log a table that Finelog did not confirm.
 
         This blocks, so call it off the event loop. Call it before the client closes: the close of a client
-        waits only about 10 seconds for queued rows.
+        waits only about 10 seconds for the queued rows of each table.
         """
         results = self.events.flush(timeout=timeout), self.messages.flush(timeout=timeout)
         for namespace, result in zip((EVENTS_NAMESPACE, MESSAGES_NAMESPACE), results, strict=True):
@@ -183,15 +183,31 @@ class FinelogRolloutLog:
 
 
 def _captures_content(rollout_id: str, content_fraction: float) -> bool:
-    """Whether a task attempt's transcript is captured. One attempt has all of its messages or none."""
-    return zlib.crc32(rollout_id.encode()) / _CRC_RANGE < content_fraction
+    """Whether a task attempt's transcript is captured. One attempt has all of its messages or none.
+
+    The rollout IDs of the samples of one prompt group differ only in a few characters. A CRC of the IDs gave
+    those samples the same decision, so this uses a hash that mixes every character into every bit.
+    """
+    digest = hashlib.blake2b(rollout_id.encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big") / _HASH_RANGE < content_fraction
 
 
 def _encoded(value: object) -> str:
     # A value that JSON cannot hold is stored as its repr: an error here would end the delivery of the task
-    # attempt's later events. The output is ASCII, so the process, a request and the table's byte bound all
-    # count one byte for each character.
+    # attempt's later events. The output is ASCII, so it holds no lone surrogate that the Arrow encode refuses,
+    # and the process, a request and the table's byte bound all count one byte for each character.
     return json.dumps(value, default=repr)
+
+
+def _text(value: object) -> str | None:
+    """``value`` as a string that the Arrow encode accepts. Harness and model code supply it, and nothing checks it.
+
+    The flush thread encodes the rows of many task attempts in one request, and one value that the encode refuses,
+    such as a number or a lone surrogate, loses the whole request.
+    """
+    if value is None:
+        return None
+    return str(value).encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -205,7 +221,9 @@ class _Content:
 
 
 def _message_content(message: dict[str, Any]) -> _Content:
-    return _Content(ContentKind.MESSAGE, _encoded(message), message.get("role"), message.get("tool_call_id"))
+    return _Content(
+        ContentKind.MESSAGE, _encoded(message), _text(message.get("role")), _text(message.get("tool_call_id"))
+    )
 
 
 def _event_content(event: RolloutEvent) -> list[_Content]:
@@ -255,7 +273,7 @@ def _event_row(
                 row,
                 duration=payload.duration,
                 turn_index=payload.turn_index,
-                stop_reason=payload.stop_reason,
+                stop_reason=_text(payload.stop_reason),
                 prompt_tokens=payload.prompt_token_count if usage is None else usage.prompt_tokens,
                 response_tokens=payload.response_token_count if usage is None else usage.completion_tokens,
             )
@@ -263,8 +281,8 @@ def _event_row(
             return replace(
                 row,
                 duration=payload.duration,
-                tool_call_id=payload.call_id,
-                tool_name=payload.name,
+                tool_call_id=_text(payload.call_id),
+                tool_name=_text(payload.name),
                 observation_bytes=payload.observation_bytes,
                 done=payload.done,
             )
@@ -283,7 +301,7 @@ def _event_row(
             return replace(
                 row,
                 duration=payload.duration,
-                stop_reason=payload.stop_reason,
+                stop_reason=_text(payload.stop_reason),
                 failed_operation=None if payload.operation is None else payload.operation.value,
                 error=payload.error,
                 turns=payload.turns,
