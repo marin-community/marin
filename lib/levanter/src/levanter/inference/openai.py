@@ -367,7 +367,7 @@ class InferenceContext:
 
                 max_tokens = min(len(r.prompt_tokens) + r.max_tokens, max_tokens_per_seq)
                 request_pages = kv_pages_for_request(len(r.prompt_tokens), max_tokens, r.n_generations, page_size)
-                if request_pages > self.engine.max_request_pages:
+                if request_pages > max_pages:
                     r.future.get_loop().call_soon_threadsafe(
                         r.future.set_exception, ValueError("Request exceeds the serving KV page budget")
                     )

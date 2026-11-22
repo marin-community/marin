@@ -112,7 +112,7 @@ class InferenceEngineConfig:
     """Reuse full prompt pages for Snowball serving.
 
     With one sequence slot, recent_prompts reserves one context for generation. With multiple
-    slots it budgets a subset of the cache for retained prompts.
+    slots it evicts the oldest prefixes as live requests reserve pages.
     """
 
     # Decode loop knobs
@@ -409,10 +409,12 @@ class PrefillWork(eqx.Module):
     new_num_seqs: jnp.ndarray
     new_slot_ids: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     clone_targets: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
-    prompt_tokens: ht.i32[NamedArray, "seq position"]  # type: ignore[name-defined]
+    prompt_tokens: ht.i32[NamedArray, "prompt position"]  # type: ignore[name-defined]
+    prompt_rows: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     seq_params: SeqDecodingParams
     cached_pages: NamedArray | None = None
+    has_clones: bool = eqx.field(static=True, default=False)
 
 
 def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
@@ -477,6 +479,7 @@ def _prefill_kernel(
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
     capture_routes: bool = False,
+    has_clones: bool = False,
 ) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -554,7 +557,7 @@ def _prefill_kernel(
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
-    if decode_state.clone_sources is not None:
+    if has_clones:
         gen_state, outputs = _handle_clones(
             gen_state,
             logits_at_samples,
@@ -593,7 +596,6 @@ def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
 
 def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     num_new = work.new_num_seqs.astype(jnp.int32)
-    max_slots = work.new_slot_ids.array.shape[0]
 
     def primary(i: int, state: GenState) -> GenState:
         slot = work.new_slot_ids.array[i]
@@ -611,7 +613,7 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
                 )
             decode_state = decode_state.assign_seq(
                 local_slot_id=slot,
-                tokens=work.prompt_tokens["seq", i],
+                tokens=work.prompt_tokens["prompt", work.prompt_rows.array[i]],
                 seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
                 kv_pages=pages,
                 page_indices=pages,
@@ -619,7 +621,7 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
             )
             return dataclasses.replace(gs, decode_state=decode_state)
 
-        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        is_primary = is_valid(slot) & ~is_valid(work.clone_targets.array[i])
         return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
     def clone(i: int, state: GenState) -> GenState:
@@ -630,16 +632,18 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
             cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
             return cloned
 
-        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        is_clone = is_valid(slot) & is_valid(parent)
         return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    gen_state = jax.lax.fori_loop(0, num_new, primary, gen_state)
+    if not work.has_clones:
+        return gen_state
     # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
     decode_state, _ = gen_state.decode_state.allocate_for_seq(
         token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
     )
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-    return jax.lax.fori_loop(0, max_slots, clone, gen_state)
+    return jax.lax.fori_loop(0, num_new, clone, gen_state)
 
 
 @functools.partial(jax.jit, donate_argnums=(0,))
@@ -672,7 +676,15 @@ def _run_prefill(
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
     gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill, capture_routes)
+    return _prefill_kernel(
+        gen_state,
+        model,
+        sampler,
+        work.queue,
+        max_seqs_in_prefill,
+        capture_routes=capture_routes,
+        has_clones=work.has_clones,
+    )
 
 
 def _handle_clones(
@@ -1055,15 +1067,14 @@ class InferenceEngine:
         if config.prefix_cache != "disabled" and not isinstance(model, SnowballLMHeadModel):
             raise ValueError("The prompt cache requires Snowball")
         self._retained_prompt_limit = 1
-        self._retained_page_budget = 0
+        self._retain_packed_prompts = config.max_seqs > 1 and config.prefix_cache == "recent_prompts"
         table = decode_state.page_table
         if config.prefix_cache == "recent_prompts":
             self._retained_prompt_limit = table.num_pages // table.pages_per_seq - 1
             if self._retained_prompt_limit < 1:
                 raise ValueError("The recent-prompts cache requires max_pages for at least two full sequences")
-            if config.max_seqs > 1:
+            if self._retain_packed_prompts:
                 self._retained_prompt_limit = config.max_seqs
-                self._retained_page_budget = max(table.pages_per_seq, (table.num_pages - table.pages_per_seq) // 4)
         self.config = config
         self._cached_prompts: list[_CachedPrompt] = []
         self._reserved_pages: dict[int, int] = {}
@@ -1159,11 +1170,6 @@ class InferenceEngine:
             self.config.page_size,
         )
 
-    @property
-    def max_request_pages(self) -> int:
-        """KV pages available to a single request, accounting for prompt retention."""
-        return self.gen_state.decode_state.page_table.num_pages - self._retained_page_budget
-
     def score_token_logprobs(self, token_ids: Sequence[int], top_k: int) -> TokenSequenceLogprobs:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
@@ -1200,7 +1206,7 @@ class InferenceEngine:
         )
 
         self.gen_state = new_state
-        if self._retained_page_budget:
+        if self._retain_packed_prompts:
             self._retain_batch_prompts(batch)
         elif self.config.prefix_cache != "disabled":
             tokens = np.asarray(batch[0].prompt_tokens, dtype=np.int32)
@@ -1219,27 +1225,39 @@ class InferenceEngine:
         return refs
 
     def _retain_batch_prompts(self, requests: Sequence[Request]) -> None:
-        state = self.gen_state.decode_state
-        table = state.page_table
-        before = self._retained_page_refs(table)
-        page_indices = jax.device_get(state.sequences.page_indices.array)
+        completed_prompts = []
         for request in requests:
             slots = self.sequences.get(request.request_id)
             if slots is None:
                 break
-            tokens = np.asarray(request.prompt_tokens, dtype=np.int32)
-            pages = page_indices[slots[0], : len(tokens) // self.config.page_size].copy()
-            if pages.size:
-                self._cached_prompts.append(_CachedPrompt(self.model, tokens, pages))
+            if len(request.prompt_tokens) >= self.config.page_size:
+                completed_prompts.append((slots[0], request.prompt_tokens))
+        if not completed_prompts:
+            return
+        state = self.gen_state.decode_state
+        before = self._retained_page_refs(state.page_table)
+        page_indices = jax.device_get(state.sequences.page_indices.array)
+        for slot, prompt in completed_prompts:
+            tokens = np.asarray(prompt, dtype=np.int32)
+            pages = page_indices[slot, : len(tokens) // self.config.page_size].copy()
+            self._cached_prompts.append(_CachedPrompt(self.model, tokens, pages))
+        self._trim_retained_prompts(before)
 
+    def _trim_retained_prompts(self, before: np.ndarray) -> None:
+        state = self.gen_state.decode_state
+        table = state.page_table
         # Track ownership by entry so shared physical pages survive eviction of either prefix.
         after = self._retained_page_refs(table)
+        page_budget = table.num_pages - sum(self._reserved_pages.values())
         pinned = np.count_nonzero(after)
-        while pinned > self._retained_page_budget or len(self._cached_prompts) > self._retained_prompt_limit:
+        while pinned > page_budget or len(self._cached_prompts) > self._retained_prompt_limit:
             pages = self._cached_prompts.pop(0).pages
             np.add.at(after, pages, -1)
             pinned -= np.count_nonzero(after[pages] == 0)
-        delta = jax.device_put(after - before, table.page_ref_counts.array.sharding)
+        change = after - before
+        if not np.any(change):
+            return
+        delta = jax.device_put(change, table.page_ref_counts.array.sharding)
         table = dataclasses.replace(table, page_ref_counts=table.page_ref_counts + hax.named(delta, "page"))
         self.gen_state = dataclasses.replace(self.gen_state, decode_state=dataclasses.replace(state, page_table=table))
 
@@ -1272,7 +1290,8 @@ class InferenceEngine:
 
         work_slot_ids = np.full((max_slots,), INVALID, dtype=np.int32)
         clone_targets = np.full((max_slots,), INVALID, dtype=np.int32)
-        prompt_tokens = np.full((max_slots, max_seq_len), INVALID, dtype=np.int32)
+        prompt_rows = np.full((max_slots,), INVALID, dtype=np.int32)
+        prompt_tokens = np.full((min(max_slots, max_seqs_in_prefill), max_seq_len), INVALID, dtype=np.int32)
         prompt_lengths = np.zeros((max_slots,), dtype=np.int32)
         prefix_pages = (
             np.full((max_slots, decode_state.page_table.pages_per_seq), INVALID, dtype=np.int32)
@@ -1301,13 +1320,12 @@ class InferenceEngine:
         offset = 0
         num_primary = 0
         total_new = 0
-        pages_left = (
-            decode_state.page_table.num_pages - self._retained_page_budget - sum(self._reserved_pages.values())
-        )
+        pages_left = decode_state.page_table.num_pages - sum(self._reserved_pages.values())
 
         for request in requests:
             seq_tokens = request.prompt_tokens
             seq_params = request.decode_params
+            rid = request.request_id
 
             pages_needed = self._request_pages(request) if max_slots > 1 else 0
             if (
@@ -1323,20 +1341,21 @@ class InferenceEngine:
                 pages = self._matching_prompt_pages(this_tokens)
             reused = 0 if pages is None else len(pages) * self.config.page_size
             end = offset + len(seq_tokens) - reused
-            if end > queue_tokens.shape[0]:
+            if end > max_prefill_size:
                 break
 
             slot_id = self.free_slots.pop()
+            queue_tokens[offset:end] = this_tokens[reused:]
+            queue_slot_ids[offset:end] = slot_id
+            queue_pos_ids[offset:end] = np.arange(reused, len(seq_tokens), dtype=np.int32)
+            offset = end
+
             if max_slots > 1:
                 self._reserved_pages[request.request_id] = pages_needed
                 pages_left -= pages_needed
             if prefix_pages is not None and pages is not None and reused:
                 prefix_pages[total_new, : len(pages)] = pages
                 logger.info("Reused %d prompt tokens", reused)
-            queue_tokens[offset:end] = this_tokens[reused:]
-            queue_slot_ids[offset:end] = slot_id
-            queue_pos_ids[offset:end] = np.arange(reused, len(seq_tokens), dtype=np.int32)
-
             prefill_idx = total_new
             if prefill_idx >= max_slots:
                 raise RuntimeError("Exceeded maximum slot instructions while building prefill work.")
@@ -1344,7 +1363,8 @@ class InferenceEngine:
             work_slot_ids[prefill_idx] = slot_id
             clone_targets[prefill_idx] = INVALID
             prompt_lengths[prefill_idx] = len(seq_tokens)
-            prompt_tokens[prefill_idx, : len(seq_tokens)] = this_tokens
+            prompt_rows[prefill_idx] = num_primary
+            prompt_tokens[num_primary, : len(seq_tokens)] = this_tokens
 
             max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
@@ -1360,11 +1380,9 @@ class InferenceEngine:
                     seq_num_stops, seq_stop_len = seq_stop.shape
                     row[:seq_num_stops, -seq_stop_len:] = seq_stop
 
-            rid = int(request.request_id)
             self.local_map[slot_id] = (rid, 0)
             self.sequences.setdefault(rid, {})[0] = slot_id
 
-            offset = end
             num_primary += 1
             total_new += 1
 
@@ -1401,6 +1419,12 @@ class InferenceEngine:
         if offset == 0:
             return None
 
+        if self._retain_packed_prompts and self._cached_prompts:
+            # The device attaches all matched pages before allocating any new pages.
+            # A matching prefix selected in this work item remains safe to reuse
+            # even when its cache entry is evicted here.
+            self._trim_retained_prompts(self._retained_page_refs(decode_state.page_table))
+
         bucket_size = next((size for size in self.config.prefill_bucket_sizes if size >= offset), max_prefill_size)
         prefill_queue = TokenQueue(
             queued_tokens=hax.named(jnp.asarray(queue_tokens[:bucket_size], dtype=jnp.int32), axis="position"),
@@ -1414,9 +1438,11 @@ class InferenceEngine:
             new_num_seqs=jnp.array(total_new, dtype=jnp.int32),
             new_slot_ids=hax.named(jnp.asarray(work_slot_ids, dtype=jnp.int32), axis="seq"),
             clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
-            prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
+            prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("prompt", "position")),
+            prompt_rows=hax.named(jnp.asarray(prompt_rows), "seq"),
             prompt_lengths=hax.named(jnp.asarray(prompt_lengths, dtype=jnp.int32), axis="seq"),
             cached_pages=None if prefix_pages is None else hax.named(jnp.asarray(prefix_pages), ("seq", "page")),
+            has_clones=bool(np.any(clone_targets[:total_new] != INVALID)),
             seq_params=SeqDecodingParams(
                 max_num_tokens=jnp.asarray(max_num_tokens, dtype=jnp.int32),
                 stop_tokens=(
@@ -1629,7 +1655,10 @@ class InferenceEngine:
         request = dataclasses.replace(
             request, decode_params=dataclasses.replace(request.decode_params, max_num_tokens=jnp.asarray(max_tokens))
         )
-        if self.config.max_seqs > 1 and self._request_pages(request) > self.max_request_pages:
+        if (
+            self.config.max_seqs > 1
+            and self._request_pages(request) > self.gen_state.decode_state.page_table.num_pages
+        ):
             raise ValueError("Request exceeds the KV pages available for generation")
         stop = request.decode_params.stop_tokens
         if stop is not None and (
@@ -1695,7 +1724,10 @@ class InferenceEngine:
                 new_num_seqs=jnp.array(0, dtype=jnp.int32),
                 new_slot_ids=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 clone_targets=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
-                prompt_tokens=hax.zeros({"seq": max_slots, "position": max_len}, dtype=jnp.int32),
+                prompt_tokens=hax.zeros(
+                    {"prompt": min(max_slots, self.config.max_seqs_in_prefill), "position": max_len}, dtype=jnp.int32
+                ),
+                prompt_rows=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 prompt_lengths=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 seq_params=SeqDecodingParams(
                     max_num_tokens=jnp.zeros(max_slots, dtype=jnp.int32),

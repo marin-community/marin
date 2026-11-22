@@ -603,7 +603,7 @@ class MoEExpertMlp(eqx.Module):
         )
 
     @named_call
-    def prefill_ep(
+    def ring_ep(
         self,
         x: Float[Array, "T D"],
         selected_experts: Int[Array, "T K"],
@@ -612,11 +612,11 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"],
         mesh: jax.sharding.AbstractMesh,
     ) -> Float[Array, "T D"]:
-        """Run ring dispatch with separate gate and up weights to avoid packing during prefill."""
+        """Run expert-parallel ring dispatch with separate gate and up weights."""
         token_spec = _token_spec_from_x(x, mesh)
         token_axes = _axis_names(token_spec[0])
         if "expert" not in token_axes or self.implementation != "ring":
-            raise ValueError("Expert-parallel prefill uses ring dispatch over disjoint expert token shards")
+            raise ValueError("Ring dispatch requires disjoint expert token shards")
         activation = (
             self.activation.to_jax_fn() if isinstance(self.activation, ActivationFunctionEnum) else self.activation
         )

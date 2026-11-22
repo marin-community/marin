@@ -202,7 +202,7 @@ def test_retaining_packed_prompt_pages_preserves_generation_after_eviction(servi
         dataclasses.replace(first, request_id=30, prompt_tokens=[1, 2, 3, 4, 12]),
         dataclasses.replace(second, prompt_tokens=[6, 7, 8, 9, 13]),
     ]
-    # Two followups share the same retained pages. The third waits for space.
+    # Followups can keep using selected pages after evicting their cache entries.
     assert cached.generate(followups).tokens == fresh.generate(followups).tokens
     cached.generate([Request([2, 4, 6, 8, 10, 12], 40, params, 1)])
     assert cached.generate(followups).tokens == fresh.generate(followups).tokens
@@ -210,7 +210,8 @@ def test_retaining_packed_prompt_pages_preserves_generation_after_eviction(servi
 
 @pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")
 @pytest.mark.parametrize(
-    "expert_implementation,decode_layers", [("grouped", "unrolled"), ("split", "unrolled_split_cache")]
+    "expert_implementation,decode_layers",
+    [("grouped", "unrolled"), ("separate", "unrolled_split_cache"), ("split", "unrolled_split_cache")],
 )
 def test_snowball_expert_sharded_cache_preserves_five_head_generation(
     serving_model, expert_implementation, decode_layers

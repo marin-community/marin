@@ -138,7 +138,7 @@ def main() -> None:
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
     parser.add_argument("--attention", choices=("tpu", "tpu_fp32", "tpu_v3", "gpu", "reference"), default="tpu_fp32")
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
-    parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
+    parser.add_argument("--decode-experts", choices=("grouped", "separate", "split"), default="grouped")
     parser.add_argument("--decode-token-layout", choices=("packed", "replicated"), default="packed")
     parser.add_argument("--replicate-window-kv", action="store_true")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
@@ -351,6 +351,10 @@ def main() -> None:
                         profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
                         if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
                             raise RuntimeError("AgentX did not complete any measured requests")
+                        if args.measure_prefill:
+                            # The replay can time out while the server still has live requests.
+                            server.pause_generation()
+                            server.resume_generation()
                     if args.prefill_only or args.measure_prefill:
                         measure_prefill(f"{url}/v1", series["model"], output / "prefill.json")
                 finally:

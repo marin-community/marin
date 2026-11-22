@@ -103,7 +103,7 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
-SnowballDecodeExpertImplementation = Literal["grouped", "split"]
+SnowballDecodeExpertImplementation = Literal["grouped", "separate", "split"]
 SnowballKvAppendImplementation = Literal["separate", "fused"]
 SnowballDecodeCache = StackedKvPageCache | ListCache[KvPageCache]
 SnowballGatedNormImplementation = Literal["native", "fixed_schedule"]
@@ -1396,7 +1396,7 @@ class SnowballMoEMLP(eqx.Module):
         token_valid: jax.Array | None = None,
         route_capture: PreparedMoERouteCapture | None = None,
         capture_routes: bool = False,
-        expert_implementation: SnowballDecodeExpertImplementation | Literal["prefill_ring"] = "grouped",
+        expert_implementation: SnowballDecodeExpertImplementation = "grouped",
         max_active_tokens: int | None = None,
     ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
         b, s, _ = x.shape
@@ -1452,8 +1452,8 @@ class SnowballMoEMLP(eqx.Module):
 
         if expert_implementation == "split":
             expert_mlp = partial(self.expert_mlp.decode_small_ep, max_active_tokens=max_active_tokens)
-        elif expert_implementation == "prefill_ring":
-            expert_mlp = self.expert_mlp.prefill_ep
+        elif expert_implementation == "separate":
+            expert_mlp = self.expert_mlp.ring_ep
         else:
             expert_mlp = self.expert_mlp
         routed_flat = expert_mlp(
@@ -2103,10 +2103,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         )
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        expert_implementation: SnowballDecodeExpertImplementation | Literal["prefill_ring"] = "grouped"
+        expert_implementation: SnowballDecodeExpertImplementation = "grouped"
         if expert_size > 1 and not capture_routes:
-            if sample_indices is not None and jax.default_backend() == "tpu":
-                expert_implementation = "prefill_ring"
+            if self.config.inference_expert_implementation == "separate" or (
+                sample_indices is not None and jax.default_backend() == "tpu"
+            ):
+                expert_implementation = "separate"
             elif sample_indices is None and (replicated_token or tokens.shape[0] == expert_size):
                 expert_implementation = self.config.inference_expert_implementation
         kv_append = (
