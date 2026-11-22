@@ -48,6 +48,7 @@ def test_authored_native_recipe_round_trip_preserves_runtime_precision_and_mesh(
                     python_executable="/opt/native/bin/python",
                     projection_logits_dtype="bfloat16",
                     allocator="vmm",
+                    numpy_madvise_hugepage=False,
                     preallocate=False,
                     validate_checkpoint_roundtrip=True,
                     head_gate_fp32=True,

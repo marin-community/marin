@@ -173,6 +173,7 @@ def training_recipe(
                             xsa_fp32=True,
                             device_memory_fraction=0.90,
                             allocator="vmm",
+                            numpy_madvise_hugepage=False,
                             preallocate=False,
                             validate_checkpoint_roundtrip=validate_native_checkpoint,
                         )

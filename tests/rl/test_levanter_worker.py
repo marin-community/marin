@@ -216,9 +216,9 @@ def test_native_child_import_time_stdout_does_not_corrupt_response(tmp_path, cap
 
 
 @pytest.mark.parametrize("require_accelerator", [True, False])
-@pytest.mark.parametrize("allocator,preallocate", [("bfc", True), ("vmm", False)])
+@pytest.mark.parametrize("allocator,preallocate,numpy_policy", [("bfc", True, None), ("vmm", False, False)])
 def test_native_child_backend_intent_overrides_inherited_coordinator_platform(
-    require_accelerator, allocator, preallocate, monkeypatch
+    require_accelerator, allocator, preallocate, numpy_policy, monkeypatch
 ):
     host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
     monkeypatch.setenv("JAX_PLATFORMS", "cpu" if require_accelerator else "cuda,cpu")
@@ -228,8 +228,14 @@ def test_native_child_backend_intent_overrides_inherited_coordinator_platform(
     monkeypatch.setenv("XLA_CLIENT_MEM_FRACTION", "0.1")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
     monkeypatch.setenv("TF_FORCE_UNIFIED_MEMORY", "true")
+    monkeypatch.setenv("NUMPY_MADVISE_HUGEPAGE", "1")
     environment = host_module._child_environment(
-        sys.executable, 0.9, require_accelerator=require_accelerator, preallocate=preallocate, allocator=allocator
+        sys.executable,
+        0.9,
+        require_accelerator=require_accelerator,
+        preallocate=preallocate,
+        allocator=allocator,
+        numpy_madvise_hugepage=numpy_policy,
     )
     result = subprocess.run(
         [
@@ -238,6 +244,7 @@ def test_native_child_backend_intent_overrides_inherited_coordinator_platform(
             """
 import json, os, sys
 import jax
+import numpy as np
 from jaxlib.xla_client import generate_pjrt_gpu_plugin_options
 from marin.rl.levanter_worker_runtime import _initialize_distributed
 try:
@@ -256,6 +263,11 @@ receipt["jax_platforms"] = os.environ.get("JAX_PLATFORMS")
 options = generate_pjrt_gpu_plugin_options()
 receipt["allocation_policy"] = {key: options[key] for key in ("allocator", "memory_fraction", "preallocate")}
 receipt["unified_memory"] = os.environ.get("TF_FORCE_UNIFIED_MEMORY")
+receipt["numpy_environment"] = os.environ.get("NUMPY_MADVISE_HUGEPAGE")
+receipt["numpy_version"] = np.__version__
+receipt["numpy_madvise_hugepage"] = bool(np._core.multiarray._get_madvise_hugepage())
+os.environ["NUMPY_MADVISE_HUGEPAGE"] = "0" if receipt["numpy_environment"] == "1" else "1"
+receipt["numpy_after_late_environment_change"] = bool(np._core.multiarray._get_madvise_hugepage())
 print(json.dumps(receipt))
 """,
             str(require_accelerator).lower(),
@@ -271,6 +283,11 @@ print(json.dumps(receipt))
     assert receipt["jax_platforms"] == ("cuda,cpu" if require_accelerator else "cpu")
     assert receipt["allocation_policy"] == {"allocator": allocator, "memory_fraction": 0.9, "preallocate": preallocate}
     assert receipt["unified_memory"] == "false"
+    assert receipt["numpy_environment"] == ("1" if numpy_policy is None else "0")
+    assert receipt["numpy_version"] == np.__version__
+    assert receipt["numpy_after_late_environment_change"] == receipt["numpy_madvise_hugepage"]
+    assert receipt["numpy_madvise_hugepage"] == (sys.platform == "linux" and numpy_policy is None)
+    assert os.environ["NUMPY_MADVISE_HUGEPAGE"] == "1"
     if require_accelerator:
         if receipt["initialized"]:
             assert receipt["backend"] == "gpu"
@@ -309,6 +326,31 @@ def test_native_allocation_overrides_reject_before_backend_or_model(preallocate,
                 "initialize",
                 {
                     "runtime": {"allocator": allocator, "preallocate": preallocate, "device_memory_fraction": 0.9},
+                    "distributed": {"num_processes": 1, "local_device_count": 1},
+                    "require_accelerator": False,
+                },
+            )
+        assert child.process.wait(timeout=5) != 0
+    finally:
+        child.close()
+
+
+def test_numpy_import_policy_mismatch_rejects_before_backend_or_model():
+    host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    environment = host._child_environment(sys.executable, 0.9, require_accelerator=False, numpy_madvise_hugepage=False)
+    environment["JAX_PLATFORMS"] = "numpy-policy-test-invalid-backend"
+    child = LearnerProcess(sys.executable, environment=environment, timeout_seconds=30)
+    try:
+        with pytest.raises(RuntimeError, match="Requested NumPy madvise-hugepage policy is not effective"):
+            child.request(
+                "initialize",
+                {
+                    "runtime": {
+                        "numpy_madvise_hugepage": True,
+                        "allocator": "bfc",
+                        "preallocate": False,
+                        "device_memory_fraction": 0.9,
+                    },
                     "distributed": {"num_processes": 1, "local_device_count": 1},
                     "require_accelerator": False,
                 },
@@ -373,6 +415,9 @@ def _same_request(children, method, payload):
 @contextmanager
 def _learner_processes(config, process_count, fast_bwd_override_rank=None):
     environment = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_CPU_COLLECTIVES_IMPLEMENTATION": "gloo"}
+    numpy_policy = config["runtime"].get("numpy_madvise_hugepage")
+    if numpy_policy is not None:
+        environment["NUMPY_MADVISE_HUGEPAGE"] = str(int(numpy_policy))
     environment.pop("XLA_CLIENT_MEM_FRACTION", None)
     environment["XLA_PYTHON_CLIENT_ALLOCATOR"] = config["runtime"]["allocator"]
     environment["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(config["runtime"]["device_memory_fraction"])
@@ -398,6 +443,7 @@ def _learner_processes(config, process_count, fast_bwd_override_rank=None):
                     compiler_diagnostics=True,
                     preallocate=config["runtime"]["preallocate"],
                     allocator=config["runtime"]["allocator"],
+                    numpy_madvise_hugepage=numpy_policy,
                 )
                 child_environment["JAX_CPU_COLLECTIVES_IMPLEMENTATION"] = "gloo"
             if rank == fast_bwd_override_rank:
@@ -458,8 +504,12 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     local_count = jax.local_device_count(backend="cpu")
     count = local_count * process_count
     batch_size = count * 2
+    numpy_policy = False if allocator == "vmm" else None
+    if numpy_policy is not None:
+        monkeypatch.setenv("NUMPY_MADVISE_HUGEPAGE", "1")
     config = {
         "runtime": {
+            "numpy_madvise_hugepage": numpy_policy,
             "allocator": allocator,
             "preallocate": preallocate,
             "device_memory_fraction": 0.9,
@@ -520,6 +570,12 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
     with _learner_processes(config, process_count, fast_bwd_override_rank) as (children, receipts, configs):
         assert all(row["global_devices"] == count and row["microbatches"] == 2 for row in receipts)
         assert all(row["backend"] == "cpu" and row["pid"] > 0 and row["global_model_parameters"] > 0 for row in receipts)
+        for row in receipts:
+            policy = row["numpy_allocation_policy"]
+            assert policy["requested_madvise_hugepage"] is numpy_policy
+            assert policy["numpy_version"] == np.__version__
+            if numpy_policy is False:
+                assert policy["observed_madvise_hugepage"] is False and policy["environment_value"] == "0"
         assert all(
             row["allocation_policy"]
             == {"allocator": allocator, "memory_fraction": 0.9, "preallocate": preallocate, "unified_memory": False}
@@ -602,6 +658,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
             # Exact state equality covers model, Adam, RNG, step and averaging.
             baseline = copy.deepcopy(config)
             baseline["runtime"]["validate_checkpoint_roundtrip"] = False
+            baseline["runtime"]["numpy_madvise_hugepage"] = None
             with _learner_processes(baseline, 1) as (control, _, _):
                 _same_request(control, "train", payload)
                 actual = _same_request(control, "state_fingerprints", {})[0]
@@ -626,6 +683,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                                 "device_memory_fraction": 0.9,
                                 "preallocate": preallocate,
                                 "allocator": allocator,
+                                "numpy_madvise_hugepage": numpy_policy,
                                 "command_timeout_seconds": 60,
                                 "initialization_timeout_seconds": 60,
                                 "validate_checkpoint_roundtrip": True,

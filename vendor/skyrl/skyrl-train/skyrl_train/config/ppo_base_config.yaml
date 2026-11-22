@@ -141,6 +141,7 @@ trainer:
       coordinator_port: 29590
       device_memory_fraction: 0.90
       allocator: bfc
+      numpy_madvise_hugepage: null
       preallocate: false
       projection_block_size: 1024
       projection_logits_dtype: float32

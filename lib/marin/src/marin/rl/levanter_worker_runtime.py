@@ -45,6 +45,7 @@ from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import multihost_allgather_sync
 from levanter.utils.mesh import MeshConfig
+from numpy._core import multiarray as np_multiarray
 
 from marin.rl.levanter_compile_diagnostics import _memory_stats, capture_compile, capture_failure, scientific_xla_flags
 from marin.rl.levanter_publication import SnowballPublication
@@ -173,6 +174,19 @@ def _initialize_distributed(config: dict) -> None:
 
 def _projection_dtype(runtime: dict) -> jnp.dtype | None:
     return {"float32": None, "bfloat16": jnp.dtype("bfloat16")}[runtime["projection_logits_dtype"]]
+
+
+def _numpy_allocation_policy(requested: bool | None) -> dict:
+    policy = {
+        "requested_madvise_hugepage": requested,
+        "observed_madvise_hugepage": bool(np_multiarray._get_madvise_hugepage()),
+        "environment_value": os.environ.get("NUMPY_MADVISE_HUGEPAGE"),
+        "numpy_version": np.__version__,
+        "platform": sys.platform,
+    }
+    if requested is not None and policy["observed_madvise_hugepage"] != requested:
+        raise ValueError(f"Requested NumPy madvise-hugepage policy is not effective: {json.dumps(policy)}")
+    return policy
 
 
 def _allocator_profile() -> dict:
@@ -338,11 +352,13 @@ class NativePolicyRuntime:
         self.version = 0
         self.source_identity = None
         self._compiler_evidence = None
+        self.numpy_allocation_policy = None
 
     def initialize(self, config: dict) -> dict:
         if self.trainer is not None:
             raise RuntimeError("Learner is already initialized")
         self.settings = config
+        self.numpy_allocation_policy = _numpy_allocation_policy(config["runtime"].get("numpy_madvise_hugepage"))
         _validate_allocator(config)
         if config["runtime"].get("validate_checkpoint_roundtrip", False):
             os.environ["LEVANTER_CE_DIAGNOSTICS"] = "1"
@@ -817,6 +833,7 @@ class NativePolicyRuntime:
             "source": self.source_identity,
             "allocation_policy": _allocator_profile(),
             "allocator_limits": _allocator_limits(),
+            "numpy_allocation_policy": self.numpy_allocation_policy,
         }
 
     def memory_statistics(self) -> dict:
@@ -829,6 +846,7 @@ class NativePolicyRuntime:
                 "version": self.version,
                 "source": self.source_identity,
                 "allocation_policy": _allocator_profile(),
+                "numpy_allocation_policy": self.numpy_allocation_policy,
                 "statistics_api": "jax.Device.memory_stats",
                 "devices": [row | {"statistics_available": row.get("stats") is not None} for row in _memory_stats()],
             }

@@ -2,14 +2,37 @@
 
 November 21, 2026 (PST).
 
-Recovery BATCH smoke `2026.11.21.12` is running from
+No completed full Snowball optimizer update is established. Updated-weight
+publication, subsequent generation, exact native checkpoint continuation, and
+the matched 25-update comparison remain unverified.
+
+Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
 are identical to `e9fa30e8a2230a4015d8488280d2b375b81ea07d`; only this
-writeup changed. After prior GPU cleanup, all five replacement tasks were
-running at 22:35 PST. Both accepted bundles match the frozen source and the
-executed configuration matches the preflight. The scheduler reused all five
-hosts, including the affected `g83c00a`. A changed stall condition and all
-native initialization, publication, update, and resume gates remain unverified.
+writeup changed. The scheduler reused all five hosts, and the same `g83c00a`
+host stalled again. At 22:45 PST its container recorded 68.42%
+memory-pressure PSI avg60, without memory-limit/OOM, swap, or CPU-throttling
+events. Three of 12 bounded kernel samples caught its NumPy tensor-conversion
+thread in `isolate_freepages_block → compaction_alloc`. This establishes
+compaction involvement; the sample count is not a fraction of elapsed time.
+The run was intentionally stopped at 22:49 PST rather than waiting for the
+same initialization deadline. All five GPU pods and the coordinator pod are
+gone. It did not qualify initialization or training.
+
+A process-local NumPy hugepage-advisory opt-out is under validation. The native
+environment pins NumPy 2.3.5, whose
+[documented import-time flag](https://numpy.org/doc/2.3/reference/global_state.html#madvise-hugepage-on-linux)
+`NUMPY_MADVISE_HUGEPAGE=0` suppresses NumPy's own hugepage hints. No node policy
+is changed, and this does not disable all process hugepages or guarantee that
+loading, publication, or training will succeed. Both accepted `.12` bundles
+and its executed configuration matched the preflight.
+
+The optional native policy defaults to `None`; the quick-loop candidate selects
+`False` before its child interpreter starts. Exact NumPy 2.3.5 / JAX 0.11.0 CPU
+tests passed fresh-process policy validation and exact continuation of model,
+Adam, RNG, step, and averaging state under both policies. Required
+checks and independent review passed. The macOS NumPy getter always returns
+false, so effective Linux policy and improved loading remain runtime gates.
 
 BATCH smoke `2026.11.21.11`, from
 `e9fa30e8a2230a4015d8488280d2b375b81ea07d`, failed at the existing

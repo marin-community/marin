@@ -29,10 +29,13 @@ def _child_environment(
     python_executable: str, memory_fraction: float, *, require_accelerator: bool, compiler_diagnostics: bool = False,
     preallocate: bool = False,
     allocator: str = "bfc",
+    numpy_madvise_hugepage: bool | None = None,
 ) -> dict[str, str]:
     if allocator not in ("bfc", "vmm") or (allocator == "vmm" and preallocate):
         raise ValueError("Native learner requires bfc, or vmm with preallocate=false")
     environment = dict(os.environ)
+    if numpy_madvise_hugepage is not None:
+        environment["NUMPY_MADVISE_HUGEPAGE"] = str(int(numpy_madvise_hugepage))
     for name in (
         "CUDA_HOME", "NVRTC_HOME", "LIBRARY_PATH", "LD_LIBRARY_PATH", "LD_PRELOAD",
         "VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH",
@@ -145,6 +148,7 @@ class LevanterHostWorker:
             compiler_diagnostics=runtime.validate_checkpoint_roundtrip,
             preallocate=runtime.preallocate,
             allocator=runtime.allocator,
+            numpy_madvise_hugepage=runtime.numpy_madvise_hugepage,
         )
         if runtime.validate_checkpoint_roundtrip:
             self.initialization_config["compiler_dump_dir"] = shlex.split(environment["XLA_FLAGS"])[-3].split("=", 1)[1]
