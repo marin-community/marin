@@ -83,3 +83,10 @@ trials:
   commit: 6b3fe25ede
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.2633
+  delta:
+  - -0.0073
+  steps: 20023
+  baseline: s7n-d1280L16 2.2706 (same commit, seed 0)
+  step_time_change: +4%
