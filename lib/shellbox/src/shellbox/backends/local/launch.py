@@ -81,11 +81,7 @@ def execute_in_namespaces(configuration_fd: int) -> None:
         os.chdir("/")
         for descriptor in (*config["namespaces"], config["root"]):
             os.close(descriptor)
-        for limit, value in config["limits"]:
-            soft, _ = resource.getrlimit(limit)
-            value = value if soft == resource.RLIM_INFINITY else min(value, soft)
-            resource.setrlimit(limit, (value, value))
-        os.nice(COMMAND_NICENESS)
+        _apply_command_limits(config)
         # setns(PID) affects only children. This supervisor stays outside the guest
         # PID namespace, so neither its pre-exec state nor control FDs are visible.
         child = os.fork()
@@ -128,6 +124,14 @@ def drop_privileges(account: list[int] | None) -> None:
         raise OSError(ctypes.get_errno(), "Cannot clear process capabilities")
     if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "Cannot set no_new_privs")
+
+
+def _apply_command_limits(config: dict) -> None:
+    for limit, value in config["limits"]:
+        soft, _ = resource.getrlimit(limit)
+        value = value if soft == resource.RLIM_INFINITY else min(value, soft)
+        resource.setrlimit(limit, (value, value))
+    os.nice(COMMAND_NICENESS)
 
 
 def execute_via_broker(configuration_fd: int) -> None:
@@ -200,11 +204,7 @@ def _broker_command(config: dict, descriptors: list[int], barrier: int) -> None:
                 except OSError as error:
                     if error.errno != errno.EBADF:
                         raise
-        for limit, value in config["limits"]:
-            soft, _ = resource.getrlimit(limit)
-            value = value if soft == resource.RLIM_INFINITY else min(value, soft)
-            resource.setrlimit(limit, (value, value))
-        os.nice(COMMAND_NICENESS)
+        _apply_command_limits(config)
         # bwrap already dropped every capability before starting the broker.
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
@@ -277,6 +277,7 @@ def run_broker(path: str) -> None:
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as listener:
         listener.bind(path)
         listener.listen()
+        os.write(1, b"R")
         if sys.stdin.readline() != "shellbox-ready\n":
             return
         while True:

@@ -11,7 +11,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -145,14 +144,13 @@ def test_keeper_broker_launches_command_from_inside_its_namespace(cgroup):
         broker = subprocess.Popen(
             [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--broker", str(socket_path)],
             stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         try:
-            deadline = time.monotonic() + 5
-            while not socket_path.exists() and broker.poll() is None and time.monotonic() < deadline:
-                time.sleep(0.01)
-            assert socket_path.exists(), broker.stderr.read().decode() if broker.poll() is not None else ""
+            assert broker.stdout is not None
+            assert select.select([broker.stdout], [], [], 5)[0]
+            assert broker.stdout.read(1) == b"R"
             assert broker.stdin is not None
             broker.stdin.write(b"shellbox-ready\n")
             broker.stdin.flush()
