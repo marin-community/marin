@@ -92,8 +92,7 @@ def load(data: str, synthetic_name: str, extra: list[str]) -> tuple[pd.DataFrame
         # More labeled pairs, for example judged stage-1 candidates, with the same columns.
         frames.append(read_frame(path)[TRAINING_COLUMNS])
     frame = with_pair_text(pd.concat(frames, ignore_index=True))
-    # The threshold comes from judge-labeled real stage-1 candidates (the label sets), whose share of
-    # copies matches what stage 2 sees; never from silver, synthetic or the older judged pairs.
+    # The threshold comes from judge-labeled stage-1 candidates, not synthetic, silver, or older pairs.
     real = frame["source"].str.startswith("set")
     real_train = sorted(frame.loc[(frame.split == "train") & real, "item"].unique())
     dev_items = set(random.Random(0).sample(real_train, len(real_train) // DEV_EVERY))
@@ -154,7 +153,7 @@ def roc_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
 
 
 def threshold_for(scores: np.ndarray, labels: np.ndarray) -> float:
-    """The lowest threshold whose marks keep the target precision on this data."""
+    """The lowest threshold meeting target precision, or 1.0 if none meets it."""
     best = 1.0
     for value in np.unique(scores)[::-1]:
         if labels[scores >= value].mean() >= TARGET_PRECISION:
@@ -191,7 +190,6 @@ def evaluation(
             results[column][name] = metrics(
                 test_scores[part.to_numpy(), head], test.loc[part, column].to_numpy(), threshold
             )
-            # Every output is also scored against the judges' "contaminated" label.
             results[column][f"{name}_vs_label"] = metrics(
                 test_scores[part.to_numpy(), head], test.loc[part, "label"].to_numpy(), threshold
             )

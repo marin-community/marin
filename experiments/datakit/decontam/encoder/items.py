@@ -88,7 +88,7 @@ def _is_passage(key: str) -> bool:
 
 
 def shared_values(docs: list[Any]) -> set[str]:
-    """String values that more than one doc of a task holds: shared passages and labels, not questions."""
+    """String values repeated across documents of a task."""
     seen: Counter[str] = Counter()
     for doc in docs:
         if isinstance(doc, dict):
@@ -289,8 +289,6 @@ def lmh_item(leaf: str, record_id: str, task: LmTask, doc: Any, shared: set[str]
         letters, parsed = _parsed_options(prompt)
         if parsed and (not labels or len(parsed) == len(labels)):
             labels, choices, mode = letters, parsed, "parsed"
-    # The question is what the eval shows: the rendered prompt without its shared passage. Template
-    # words in it are common, so they never become a stage-1 key.
     question = prompt.replace(passage, " ").strip() if passage else prompt.strip()
     try:
         target = task.doc_to_target(doc)

@@ -3,9 +3,10 @@
 
 """Stage 1: choose the rarest 20-character key of each eval item, and measure its candidate volume.
 
-``count``: for every item, up to ``WINDOWS_PER_ITEM`` evenly spaced windows of its question
-stream (letters and digits) are candidate keys. A Zephyr job over reference shards counts in
-how many records each candidate window occurs; each worker writes sparse counts.
+``count``: for every item, up to ``WINDOWS_PER_ITEM`` evenly spaced windows of its item
+stream (letters and digits) are candidate keys. Short question streams include the lettered
+choices. A Zephyr job over reference shards counts in how many records each candidate window
+occurs; each worker writes sparse counts.
 
 ``choose``: sum the counts; each item keeps its least frequent window (ties: the earliest) and
 the next least frequent window that does not overlap it.

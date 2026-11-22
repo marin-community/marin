@@ -66,7 +66,7 @@ def _offset(text: str, position: int) -> int:
 
 
 def _located(streams: list[tuple[str, str]], question: str, key: str, offset: int) -> tuple[str, str, int]:
-    """The first record reading that holds the item, its stream, and the item's stream position (-1 if none)."""
+    """The first reading with the question or key, its stream, and estimated item position (-1 if absent)."""
     for text, stream in streams:
         at = stream.find(question) if question else -1
         if at < 0 and key:
