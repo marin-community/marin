@@ -95,6 +95,16 @@ class BuildOperation(StrEnum):
     SDIST = "sdist"
 
 
+class FloorUpdate(StrEnum):
+    """Outcome of raising one native compatibility floor."""
+
+    # The floor already admits the release.
+    CURRENT = "current"
+    RAISED = "raised"
+    # The floor advanced, and environment markers changed outside the released packages.
+    MARKERS_CHANGED = "markers_changed"
+
+
 @dataclass(frozen=True)
 class ReleaseVersion:
     mode: str
@@ -674,11 +684,8 @@ def bump_native_requirement(
     package_name: str,
     version: str,
     repo_root: Path,
-) -> bool:
-    """Advance the compatibility floor and exact universal lock entry.
-
-    Return whether environment markers changed outside the released distribution and its owner.
-    """
+) -> FloorUpdate:
+    """Advance the compatibility floor and exact universal lock entry."""
     package = PACKAGES[package_name]
     build = package.build
     if not isinstance(build, NativeBuild):
@@ -694,7 +701,7 @@ def bump_native_requirement(
         version,
     )
     if not changed:
-        return False
+        return FloorUpdate.CURRENT
 
     original_lock = lock_path.read_text()
     requirement_path.write_text(updated_requirement)
@@ -730,11 +737,13 @@ def bump_native_requirement(
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise RuntimeError(f"`uv lock --check` failed after {attempt} attempts")
-        return lock_changed_outside(
+        if lock_changed_outside(
             original_lock,
             updated_lock,
             (build.requirement_distribution, build.requirement_owner),
-        )
+        ):
+            return FloorUpdate.MARKERS_CHANGED
+        return FloorUpdate.RAISED
     raise AssertionError("Unreachable lock retry loop")
 
 
@@ -1061,14 +1070,12 @@ def _bump_releases_command(args: argparse.Namespace) -> None:
     selected = [name for name in sorted(versions) if isinstance(PACKAGES[name].build, NativeBuild)]
     requirement_paths = requirement_paths_for_packages(selected)
     before = {path: (args.repo_root / path).read_text() for path in requirement_paths}
-    markers_changed = False
-    for name in selected:
-        markers_changed |= bump_native_requirement(name, versions[name]["version"], args.repo_root)
+    updates = [bump_native_requirement(name, versions[name]["version"], args.repo_root) for name in selected]
     changed_paths = [path for path in requirement_paths if (args.repo_root / path).read_text() != before[path]]
     emit_github_output(
         args.github_output,
         changed=str(bool(changed_paths)).lower(),
-        markers_changed=str(markers_changed).lower(),
+        markers_changed=str(FloorUpdate.MARKERS_CHANGED in updates).lower(),
         requirement_paths=" ".join(path.as_posix() for path in changed_paths),
     )
 

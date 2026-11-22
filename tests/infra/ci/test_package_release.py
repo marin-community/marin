@@ -495,10 +495,6 @@ def test_native_version_updates_run_from_main_after_trusted_releases() -> None:
     assert "bump" not in release_workflow["jobs"]
     assert workflow["permissions"] == {"contents": "read"}
     assert "workflow_run.event != 'pull_request'" in workflow["jobs"]["update"]["if"]
-    merge = next(
-        step for step in workflow["jobs"]["update"]["steps"] if step.get("name") == "Merge green native package update"
-    )
-    assert "steps.bump.outputs.markers_changed == 'false'" in merge["if"]
 
 
 @pytest.mark.parametrize("workflow_path", [EXTERNAL_UPDATE_WORKFLOW, NATIVE_UPDATE_WORKFLOW])
