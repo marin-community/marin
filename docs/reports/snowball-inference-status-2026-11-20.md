@@ -388,6 +388,21 @@ overall against 58.65 for vLLM. Both engines emitted 9,967 tokens on the
 151.93 active decode tokens/s and 891.50 ms p90 TTFT. vLLM measured
 164.06 tokens/s and 941.65 ms. [Sliding-window KV trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v29-window-kv)
 
+Split-K CUDA matvecs for replicated single-token attention and shared
+expert projections raised native throughput to 65.16 output tokens/s.
+The integrated repeat measured 65.34 output tokens/s against 58.65 for
+compiled vLLM on eight H100 80 GB GPUs. Native completed 29 turns and
+vLLM completed 28. On the 28 common turns, both emitted 11,014 output
+tokens with identical counts for every turn.
+
+| Engine | AgentX output tok/s | Paired active decode tok/s | Paired median TTFT (ms) | Paired p90 TTFT (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Native, integrated | 65.34 | 206.65 | 509 | 642 |
+| Compiled vLLM | 58.65 | 164.16 | 375 | 941 |
+
+The native run retained four KV contexts and used the same 64K,
+concurrency-one, 180-second replay. [Projection trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v31-dense-matvec) · [Integrated repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v33-integrated-dense)
+
 Run the native H100 probe with the regional checkpoint and replay receipt.
 These settings preserve the compiled prefill path and four KV contexts
 used in the H100 comparison.
@@ -396,7 +411,7 @@ used in the H100 comparison.
 uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_probe \
   --accelerator h100x8 --attention gpu --weights "$weights" --workload "$workload" \
   --decode-layers unrolled_split_cache --decode-experts split --decode-token-layout replicated \
-  --kv-sharding expert --kv-cache-contexts 4 --prefix-cache recent_prompts \
+  --kv-sharding expert --replicate-window-kv --kv-cache-contexts 4 --prefix-cache recent_prompts \
   --max-unrolled-prefill-tokens 0 --prefill-buckets 4096 8192 16384 32768
 ```
 

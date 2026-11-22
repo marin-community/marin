@@ -137,6 +137,7 @@ def main() -> None:
     parser.add_argument("--decode-layers", choices=("scan", "unrolled", "unrolled_split_cache"), default="scan")
     parser.add_argument("--decode-experts", choices=("grouped", "split"), default="grouped")
     parser.add_argument("--decode-token-layout", choices=("packed", "replicated"), default="packed")
+    parser.add_argument("--replicate-window-kv", action="store_true")
     parser.add_argument("--kv-sharding", choices=("model", "expert"), default="model")
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
     parser.add_argument("--kv-cache-contexts", type=int, default=1)
@@ -148,6 +149,12 @@ def main() -> None:
         "--profile-prefill", action="store_true", help="Trace fresh and primed prefill after measurement"
     )
     args = parser.parse_args()
+    if args.replicate_window_kv and (
+        args.decode_token_layout != "replicated"
+        or args.kv_sharding != "expert"
+        or args.decode_layers != "unrolled_split_cache"
+    ):
+        raise ValueError("Window KV replication requires replicated tokens and split expert-sharded KV buffers")
     logging.basicConfig(level=logging.INFO)
 
     series = load_series(SERIES)
@@ -175,8 +182,8 @@ def main() -> None:
         max_seq_len=series["max_context"],
         max_seqs=1,
         max_seqs_in_prefill=1,
-        max_queued_tokens=32,
-        max_tokens_per_round=expert_shards,  # Pad the one active decode token to the expert mesh.
+        max_queued_tokens=1 if args.decode_token_layout == "replicated" else 32,
+        max_tokens_per_round=1 if args.decode_token_layout == "replicated" else expert_shards,
         prefill_bucket_sizes=tuple(args.prefill_buckets),
         prefix_cache=args.prefix_cache,
     )
@@ -200,6 +207,7 @@ def main() -> None:
             inference_decode_implementation=args.decode_layers,
             inference_expert_implementation=args.decode_experts,
             inference_decode_token_layout=args.decode_token_layout,
+            inference_replicate_window_kv=args.replicate_window_kv,
             inference_kv_sharding=args.kv_sharding,
             inference_kv_append=args.kv_append,
         )
@@ -250,11 +258,13 @@ def main() -> None:
             "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS"),
             "mesh": {"model": 1, "expert": expert_shards},
             "max_pages": service.max_pages,
+            "max_queued_tokens": service.max_queued_tokens,
             "max_tokens_per_round": service.max_tokens_per_round,
             "attention": args.attention,
             "decode_layers": args.decode_layers,
             "decode_experts": args.decode_experts,
             "decode_token_layout": args.decode_token_layout,
+            "replicate_window_kv": args.replicate_window_kv,
             "kv_sharding": args.kv_sharding,
             "kv_append": args.kv_append,
             "prefill_buckets": service.prefill_bucket_sizes,
@@ -297,6 +307,9 @@ def main() -> None:
                             # Distinct prefixes force each prefill buffer to compile.
                             prompt[0] = index
                             context.engine.generate([_request(prompt, 1)])
+                        if args.decode_token_layout == "replicated":
+                            # Warm a round that takes the per-layer decode cache as input.
+                            context.engine.generate([_request([filler], 2 * service.max_rounds + 1)])
                         context.engine.reset()
                     evidence["bucket_warmup_seconds"] = time.monotonic() - started - evidence["cold_completion_seconds"]
                 probe_path.write_text(json.dumps(evidence, indent=2))

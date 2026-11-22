@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plgpu
+from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
@@ -74,6 +75,27 @@ def _selected_matvec_kernel(routes: int, width: int, out_width: int, dtype):
 def _selected_matvec(x: jax.Array, experts: jax.Array, weight: jax.Array) -> jax.Array:
     partial = _selected_matvec_kernel(*x.shape, weight.shape[-1], x.dtype)(x, experts, weight)
     return jnp.sum(partial, axis=0).astype(x.dtype)
+
+
+def replicated_decode_matvec(x: jax.Array, weight: jax.Array) -> jax.Array:
+    """Project a single replicated decode token with the CUDA split-K matvec."""
+    width, out_width = weight.shape
+    if (
+        jax.default_backend() != "gpu"
+        or x.dtype != jnp.bfloat16
+        or weight.dtype != x.dtype
+        or x.size != width
+        or width % _INPUT_TILE != 0
+        or out_width % _OUTPUT_TILE != 0
+    ):
+        return jnp.einsum("...d,dh->...h", x, weight, out_sharding=P())
+
+    def project(token, matrix):
+        return _selected_matvec(token.reshape(1, width), jnp.zeros(1, jnp.int32), matrix[None])[0]
+
+    run = jax.shard_map(project, in_specs=(P(), P()), out_specs=P(), check_vma=False)
+    projected = run(jax.reshard(x, P()), jax.reshard(weight, P()))
+    return projected.reshape(*x.shape[:-1], out_width)
 
 
 def selected_expert_mlp(

@@ -42,6 +42,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.grug._moe.selected_gpu import replicated_decode_matvec
 from levanter.grug.attention import (
     FUSED_KV_APPEND_MAX_TOKENS,
     AttentionMask,
@@ -348,6 +349,11 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _FSDP_AXES: tuple[str, ...] = ("data", "context")
 
 
+def is_long_attention_layer(layer: int, num_layers: int) -> bool:
+    """Return whether the indexed Snowball layer attends to its entire context."""
+    return (layer + 1) % _LONG_ATTENTION_INTERVAL == 0 or layer == num_layers - 1
+
+
 def _context_axis() -> str | None:
     mesh = _current_mesh()
     return "context" if mesh is not None and not mesh.empty and _mesh_axis_size(mesh, "context") > 1 else None
@@ -493,6 +499,7 @@ class SnowballConfig(HFCompatConfig):
     inference_expert_implementation: SnowballDecodeExpertImplementation = "grouped"
     inference_kv_sharding: Literal["model", "expert"] = "model"
     inference_decode_token_layout: Literal["packed", "replicated"] = "packed"
+    inference_replicate_window_kv: bool = False
     inference_kv_append: SnowballKvAppendImplementation = "separate"
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
@@ -823,12 +830,19 @@ class SnowballAttention(eqx.Module):
         return self._project_output(x, attn_out, local_v)
 
     def _project_qkv(
-        self, x: jax.Array, *, disable_rope: bool, position_ids: jax.Array | None = None
+        self,
+        x: jax.Array,
+        *,
+        disable_rope: bool,
+        position_ids: jax.Array | None = None,
+        replicated_token: bool = False,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         head_dim = self.cfg.inferred_head_dim
 
         if self.cfg.projection_implementation == "fixed_schedule":
             project = lambda weight: _fixed_schedule_projection(x, weight)
+        elif replicated_token:
+            project = lambda weight: replicated_decode_matvec(x, weight)
         else:
             project = lambda weight: jnp.einsum("bsh,hd->bsd", x, weight)
 
@@ -882,9 +896,9 @@ class SnowballAttention(eqx.Module):
         if self.cfg.projection_implementation == "fixed_schedule":
             output = _fixed_schedule_projection(attn_out, self.w_o)
             return _match_activation_layout(output, x)
-        return jnp.einsum(
-            "bsh,hd->bsd", attn_out, self.w_o, out_sharding=P() if replicated_token else _activation_spec()
-        )
+        if replicated_token:
+            return replicated_decode_matvec(attn_out, self.w_o)
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
 
     @named_call
     def decode(
@@ -902,9 +916,14 @@ class SnowballAttention(eqx.Module):
         """Attend a flat batch of serving tokens with the June attention recipe."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
-        kv_axis, kv_heads = _inference_kv_layout(cfg)
+        if replicated_token and cfg.inference_replicate_window_kv and use_long is False:
+            kv_axis, kv_heads = "model", cfg.num_kv_heads
+        else:
+            kv_axis, kv_heads = _inference_kv_layout(cfg)
         extra_heads = kv_heads - cfg.num_kv_heads
-        q, k, v = self._project_qkv(x, disable_rope=use_long, position_ids=pos_ids[:, None])
+        q, k, v = self._project_qkv(
+            x, disable_rope=use_long, position_ids=pos_ids[:, None], replicated_token=replicated_token
+        )
         token_axis = batch_info.new_token_dests.axes[0].resize(x.shape[0])
         kv_axes = (token_axis, Axis("kv_head", kv_heads), Axis("head_size", head_dim))
         cache_k, cache_v = k[:, 0], v[:, 0]
@@ -1291,6 +1310,10 @@ class DenseMLP(eqx.Module):
             gate = _fixed_schedule_projection(x_flat, self.w_gate)
             up = _fixed_schedule_projection(x_flat, self.w_up)
             out_flat = _fixed_schedule_projection(jax.nn.silu(gate) * up, self.w_down)
+        elif replicated_token:
+            gate = replicated_decode_matvec(x_flat, self.w_gate)
+            up = replicated_decode_matvec(x_flat, self.w_up)
+            out_flat = replicated_decode_matvec(jax.nn.silu(gate) * up, self.w_down)
         else:
             gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
             up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
@@ -1298,7 +1321,7 @@ class DenseMLP(eqx.Module):
                 "tm,md->td",
                 jax.nn.silu(gate) * up,
                 self.w_down,
-                out_sharding=P() if replicated_token else _token_spec(),
+                out_sharding=_token_spec(),
             )
         output = rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
         return output if replicated_token else _activation_reshard(output)
@@ -2151,16 +2174,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             mlp_out, capture = block.mlp(mlp_in, token_valid=token_valid, capture_routes=True)
             return x + (mlp_out + block.shared(mlp_in)), cache, capture
 
-        def uses_long_attention(layer: int) -> bool:
-            return (layer + 1) % _LONG_ATTENTION_INTERVAL == 0 or layer == num_layers - 1
-
         if isinstance(kv_cache, ListCache):
             if not unroll:
                 raise ValueError("Per-layer KV buffers require unrolled Snowball decode")
             updated = []
             for layer, (block, cache) in enumerate(zip(self.transformer.blocks, kv_cache, strict=True)):
                 hidden, layer_cache, _ = layer_forward(
-                    hidden, cache, inference_block(block), uses_long_attention(layer)
+                    hidden, cache, inference_block(block), is_long_attention_layer(layer, num_layers)
                 )
                 updated.append(layer_cache)
             caches = ListCache(tuple(updated))
@@ -2180,7 +2200,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             state = (hidden, kv_cache.kv_pages.array)
             if unroll:
                 for layer, block in enumerate(self.transformer.blocks):
-                    state, _ = layer_step(state, (layer, inference_block(block), uses_long_attention(layer)))
+                    state, _ = layer_step(
+                        state, (layer, inference_block(block), is_long_attention_layer(layer, num_layers))
+                    )
                 stacked_captures = None
             else:
                 stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)

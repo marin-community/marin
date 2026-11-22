@@ -43,7 +43,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache, PageCache, StackedKvPageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import SnowballLMHeadModel
+from levanter.models.snowball import is_long_attention_layer, SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -626,6 +626,26 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, clone, gen_state)
 
 
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _stack_snowball_cache(layers: ListCache[KvPageCache]) -> StackedKvPageCache:
+    last = layers[-1].kv_pages
+    sharding = named_sharding_of(last.array)
+
+    def restore_heads(layer):
+        pages = layer.kv_pages.array
+        missing = last.shape["kv_head"] - layer.kv_pages.shape["kv_head"]
+        if missing:
+            pages = jnp.pad(pages, ((0, 0), (0, 0), (0, missing), (0, 0)))
+        if sharding is not None and not sharding.mesh.empty:
+            pages = jax.reshard(pages, sharding)
+        return pages
+
+    pages = jnp.stack([restore_heads(layer) for layer in layers])
+    if sharding is not None and not sharding.mesh.empty:
+        pages = jax.reshard(pages, sharding.update(spec=PartitionSpec(None, *sharding.spec)))
+    return StackedKvPageCache(hax.named(pages, (hax.Axis("layer", len(layers)), *last.axes)))
+
+
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "capture_routes"))
 def _run_prefill(
     gen_state: GenState,
@@ -635,6 +655,8 @@ def _run_prefill(
     max_seqs_in_prefill: int,
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
+    if isinstance(model, SnowballLMHeadModel) and isinstance(gen_state.cache, ListCache):
+        gen_state = dataclasses.replace(gen_state, cache=_stack_snowball_cache(gen_state.cache))
     gen_state = _apply_prefill_work(gen_state, work)
     return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill, capture_routes)
 
@@ -804,7 +826,10 @@ def _run_generation_loop(
             routes = routes.append(captured, slot_ids)
         elif (
             isinstance(model, SnowballLMHeadModel)
-            and model.config.inference_attention_implementation == "gpu"
+            and (
+                model.config.inference_attention_implementation == "gpu"
+                or model.config.inference_decode_token_layout == "replicated"
+            )
             and decode_state.max_seqs == 1
         ):
             # The generation queue holds at most one sampled token per active sequence.
@@ -848,35 +873,44 @@ def _run_generation_loop(
     routes = None
     if capture_routes:
         assert isinstance(model, SnowballLMHeadModel)
+        if isinstance(gen_state.cache, ListCache):
+            gen_state = dataclasses.replace(gen_state, cache=_stack_snowball_cache(gen_state.cache))
         routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds + gen_state.decode_state.max_seqs)
-    stacked_axes = None
-    stacked_sharding = None
+    split_cache = False
+    keep_layers = isinstance(model, SnowballLMHeadModel) and model.config.inference_decode_token_layout == "replicated"
     if (
         not capture_routes
         and isinstance(model, SnowballLMHeadModel)
         and model.config.inference_decode_implementation == "unrolled_split_cache"
         and isinstance(gen_state.cache, StackedKvPageCache)
     ):
-        # Split once per round so each decode step can update the layer buffers directly.
+        # Update each layer directly through a whole decode round.
+        split_cache = True
         stacked = gen_state.cache.kv_pages
-        stacked_axes = stacked.axes
         stacked_sharding = named_sharding_of(stacked.array)
         layers = jnp.unstack(stacked.array, axis=0)
         if stacked_sharding is not None and not stacked_sharding.mesh.empty:
             layer_sharding = stacked_sharding.update(spec=PartitionSpec(*stacked_sharding.spec[1:]))
             layers = tuple(jax.reshard(layer, layer_sharding) for layer in layers)
-        caches = ListCache(tuple(KvPageCache(hax.named(layer, stacked_axes[1:])) for layer in layers))
+        if keep_layers and model.config.inference_replicate_window_kv:
+            heads = 2 * model.config.num_kv_heads
+            page, slot, _, embed = stacked.axes[1:]
+
+            def layer_cache(layer, pages):
+                if is_long_attention_layer(layer, len(layers)):
+                    return KvPageCache(hax.named(pages, stacked.axes[1:]))
+                pages = jax.reshard(pages, PartitionSpec(None, None, "model", None))[:, :, :heads]
+                return KvPageCache(hax.named(pages, (page, slot, hax.Axis("kv_head", heads), embed)))
+
+            caches = ListCache(tuple(layer_cache(i, pages) for i, pages in enumerate(layers)))
+        else:
+            caches = ListCache(tuple(KvPageCache(hax.named(layer, stacked.axes[1:])) for layer in layers))
         gen_state = dataclasses.replace(gen_state, cache=caches)
     init_state = (gen_state, outputs_buf, routes, jnp.array(0, dtype=jnp.int32))
     final_gen_state, final_outputs, routes, _ = jax.lax.while_loop(cond, body, init_state)
-    if stacked_axes is not None:
+    if split_cache and not keep_layers:
         assert isinstance(final_gen_state.cache, ListCache)
-        pages = jnp.stack([cache.kv_pages.array for cache in final_gen_state.cache])
-        if stacked_sharding is not None and not stacked_sharding.mesh.empty:
-            pages = jax.reshard(pages, stacked_sharding)
-        final_gen_state = dataclasses.replace(
-            final_gen_state, cache=StackedKvPageCache(hax.named(pages, stacked_axes))
-        )
+        final_gen_state = dataclasses.replace(final_gen_state, cache=_stack_snowball_cache(final_gen_state.cache))
     if routes is not None:
         assert isinstance(model, SnowballLMHeadModel)
         final_gen_state, routes = _capture_terminal_inputs(final_gen_state, model, routes)
@@ -1086,6 +1120,9 @@ class InferenceEngine:
         prefill_work = self._prefill_prompts(batch)
         if prefill_work is None:
             return None
+        if isinstance(self.model, SnowballLMHeadModel) and isinstance(self.gen_state.cache, ListCache):
+            # Normalize the cache before JIT dispatch so both states reuse the same prefill buckets.
+            self.gen_state = dataclasses.replace(self.gen_state, cache=_stack_snowball_cache(self.gen_state.cache))
         new_state, outputs = _run_prefill(
             self.gen_state,
             self.model,
