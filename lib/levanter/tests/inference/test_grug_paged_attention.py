@@ -239,23 +239,26 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
 
 @pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window", [None, 2048])
-def test_grug_tpu_fused_append_updates_only_the_addressed_token(window):
+@pytest.mark.parametrize("width,active", [(4, 1), (16, 3), (32, 5)])
+def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, active):
     rng = np.random.default_rng(25)
-    q = jnp.asarray(rng.normal(size=(4, 5, 4, 128)), jnp.bfloat16)
-    k = jnp.asarray(rng.normal(size=(4, 5, 128)), jnp.bfloat16)
-    v = jnp.asarray(rng.normal(size=(4, 5, 128)), jnp.bfloat16)
-    pages = jnp.asarray(rng.normal(size=(32, 128, 10, 128)), jnp.bfloat16)
-    indices = jnp.asarray(rng.permutation(32)[None], jnp.int32)
-    length, page_size = 2208, 128
-    lengths = jnp.array([length], jnp.int32)
-    offsets = jnp.array([0, 1], jnp.int32)
-    num_seqs = jnp.array(1, jnp.int32)
+    q = jnp.asarray(rng.normal(size=(width, 5, 4, 128)), jnp.bfloat16)
+    k = jnp.asarray(rng.normal(size=(width, 5, 128)), jnp.bfloat16)
+    v = jnp.asarray(rng.normal(size=(width, 5, 128)), jnp.bfloat16)
+    page_size, pages_per_seq = 128, 32
+    num_pages = active * pages_per_seq
+    pages = jnp.asarray(rng.normal(size=(num_pages, page_size, 10, 128)), jnp.bfloat16)
+    indices = jnp.asarray(rng.permutation(num_pages).reshape(active, pages_per_seq), jnp.int32)
+    lengths = 2208 + 31 * jnp.arange(active, dtype=jnp.int32)
+    offsets = jnp.arange(active + 1, dtype=jnp.int32)
+    num_seqs = jnp.array(active, jnp.int32)
     scale = 128**-0.5
     attention = jax.jit(partial(ragged_paged_attention_append, sm_scale=scale, sliding_window=window))
     actual, updated = attention(q, k, v, pages, lengths, indices, offsets, num_seqs)
-    logical_page, slot = divmod(length - 1, page_size)
-    physical_page = indices[0, logical_page]
-    expected_pages = pages.at[physical_page, slot, 0::2].set(k[0]).at[physical_page, slot, 1::2].set(v[0])
+    logical_pages, slots = jnp.divmod(lengths - 1, page_size)
+    physical_pages = indices[jnp.arange(active), logical_pages]
+    expected_pages = pages.at[physical_pages, slots, 0::2].set(k[:active])
+    expected_pages = expected_pages.at[physical_pages, slots, 1::2].set(v[:active])
     np.testing.assert_array_equal(updated, expected_pages)
     args = _PagedCase(q, expected_pages, lengths, indices, offsets, num_seqs)
     expected = _dense_reference(args, window, None, scale)

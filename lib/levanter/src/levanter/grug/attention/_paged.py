@@ -21,7 +21,7 @@ from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.ragged_paged_attention_v3 import ragged_paged_attention as tpu_ragged_paged_attention_v3
 
 TPU_HEAD_ALIGNMENT = 128
-FUSED_KV_APPEND_MAX_TOKENS = 8
+FUSED_KV_APPEND_MAX_TOKENS = 32
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32", "tpu_v3", "gpu"]
 _TPU_KV_HEAD_GROUP = 8
 _FP32_QUERIES_PER_BLOCK = 128
