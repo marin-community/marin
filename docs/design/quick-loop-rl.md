@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child verified its initial publication and completed the 100-task baseline. | Verify all 25 updates on the third child and compare with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child completed the 100-task baseline and first two updates, with 24 zero-mismatch receiver checks through version 2. | Verify all 25 updates on the third child and compare with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Native 67B serving cleared the cache at install and generated four full-length policy-2 responses in the original process. Fused replay passed 611 real tool-turn targets. Ordered MoE gather produced four byte-identical repeats on the short H100 probe. | Score the captured full-length responses, qualify ordered gather at full context, and run the held-learner comparison. |
+| Native inventory backend | Native 67B serving cleared the cache at install and generated four full-length policy-2 responses. Fused replay passed 611 real tool-turn targets. The original scatter path had one clip crossing in the full-context group. Ordered MoE gather passed four byte-identical short repeats. | Pass the full-context clip gate with ordered gather, then run the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1645,11 +1645,19 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   reply. The replay-only scorer uses the exact saved policy-2 bytes and
   the same FA4 and fused projection configuration. The first replay-only
   worker read the archived bytes and stopped on a missing `zstd` command.
-  The replacement uses the task's locked Python Zstandard reader. The CPU
-  fixture retains its byte-equality check.
+  The replacement used the task's locked Python Zstandard reader and
+  scored all 32,768 original targets. The independent audit recomputed
+  one upper crossing at response offset 6,167 in request 60,001. Its
+  ratio was 1.2528 against the 1.20 limit. The p99 absolute log-ratio
+  was `1.58e-4`. The current ordered-gather run uses the same checkpoint
+  bytes and clip gate. It released policy 2 with zero cache ownership
+  and produced byte-identical first and repeated short replies in the
+  original process. It then admitted the full four-response group.
+  The CPU fixture retains its byte-equality check.
   [Full-context run][iris-native-cache-ownership] ·
   [Archived exact-task source][native-full-capture-archive] ·
-  [Replay-only scorer][iris-native-b-scorer]
+  [Replay-only scorer][iris-native-b-scorer] ·
+  [Full ordered-gather qualification][iris-native-ordered-gather]
 
   The held comparison measures end-to-end rollout admission and optimizer
   timing with four learner hosts. The 128-group frozen learner's warm
@@ -1744,6 +1752,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-tool-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-tool-scorer-20261122a
 [iris-native-repeat-prefill]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-repeat-prefill-20261122a
 [iris-native-b-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-b-scorer-20261122b
+[iris-native-ordered-gather]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122j
 [native-full-capture-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122i%2Fnative-native-fused-20261122i-tool-fused%2F0%2F2d4106a1e0593f89%2Foutputs.tar.zst
 [native-paged-moe]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/models/snowball.py#L1932-L1943
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
