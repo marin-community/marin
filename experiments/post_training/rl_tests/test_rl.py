@@ -820,8 +820,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
 def test_submission_exit_codes_and_publication_retries(
     recorded_runs, selection, tmp_path, monkeypatch, preset_table, case, expected
 ):
-    if case in {"mixed-native-failed", "partial-retry"}:
-        cache_native_compositions(monkeypatch)
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     publication_case = case in {
@@ -832,6 +830,9 @@ def test_submission_exit_codes_and_publication_retries(
         "partial-retry",
         "data-short",
     }
+    # The data-short case rewrites its validation data before launch.
+    if publication_case and case != "data-short":
+        cache_native_compositions(monkeypatch)
     preset_name = "data-short" if case == "data-short" else "learning-medium" if publication_case else "speed-medium"
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     if case == "child":
