@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import NamedTuple
 
 import equinox as eqx
@@ -36,6 +37,7 @@ from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import Checkpointer, discover_checkpoint_candidates, load_checkpoint_metadata
+from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -224,8 +226,107 @@ def restore_template_from(state):
     return template
 
 
+_EXPERT_BANK_PATH_SUFFIXES = (
+    ("expert_mlp", "w_gate"),
+    ("expert_mlp", "w_up"),
+    ("expert_mlp", "w_down"),
+)
+
+
+def _path_names(path: tuple) -> tuple[str, ...]:
+    names = []
+    for k in path:
+        if hasattr(k, "key"):
+            names.append(str(k.key))
+        elif hasattr(k, "name"):
+            names.append(str(k.name))
+        else:
+            names.append(str(k))
+    return tuple(names)
+
+
+def _is_moved_bank_rms_leaf_path(path: tuple) -> bool:
+    """Return True for the 3 RMS nu leaves and the adam_rms group count scalar."""
+    names = _path_names(path)
+    if "adam_rms" not in names:
+        return False
+    return (len(names) >= 2 and names[-2:] in _EXPERT_BANK_PATH_SUFFIXES) or (names[-1] == "count")
+
+
+def _should_migrate_bank_rms_state(template: "GrugTrainState", candidate: str) -> bool:
+    """Return True if candidate holds muonh bank slots and template expects adam_rms."""
+    manifest = read_manifest(candidate)
+    if manifest is None:
+        return False
+    paths = manifest.array_paths
+    has_muonh_banks = all(
+        any("/muonh/" in p and p.endswith(f"/{parent}/{leaf}") for p in paths)
+        for parent, leaf in _EXPERT_BANK_PATH_SUFFIXES
+    )
+    if not has_muonh_banks:
+        return False
+
+    has_rms_in_template = any(
+        _is_moved_bank_rms_leaf_path(path) and leaf is not None
+        for path, leaf in jax.tree_util.tree_leaves_with_path(template.opt_state)
+    )
+    if not has_rms_in_template:
+        return False
+    return not any("/adam_rms/" in p for p in paths)
+
+
+def mask_moved_bank_optimizer_state(
+    template: "GrugTrainState",
+) -> tuple["GrugTrainState", dict[tuple, jax.ShapeDtypeStruct]]:
+    """Mask only the 4 moved expert-bank adam_rms optimizer leaves to None, returning their abstract specs."""
+    saved_specs: dict[tuple, jax.ShapeDtypeStruct] = {}
+    expected_count = 4
+
+    def mask_leaf(path, leaf):
+        if _is_moved_bank_rms_leaf_path(path) and leaf is not None:
+            saved_specs[path] = jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
+            return None
+        return leaf
+
+    masked_opt_state = jax.tree_util.tree_map_with_path(mask_leaf, template.opt_state)
+    if len(saved_specs) != expected_count:
+        raise ValueError(f"Expected {expected_count} moved bank adam_rms leaves in template, found {len(saved_specs)}")
+    return dataclasses.replace(template, opt_state=masked_opt_state), saved_specs
+
+
+def fill_moved_bank_optimizer_state(
+    state: "GrugTrainState", saved_specs: dict[tuple, jax.ShapeDtypeStruct]
+) -> "GrugTrainState":
+    """Zero-initialize only the masked bank optimizer leaves directly in their abstract template sharding."""
+    if not saved_specs:
+        return state
+    filled_count = 0
+
+    def fill_leaf(path, leaf):
+        nonlocal filled_count
+        spec = saved_specs.get(path)
+        if spec is None:
+            return leaf
+        if leaf is not None:
+            raise ValueError(f"Expected None at masked bank leaf {jax.tree_util.keystr(path)}, got {type(leaf)}")
+        zeros = jax.jit(lambda s=spec: jnp.zeros(s.shape, dtype=s.dtype), out_shardings=spec.sharding)()
+        assert zeros.shape == spec.shape
+        assert zeros.dtype == spec.dtype
+        assert zeros.sharding == spec.sharding
+        filled_count += 1
+        return zeros
+
+    opt_state = jax.tree_util.tree_map_with_path(fill_leaf, state.opt_state, is_leaf=lambda x: x is None)
+    assert filled_count == len(saved_specs), f"Filled {filled_count} leaves, expected {len(saved_specs)}"
+    return dataclasses.replace(state, opt_state=opt_state)
+
+
 def template_for_candidate_layout(
-    state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
+    state: "GrugTrainState",
+    candidate: str,
+    run_mode: MasterParamMode,
+    *,
+    masked_bank_specs_out: dict[tuple, jax.ShapeDtypeStruct] | None = None,
 ) -> "GrugTrainState":
     """Pick the template restore reads checkpoint ``candidate`` with.
 
@@ -237,16 +338,28 @@ def template_for_candidate_layout(
     the checkpoint's authoritative fp32 master loads directly into it and the bf16 copy goes
     unread; ``take_master_as_params`` then moves it back, and the next save writes the new layout.
     """
+    template = state
     has_master = checkpoint_stores_master(candidate)
-    if has_master == (run_mode != MasterParamMode.DEVICE):
-        return state
-    if not has_master:
-        raise ValueError(
-            f"checkpoint {candidate} stores no master parameters, but this run trains with {run_mode}. "
-            "Synthesizing a master from stored weights is not a conversion this supports."
-        )
-    logger.info("Checkpoint %s stores a pinned-host fp32 master; restoring it as the parameters.", candidate)
-    return dataclasses.replace(state, params=None, master_params=state.params)
+    if has_master != (run_mode != MasterParamMode.DEVICE):
+        if not has_master:
+            raise ValueError(
+                f"checkpoint {candidate} stores no master parameters, but this run trains with {run_mode}. "
+                "Synthesizing a master from stored weights is not a conversion this supports."
+            )
+        logger.info("Checkpoint %s stores a pinned-host fp32 master; restoring it as the parameters.", candidate)
+        template = dataclasses.replace(template, params=None, master_params=template.params)
+
+    if masked_bank_specs_out is not None:
+        masked_bank_specs_out.clear()
+        if _should_migrate_bank_rms_state(template, candidate):
+            template, specs = mask_moved_bank_optimizer_state(template)
+            masked_bank_specs_out.update(specs)
+            logger.info(
+                "Checkpoint %s stores expert banks under muonh; zero-initializing %d adam_rms leaves.",
+                candidate,
+                len(specs),
+            )
+    return template
 
 
 def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
@@ -778,8 +891,20 @@ def _compute_flops(
     return flops_per_example, flops_summary
 
 
+def _read_proc_status_gib() -> dict[str, float]:
+    """Read Linux /proc/self/status memory counters (VmPin, VmRSS, VmHWM) in GiB."""
+    out: dict[str, float] = {}
+    for line in Path("/proc/self/status").read_text().splitlines():
+        key, _, rest = line.partition(":")
+        if key in ("VmPin", "VmRSS", "VmHWM"):
+            parts = rest.strip().split()
+            if parts:
+                out[key] = int(parts[0]) / (1024**2)
+    return out
+
+
 def log_device_memory(step_info) -> None:
-    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB.
+    """Log every local device's HBM peak, live bytes, and allocator limit in GiB (plus /proc VmPin/VmRSS/VmHWM).
 
     The EP hero had no peak-HBM telemetry, which makes a whole class of result unreadable: XLA's
     ``HloRematerialization`` engages only when peak crosses the allocator limit, so a config change
@@ -791,15 +916,41 @@ def log_device_memory(step_info) -> None:
 
     Ported from ``experiments/grug/moe_hero_fsdp/train.py``.
     """
-    stats = jax.local_devices()[0].memory_stats()
-    levanter.tracker.log(
-        {
-            "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
-            "memory/in_use_gib": stats["bytes_in_use"] / 1024**3,
-            "memory/limit_gib": stats["bytes_limit"] / 1024**3,
-        },
-        step=step_info.step,
-    )
+    dev0_stats = None
+    for dev_idx, dev in enumerate(jax.local_devices()):
+        stats = dev.memory_stats()
+        if stats is None:
+            raise RuntimeError(f"memory_stats() returned None for device {dev_idx} ({dev})")
+        if dev_idx == 0:
+            dev0_stats = stats
+        logger.info(
+            "device_memory process_index=%d device=%d step=%d peak_gib=%.3f in_use_gib=%.3f limit_gib=%.3f",
+            jax.process_index(),
+            dev_idx,
+            step_info.step,
+            stats["peak_bytes_in_use"] / 1024**3,
+            stats["bytes_in_use"] / 1024**3,
+            stats["bytes_limit"] / 1024**3,
+        )
+    proc_mem = _read_proc_status_gib()
+    if proc_mem:
+        logger.info(
+            "host_memory process_index=%d step=%d vm_pin_gib=%.3f vm_rss_gib=%.3f vm_hwm_gib=%.3f",
+            jax.process_index(),
+            step_info.step,
+            proc_mem.get("VmPin", float("nan")),
+            proc_mem.get("VmRSS", float("nan")),
+            proc_mem.get("VmHWM", float("nan")),
+        )
+    if dev0_stats is not None:
+        levanter.tracker.log(
+            {
+                "memory/peak_gib": dev0_stats["peak_bytes_in_use"] / 1024**3,
+                "memory/in_use_gib": dev0_stats["bytes_in_use"] / 1024**3,
+                "memory/limit_gib": dev0_stats["bytes_limit"] / 1024**3,
+            },
+            step=step_info.step,
+        )
 
 
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
@@ -1466,6 +1617,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         if expert_placement is not None:
             _validate_expert_placement(expert_placement, config)
+        masked_bank_specs: dict[tuple, jax.ShapeDtypeStruct] = {}
         state, loaded_checkpoint = restore_grug_state_and_source(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -1473,7 +1625,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
             template_for_candidate=lambda candidate: template_for_candidate_layout(
-                state, candidate, config.trainer.master_param_mode
+                state,
+                candidate,
+                config.trainer.master_param_mode,
+                masked_bank_specs_out=masked_bank_specs,
             ),
         )
         if config.trainer.master_param_mode == MasterParamMode.DEVICE:
@@ -1481,6 +1636,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         restored_nothing = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
         if released_initial_state and restored_nothing:
             state = _init_state(model_key)
+        elif masked_bank_specs and not restored_nothing:
+            state = fill_moved_bank_optimizer_state(state, masked_bank_specs)
         if loaded_checkpoint is not None and not restored_nothing:
             state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
         special_tokens = config.trainer.special_tokens
