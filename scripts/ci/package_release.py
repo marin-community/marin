@@ -618,7 +618,10 @@ def validate_targeted_lock_change(
     *,
     allowed_packages: Iterable[str] = (),
 ) -> None:
-    """Reject lock changes outside the released distribution and requirement owner."""
+    """Reject lock changes outside the released distribution and requirement owner.
+
+    Keys in UV_SPELLING_LOCK_KEYS are not compared, so marker rewrites by another uv release pass.
+    """
     before_metadata, before_packages = _canonical_package_entries(before)
     after_metadata, after_packages = _canonical_package_entries(after)
     if before_metadata != after_metadata:
@@ -676,11 +679,11 @@ def bump_native_requirement(
         return
 
     original_lock = lock_path.read_text()
+    requirement_path.write_text(updated_requirement)
     command = ["uv", "lock", "--upgrade-package", f"{build.requirement_distribution}=={version}"]
     for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
         if delay:
             time.sleep(delay)
-        requirement_path.write_text(updated_requirement)
         lock_path.write_text(original_lock)
         result = subprocess.run(command, cwd=repo_root)
         if result.returncode != 0:
