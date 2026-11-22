@@ -12,6 +12,7 @@ drop-in replacements for OpenAI models.
 import asyncio
 import collections
 import collections.abc
+from collections import deque
 import logging
 import queue
 import threading
@@ -43,12 +44,14 @@ from tokenizers.decoders import DecodeStream
 from tokenizers.models import BPE
 from transformers import PreTrainedTokenizerFast
 from levanter.inference.engine import (
+    GenerationResult,
     InferenceEngine,
     InferenceEngineConfig,
     Request,
     TokenSequenceLogprobs,
 )
 from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
+from levanter.inference.page_table import kv_pages_for_request
 from levanter.inference.utils import INVALID
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -137,9 +140,6 @@ class InferenceResponse:
 class InferenceBatch(list):
     def num_seqs(self) -> int:
         return sum(req.n_generations for req in self)
-
-    def total_tokens(self) -> int:
-        return sum(len(req.prompt_tokens) + req.max_tokens for req in self)
 
 
 # A callback which replaces the current model.
@@ -341,13 +341,17 @@ class InferenceContext:
 
             batch = InferenceBatch()
             max_tokens_per_seq = self.engine.config.max_seq_len
-            max_tokens_per_batch = self.engine.config.page_size * self.engine.config.max_pages  # type: ignore
-            logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
+            page_size = self.engine.config.page_size
+            max_pages = self.engine.config.max_pages
+            assert max_pages is not None
+            batch_pages = 0
+            logger.info("Max tokens per sequence: %d, pages per batch: %d", max_tokens_per_seq, max_pages)
 
             for r in requests:
-                if len(r.prompt_tokens) > max_tokens_per_seq:
+                if len(r.prompt_tokens) >= max_tokens_per_seq:
                     r.future.get_loop().call_soon_threadsafe(
-                        r.future.set_exception, ValueError("Prompt exceeds the serving context limit")
+                        r.future.set_exception,
+                        ValueError("Prompt must leave room for generation within the context limit"),
                     )
                     continue
 
@@ -361,15 +365,22 @@ class InferenceContext:
                     r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
                     continue
 
-                if (
-                    batch.num_seqs() + r.n_generations <= self.engine.config.max_seqs
-                    and batch.total_tokens() + (len(r.prompt_tokens) + r.max_tokens) <= max_tokens_per_batch
+                max_tokens = min(len(r.prompt_tokens) + r.max_tokens, max_tokens_per_seq)
+                request_pages = kv_pages_for_request(len(r.prompt_tokens), max_tokens, r.n_generations, page_size)
+                if request_pages > self.engine.max_request_pages:
+                    r.future.get_loop().call_soon_threadsafe(
+                        r.future.set_exception, ValueError("Request exceeds the serving KV page budget")
+                    )
+                    continue
+
+                if batch.num_seqs() + r.n_generations > self.engine.config.max_seqs or (
+                    batch_pages + request_pages > max_pages
                 ):
-                    batch.append(r)
-                else:
-                    if batch:
-                        self.batch_queue.put(batch)
-                    batch = InferenceBatch([r])
+                    self.batch_queue.put(batch)
+                    batch = InferenceBatch()
+                    batch_pages = 0
+                batch.append(r)
+                batch_pages += request_pages
 
             if batch:
                 self.batch_queue.put(batch)
@@ -380,15 +391,25 @@ class InferenceContext:
         """Batch processing loop running in background thread - waits for batches and executes them"""
         logger.info("Batch processing thread started")
 
+        waiting: deque[InferenceRequest] = deque()
+
+        def receive(limit: int) -> InferenceBatch:
+            while len(waiting) < limit:
+                try:
+                    waiting.extend(self.batch_queue.get_nowait())
+                except queue.Empty:
+                    break
+            return InferenceBatch(waiting.popleft() for _ in range(min(limit, len(waiting))))
+
         while not self.shutdown_event.is_set():
             try:
-                batch = self.batch_queue.get(timeout=1)
+                batch = receive(self.config.service.max_seqs) or self.batch_queue.get(timeout=1)
                 with (
                     self.model_lock,
                     hax.partitioning.set_mesh(self.config.trainer.device_mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
-                    self._execute_batch(batch)
+                    self._execute_batch(batch, receive if self.config.service.max_seqs > 1 else None)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -396,115 +417,119 @@ class InferenceContext:
                 # Set exceptions on all futures in the batch
                 for req in batch:
                     try:
-                        req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
+                        req.future.get_loop().call_soon_threadsafe(_fail_request, req.future, e)
                     except Exception:
                         pass
 
         logger.info("Batch processing thread shutting down")
 
-    def _execute_batch(self, requests: InferenceBatch):
-        """Execute a batch of inference requests"""
-        admitted = InferenceBatch()
-        for request in requests:
-            if self.pause_event.is_set() or request.admission_epoch != self.admission_epoch:
-                self._abort_request(request)
-            else:
-                admitted.append(request)
-        requests = admitted
-        if not requests:
-            return
-        service_requests = []
-
+    def _execute_batch(
+        self,
+        requests: InferenceBatch,
+        receive: collections.abc.Callable[[int], InferenceBatch] | None = None,
+    ) -> None:
+        """Run queued requests with one serving model version."""
         if not self.engine:
             raise RuntimeError("Inference engine is not initialized.")
 
-        for i, req in enumerate(requests):
-            # Create stop tokens if specified
-            stop_ids = None
-            if req.stop_tokens:
-                max_stop_length = max(map(len, req.stop_tokens))
-                padded_stops = np.full((len(req.stop_tokens), max_stop_length), INVALID, dtype=np.int32)
-                for index, stop in enumerate(req.stop_tokens):
-                    padded_stops[index, -len(stop) :] = stop
-                stop_ids = hax.named(jnp.asarray(padded_stops), axis=("stop_seq", "position"))
+        in_flight: dict[int, InferenceRequest] = {}
+        next_id = 0
 
-            # dumb fallback seed if none provided
-            if req.seed is None:
-                req.seed = np.random.default_rng().integers(0, 2**32 - 1)
-
-            seq_params = SeqDecodingParams(
-                max_num_tokens=jnp.array(len(req.prompt_tokens) + req.max_tokens, dtype=jnp.int32),
-                stop_tokens=stop_ids,
-                temperature=jnp.array(req.temperature, dtype=jnp.float32),
-                top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
-                key=jrandom.PRNGKey(req.seed if req.seed is not None else i),
-            )
-
-            service_req = Request(
-                prompt_tokens=req.prompt_tokens,
-                request_id=i,  # Use batch index as service request id
-                decode_params=seq_params,
-                n_generations=req.n_generations,
-            )
-            service_requests.append(service_req)
+        def admit(queued: InferenceBatch) -> list[Request]:
+            nonlocal next_id
+            admitted = []
+            for req in queued:
+                if self.pause_event.is_set() or req.admission_epoch != self.admission_epoch:
+                    self._abort_request(req)
+                    continue
+                in_flight[next_id] = req
+                admitted.append(self._engine_request(next_id, req))
+                next_id += 1
+            return admitted
 
         def on_tokens(request_index: int, choice: int, tokens: list[int]) -> None:
-            callback = requests[request_index].on_tokens
+            callback = in_flight[request_index].on_tokens
             if callback is not None:
                 callback(choice, tokens, self.model_version)
 
-        start_time = time.time()
-        result = self.engine.generate(
-            service_requests,
-            should_abort=lambda: self.shutdown_event.is_set() or self.pause_event.is_set(),
-            on_tokens=on_tokens if any(request.on_tokens is not None for request in requests) else None,
+        def on_complete(request_index: int, result: GenerationResult) -> None:
+            self._complete_request(in_flight.pop(request_index), result)
+
+        def should_abort() -> bool:
+            return self.shutdown_event.is_set() or self.pause_event.is_set()
+
+        try:
+            initial = admit(requests)
+            if receive is None:
+                self.engine.generate(initial, should_abort=should_abort, on_tokens=on_tokens, on_complete=on_complete)
+            else:
+                self.engine.generate_continuously(
+                    initial,
+                    lambda limit: admit(receive(limit)),
+                    on_complete,
+                    should_abort=should_abort,
+                    on_tokens=on_tokens,
+                )
+        except Exception as error:
+            for req in in_flight.values():
+                req.future.get_loop().call_soon_threadsafe(_fail_request, req.future, error)
+            raise
+
+    def _engine_request(self, request_index: int, req: InferenceRequest) -> Request:
+        stop_ids = None
+        if req.stop_tokens:
+            max_stop_length = max(map(len, req.stop_tokens))
+            padded_stops = np.full((len(req.stop_tokens), max_stop_length), INVALID, dtype=np.int32)
+            for index, stop in enumerate(req.stop_tokens):
+                padded_stops[index, -len(stop) :] = stop
+            stop_ids = hax.named(jnp.asarray(padded_stops), axis=("stop_seq", "position"))
+        seed = req.seed if req.seed is not None else np.random.default_rng().integers(0, 2**32 - 1)
+        seq_params = SeqDecodingParams(
+            max_num_tokens=jnp.array(len(req.prompt_tokens) + req.max_tokens, dtype=jnp.int32),
+            stop_tokens=stop_ids,
+            temperature=jnp.array(req.temperature, dtype=jnp.float32),
+            top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
+            key=jrandom.PRNGKey(seed),
         )
-        duration = time.time() - start_time
-        logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
+        return Request(req.prompt_tokens, request_index, seq_params, req.n_generations)
 
-        # Return results to futures
-        output_idx = 0
-        for req in requests:
-            try:
-                req_outputs = []
-                for _ in range(req.n_generations):
-                    if output_idx < len(result.tokens):
-                        generated_tokens = result.tokens[output_idx]
-                        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+    def _complete_request(self, req: InferenceRequest, result: GenerationResult) -> None:
+        try:
+            req_outputs = []
+            for index, generated_tokens in enumerate(result.tokens):
+                echo_token_ids = None
+                echo_logprobs = None
+                if req.echo_logprobs_top_k is not None:
+                    echo_token_ids = req.prompt_tokens + generated_tokens
+                    echo_logprobs = self.engine.score_token_logprobs(echo_token_ids, req.echo_logprobs_top_k)
+                req_outputs.append(
+                    InferenceResponse(
+                        text=self.tokenizer.decode(generated_tokens, skip_special_tokens=True),
+                        tokens=generated_tokens,
+                        logprobs=result.logprobs[index] if result.logprobs is not None else None,
+                        prompt_tokens=len(req.prompt_tokens),
+                        completion_tokens=len(generated_tokens),
+                        finish_reason=result.finish_reasons[index],
+                        model_version=self.model_version,
+                        request_id=req.request_id,
+                        echo_token_ids=echo_token_ids,
+                        echo_logprobs=echo_logprobs,
+                    )
+                )
+            req.future.get_loop().call_soon_threadsafe(_finish_request, req.future, req_outputs)
+        except Exception as e:
+            logger.exception("Error processing result for %s", req.request_id)
+            req.future.get_loop().call_soon_threadsafe(_fail_request, req.future, e)
 
-                        result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
-                        echo_token_ids = None
-                        echo_logprobs = None
-                        if req.echo_logprobs_top_k is not None:
-                            echo_token_ids = req.prompt_tokens + generated_tokens
-                            echo_logprobs = self.engine.score_token_logprobs(
-                                echo_token_ids,
-                                req.echo_logprobs_top_k,
-                            )
 
-                        req_outputs.append(
-                            InferenceResponse(
-                                text=text,
-                                tokens=result.tokens[output_idx],
-                                logprobs=result_logprobs,
-                                prompt_tokens=len(req.prompt_tokens),
-                                completion_tokens=len(generated_tokens),
-                                finish_reason=result.finish_reasons[output_idx],
-                                model_version=self.model_version,
-                                request_id=req.request_id,
-                                echo_token_ids=echo_token_ids,
-                                echo_logprobs=echo_logprobs,
-                            )
-                        )
-                        output_idx += 1
-                    else:
-                        raise RuntimeError(f"Missing output for request {req.request_id}")
+def _finish_request(future: asyncio.Future, outputs: list[InferenceResponse]) -> None:
+    if not future.done():
+        future.set_result(outputs)
 
-                # Set the future result
-                req.future.get_loop().call_soon_threadsafe(req.future.set_result, req_outputs)
-            except Exception as e:
-                logger.error(f"Error processing result for {req.request_id}: {e}")
-                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
+
+def _fail_request(future: asyncio.Future, error: Exception) -> None:
+    if not future.done():
+        future.set_exception(error)
 
 
 def _health_check() -> dict:

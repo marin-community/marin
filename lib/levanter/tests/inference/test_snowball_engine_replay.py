@@ -93,12 +93,49 @@ def test_prefill_buckets_preserve_snowball_generation(serving_model):
     assert bucketed == full
 
 
-@pytest.mark.parametrize("decode_layers", ["unrolled", "unrolled_split_cache"])
-def test_unrolled_decode_preserves_snowball_generation(serving_model, decode_layers):
+def test_continuous_generation_admits_another_request_while_decoding(serving_model):
+    short, long, followup, _ = _requests()
+    short = dataclasses.replace(
+        short, decode_params=dataclasses.replace(short.decode_params, max_num_tokens=jnp.array(3))
+    )
+    followup = dataclasses.replace(
+        followup, decode_params=dataclasses.replace(followup.decode_params, max_num_tokens=jnp.array(2))
+    )
+    expected = _engine(serving_model, 3).generate([short, long, followup])
+    completed = {}
+    remaining = [followup]
+
+    def poll(capacity):
+        if short.request_id in completed and capacity:
+            return [remaining.pop()] if remaining else []
+        return []
+
+    def complete(rid, result):
+        completed[rid] = result.tokens[0]
+        if rid == followup.request_id:
+            remaining.clear()
+
+    _engine(serving_model, 3).generate_continuously(
+        [short, long], poll, complete, should_abort=lambda: False, on_tokens=lambda *_: None
+    )
+    assert list(completed) == [short.request_id, followup.request_id, long.request_id]
+    assert [completed[request.request_id] for request in (short, long, followup)] == expected.tokens
+
+
+@pytest.mark.parametrize(
+    "decode_layers,unrolled_prefill",
+    [("unrolled", 0), ("unrolled_split_cache", 0), ("unrolled_split_cache", 8)],
+)
+def test_unrolled_decode_preserves_snowball_generation(serving_model, decode_layers, unrolled_prefill):
     requests = _requests()
     scanned = _engine(serving_model, 3).generate(requests)
     model = dataclasses.replace(
-        serving_model, _config=dataclasses.replace(serving_model.config, inference_decode_implementation=decode_layers)
+        serving_model,
+        _config=dataclasses.replace(
+            serving_model.config,
+            inference_decode_implementation=decode_layers,
+            inference_max_unrolled_prefill_tokens=unrolled_prefill,
+        ),
     )
     assert _engine(model, 3).generate(requests) == scanned
 
@@ -136,6 +173,39 @@ def test_reusing_prompt_pages_preserves_generation_and_resets(serving_model, cap
     with caplog.at_level(logging.INFO):
         assert cached.generate([next_turn]) == expected
     assert "Reused" not in caplog.text
+
+
+def test_retaining_packed_prompt_pages_preserves_generation_after_eviction(serving_model):
+    config = InferenceEngineConfig(
+        max_seq_len=8,
+        max_pages=12,
+        max_seqs=3,
+        page_size=2,
+        max_queued_tokens=3,
+        max_seqs_in_prefill=3,
+        prefill_bucket_sizes=(4,),
+        compute_dtype=jnp.float32,
+    )
+    fresh = InferenceEngine.from_model_with_config(serving_model, None, config)
+    cached = InferenceEngine.from_model_with_config(
+        serving_model, None, dataclasses.replace(config, prefix_cache="recent_prompts")
+    )
+    params = dataclasses.replace(
+        SeqDecodingParams.default(), temperature=jnp.asarray(0.0), max_num_tokens=jnp.asarray(7)
+    )
+    first = Request([1, 2, 3, 4, 5], 10, params, 1)
+    second = Request([6, 7, 8, 9, 10], 20, params, 1)
+    cached.generate([first, second])
+
+    followups = [
+        dataclasses.replace(first, prompt_tokens=[1, 2, 3, 4, 11]),
+        dataclasses.replace(first, request_id=30, prompt_tokens=[1, 2, 3, 4, 12]),
+        dataclasses.replace(second, prompt_tokens=[6, 7, 8, 9, 13]),
+    ]
+    # Two followups share the same retained pages. The third waits for space.
+    assert cached.generate(followups).tokens == fresh.generate(followups).tokens
+    cached.generate([Request([2, 4, 6, 8, 10, 12], 40, params, 1)])
+    assert cached.generate(followups).tokens == fresh.generate(followups).tokens
 
 
 @pytest.mark.skipif(jax.device_count() != 4, reason="Requires a four-device expert mesh")

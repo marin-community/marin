@@ -32,7 +32,7 @@ from levanter.inference.jit_scheduler import (
     TokenQueue,
     _DecodeOutputs,
 )
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageTable, kv_pages_for_request
 from levanter.inference.snowball_replay_payload import (
     _SnowballDecodeOutputs,
     _SnowballReplayCollector,
@@ -109,15 +109,17 @@ class InferenceEngineConfig:
     token mesh size. The largest prefill always uses max_prefill_size.
     """
     prefix_cache: Literal["disabled", "last_prompt", "recent_prompts"] = "disabled"
-    """Reuse full prompt pages for single-sequence Snowball serving.
+    """Reuse full prompt pages for Snowball serving.
 
-    The recent-prompts cache reserves one sequence's worth of pages for the active request. Each
-    additional sequence's worth of pages can retain one completed prompt.
+    With one sequence slot, recent_prompts reserves one context for generation. With multiple
+    slots it budgets a subset of the cache for retained prompts.
     """
 
     # Decode loop knobs
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
+    decode_bucket_sizes: tuple[int, ...] = ()
+    """Increasing decode capacities below max_tokens_per_round, aligned to the token mesh."""
 
     def __post_init__(self):
         # this one is only required because of clones. If we really care, we could relax this
@@ -140,8 +142,12 @@ class InferenceEngineConfig:
             and self.prefill_bucket_sizes[-1] >= self.max_prefill_size
         ):
             raise ValueError("prefill_bucket_sizes must be below max_prefill_size")
-        if self.prefix_cache != "disabled" and self.max_seqs != 1:
-            raise ValueError("The prompt cache requires max_seqs=1")
+        if self.prefix_cache == "last_prompt" and self.max_seqs != 1:
+            raise ValueError("last_prompt requires max_seqs=1")
+        if self.decode_bucket_sizes != tuple(sorted(set(self.decode_bucket_sizes))) or any(
+            not 0 < size < self.imputed_max_tokens_per_round for size in self.decode_bucket_sizes
+        ):
+            raise ValueError("decode_bucket_sizes must be increasing and below max_tokens_per_round")
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -416,7 +422,7 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     Boundary when absolute pos_id equals the post-allocation seq_len - 1 for that sequence.
     """
     seq_lens_per_seq = seq_lens["seq", slot_ids]
-    boundary_mask = pos_ids == (seq_lens_per_seq - 1)
+    boundary_mask = is_valid(slot_ids) & is_valid(pos_ids) & (pos_ids == (seq_lens_per_seq - 1))
     # jax.debug.print("pos_ids={pos} seq_lens={lens} boundary={b}", pos=pos_ids.array, lens=seq_lens_per_seq.array, b=boundary_mask.array)
     sample_indices = hax.where(
         boundary_mask,
@@ -479,6 +485,15 @@ def _prefill_kernel(
     slot_ids = queue.queued_slot_ids
 
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+    if max_seqs_in_prefill < binfo.slot_ids.axis_size("seq"):
+        seq_slice = slice(0, max_seqs_in_prefill)
+        binfo = dataclasses.replace(
+            binfo,
+            slot_ids=binfo.slot_ids["seq", seq_slice],
+            page_indices=binfo.page_indices["seq", seq_slice],
+            seq_lens=binfo.seq_lens["seq", seq_slice],
+            cu_q_lens=binfo.cu_q_lens["seq", : max_seqs_in_prefill + 1],
+        )
 
     seq_lens = decode_state.seq_lens
 
@@ -589,7 +604,8 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
             if work.cached_pages is not None:
                 pages = work.cached_pages["seq", i]
                 table = decode_state.page_table
-                refs = table.page_ref_counts.at["page", pages].add(1, mode="drop")
+                valid_pages = hax.where(is_valid(pages), pages, table.num_pages)
+                refs = table.page_ref_counts.at["page", valid_pages].add(1, mode="drop")
                 decode_state = dataclasses.replace(
                     decode_state, page_table=dataclasses.replace(table, page_ref_counts=refs)
                 )
@@ -655,8 +671,6 @@ def _run_prefill(
     max_seqs_in_prefill: int,
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
-    if isinstance(model, SnowballLMHeadModel) and isinstance(gen_state.cache, ListCache):
-        gen_state = dataclasses.replace(gen_state, cache=_stack_snowball_cache(gen_state.cache))
     gen_state = _apply_prefill_work(gen_state, work)
     return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill, capture_routes)
 
@@ -926,6 +940,19 @@ class GenerationResult:
     finish_reasons: list[FinishReason]
 
 
+CompletionCallback = Callable[[int, GenerationResult], None]
+RequestSource = Callable[[int], Sequence[Request]]
+
+
+def _result_for_choices(choices: Sequence[DecodeResult]) -> GenerationResult:
+    return GenerationResult(
+        tokens=[choice.token_list for choice in choices],
+        logprobs=[choice.logprobs for choice in choices],
+        total_generated=sum(len(choice.token_list) for choice in choices),
+        finish_reasons=[choice.finish_reason for choice in choices],
+    )
+
+
 FIRST_TOKEN_LOGPROB = 0.0
 
 
@@ -1028,13 +1055,18 @@ class InferenceEngine:
         if config.prefix_cache != "disabled" and not isinstance(model, SnowballLMHeadModel):
             raise ValueError("The prompt cache requires Snowball")
         self._retained_prompt_limit = 1
+        self._retained_page_budget = 0
+        table = decode_state.page_table
         if config.prefix_cache == "recent_prompts":
-            table = decode_state.page_table
             self._retained_prompt_limit = table.num_pages // table.pages_per_seq - 1
             if self._retained_prompt_limit < 1:
                 raise ValueError("The recent-prompts cache requires max_pages for at least two full sequences")
+            if config.max_seqs > 1:
+                self._retained_prompt_limit = config.max_seqs
+                self._retained_page_budget = max(table.pages_per_seq, (table.num_pages - table.pages_per_seq) // 4)
         self.config = config
         self._cached_prompts: list[_CachedPrompt] = []
+        self._reserved_pages: dict[int, int] = {}
         # Track free local sequence slots as explicit ids (smallest id first to match allocator expectations).
         # Respect any pre-populated allocations in the provided PageTable.
         sequences = decode_state.sequences
@@ -1070,9 +1102,22 @@ class InferenceEngine:
         assert config.max_pages is not None
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
-        cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
-            table.spec(), dtype=config.compute_dtype
-        )
+        cache: PageCache
+        if (
+            isinstance(model, SnowballLMHeadModel)
+            and config.max_seqs > 1
+            and model.config.inference_decode_implementation == "unrolled_split_cache"
+            and (config.max_prefill_size or table.max_len_per_seq)
+            <= model.config.inference_max_unrolled_prefill_tokens
+        ):
+            allocate_layer = hax.named_jit(model.initial_layer_cache, axis_resources=axis_resources)
+            cache = ListCache(
+                tuple(allocate_layer(table.spec(), dtype=config.compute_dtype) for _ in model.transformer.blocks)
+            )
+        else:
+            cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
+                table.spec(), dtype=config.compute_dtype
+            )
         decode_state = DecodeState.init(
             table,
             max_stop_seqs=config.max_stop_seqs,
@@ -1095,7 +1140,7 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = eqx.filter_jit(GenState.reset, donate="all")(self.gen_state)
+        self.gen_state = eqx.filter_jit(GenState.reset, donate="all", keep_unused=True)(self.gen_state)
         self._cached_prompts.clear()
         self._clear_requests()
 
@@ -1104,6 +1149,20 @@ class InferenceEngine:
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
+        self._reserved_pages.clear()
+
+    def _request_pages(self, request: Request) -> int:
+        return kv_pages_for_request(
+            len(request.prompt_tokens),
+            int(request.decode_params.max_num_tokens),
+            request.n_generations,
+            self.config.page_size,
+        )
+
+    @property
+    def max_request_pages(self) -> int:
+        """KV pages available to a single request, accounting for prompt retention."""
+        return self.gen_state.decode_state.page_table.num_pages - self._retained_page_budget
 
     def score_token_logprobs(self, token_ids: Sequence[int], top_k: int) -> TokenSequenceLogprobs:
         """Score a token sequence under this engine's model."""
@@ -1120,8 +1179,16 @@ class InferenceEngine:
         prefill_work = self._prefill_prompts(batch)
         if prefill_work is None:
             return None
-        if isinstance(self.model, SnowballLMHeadModel) and isinstance(self.gen_state.cache, ListCache):
-            # Normalize the cache before JIT dispatch so both states reuse the same prefill buckets.
+        if (
+            isinstance(self.model, SnowballLMHeadModel)
+            and isinstance(self.gen_state.cache, ListCache)
+            and (
+                self.config.max_seqs == 1
+                or replay is not None
+                or prefill_work.queue.queued_tokens.axis_size("position")
+                > self.model.config.inference_max_unrolled_prefill_tokens
+            )
+        ):
             self.gen_state = dataclasses.replace(self.gen_state, cache=_stack_snowball_cache(self.gen_state.cache))
         new_state, outputs = _run_prefill(
             self.gen_state,
@@ -1133,7 +1200,9 @@ class InferenceEngine:
         )
 
         self.gen_state = new_state
-        if self.config.prefix_cache != "disabled":
+        if self._retained_page_budget:
+            self._retain_batch_prompts(batch)
+        elif self.config.prefix_cache != "disabled":
             tokens = np.asarray(batch[0].prompt_tokens, dtype=np.int32)
             count = len(tokens) // self.config.page_size
             pages = np.array(jax.device_get(new_state.decode_state.sequences.page_indices.array[0, :count]))
@@ -1142,6 +1211,37 @@ class InferenceEngine:
             self._cached_prompts.append(_CachedPrompt(self.model, tokens, pages))
             del self._cached_prompts[: -self._retained_prompt_limit]
         return outputs
+
+    def _retained_page_refs(self, table: PageTable) -> np.ndarray:
+        refs = np.zeros(table.num_pages, dtype=np.int32)
+        for cached in self._cached_prompts:
+            np.add.at(refs, cached.pages, 1)
+        return refs
+
+    def _retain_batch_prompts(self, requests: Sequence[Request]) -> None:
+        state = self.gen_state.decode_state
+        table = state.page_table
+        before = self._retained_page_refs(table)
+        page_indices = jax.device_get(state.sequences.page_indices.array)
+        for request in requests:
+            slots = self.sequences.get(request.request_id)
+            if slots is None:
+                break
+            tokens = np.asarray(request.prompt_tokens, dtype=np.int32)
+            pages = page_indices[slots[0], : len(tokens) // self.config.page_size].copy()
+            if pages.size:
+                self._cached_prompts.append(_CachedPrompt(self.model, tokens, pages))
+
+        # Track ownership by entry so shared physical pages survive eviction of either prefix.
+        after = self._retained_page_refs(table)
+        pinned = np.count_nonzero(after)
+        while pinned > self._retained_page_budget or len(self._cached_prompts) > self._retained_prompt_limit:
+            pages = self._cached_prompts.pop(0).pages
+            np.add.at(after, pages, -1)
+            pinned -= np.count_nonzero(after[pages] == 0)
+        delta = jax.device_put(after - before, table.page_ref_counts.array.sharding)
+        table = dataclasses.replace(table, page_ref_counts=table.page_ref_counts + hax.named(delta, "page"))
+        self.gen_state = dataclasses.replace(self.gen_state, decode_state=dataclasses.replace(state, page_table=table))
 
     def _matching_prompt_pages(self, tokens: np.ndarray) -> np.ndarray:
         pages = np.empty(0, dtype=np.int32)
@@ -1201,28 +1301,38 @@ class InferenceEngine:
         offset = 0
         num_primary = 0
         total_new = 0
+        pages_left = (
+            decode_state.page_table.num_pages - self._retained_page_budget - sum(self._reserved_pages.values())
+        )
 
         for request in requests:
             seq_tokens = request.prompt_tokens
             seq_params = request.decode_params
 
-            if len(seq_tokens) + offset > queue_tokens.shape[0] or num_primary >= max_seqs_in_prefill:
+            pages_needed = self._request_pages(request) if max_slots > 1 else 0
+            if (
+                num_primary >= max_seqs_in_prefill
+                or len(self.free_slots) < request.n_generations
+                or pages_needed > pages_left
+            ):
                 break
-
-            if len(self.free_slots) < request.n_generations:
-                break
-
-            requested_slot = self.free_slots.pop()
-            slot_id = int(requested_slot)
 
             this_tokens = np.asarray(seq_tokens, dtype=np.int32)
-            reused = 0
+            pages = None
             if prefix_pages is not None and self._cached_prompts:
                 pages = self._matching_prompt_pages(this_tokens)
-                prefix_pages[total_new, : len(pages)] = pages
-                reused = len(pages) * self.config.page_size
-                logger.info("Reused %d prompt tokens", reused)
+            reused = 0 if pages is None else len(pages) * self.config.page_size
             end = offset + len(seq_tokens) - reused
+            if end > queue_tokens.shape[0]:
+                break
+
+            slot_id = self.free_slots.pop()
+            if max_slots > 1:
+                self._reserved_pages[request.request_id] = pages_needed
+                pages_left -= pages_needed
+            if prefix_pages is not None and pages is not None and reused:
+                prefix_pages[total_new, : len(pages)] = pages
+                logger.info("Reused %d prompt tokens", reused)
             queue_tokens[offset:end] = this_tokens[reused:]
             queue_slot_ids[offset:end] = slot_id
             queue_pos_ids[offset:end] = np.arange(reused, len(seq_tokens), dtype=np.int32)
@@ -1327,6 +1437,7 @@ class InferenceEngine:
         *,
         should_abort: Callable[[], bool] | None = None,
         on_tokens: TokenCallback | None = None,
+        on_complete: CompletionCallback | None = None,
     ) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
@@ -1339,8 +1450,11 @@ class InferenceEngine:
             should_abort: Host predicate checked before prefill and between decode rounds.
                 Unfinished choices return their exact partial output with an ABORT reason.
             on_tokens: Called on the host with a request ID, choice index, and newly sampled tokens.
+            on_complete: Called once when all choices for a request complete or abort.
         """
-        return self._generate(requests, step_callback, should_abort=should_abort, on_tokens=on_tokens)
+        return self._generate(
+            requests, step_callback, should_abort=should_abort, on_tokens=on_tokens, on_complete=on_complete
+        )
 
     def _generate(
         self,
@@ -1350,121 +1464,76 @@ class InferenceEngine:
         should_abort: Callable[[], bool] | None = None,
         replay: _SnowballReplayCollector | None = None,
         on_tokens: TokenCallback | None = None,
+        on_complete: CompletionCallback | None = None,
+        poll_requests: RequestSource | None = None,
     ) -> GenerationResult:
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
         if len({r.request_id for r in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a generation batch.")
-        assert self.config.max_prefill_size is not None
-        for request in requests:
-            if not request.prompt_tokens or len(request.prompt_tokens) > self.config.max_prefill_size:
-                raise ValueError("Each prompt must be nonempty and fit within max_prefill_size.")
-            if len(request.prompt_tokens) >= self.config.max_seq_len:
-                raise ValueError("Each prompt must leave room for generation within max_seq_len.")
+        requests = [self._prepare_request(request) for request in requests]
 
-        requests = [
-            dataclasses.replace(
-                request,
-                decode_params=dataclasses.replace(
-                    request.decode_params,
-                    max_num_tokens=jnp.minimum(request.decode_params.max_num_tokens, self.config.max_seq_len),
-                ),
-            )
-            for request in requests
-        ]
-
-        # validate we don't have any sequences with n_generations exceeding max_seqs
-        max_needed = max(int(r.n_generations) for r in requests)
-        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
+        if self.config.prefix_cache != "disabled" and (
+            replay is not None or (self.config.max_seqs == 1 and len(requests) != 1)
+        ):
             raise ValueError(
-                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
-                "Decompose your request into smaller batches or increase max_seqs when building the service."
+                "Prefix caching requires generation without route capture and one request for a single slot"
             )
 
-        if self.config.prefix_cache != "disabled" and (len(requests) != 1 or replay is not None):
-            raise ValueError("The prompt cache requires one request without route capture")
+        self._start_generation()
+        call_rids = [request.request_id for request in requests]
+        for request in requests:
+            self._begin_request(request)
 
-        if not self._cached_prompts or self._cached_prompts[-1].model is not self.model:
-            self.reset()
-        else:
-            decode_state = eqx.filter_jit(DecodeState.reset)(self.gen_state.decode_state)
-            if self.config.prefix_cache == "recent_prompts":
-                table = decode_state.page_table
-                refs = np.zeros(table.num_pages, dtype=np.int32)
-                for cached in self._cached_prompts:
-                    refs[cached.pages] = 1
-                pages = jax.device_put(refs, table.page_ref_counts.array.sharding)
-                table = dataclasses.replace(table, page_ref_counts=hax.named(pages, table.page_ref_counts.axes))
-                decode_state = dataclasses.replace(decode_state, page_table=table)
-            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
-            self._clear_requests()
+        completed: list[int] = []
+        streamed_tokens = 0
 
-        # Track outputs and finished flags using self.results for only this call's requests
-        call_rids = [int(r.request_id) for r in requests]
-        expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
-        # Initialize fresh result buckets for this call
-        for rid in call_rids:
-            self.results[rid] = {
-                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
-            }
+        def complete_live_request(rid: int, result: GenerationResult) -> None:
+            nonlocal streamed_tokens
+            assert on_complete is not None
+            on_complete(rid, result)
+            streamed_tokens += result.total_generated
+            completed.append(rid)
 
-        # Validate requested stop-token shapes against configured capacity; do not resize dynamically
-        ds = self.gen_state.decode_state
-        cur_stop_seqs = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("stop_seq")
-        cur_stop_len = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("position")
-        req_stop_seqs = 0
-        req_stop_len = 0
-        for req in requests:
-            st = req.decode_params.stop_tokens
-            if st is None:
-                continue
-            req_stop_seqs = max(req_stop_seqs, int(st.axis_size("stop_seq")))
-            req_stop_len = max(req_stop_len, int(st.axis_size("position")))
-        if req_stop_seqs > 0 or req_stop_len > 0:
-            if ds.stop_tokens is None:
-                raise ValueError(
-                    f"Requested stop tokens (seqs={req_stop_seqs}, len={req_stop_len}) but service was initialized "
-                    f"without stop-token capacity. Recreate service with nonzero max_stop_seqs/max_stop_tokens."
-                )
-            if req_stop_seqs > cur_stop_seqs or req_stop_len > cur_stop_len:
-                raise ValueError(
-                    "Requested stop-token configuration exceeds service capacity: "
-                    f"required (seqs={req_stop_seqs}, len={req_stop_len}) > "
-                    f"configured (seqs={cur_stop_seqs}, len={cur_stop_len}). "
-                    "Increase max_stop_seqs/max_stop_tokens when constructing the service."
-                )
-
+        complete = complete_live_request if poll_requests is not None else on_complete
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
         aborted = should_abort is not None and should_abort()
         if not aborted:
             decode_outputs = self._prefill_batch(requests, replay)
-            self._extract_outputs(decode_outputs, replay, on_tokens)
+            self._extract_outputs(decode_outputs, replay, on_tokens, complete)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
-        def _all_done() -> bool:
-            for rid, n_kids in expected_children.items():
-                kid_map = self.results.get(rid, {})
-                for cid in range(n_kids):
-                    dr = kid_map.get(cid)
-                    if dr is None or not dr.done:
-                        return False
-            return True
-
         pending = [request for request in requests if request.request_id not in self.sequences]
         decode_iteration = 0
-        while not aborted and not _all_done():
+        while not aborted:
             if should_abort is not None and should_abort():
                 aborted = True
                 break
+            if poll_requests is None:
+                if all(choice.done for choices in self.results.values() for choice in choices.values()):
+                    break
+            else:
+                for rid in completed:
+                    del self.results[rid]
+                    del self.sequences[rid]
+                completed.clear()
+                capacity = self.config.max_seqs - len(self.results)
+                if capacity > 0:
+                    for request in poll_requests(capacity):
+                        request = self._prepare_request(request)
+                        self._begin_request(request)
+                        pending.append(request)
+                if not self.results:
+                    break
+
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending, replay)
-                self._extract_outputs(prefill_outputs, replay, on_tokens)
+                self._extract_outputs(prefill_outputs, replay, on_tokens, complete)
                 pending = [request for request in pending if request.request_id not in self.sequences]
-                if prefill_outputs is not None:
+                if prefill_outputs is not None and (poll_requests is None or not self.local_map):
                     continue
-            # Call step callback if provided
+
             if step_callback is not None:
                 step_callback(decode_iteration)
             if should_abort is not None and should_abort():
@@ -1472,68 +1541,127 @@ class InferenceEngine:
                 break
 
             iter_start = time.time()
-
+            # Each active sequence contributes at most one queued token. Avoid running
+            # the full decode graph when the live batch fits in a smaller bucket.
+            active = len(self.local_map)
+            round_tokens = next(
+                (size for size in self.config.decode_bucket_sizes if size >= active),
+                self.config.imputed_max_tokens_per_round,
+            )
             future_state, decode_outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
                 self.sampler,
-                # TODO: tune max_tokens_per_round
-                self.config.imputed_max_tokens_per_round,
+                round_tokens,
                 self.config.max_rounds,
                 capture_routes=replay is not None,
             )
             submit_done = time.time()
             self.gen_state = future_state
+            new_tokens = self._extract_outputs(decode_outputs, replay, on_tokens, complete)
 
-            extract_start = time.time()
-            new_tokens = self._extract_outputs(decode_outputs, replay, on_tokens)
-            extract_time = time.time() - extract_start
-
-            iter_end = time.time()
-            iter_time = iter_end - iter_start
-            submit_time = submit_done - iter_start
+            iter_time = time.time() - iter_start
             if iter_time > 0:
-                tps_total = new_tokens / iter_time
                 logger.info(
-                    f"Decode iter: total {iter_time:.3f}s (submit {submit_time:.3f}s, "
-                    f"extract/wait {extract_time:.3f}s), {tps_total:.2f} tok/s, {new_tokens} new"
+                    "Decode iter: total %.3fs (submit %.3fs), %.2f tok/s, %d new",
+                    iter_time,
+                    submit_done - iter_start,
+                    new_tokens / iter_time,
+                    new_tokens,
                 )
-
             decode_iteration += 1
-
             if new_tokens == 0:
                 raise RuntimeError("Inference made no progress with unfinished requests.")
 
-        # Assemble outputs in the order of the requests for this call
-        outputs_list: list[list[int]] = []
-        logprobs_list: list[list[float]] = []
-        finish_reasons: list[FinishReason] = []
-        total_prompt_tokens = 0
-        for r in requests:
-            rid = int(r.request_id)
-            total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
-            kid_map = self.results[rid]
-            for k in range(int(r.n_generations)):
-                dr = kid_map[k]
-                if aborted and not dr.done:
-                    dr.finish_reason = FinishReason.ABORT
-                finish_reasons.append(dr.finish_reason)
-                outputs_list.append(dr.token_list)
-                logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
-            self.results[rid] = kid_map
-        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
+        if poll_requests is not None:
+            call_rids = list(self.results)
+        ordered_choices = []
+        for rid in call_rids:
+            choices = list(self.results.pop(rid).values())
+            if aborted and any(not choice.done for choice in choices):
+                for choice in choices:
+                    if not choice.done:
+                        choice.finish_reason = FinishReason.ABORT
+                if complete is not None:
+                    complete(rid, _result_for_choices(choices))
+            if poll_requests is None:
+                ordered_choices.extend(choices)
+        result = _result_for_choices(ordered_choices)
+        total_generated = streamed_tokens if poll_requests is not None else result.total_generated
         total_time = time.time() - time_in
         tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
         logger.debug(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
-        # Clear results for these requests now that we've assembled outputs
-        for rid in call_rids:
-            if rid in self.results:
-                self.results.pop(rid, None)
         if aborted:
             self.reset()
-        return GenerationResult(
-            tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated, finish_reasons=finish_reasons
+        return result
+
+    def generate_continuously(
+        self,
+        requests: Sequence[Request],
+        poll_requests: RequestSource,
+        on_complete: CompletionCallback,
+        *,
+        should_abort: Callable[[], bool],
+        on_tokens: TokenCallback,
+    ) -> None:
+        """Serve requests until idle, admitting more work between device rounds."""
+        if self.config.max_seqs < 2:
+            raise ValueError("Continuous generation requires multiple sequence slots")
+        self._generate(
+            requests,
+            should_abort=should_abort,
+            on_tokens=on_tokens,
+            on_complete=on_complete,
+            poll_requests=poll_requests,
         )
+
+    def _prepare_request(self, request: Request) -> Request:
+        assert self.config.max_prefill_size is not None
+        if not request.prompt_tokens or len(request.prompt_tokens) > self.config.max_prefill_size:
+            raise ValueError("Each prompt must be nonempty and fit within max_prefill_size.")
+        if len(request.prompt_tokens) >= self.config.max_seq_len:
+            raise ValueError("Each prompt must leave room for generation within max_seq_len.")
+        if request.n_generations < 1 or request.n_generations > self.config.max_seqs:
+            raise ValueError(
+                f"Requested {request.n_generations} sequences for a service with {self.config.max_seqs} slots"
+            )
+        max_tokens = min(int(request.decode_params.max_num_tokens), self.config.max_seq_len)
+        request = dataclasses.replace(
+            request, decode_params=dataclasses.replace(request.decode_params, max_num_tokens=jnp.asarray(max_tokens))
+        )
+        if self.config.max_seqs > 1 and self._request_pages(request) > self.max_request_pages:
+            raise ValueError("Request exceeds the KV pages available for generation")
+        stop = request.decode_params.stop_tokens
+        if stop is not None and (
+            stop.axis_size("stop_seq") > self.config.max_stop_seqs
+            or stop.axis_size("position") > self.config.max_stop_tokens
+        ):
+            raise ValueError("Requested stop tokens exceed the configured stop-token capacity")
+        return request
+
+    def _begin_request(self, request: Request) -> None:
+        rid = request.request_id
+        if rid in self.results:
+            raise ValueError("Request IDs must be unique among active requests")
+        self.results[rid] = {k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(request.n_generations)}
+
+    def _start_generation(self) -> None:
+        if not isinstance(self.model, SnowballLMHeadModel):
+            self.reset()
+        else:
+            if self._cached_prompts and self._cached_prompts[-1].model is not self.model:
+                self._cached_prompts.clear()
+            # Snowball writes each new token's KV before attention. Free pages need no
+            # device-wide memset between batches, while explicit reset still clears them.
+            decode_state = eqx.filter_jit(DecodeState.reset)(self.gen_state.decode_state)
+            if self.config.prefix_cache == "recent_prompts" and self._cached_prompts:
+                table = decode_state.page_table
+                refs = self._retained_page_refs(table)
+                pages = jax.device_put(refs, table.page_ref_counts.array.sharding)
+                table = dataclasses.replace(table, page_ref_counts=hax.named(pages, table.page_ref_counts.axes))
+                decode_state = dataclasses.replace(decode_state, page_table=table)
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            self._clear_requests()
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
@@ -1601,6 +1729,7 @@ class InferenceEngine:
         pending_outputs: _DecodeOutputs | _SnowballDecodeOutputs | None,
         replay: _SnowballReplayCollector | None = None,
         on_tokens: TokenCallback | None = None,
+        on_complete: CompletionCallback | None = None,
     ) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
@@ -1654,6 +1783,11 @@ class InferenceEngine:
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.finish_reason = FinishReason(int(pending_outputs.finish_reasons.array[local_slot]))
+            choices = self.results[rid].values()
+            if all(choice.done for choice in choices):
+                self._reserved_pages.pop(rid, None)
+                if on_complete is not None:
+                    on_complete(rid, _result_for_choices(list(choices)))
 
             del self.local_map[local_slot]
             self.free_slots.append(local_slot)

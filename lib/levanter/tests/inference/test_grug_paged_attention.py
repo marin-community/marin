@@ -141,6 +141,30 @@ def test_grug_gpu_paged_attention_matches_reordered_cached_prefix(window, query_
     np.testing.assert_array_equal(actual[query_length:], jnp.zeros_like(actual[query_length:]))
 
 
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="CUDA paged attention")
+@pytest.mark.parametrize("query_capacity", [128, 256, 1024])
+@pytest.mark.parametrize("window", [None, 129])
+def test_grug_gpu_paged_attention_matches_distinct_packed_prefixes(query_capacity, window):
+    rng = np.random.default_rng(12)
+    pages = rng.normal(size=(10, 128, 2, 128))
+    pages[0] = np.nan
+    args = _PagedCase(
+        jnp.asarray(rng.normal(size=(query_capacity, 1, 4, 128)), jnp.bfloat16),
+        jnp.asarray(pages, jnp.bfloat16),
+        jnp.array([385, 262, -1], jnp.int32),
+        jnp.array([[3, 1, 7, 2], [6, 4, 5, -1], [-1, -1, -1, -1]], jnp.int32),
+        jnp.array([0, 16, 49, -1], jnp.int32),
+        jnp.array(2, jnp.int32),
+    )
+    scale = 128**-0.5
+    actual = jax.jit(partial(ragged_paged_attention, implementation="gpu", sm_scale=scale, sliding_window=window))(
+        *args
+    )
+    expected = _dense_reference(args, window, None, scale)
+    np.testing.assert_allclose(actual.astype(jnp.float32), expected.astype(jnp.float32), atol=2e-4, rtol=8e-3)
+    np.testing.assert_array_equal(actual[49:], jnp.zeros_like(actual[49:]))
+
+
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
 @pytest.mark.parametrize("runtime_scale", [False, True])
 def test_grug_tpu_paged_attention_matches_reference(runtime_scale):

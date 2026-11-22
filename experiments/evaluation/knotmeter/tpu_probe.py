@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 import requests
-from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLauncherType
+from marin.inference.config import ServedModelConfig, VllmCompilationCacheMode, VllmEngineConfig, VllmLauncherType
 from marin.inference.serve import local_inference
 
 from experiments.evaluation.knotmeter.artifacts import PROFILE_EXPORT_RELATIVE_PATH, pack_server_metrics, read_record
@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--expert-parallel", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--max-seqs", type=int, default=8)
+    parser.add_argument("--compilation-cache-dir", help="Persistent JAX cache in the worker's region")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
@@ -53,12 +54,18 @@ def main() -> None:
     if args.expert_parallel > 1:
         sharding = {"sharding": {"sharding_strategy": {"expert_parallelism": args.expert_parallel}}}
         extra_args += ("--enable-expert-parallel", "--additional-config", json.dumps(sharding))
+    compilation_cache = VllmCompilationCacheMode.MANAGED
+    if args.compilation_cache_dir:
+        os.environ["JAX_COMPILATION_CACHE_DIR"] = args.compilation_cache_dir
+        os.environ["VLLM_XLA_CACHE_PATH"] = args.compilation_cache_dir
+        compilation_cache = VllmCompilationCacheMode.CALLER_MANAGED
     engine = VllmEngineConfig(
         launcher=VllmLauncherType.TPU,
         startup_timeout_seconds=3600,
         max_num_batched_tokens=8192,
         max_num_seqs=args.max_seqs,
         extra_args=extra_args,
+        compilation_cache=compilation_cache,
     )
 
     with tempfile.TemporaryDirectory(prefix="agentx-tpu-") as workdir:
@@ -90,6 +97,10 @@ def main() -> None:
                         "chips": args.chips,
                         "tensor_parallel": args.tensor_parallel,
                         "expert_parallel": args.expert_parallel,
+                        "concurrency": args.concurrency,
+                        "max_num_batched_tokens": engine.max_num_batched_tokens,
+                        "max_num_seqs": engine.max_num_seqs,
+                        "compilation_cache_dir": args.compilation_cache_dir,
                         "command": command,
                     },
                     indent=2,

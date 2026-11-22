@@ -1970,17 +1970,24 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     def initial_cache(self, spec: PageTableSpec, *, dtype) -> StackedKvPageCache:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
+        page = self.initial_layer_cache(spec, dtype=dtype).kv_pages
+        layer = Axis("layer", len(self.transformer.blocks))
+        stacked = page.broadcast_axis(layer).rearrange((layer, ...))
+        kv_axis, _ = _inference_kv_layout(self.config)
+        pages = reshard(stacked.array, P(None, None, None, kv_axis, None))
+        return StackedKvPageCache(hax.named(pages, stacked.axes))
+
+    def initial_layer_cache(self, spec: PageTableSpec, *, dtype) -> KvPageCache:
+        """Allocate the interleaved paged KV cache for one serving layer."""
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
         kv_axis, kv_head_count = _inference_kv_layout(cfg)
         kv_heads, head_size = Axis("kv_head", kv_head_count), Axis("head_size", cfg.inferred_head_dim)
-        layer = Axis("layer", len(self.transformer.blocks))
         page = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
-        stacked = page.broadcast_axis(layer).rearrange((layer, ...))
         # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-        pages = reshard(stacked.array, P(None, None, None, kv_axis, None))
-        return StackedKvPageCache(hax.named(pages, stacked.axes))
+        pages = reshard(page.array, P(None, None, kv_axis, None))
+        return KvPageCache(hax.named(pages, page.axes))
 
     def decode(
         self,
@@ -2025,18 +2032,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def decode_for_sampling(
         self,
         input_ids: NamedArray,
-        kv_cache: StackedKvPageCache,
+        kv_cache: SnowballDecodeCache,
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         sample_indices: NamedArray,
-    ) -> tuple[NamedArray, StackedKvPageCache]:
+    ) -> tuple[NamedArray, SnowballDecodeCache]:
         """Prefill the cache and project only the rows needed by the sampler."""
         if self.config.projection_implementation != "native":
             raise ValueError("Selected-row decoding requires Snowball's native projection")
         logits, caches, _ = self._decode(
             input_ids, kv_cache, batch_info, pos_ids, capture_routes=False, sample_indices=sample_indices
         )
-        assert isinstance(caches, StackedKvPageCache)
         return logits, caches
 
     @named_call

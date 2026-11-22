@@ -27,6 +27,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--max-seqs", type=int, default=8, help="Maximum sequences per data-parallel rank")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
@@ -51,7 +53,7 @@ def main() -> None:
         launcher=VllmLauncherType.CUDA,
         source=VllmSource.MARIN_FORK,
         max_num_batched_tokens=8192,
-        max_num_seqs=8,
+        max_num_seqs=args.max_seqs,
         extra_args=(
             "--enable-prefix-caching",
             "--gpu-memory-utilization",
@@ -73,7 +75,7 @@ def main() -> None:
         with local_inference(model, engine, num_chips=H100_COUNT) as session:
             endpoint = session.model.endpoint
             url = endpoint.base_url.removesuffix("/v1")
-            command = benchmark_command(series, 1, url, output / "aiperf_artifacts")
+            command = benchmark_command(series, args.concurrency, url, output / "aiperf_artifacts")
             (output / "probe.json").write_text(
                 json.dumps(
                     {
@@ -87,6 +89,7 @@ def main() -> None:
                         "engine_args": engine.extra_args,
                         "max_num_batched_tokens": engine.max_num_batched_tokens,
                         "max_num_seqs": engine.max_num_seqs,
+                        "concurrency": args.concurrency,
                         "command": command,
                     },
                     indent=2,

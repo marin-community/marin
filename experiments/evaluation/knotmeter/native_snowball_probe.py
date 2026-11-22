@@ -130,6 +130,9 @@ def main() -> None:
     benchmark.add_argument("--workload")
     benchmark.add_argument("--prefill-only", action="store_true")
     parser.add_argument("--measure-prefill", action="store_true", help="Also measure prefill after AgentX")
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--max-seqs-in-prefill", type=int, default=16)
+    parser.add_argument("--max-rounds", type=int, default=32)
     parser.add_argument("--accelerator", choices=("tpu", "h100x8"), default="tpu")
     parser.add_argument("--chips", type=int, choices=(4, 8))
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
@@ -142,6 +145,7 @@ def main() -> None:
     parser.add_argument("--kv-append", choices=("separate", "fused"), default="separate")
     parser.add_argument("--kv-cache-contexts", type=int, default=1)
     parser.add_argument("--prefill-buckets", type=int, nargs="+", default=())
+    parser.add_argument("--decode-buckets", type=int, nargs="+", default=())
     parser.add_argument("--max-unrolled-prefill-tokens", type=int)
     parser.add_argument("--prefix-cache", choices=("disabled", "last_prompt", "recent_prompts"), default="disabled")
     parser.add_argument("--profile-decode", action="store_true", help="Trace short and long decode after the AgentX run")
@@ -149,6 +153,10 @@ def main() -> None:
         "--profile-prefill", action="store_true", help="Trace fresh and primed prefill after measurement"
     )
     args = parser.parse_args()
+    if min(args.concurrency, args.max_seqs_in_prefill, args.max_rounds) < 1:
+        parser.error("--concurrency, --max-seqs-in-prefill, and --max-rounds must be positive")
+    if args.concurrency > 1 and (args.prefix_cache == "last_prompt" or args.decode_token_layout == "replicated"):
+        parser.error("last_prompt and replicated decode require --concurrency 1")
     if args.replicate_window_kv and (
         args.decode_token_layout != "replicated"
         or args.kv_sharding != "expert"
@@ -178,13 +186,19 @@ def main() -> None:
         mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": expert_shards, "context": 1}),
         use_explicit_mesh_axes=True,
     )
+    packed_tokens = ((args.concurrency + expert_shards - 1) // expert_shards) * expert_shards
+    decode_tokens = 1 if args.decode_token_layout == "replicated" else packed_tokens
+    if any(size % expert_shards for size in args.decode_buckets):
+        parser.error("--decode-buckets must be divisible by the expert mesh size")
     service = InferenceEngineConfig(
         max_seq_len=series["max_context"],
-        max_seqs=1,
-        max_seqs_in_prefill=1,
-        max_queued_tokens=1 if args.decode_token_layout == "replicated" else 32,
-        max_tokens_per_round=1 if args.decode_token_layout == "replicated" else expert_shards,
+        max_seqs=args.concurrency,
+        max_seqs_in_prefill=min(args.concurrency, args.max_seqs_in_prefill),
+        max_queued_tokens=1 if args.decode_token_layout == "replicated" else max(32, decode_tokens),
+        max_tokens_per_round=decode_tokens,
+        max_rounds=args.max_rounds,
         prefill_bucket_sizes=tuple(args.prefill_buckets),
+        decode_bucket_sizes=tuple(args.decode_buckets),
         prefix_cache=args.prefix_cache,
     )
     service = dataclasses.replace(service, max_pages=service.max_pages_per_seq * args.kv_cache_contexts)
@@ -244,7 +258,7 @@ def main() -> None:
 
         sock = bind_serving_socket("127.0.0.1", 0)
         url = f"http://127.0.0.1:{sock.getsockname()[1]}"
-        command = benchmark_command(series, 1, url, output / "aiperf_artifacts")
+        command = benchmark_command(series, args.concurrency, url, output / "aiperf_artifacts")
         metrics_arg = command.index("--server-metrics")
         del command[metrics_arg : metrics_arg + 2]
         evidence = {
@@ -257,9 +271,13 @@ def main() -> None:
             "jax_version": jax.__version__,
             "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS"),
             "mesh": {"model": 1, "expert": expert_shards},
+            "concurrency": args.concurrency,
+            "max_seqs": service.max_seqs,
+            "max_seqs_in_prefill": service.max_seqs_in_prefill,
             "max_pages": service.max_pages,
             "max_queued_tokens": service.max_queued_tokens,
             "max_tokens_per_round": service.max_tokens_per_round,
+            "max_rounds": service.max_rounds,
             "attention": args.attention,
             "decode_layers": args.decode_layers,
             "decode_experts": args.decode_experts,
@@ -268,6 +286,7 @@ def main() -> None:
             "kv_sharding": args.kv_sharding,
             "kv_append": args.kv_append,
             "prefill_buckets": service.prefill_bucket_sizes,
+            "decode_buckets": service.decode_bucket_sizes,
             "max_unrolled_prefill_tokens": model_config.inference_max_unrolled_prefill_tokens,
             "prefix_cache": service.prefix_cache,
             "load_seconds": load_seconds,
@@ -294,7 +313,7 @@ def main() -> None:
                 if response.json()["usage"]["completion_tokens"] < 1:
                     raise RuntimeError("Native preflight generated no tokens")
                 evidence["cold_completion_seconds"] = time.monotonic() - started
-                if service.prefill_bucket_sizes:
+                if service.prefill_bucket_sizes or service.decode_bucket_sizes:
                     context = server.inference_context
                     filler = tokenizer.encode(" example", add_special_tokens=False)[0]
                     with (
@@ -307,6 +326,13 @@ def main() -> None:
                             # Distinct prefixes force each prefill buffer to compile.
                             prompt[0] = index
                             context.engine.generate([_request(prompt, 1)])
+                        for previous_bucket in service.decode_bucket_sizes:
+                            context.engine.generate(
+                                [
+                                    dataclasses.replace(_request([filler], 2), request_id=index)
+                                    for index in range(previous_bucket + 1)
+                                ]
+                            )
                         if args.decode_token_layout == "replicated":
                             # Warm a round that takes the per-layer decode cache as input.
                             context.engine.generate([_request([filler], 2 * service.max_rounds + 1)])

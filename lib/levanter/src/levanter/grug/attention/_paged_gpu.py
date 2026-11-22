@@ -3,7 +3,7 @@
 
 """GPU attention for Levanter's interleaved KV pages.
 
-Decode follows JAX's Pallas GPU split-K algorithm. Prefill gathers the
+Decode follows JAX's Pallas GPU split-K algorithm. Prefill gathers each
 sequence's logical pages for the segmented FA4 forward kernel.
 """
 
@@ -26,27 +26,56 @@ _MIN_DOT_TILE = 16
 def gpu_paged_prefill(
     q: jax.Array,
     kv_pages: jax.Array,
-    kv_len: jax.Array,
-    page_ids: jax.Array,
-    q_len: jax.Array,
+    kv_lens: jax.Array,
+    page_indices: jax.Array,
+    cu_q_lens: jax.Array,
     num_seqs: jax.Array,
     *,
     sm_scale: float,
     sliding_window: int | None,
 ) -> jax.Array:
-    """Run causal FA4 on an active sequence suffix and its reordered cached prefix."""
+    """Run causal FA4 for each active sequence in the packed query buffer."""
+    attend = partial(_gpu_paged_prefill_sequence, kv_pages, sm_scale=sm_scale, sliding_window=sliding_window)
+    count = num_seqs.reshape(())
+    sequence_capacity = min(q.shape[0], page_indices.shape[1] * kv_pages.shape[1])
+    if page_indices.shape[0] == 1 and sequence_capacity == q.shape[0]:
+        return attend(q, kv_lens[0], page_indices[0], jnp.where(count > 0, cu_q_lens[1], 0))
+
+    positions = jnp.arange(sequence_capacity)
+
+    def attend_sequence(seq, output):
+        start, end = cu_q_lens[seq], cu_q_lens[seq + 1]
+        indices = start + positions
+        query = q.at[indices].get(mode="fill", fill_value=0)
+        sequence_output = attend(query, kv_lens[seq], page_indices[seq], end - start)
+        destinations = jnp.where(indices < end, indices, q.shape[0])
+        return output.at[destinations].set(sequence_output, mode="drop")
+
+    return jax.lax.fori_loop(0, count, attend_sequence, jnp.zeros_like(q))
+
+
+def _gpu_paged_prefill_sequence(
+    kv_pages: jax.Array,
+    q: jax.Array,
+    kv_len: jax.Array,
+    page_ids: jax.Array,
+    q_len: jax.Array,
+    *,
+    sm_scale: float,
+    sliding_window: int | None,
+) -> jax.Array:
     query_capacity, heads, groups, head_dim = q.shape
     page_size = kv_pages.shape[1]
     kv_capacity = page_ids.size * page_size
     pages = kv_pages[jnp.maximum(page_ids, 0)]
     positions = jnp.arange(kv_capacity).reshape(page_ids.size, page_size)
-    valid_pages = (page_ids[:, None] >= 0) & (positions < kv_len[0])
+    valid_pages = (page_ids[:, None] >= 0) & (positions < kv_len)
     pages = jnp.where(valid_pages[:, :, None, None], pages, 0)
     cache = pages.reshape(1, kv_capacity, 2 * heads, head_dim)
 
-    offset = jnp.maximum(0, kv_len - q_len)
+    offset = jnp.maximum(0, kv_len - q_len).reshape(1)
     tokens = jnp.arange(query_capacity)[None, :]
-    valid = (tokens < q_len) & (num_seqs > 0)
+    valid = tokens < q_len
     lower_bounds = (
         jnp.zeros_like(tokens) if sliding_window is None else jnp.maximum(0, offset + tokens + 1 - sliding_window)
     )

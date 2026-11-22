@@ -30,7 +30,8 @@ _RPA_V3_VMEM_LIMIT_BYTES = {
     pltpu.ChipVersion.TPU_V5P: 50_000 * 1024,
     pltpu.ChipVersion.TPU_V6E: 98_304 * 1024,
 }
-_GPU_PAGED_QUERY_LIMIT = 8
+_GPU_PAGED_QUERY_LIMIT = 128
+_GPU_PACKED_DECODE_SPLITS = 16
 _GPU_FULL_DECODE_SPLITS = 128
 _GPU_WINDOWED_DECODE_SPLITS = 16
 
@@ -64,8 +65,7 @@ def ragged_paged_attention(
             `tpu_fp32` uses FP32 operands in the kernel and preserves the query dtype on output.
             `tpu_v3` uses BF16 KV DMA and FP32 value accumulation on v5p and v6e. Small sliding-window
             batches use the compact FP32 kernel.
-            `gpu` uses split-K CUDA attention for small query batches and FA4 for single-sequence
-            BF16 prefill.
+            `gpu` uses split-K CUDA attention for small query batches and FA4 for BF16 prefill.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. Default TPU dispatch uses the tiled kernel for
@@ -264,22 +264,25 @@ def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
         metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
         upper = jnp.where(metadata.valid, metadata.position + 1, 0)
         lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+        max_splits = _GPU_FULL_DECODE_SPLITS if sliding_window is None else _GPU_WINDOWED_DECODE_SPLITS
+        if q.shape[0] > _GPU_PACKED_DECODE_SPLITS:
+            max_splits = _GPU_PACKED_DECODE_SPLITS
         return gpu_paged_attention(
             q,
             kv_pages,
             jnp.maximum(page_indices[metadata.sequence], 0),
             jnp.stack((lower, upper), axis=-1),
             sm_scale,
-            max_splits=_GPU_FULL_DECODE_SPLITS if sliding_window is None else _GPU_WINDOWED_DECODE_SPLITS,
+            max_splits=max_splits,
             soft_cap=soft_cap,
         )
-    if page_indices.shape[0] == 1 and bf16 and soft_cap is None and isinstance(sm_scale, (float, int)):
+    if bf16 and soft_cap is None and isinstance(sm_scale, (float, int)):
         return gpu_paged_prefill(
             q,
             kv_pages,
             kv_lens,
-            page_indices[0],
-            cu_q_lens[1],
+            page_indices,
+            cu_q_lens,
             num_seqs,
             sm_scale=float(sm_scale),
             sliding_window=sliding_window,

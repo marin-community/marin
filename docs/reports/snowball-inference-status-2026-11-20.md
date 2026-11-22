@@ -431,6 +431,48 @@ uv run --no-sync python -m experiments.evaluation.knotmeter.native_snowball_prob
   --max-unrolled-prefill-tokens 0 --prefill-buckets 4096 8192 16384 32768
 ```
 
+### AgentX at concurrency 128
+
+Both engines used one eight-H100 80 GB host, the pinned BF16 checkpoint,
+the frozen 64K Weka replay, and a 180-second profiling window. vLLM used
+compiled CUDA graphs, eight data-parallel ranks with expert parallelism,
+and up to 16 sequences per rank. Native used a single eight-way expert
+mesh. Both engines enabled prefix caching.
+
+| Engine | Completed requests | Output tokens | Output tok/s | p50 TTFT (s) | p90 TTFT (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| [Compiled vLLM](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-vllm-c128-20261122-v2) | 423 | 120,615 | 593.09 | 0.70 | 1.44 |
+| [Native, fixed request batches](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v2) | 47 | 10,043 | 47.82 | 55.89 | 127.39 |
+| [Native, continuous admission](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v3-continuous) | 190 | 34,494 | 164.26 | 10.91 | 21.81 |
+
+The fixed-batch run had 12 full contexts of KV capacity. It cancelled 48
+requests at the drain deadline. On 47 common turns, both engines emitted
+10,043 tokens with identical counts, and active decode was 58.26 tok/s
+for native and 45.46 tok/s for vLLM.
+
+The continuous run increased KV capacity to 16 full contexts and admitted
+new requests between eight-step device rounds. It cancelled 20 requests
+at the drain deadline. Pairing by trace and branch coordinates matched
+all 190 completed turns and all 34,494 output tokens. Paired active decode
+was 11.93 tok/s for native and 45.48 tok/s for vLLM. The continuous run's
+active decode interval includes pauses to process other requests' prompts.
+Both native runs and vLLM reported zero profiling errors.
+
+### AgentX at concurrency 128 on TPU
+
+The first native v5p-8 attempt with 16 full KV contexts reached decode
+compilation. XLA reported 106.34 GiB of temporaries per chip against
+95.73 GiB of available HBM. The lower-memory follow-up retains per-layer
+KV buffers through both prefill and decode and sizes decode rounds to
+the live batch. It uses eight full KV contexts. Repeated vLLM worker
+losses interrupted compilation in `us-central1`. The second vLLM run
+uses the checkpoint and persistent XLA cache in `us-east5`, with four
+precompile workers. [Native v5p-8 failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v1) · [Native v5p-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v3-layer-kv) · [vLLM v5p-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v5p8-c128-20261122-v2-east5)
+
+The first native v6e-8 attempt reached preflight and failed to allocate a
+6.50 GiB device buffer. The per-layer retry uses four full KV contexts and
+selects the checkpoint in the worker's region. [Native v6e-8 failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v1) · [Native v6e-8 retry](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v3-layer-kv)
+
 ## What works
 
 - **Paged generation.** The real `InferenceEngine` handles heterogeneous causal
