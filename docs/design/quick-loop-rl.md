@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 5:24 a.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 5:42 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -15,7 +15,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
-| Megatron learner with vLLM | The inventory quick loop has historical 25-update runs. The fresh verified-publication control `2026.11.20.6` has been submitted. | Verify all 25 updates and both fixed-panel evaluations. |
+| Megatron learner with vLLM | The fresh verified-publication control `2026.11.20.6` completed the initial panel and its first two updates on H100. | Verify all 25 updates, their final policy publication and the final fixed-panel evaluation. |
 | Levanter learner with vLLM | The artifact main passed the frozen 40-H100 smoke through training, exact restart, byte-verified publication, and terminal checkpoint. | Run the 25-update Levanter arm with the same workload and evaluation panel as the Megatron control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
@@ -718,7 +718,25 @@ its receipt and weight-change audits.
 Run Levanter `2026.11.20.7` as the second arm. Both use the same regional
 route and publication verification. The trainer differences are the
 learner strategy, batch builder and Levanter policy configuration.
-[Megatron matched control coordinator][iris-matched-megatron]
+[Megatron matched control][iris-matched-megatron]
+
+The control started at step 0 on the same five physical H100 hosts. Its
+initial panel scored 0.2602 across 100 tasks. The original Ray driver logs
+verified all eight receivers with zero mismatches for versions 0 and 1,
+each covering 157,226,237,952 bytes. Its first two training rollouts each
+admitted 128 groups and 512 trajectories with zero staleness. Version-1
+publication took 2.998 seconds. The accepted Levanter smoke took 164.066
+seconds to publish version 1, including 128.147 seconds to install.
+The Megatron install took 0.439 seconds. The Levanter expert-phase timer
+accounted for 119.911 seconds of the install and includes source waits
+and per-send CUDA synchronization. Each learner host staged approximately
+3,450 individual payloads and 33.5 GB of source bytes. Megatron used
+persistent GPU views and synchronized at phase boundaries. At the
+receivers, the FP32 Levanter router raised total bytes by 0.17%. Time the
+individual export, host copies, spool I/O, CUDA transfer, and replay
+stages before selecting a publication optimization, and use both complete
+matched runs to compare overall training and rollout time.
+
 Before each submission, confirm that Iris and the durable and scratch prefixes
 have no prior attempt for that version. The launcher creates a fresh coordinator
 ID and the trainer can resume from an existing checkpoint.
@@ -1450,7 +1468,7 @@ arms. [Prior timing comparison][timing]
 [iris-smoke-canonical-replay]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.19-coordinator-b37693ff%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.19-abe09138e0b3
 [iris-smoke-terminal-cleanup]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.20-coordinator-8633ad51%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.20-a747a82c7558
 [iris-smoke-terminal-cleanup-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.20-coordinator-8633ad51%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.20-acbbca3b8eb3
-[iris-matched-megatron]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0
+[iris-matched-megatron]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-coordinator-46214fd0%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.6-a30288e64eea
 [xla-learner-allocator]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1343-L1380
 [xla-learner-allocator-defaults]: https://github.com/openxla/xla/blob/131bf41acb4650e4391a640c3f1859c1c86ad74b/xla/debug_options_flags.cc#L308-L315
 [h100-init-failure]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.8%2Fobserved-failure.json
