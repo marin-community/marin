@@ -852,7 +852,15 @@ preparation. The independently captured 64 MiB NCCL all-to-all preflight
 had similar median bus bandwidth on all 40 original ranks, 44.17 GB/s
 for the third Levanter child and 43.47 GB/s for the accepted Megatron
 child. The collective preflight measures a different path from export,
-CPU staging and the per-expert publication sends.
+CPU staging and the per-expert publication sends. The frozen learner
+copies each canonical expert slice to the host, serializes it through a
+local pipe, stages it on the sender GPU and spools the same bytes for
+receiver verification. The maintained binary pipe reached a median of
+1.60 GiB/s versus 0.71 GiB/s for the frozen pickle pipe in a local ARM CPU
+test with the production 6.25 and 12.5 MiB expert matrix sizes. This
+measures framing and decoding. Time the JAX reshard, device-to-host copy,
+pipe, GPU staging, NCCL and exact replay separately on H100 before
+estimating the end-to-end gain.
 
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
@@ -1670,15 +1678,23 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   three crossings, two below 0.80 and one above 1.20. Each was a
   standalone period under a fully matching token history in the
   scatter and gather captures. Their predictor expert sets still
-  differed between serving implementations. Compare the saved frames
-  with the learner's named-axis mapping and compare vocabulary
-  projections on the same selected activations. Preserve the
-  serving-score parity measurements alongside the learner's separate
-  current-versus-old policy ratio.
+  differed between serving implementations. A saved-frame H100
+  diagnostic reproduced the same scores bit for bit with and without
+  the learner's named-axis mapping. FP32 projection retained all three
+  crossings, including in a comparison that held the learner
+  activations fixed. Highest matmul precision left two crossings.
+  Native H100 serving streams paged K/V through the portable FP32
+  reference attention path. The learner uses dense-sequence BF16 FA4.
+  Compare these forward paths while preserving the original causal
+  context, then profile the paged path before choosing a production
+  kernel. The serving-score parity gate compares scores from two
+  runtimes. The held PPO objective uses its own learner-rescored old
+  probabilities.
   [Full-context run][iris-native-cache-ownership] ·
   [Archived exact-task source][native-full-capture-archive] ·
   [Replay-only scorer][iris-native-b-scorer] ·
-  [Full ordered-gather qualification][iris-native-ordered-gather]
+  [Full ordered-gather qualification][iris-native-ordered-gather] ·
+  [Saved-frame precision diagnostic][iris-native-score-profiles]
 
   The held comparison measures end-to-end rollout admission and optimizer
   timing with four learner hosts. The 128-group frozen learner's warm
@@ -1774,6 +1790,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-repeat-prefill]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-repeat-prefill-20261122a
 [iris-native-b-scorer]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-original-b-scorer-20261122b
 [iris-native-ordered-gather]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122j
+[iris-native-score-profiles]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-saved-24k-score-profiles-20261122a
 [native-full-capture-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122i%2Fnative-native-fused-20261122i-tool-fused%2F0%2F2d4106a1e0593f89%2Foutputs.tar.zst
 [native-paged-moe]: https://github.com/marin-community/marin/blob/fcc3167fef231ed2dacdd9e21cd48a564668e7ee/lib/levanter/src/levanter/models/snowball.py#L1932-L1943
 [jax-allocator-options]: https://docs.jax.dev/en/latest/gpu_memory_allocation.html
