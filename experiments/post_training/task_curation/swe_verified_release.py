@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
-from taskcompendium.harbor import read_harbor_setup
+from taskcompendium.harbor.setup import read_harbor_setup
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 

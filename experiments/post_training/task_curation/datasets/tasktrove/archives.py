@@ -7,7 +7,7 @@ import tomllib
 from dataclasses import dataclass, replace
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.harbor import read_harbor_setup
+from taskcompendium.harbor.setup import read_harbor_setup
 from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
@@ -36,22 +36,16 @@ ANSWER_FILE_DELIVERY = (
 
 def harbor_setup_rejection(row: RawRow) -> ImportRejection | None:
     """Refuse setup declarations in TaskTrove conversions without a Harbor trial."""
-    if TASK_TOML in (row.data.get("archive_links") or {}):
-        return unsupported("unsupported_archive_links", "TaskTrove conversion requires a regular task.toml")
     contents = archive_file(row.data, TASK_TOML)
     if contents is None:
         return None
     try:
         setup = read_harbor_setup(tomllib.loads(contents.decode()), source=row.id)
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="invalid_task_toml", detail=str(error))
     except ValueError as error:
-        detail = str(error)
-    else:
-        if setup is None:
-            return None
-        detail = "TaskTrove conversion does not support [environment.setup]"
-    return unsupported("harbor_setup", detail)
+        return unsupported("harbor_setup", str(error))
+    if setup is None:
+        return None
+    return unsupported("harbor_setup", "TaskTrove conversion does not support [environment.setup]")
 
 
 @dataclass(frozen=True)

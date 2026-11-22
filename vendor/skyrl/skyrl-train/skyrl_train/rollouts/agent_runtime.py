@@ -209,7 +209,7 @@ class InstalledAgentRuntime:
         )
         try:
             task_dir = evidence / "task"
-            restore_harbor_trial_task(lowered.task, task_dir, setup_budget=self.settings.setup_timeout)
+            restore_harbor_trial_task(lowered.task, task_dir, setup_timeout=self.settings.setup_timeout)
             binding = self.settings.task_bindings.get(lowered.task.id)
             config = apply_task_binding(config, binding)
             environment = config.environment

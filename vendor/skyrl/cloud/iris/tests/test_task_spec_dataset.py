@@ -119,24 +119,38 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
     assert loaded[2].harness == ASSISTANT_PREFIX_HARNESS
 
 
+DECLARED_SETUP = '[environment.setup]\ncommand = "true"\n'
+
+
 @pytest.mark.parametrize(
-    "harness, extra, error",
+    "harness, setup, error",
     [
-        (HARBOR_TRIAL_SESSION, "", None),
-        (HARBOR_TRIAL_SESSION, 'user = "root"\n', "environment.setup.user"),
-        ("shellbox", "", "[environment.setup]"),
+        pytest.param(HARBOR_TRIAL_SESSION, DECLARED_SETUP, None, id="full-trial"),
+        pytest.param(
+            HARBOR_TRIAL_SESSION, DECLARED_SETUP + 'user = "root"\n', "environment.setup.user", id="unknown-setup-key"
+        ),
+        pytest.param(HARBOR_TRIAL_SESSION, "setup = true\n", "[environment.setup]", id="setup-is-not-a-table"),
+        pytest.param(
+            HARBOR_TRIAL_SESSION, '[environment.setup]\ncommand = " "\n', "environment.setup.command", id="blank-command"
+        ),
+        pytest.param(
+            HARBOR_TRIAL_SESSION, DECLARED_SETUP + "timeout_sec = inf\n", "environment.setup.timeout_sec",
+            id="nonfinite-timeout",
+        ),
+        pytest.param("shellbox", DECLARED_SETUP, "[environment.setup]", id="shellbox-refusal"),
+        pytest.param("shellbox", "", None, id="shellbox-without-setup"),
     ],
-    ids=["full-trial", "unknown-setup-key", "shellbox"],
 )
-def test_raw_harbor_package_setup(tmp_path: Path, harness: str, extra: str, error: str | None):
+def test_raw_harbor_package_binds_setup_for_full_trial_and_refuses_invalid_setup(
+    tmp_path: Path, harness: str, setup: str, error: str | None
+):
     package = tmp_path / "task"
     (package / "tests").mkdir(parents=True)
     (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "instruction.md").write_text("Write an answer.")
     document = (
         '[verifier]\nenvironment_mode = "separate"\n'
-        f'[environment]\ndocker_image = "example.test/task@sha256:{"a" * 64}"\n'
-        '[environment.setup]\ncommand = "true"\ntimeout_sec = 1\n' + extra
+        f'[environment]\ndocker_image = "example.test/task@sha256:{"a" * 64}"\n' + setup
     )
     (package / "task.toml").write_text(document)
     kwargs = {"cache_dir": tmp_path / "cache", "session": session_spec(harness)}
@@ -148,7 +162,12 @@ def test_raw_harbor_package_setup(tmp_path: Path, harness: str, extra: str, erro
 
     path = materialize_harbor_tasks([str(package)], **kwargs)
     [serialized] = pq.read_table(path).column(TASK_ROLLOUT_COLUMN).to_pylist()
-    task = TaskRolloutSpec.model_validate_json(serialized).task
+    spec = TaskRolloutSpec.model_validate_json(serialized)
+    task = spec.task
+    if harness == "shellbox":
+        assert is_shell_harness(spec.harness)
+        assert isinstance(task.grader, ScriptGrader)
+        return
     assert task.environment_requirements.setup_commands == ("true",)
     [config] = [resource for resource in task.resources.verifier if resource.path == "task.toml"]
     assert resource_bytes(config) == document.encode()

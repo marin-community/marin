@@ -127,9 +127,11 @@ For these trials, the Harbor task package defines the image, environment variabl
 and agent user. TaskSpec may add `setup_commands` and their setup-only
 `working_directory`; other TaskSpec machine-environment overrides are rejected.
 SkyRL imports a raw Harbor package's `[environment.setup].command` into
-`setup_commands` for a full trial. The optional `timeout_sec` must be positive
-and fit the launch setup budget. The launch budget governs execution. Shellbox,
-native Harbor, and the TaskTrove and ARC archive converters refuse this table.
+`setup_commands` for a full trial. If the declared command does not occur
+exactly once in `setup_commands` or `timeout_sec` exceeds `setup_timeout`, SkyRL
+records a failed attempt during trial preparation. The launch continues and
+task health tracks the failure. Shellbox, native Harbor, and the TaskTrove and
+ARC archive converters refuse this table.
 
 ## Harnesses
 

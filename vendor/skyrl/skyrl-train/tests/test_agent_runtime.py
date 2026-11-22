@@ -80,9 +80,17 @@ def harbor_package(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("phase", "timeout_sec"), [("train", None), ("eval", 5), ("eval", 6)])
+@pytest.mark.parametrize(
+    ("phase", "timeout_sec", "commands", "refused_field"),
+    [
+        pytest.param("train", None, ("exit 23",), None, id="train-no-setup"),
+        pytest.param("eval", 5, ("exit 23",), None, id="eval-setup-within-budget"),
+        pytest.param("eval", 6, ("exit 23",), "environment.setup.timeout_sec", id="eval-setup-over-budget"),
+        pytest.param("eval", 5, ("true",), "environment.setup.command", id="eval-setup-not-bound"),
+    ],
+)
 async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
-    tmp_path, monkeypatch, phase, timeout_sec, harbor_package
+    tmp_path, monkeypatch, phase, timeout_sec, commands, refused_field, harbor_package
 ):
     package = harbor_package
     if timeout_sec is not None:
@@ -92,7 +100,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     task = task.model_copy(
         update={
             "environment_requirements": task.environment_requirements.model_copy(
-                update={"setup_commands": ("exit 23",), "working_directory": "/workspace"}
+                update={"setup_commands": commands, "working_directory": "/workspace"}
             )
         }
     )
@@ -158,19 +166,20 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     monkeypatch.setattr(agent_runtime, "registered_agent_endpoint", registered_endpoint)
     await runtime.startup()
     try:
-        if timeout_sec == 6:
-            with pytest.raises(GradedRolloutInterrupted) as interrupted:
-                await RolloutEngine({}, harnesses).run_task(configured, unexpected_model_request)
-            cause = interrupted.value.__cause__
-            assert isinstance(cause, ValueError)
-            assert "environment.setup.timeout_sec exceeds launch setup budget" in str(cause)
-            assert attempted == []
-            return
         with pytest.raises(GradedRolloutInterrupted) as interrupted:
             await RolloutEngine({}, harnesses).run_task(configured, unexpected_model_request)
-        assert interrupted.value.grade.reward is None
     finally:
         await runtime.shutdown()
+
+    assert interrupted.value.grade.reward is None
+    [attempt] = list((tmp_path / "attempts").iterdir())
+    assert (attempt / "identity.json").is_file()
+    if refused_field is not None:
+        cause = interrupted.value.__cause__
+        assert isinstance(cause, ValueError)
+        assert refused_field in str(cause)
+        assert attempted == []
+        return
 
     assert len(attempted) == 1
     selected = connections[phase]
@@ -179,10 +188,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         selected.api_url,
         selected.target,
     )
-    attempts = list((tmp_path / "attempts").iterdir())
-    assert len(attempts) == 1
-    assert (attempts[0] / "identity.json").is_file()
-    [result_path] = list((attempts[0] / "trials").glob("*/result.json"))
+    [result_path] = list((attempt / "trials").glob("*/result.json"))
     result = TrialResult.model_validate_json(result_path.read_text())
     assert result.exception_info.exception_type == "ProviderUnavailable"
 
@@ -262,7 +268,7 @@ async def test_original_trial_runs_setup_before_installation_and_retains_failure
     )
     task = task.model_copy(update={"environment_requirements": requirements})
     restored = tmp_path / "restored"
-    restore_harbor_trial_task(task, restored, setup_budget=5)
+    restore_harbor_trial_task(task, restored, setup_timeout=5)
     config = restored / "task.toml"
     assert config.stat().st_mode == original.stat().st_mode
     assert config.stat().st_mtime_ns == original.stat().st_mtime_ns

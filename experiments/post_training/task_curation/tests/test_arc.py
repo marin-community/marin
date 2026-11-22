@@ -37,17 +37,15 @@ ARCHIVE_FILES = {
 }
 
 
-def archive(instruction: str, verifier_data: dict, *, setup: bytes = b"", link_config: bool = False) -> dict:
-    files = {
-        "instruction.md": instruction.encode(),
-        "tests/verifier_data.json": json.dumps(verifier_data).encode(),
-        **ARCHIVE_FILES,
-        "task.toml": ARCHIVE_FILES["task.toml"] + setup,
-    }
-    if link_config:
-        files["config.toml"] = files.pop("task.toml")
-        return tasktrove_row(files, symlinks={"task.toml": "config.toml"})
-    return tasktrove_row(files)
+def archive(instruction: str, verifier_data: dict, *, setup: bytes = b"") -> dict:
+    return tasktrove_row(
+        {
+            "instruction.md": instruction.encode(),
+            "tests/verifier_data.json": json.dumps(verifier_data).encode(),
+            **ARCHIVE_FILES,
+            "task.toml": ARCHIVE_FILES["task.toml"] + setup,
+        }
+    )
 
 
 ROWS: dict[str, dict] = {
@@ -97,15 +95,6 @@ def test_tasktrove_transductive_preserves_the_release_grid_comparison(answer, re
             ImportFailureKind.UNSUPPORTED,
             "harbor_setup",
             id="harbor-setup",
-        ),
-        pytest.param(
-            "tasktrove-arc_transductive",
-            archive(
-                "Solve.", {"expected_output": GRID}, setup=b'[environment.setup]\ncommand = "true"\n', link_config=True
-            ),
-            ImportFailureKind.UNSUPPORTED,
-            "unsupported_archive_links",
-            id="linked-harbor-setup",
         ),
         (
             "tasktrove-arc_inductive",

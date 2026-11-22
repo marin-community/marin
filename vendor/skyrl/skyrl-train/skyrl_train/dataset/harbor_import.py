@@ -13,7 +13,7 @@ from typing import Any
 import tomlkit
 from pydantic import BaseModel, Field
 
-from taskcompendium.harbor import read_harbor_setup
+from taskcompendium.harbor.setup import read_harbor_setup
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -169,15 +169,15 @@ def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
     )
 
 
-def restore_harbor_trial_task(task: TaskSpec, directory: Path, *, setup_budget: float) -> None:
-    """Restore a private trial copy and validate its setup against the typed binding."""
+def restore_harbor_trial_task(task: TaskSpec, directory: Path, *, setup_timeout: float) -> None:
+    """Validate the setup binding and restore a private host copy of the package."""
     directory.mkdir(parents=True, exist_ok=False)
     for resource in task.resources.verifier:
         path = directory / resource.path
         path.parent.mkdir(parents=True, exist_ok=True)
         contents = resource_bytes(resource)
         if path == directory / "task.toml":
-            contents = _trial_config_contents(contents, task, setup_budget)
+            contents = _trial_config_contents(contents, task, setup_timeout)
         path.write_bytes(contents)
         if resource.mode is not None:
             path.chmod(int(resource.mode, 8))
@@ -185,16 +185,16 @@ def restore_harbor_trial_task(task: TaskSpec, directory: Path, *, setup_budget: 
             os.utime(path, ns=(resource.mtime_ns, resource.mtime_ns))
 
 
-def _trial_config_contents(contents: bytes, task: TaskSpec, setup_budget: float) -> bytes:
+def _trial_config_contents(contents: bytes, task: TaskSpec, setup_timeout: float) -> bytes:
     text = contents.decode()
     setup = read_harbor_setup(tomllib.loads(text), source=task.id)
     if setup is None:
         return contents
     if task.environment_requirements.setup_commands.count(setup.command) != 1:
         raise ValueError(f"{task.id}: environment.setup.command must occur once in the trial's setup_commands")
-    if setup.timeout_sec is not None and setup.timeout_sec > setup_budget:
-        raise ValueError(f"{task.id}: environment.setup.timeout_sec exceeds launch setup budget of {setup_budget}s")
-    # Native Harbor receives its own configuration. The trial hook consumes the typed command.
+    if setup.timeout_sec is not None and setup.timeout_sec > setup_timeout:
+        raise ValueError(f"{task.id}: environment.setup.timeout_sec exceeds the launch setup_timeout of {setup_timeout}s")
+    # Native Harbor refuses [environment.setup]. The trial hook runs the typed command.
     config = tomlkit.parse(text)
     environment = config["environment"]
     assert isinstance(environment, MutableMapping)

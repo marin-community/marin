@@ -71,9 +71,7 @@ def converted_task(pipeline: CurationRecipe, data: dict[str, Any], *, inputs: St
     return task
 
 
-def tasktrove_row(
-    files: Mapping[str, bytes], *, path: str = "fixture-task", symlinks: Mapping[str, str] | None = None
-) -> dict[str, Any]:
+def tasktrove_row(files: Mapping[str, bytes], *, path: str = "fixture-task") -> dict[str, Any]:
     """A TaskTrove ``tasks.parquet`` row whose archive holds ``files``."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
@@ -82,9 +80,4 @@ def tasktrove_row(
             member.size = len(data)
             member.mode = 0o644
             archive.addfile(member, io.BytesIO(data))
-        for name, target in (symlinks or {}).items():
-            member = tarfile.TarInfo(name)
-            member.type = tarfile.SYMTYPE
-            member.linkname = target
-            archive.addfile(member)
     return {"path": path, "task_binary": buffer.getvalue()}

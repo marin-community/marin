@@ -223,5 +223,4 @@ def test_tasktrove_converter_refuses_declared_environment_setup():
     )
     result = convert_row(sources()[0].config, row)
     assert isinstance(result, ImportRejection)
-    assert result.kind == ImportFailureKind.UNSUPPORTED
-    assert "[environment.setup]" in result.detail
+    assert (result.kind, result.reason) == (ImportFailureKind.UNSUPPORTED, "harbor_setup")
