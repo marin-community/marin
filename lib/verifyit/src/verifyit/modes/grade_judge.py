@@ -642,7 +642,7 @@ def _answer_verdicts(reply: str, count: int) -> tuple[list[_AnswerVerdict], int 
         )
     try:
         confidence = max(0, min(100, round(float(str(data.get("confidence")).rstrip("%")))))
-    except ValueError:
+    except (ValueError, OverflowError):
         confidence = None
     return verdicts, confidence
 

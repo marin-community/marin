@@ -1118,6 +1118,7 @@ def _verdicts(*correct: str, confidence: str = "80") -> str:
         (_verdicts("yes", "yes"), 1.0, 1.0, Status.SCORED),
         (_verdicts("yes", "no"), 0.0, 0.5, Status.SCORED),
         ("```json\n" + _verdicts("YES", "yes", confidence="90%") + "\n```", 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes", "yes", confidence="Infinity"), 1.0, 1.0, Status.SCORED),
         (_verdicts("yes"), 0.0, None, Status.INFRA_ERROR),
         (_verdicts("yes", "maybe"), 0.0, None, Status.INFRA_ERROR),
         ("Both answers are correct.", 0.0, None, Status.INFRA_ERROR),
