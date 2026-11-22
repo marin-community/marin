@@ -1888,12 +1888,9 @@ class InferenceEngine:
                 on_tokens(rid, cid, tokens)
 
         # Update done flags based on snapshot
-        finished_slots = np.flatnonzero(fins).tolist()
+        finished_slots = sorted(slot for slot in self.local_map if fins[slot])
         for local_slot in finished_slots:
-            info = self.local_map.get(local_slot)
-            if info is None:
-                continue
-            rid, cid = info
+            rid, cid = self.local_map[local_slot]
             dr = self.results[rid][cid]
             dr.finish_reason = FinishReason(int(finish_reasons[local_slot]))
             choices = self.results[rid].values()
@@ -1917,8 +1914,10 @@ class InferenceEngine:
 
         num_finished = len(finished_slots)
         if num_finished:
+            released = np.zeros_like(fins)
+            released[finished_slots] = True
             decode_state = eqx.filter_jit(DecodeState.free_pages_for_finished)(
-                self.gen_state.decode_state, jnp.asarray(fins)
+                self.gen_state.decode_state, jnp.asarray(released)
             )
             self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
             self.free_slots.sort()

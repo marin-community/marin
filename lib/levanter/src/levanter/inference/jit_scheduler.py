@@ -394,34 +394,14 @@ class SequenceTable(eqx.Module):
     ) -> tuple["SequenceTable", "PageTable"]:
         assert finished_mask.ndim == 1
 
-        def dec_refcounts_for_seq(pages_row, ref_counts):
-            valid = is_valid(pages_row)
-
-            def body(i, rc):
-                def dec(rc):
-                    page = pages_row["page", i].scalar()
-                    return rc.at["page", page].add(-1)
-
-                return jax.lax.cond(valid["page", i].scalar(), dec, lambda x: x, rc)
-
-            updated = jax.lax.fori_loop(0, pages_row.axis_size("page"), body, ref_counts)
-            return hax.maximum(updated, hax.zeros_like(updated))
-
-        def body(i, state):
-            ref_counts, sequences = state
-
-            def do(state):
-                ref_counts, sequences = state
-                pages_row = sequences.page_indices["seq", i]
-                ref_counts = dec_refcounts_for_seq(pages_row, ref_counts)
-                sequences = sequences.release_slot(i)
-                return ref_counts, sequences
-
-            return jax.lax.cond(finished_mask[i], do, lambda s: s, (ref_counts, sequences))
-
-        ref_counts, sequences = jax.lax.fori_loop(0, self.max_seqs, body, (page_table.page_ref_counts, self))
-        new_page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
-        return sequences, new_page_table
+        released = hax.named(finished_mask, "seq") & self.used_mask
+        pages = self.page_indices.array
+        destinations = jnp.where(released.array[:, None] & is_valid(pages), pages, page_table.num_pages)
+        ref_counts = page_table.page_ref_counts
+        # Each released sequence contributes one decrement per page, including shared pages.
+        updated = jnp.maximum(ref_counts.array.at[destinations].add(-1, mode="drop"), 0)
+        table = dataclasses.replace(page_table, page_ref_counts=hax.named(updated, ref_counts.axes))
+        return self.clear_slots(released), table
 
     @eqx.filter_jit(donate="all")
     def clone_pages_from(

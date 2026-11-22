@@ -4,8 +4,16 @@ The bounded Snowball inference-to-learner path now reproduces sampled policy
 logprobs bit-for-bit on four TPUv4 devices. The production engine retains its
 device-side decode loop. On TPUv4, 32-token chunks measured 3.54× faster than
 one-token chunks on the long-request fixture and 1.79× on the mixed-request
-fixture. The full 67B checkpoint now runs AgentX on v5p-8. Full-model learner
-replay parity and external rollout/learner integration remain open.
+fixture. Full-model learner replay parity and external rollout/learner
+integration remain open.
+
+The full BF16 67B checkpoint completed the matched 64K AgentX replay at
+128 offered clients on v5p-8, v6e-8, and eight H100s. The best native runs
+reached 67%, 34%, and 94% of compiled vLLM's aggregate output throughput
+on those platforms. The two-replica H100 trial reached 0.96 s p90 time to
+first token versus vLLM's 1.44 s. At 64,512 fresh prompt tokens, native
+HTTP prefill reached 35.5k prompt tok/s on v5p-8 and 42.2k on v6e-8
+versus 33.1k and 42.4k for vLLM.
 
 This publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -681,6 +689,13 @@ reused 168,192 prompt tokens across four admissions during profiling.
 Throughput reached 180.80 output tok/s. All 180 paired turns matched output
 lengths and paired active decode was 28.55 tok/s versus 32.49 tok/s.
 Both of the higher-capacity native TPU runs reported zero profiling errors.
+
+On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
+one newly finished slot following 20 stale finish flags. With four newly
+finished slots it took 0.45 ms versus 18.26 ms. Both cases used a 128-slot
+page table with shared prefix pages. Page mappings and reference counts
+matched exactly.
+[KV release benchmark](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-batched-kv-release-v6e-20261122-v1)
 
 ### Serial raw prefill with the concurrency-128 server configurations
 

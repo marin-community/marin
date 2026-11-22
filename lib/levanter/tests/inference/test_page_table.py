@@ -74,3 +74,22 @@ def test_sequence_table_allocate_and_free_pages():
     sequences, pt = sequences.free_pages(pt, seq0)
     assert sequences.seq_lens["seq", seq0].scalar() == 0
     assert not bool(sequences.used_mask["seq", seq0].scalar())
+
+
+def test_releasing_multiple_sequences_preserves_shared_pages_of_live_clone():
+    table = _make_table(pages_per_seq=3)
+    sequences = SequenceTable.init(table.max_seqs, table.pages_per_seq, table.page_size)
+    sequences, _ = sequences.reserve_slot(0)
+    slots = hax.named(jnp.array([0, 0, 0], dtype=jnp.int32), "position")
+    positions = hax.named(jnp.array([0, 1, 2], dtype=jnp.int32), "position")
+    sequences, table, _ = sequences.allocate_for_seq(table, slots, positions)
+    sequences, table = sequences.clone_pages_from(table, 0, 1)
+    sequences, table = sequences.clone_pages_from(table, 0, 2)
+
+    first_page, active_tail = sequences.page_indices.array[2, :2].tolist()
+    sequences, table = sequences.free_pages_for_finished(table, jnp.array([True, True, False, False]))
+
+    assert sequences.used_mask.array.tolist() == [False, False, True, False]
+    assert sequences.page_indices.array[2, :2].tolist() == [first_page, active_tail]
+    assert table.page_ref_counts.array[first_page] == table.page_ref_counts.array[active_tail] == 1
+    assert jnp.sum(table.page_ref_counts.array) == 2
