@@ -15,14 +15,13 @@ from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
-    CommandSemantics,
     DockerImage,
-    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
     ProcessScope,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
@@ -323,13 +322,12 @@ class DockerMachineFactory:
             raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
         return spec.source
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         source = self._check_spec(spec)
         reference = source.reference if isinstance(source, (DockerImage, RegistryImage)) else None
         check_execution_requirements(
             requirements,
             spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
             capabilities=LINUX_PROCESS_CAPABILITIES,
             image_reference=reference,
         )

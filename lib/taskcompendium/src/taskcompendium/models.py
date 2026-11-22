@@ -24,7 +24,7 @@ from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from shellbox.machine import CommandSemantics as CommandSemantics
-from shellbox.machine import PackageSpec
+from shellbox.machine import PackageSpec, task_requirements
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -423,11 +423,7 @@ class ServiceRequirement(BaseModel):
 
 
 class EnvironmentRequirements(BaseModel):
-    """Operations, initial workspace or unresolved recipe, and tool-provider contracts.
-
-    ``services`` and ``readiness`` are omitted from serialization when unset, so tasks
-    without them keep their serialized form.
-    """
+    """Machine software, workspace and tool providers; unset services and readiness are omitted."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -443,6 +439,8 @@ class EnvironmentRequirements(BaseModel):
     package_spec: PackageSpec | None = None
     services: tuple[ServiceRequirement, ...] = Field(default=(), exclude_if=lambda value: not value)
     readiness: ReadinessRequirement | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    requirements = property(task_requirements)
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":

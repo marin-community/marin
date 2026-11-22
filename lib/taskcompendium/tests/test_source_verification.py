@@ -34,11 +34,9 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.source_verification import (
     INFRA_ERROR_RETRIES,
     SOURCE_VERIFICATION_REVISION,
-    SampleResult,
     SourceVerificationPolicy,
     SourceVerificationStatus,
     VerificationSample,
-    VerificationTrial,
     _verify_sample_with_evidence,
     gate_source_row,
     merge_samples,
@@ -51,6 +49,7 @@ from taskcompendium.pipeline.source_verification import (
 )
 from taskcompendium.pipeline.stages import manifest_counts
 from taskcompendium.pipeline.verification import DIAGNOSTIC_TAIL_CHARS, control_result
+from taskcompendium.pipeline.verification_trials import SampleResult, VerificationTrial
 
 from .pipeline_stages import FixtureGradingMachines
 

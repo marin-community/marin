@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
-from shellbox.backends.local.machine import check_local_environment
+from shellbox.backends.local.support import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.http_service import HttpResponse, serve_http
 from shellbox.image import DockerfileSource
@@ -24,12 +24,12 @@ from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
-    ExecutionRequirements,
     ExitReason,
     Machine,
     MachineSpec,
     PackageSpec,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
@@ -251,7 +251,7 @@ class RecordingShellSimFactory(DockerMachineFactory):
 
     machines: list[Machine] = field(default_factory=list)
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
         factory.check_environment(requirements, spec)
 
@@ -999,7 +999,7 @@ class NoBuildFactory(RecordingShellSimFactory):
 
     backend: Backend = Backend.LOCAL
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         check_local_environment(requirements, spec)
 
 

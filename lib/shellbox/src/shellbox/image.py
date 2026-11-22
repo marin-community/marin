@@ -19,6 +19,10 @@ from typing import Any
 OCI_TAG = "image"
 
 
+class UnsupportedImage(ValueError):
+    """The verified image uses an unsupported platform."""
+
+
 @dataclass(frozen=True)
 class RegistryImage:
     """An OCI registry reference such as ghcr.io/org/image:tag."""
@@ -41,6 +45,14 @@ class PreparedImage:
     layout: Path
     manifest_digest: str
     source: RegistryImage | DockerfileSource
+
+
+DIGEST_PINNED_IMAGE = re.compile(r"[^\s]+@sha256:[0-9a-f]{64}")
+
+
+def is_digest_pinned_image(reference: str) -> bool:
+    """Whether the registry reference names its manifest by sha256 digest."""
+    return DIGEST_PINNED_IMAGE.fullmatch(reference) is not None
 
 
 def _oci_blob(layout: Path, digest: str) -> Path:
@@ -160,7 +172,7 @@ def _manifest_digest(layout: Path, *, expected: str | None = None) -> str:
     manifest = _oci_json_blob(layout, digest)
     config = _oci_json_blob(layout, manifest["config"]["digest"])
     if config["os"] != "linux" or config["architecture"] != "amd64":
-        raise ValueError("Only Linux amd64 images are supported")
+        raise UnsupportedImage("Only Linux amd64 images are supported")
     for layer in manifest["layers"]:
         _oci_blob(layout, layer["digest"])
     return digest

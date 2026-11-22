@@ -83,7 +83,7 @@ def validate_machine_spec(requirements: EnvironmentRequirements, factory: Machin
         raise UnsupportedMachineSpec("Service groups and readiness checks require a multi-container task runtime")
     if requirements.docker_build is not None and not isinstance(spec.source, DockerfileSource):
         raise UnsupportedMachineSpec("A Docker build context requires a machine built from its Dockerfile")
-    factory.check_environment(requirements, bound_machine_spec(requirements, factory, spec))
+    factory.check_environment(requirements.requirements, bound_machine_spec(requirements, factory, spec))
 
 
 def prepare_machine_spec(

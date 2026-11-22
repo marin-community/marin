@@ -27,8 +27,6 @@ from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
-    CommandSemantics,
-    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
@@ -37,6 +35,7 @@ from shellbox.machine import (
     Result,
     ShellStatus,
     ShellUpdate,
+    TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
@@ -519,7 +518,7 @@ class QemuMachineFactory:
                 raise UnsupportedMachineSpec("OCI images require QEMU assets and a bundle cache")
         return spec.source
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         source = self._check_spec(spec)
         source = source.source if isinstance(source, PreparedImage) else source
         reference = (
@@ -530,7 +529,6 @@ class QemuMachineFactory:
         check_execution_requirements(
             requirements,
             spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
             capabilities=LINUX_PROCESS_CAPABILITIES,
             image_reference=reference,
         )

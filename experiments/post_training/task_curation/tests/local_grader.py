@@ -22,13 +22,14 @@ from dataclasses import dataclass, replace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
-from shellbox.backends.local.machine import check_local_environment
+from shellbox.backends.local.support import check_local_environment
+from shellbox.context import MachineRoute
 from shellbox.machine import (
     Backend,
     DockerImage,
-    ExecutionRequirements,
     HostImage,
     MachineSpec,
+    TaskRequirements,
 )
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -56,7 +57,7 @@ class LocalGraderFactory:
     backend: Backend
     image: str = LOCAL_GRADER_IMAGE
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         if self.backend == Backend.LOCAL:
             check_local_environment(requirements, spec)
             return
@@ -75,12 +76,20 @@ class LocalGraderMachines:
     def identity(self) -> dict:
         return {"backend": Backend.DOCKER.value, "image": self.image}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[LocalGraderFactory, MachineSpec]:
+    def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         if environment.packages_lock is not None:
-            return LocalGraderFactory(Backend.LOCAL, self.image), MachineSpec(HostImage(), memory_mb=memory_mb)
+            return (
+                MachineRoute(
+                    LocalGraderFactory(Backend.LOCAL, self.image),
+                    MachineSpec(HostImage(), memory_mb=memory_mb),
+                ),
+            )
         assert environment.docker_image is not None
-        return LocalGraderFactory(Backend.DOCKER, self.image), MachineSpec(
-            DockerImage(environment.docker_image), memory_mb=memory_mb
+        return (
+            MachineRoute(
+                LocalGraderFactory(Backend.DOCKER, self.image),
+                MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb),
+            ),
         )
 
 
@@ -105,7 +114,8 @@ def grade(
         attempt = GradingAttempt(trace, dict(submission.files))
     environment = grader_environment(task.grader)
     assert environment is not None
-    return asyncio.run(sandbox_grade(task, attempt, *machines.machine(environment, memory_mb)))
+    route = machines.routes(environment, memory_mb)[0]
+    return asyncio.run(sandbox_grade(task, attempt, route.factory, route.spec))
 
 
 def with_verifier_file(task: TaskSpec, replacement: TaskResource) -> TaskSpec:

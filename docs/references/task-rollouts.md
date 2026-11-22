@@ -80,8 +80,8 @@ message runs under the assistant-prefix harness. The `structure-closure` tasks o
 curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
-A task that needs a machine uses `task_machine_by_dataset[task.source.dataset]`, or else
-`task_machine_by_command_semantics` for its command semantics; without either, it fails validation.
+Machine tasks use `task_machine_by_dataset`, or the first supported backend in `task_machine_by_tier` insertion order.
+Shellbox checks software and capabilities; `network` binds `allow`. Ingest records the passing backend and higher admitted candidates in `machine.route_backends`; RL selects only from that list, excluding cheaper backends that failed controls.
 Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not

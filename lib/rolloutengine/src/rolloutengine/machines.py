@@ -16,7 +16,6 @@ from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
-    ExecutionRequirements,
     ExitReason,
     HostImage,
     Machine,
@@ -26,6 +25,7 @@ from shellbox.machine import (
     ProcessMachine,
     ProcessSession,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, TaskSpec
@@ -262,7 +262,7 @@ class _AttemptMachineFactory:
     def backend(self) -> Backend:
         return self.factories[self.runtime.backend].backend
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         self.factories[self.runtime.backend].check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:

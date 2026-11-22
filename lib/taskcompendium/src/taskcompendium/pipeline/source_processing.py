@@ -49,6 +49,7 @@ from taskcompendium.pipeline.execution_telemetry import (
     execute_phase,
 )
 from taskcompendium.pipeline.inputs import SourceFileOverride
+from taskcompendium.pipeline.machine_routes import export_machine_route
 from taskcompendium.pipeline.models import (
     Admission,
     Disposition,
@@ -664,8 +665,7 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
 
 
 def _export_row(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
-    """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
-    admitted = _admit(row, verification=verification)
+    admitted = export_machine_route(_admit(row, verification=verification), row)
     raw = json.loads(admitted.pop("raw_json"))
     return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
 

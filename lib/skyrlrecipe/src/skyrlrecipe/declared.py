@@ -14,6 +14,7 @@ from .model import FrozenMap, NumberMap, Section, SectionMap, field, thaw, unset
 from .sampling import EvalSamplingParams
 
 DAYTONA_EVAL_BACKEND = "daytona-eval"
+TASK_MACHINE_BY_TIER = "task_machine_by_tier"
 
 
 class TeacherModel(Section):

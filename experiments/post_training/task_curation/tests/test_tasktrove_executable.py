@@ -14,15 +14,16 @@ from typing import cast
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.context import MachineRoute
 from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
-    ExecutionRequirements,
     ExitReason,
-    MachineFactory,
     MachineSpec,
+    PackageSpec,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import (
@@ -181,7 +182,7 @@ class GradingMachines(DockerMachineFactory):
     machines: list[GradingMachine] = field(default_factory=list)
     verdict_status: str = "scored"
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
         factory.check_environment(requirements, spec)
 
@@ -200,9 +201,9 @@ class ControlMachines:
     def identity(self) -> dict:
         return {"backend": "fixture"}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+    def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         assert environment.docker_image is not None
-        return self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
+        return (MachineRoute(self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)),)
 
 
 def without_oracle(task: TaskSpec) -> TaskSpec:
@@ -275,28 +276,20 @@ async def test_captured_submission_cannot_supply_its_own_reward(executable_task,
     assert machines.machines[0].closed
 
 
-def simulator_task(task: TaskSpec) -> TaskSpec:
-    """Require simulated shell behavior from a native process machine."""
-    data = task.model_dump(mode="json")
-    requirements = data["environment_requirements"]
-    requirements["docker_image"] = None
-    requirements["command_semantics"] = "shell_simulator"
-    return TaskSpec.model_validate_json(json.dumps(data))
-
-
 @pytest.mark.asyncio
 async def test_agent_machine_rejects_incompatible_command_semantics_before_start(executable_task):
-    machines = GradingMachines()
-    factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 1, 1024)
+    machines = GradingMachines(backend=Backend.SHELLSIM)
+    factory = ShellFactory(machines, MachineSpec(PackageSpec()), {}, 1, 1024)
     with pytest.raises(UnsupportedMachineSpec):
-        await factory.create(simulator_task(executable_task))
+        await factory.create(executable_task)
     assert not machines.machines
 
 
 def test_grader_controls_reject_simulation_of_linux_processes_before_start(executable_task):
     machines = ControlMachines(factory=GradingMachines(backend=Backend.SHELLSIM))
-    with pytest.raises(UnsupportedMachineSpec):
-        run_controls(executable_task, controls=CONTROLS, machines=machines)
+    report = run_controls(executable_task, controls=CONTROLS, machines=machines)
+    assert {check.check: check.status for check in report.checks} == {"golden": CheckStatus.UNSUPPORTED}
+    assert [verdict.tier for verdict in report.verdicts] == ["shellsim"]
     assert not machines.factory.machines
 
 

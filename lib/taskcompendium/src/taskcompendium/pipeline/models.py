@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from shellbox.machine import Backend
 
 from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
@@ -213,10 +214,30 @@ class CheckResult(BaseModel):
     detail: str
 
 
+class TierRole(StrEnum):
+    """Which machine of a task a tier verdict describes."""
+
+    TASK = "task"
+    VERIFIER = "verifier"
+
+
+class TierVerdict(BaseModel):
+    """One tier's control outcome: the machine role, the tier and what happened there."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    role: TierRole
+    tier: Backend
+    status: CheckStatus
+    detail: str
+
+
 @dataclass(frozen=True)
 class VerificationReport:
     checks: list[CheckResult]
     rollouts: tuple[RolloutRecord, ...] = ()
+    verdicts: tuple[TierVerdict, ...] = ()
+    route_backends: tuple[Backend, ...] = ()
+    """The passing oracle backend followed by its higher admitted candidates; empty for reply and empty controls."""
 
 
 @dataclass(frozen=True)

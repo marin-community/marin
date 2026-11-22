@@ -15,7 +15,7 @@ from taskcompendium.models import ResourceGroups, ScriptGrader
 from taskcompendium.runtime.resources import inline_resource
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT
 from hydra import compose, initialize_config_dir
-from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineSpec, Result
+from shellbox.machine import Backend, Command, TaskRequirements, Machine, MachineSpec, Result
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker, TaskRolloutWorkerSpec
 from skyrl_train.rollouts.workers import WorkerShard
@@ -72,7 +72,7 @@ class ResettingFactory:
     backend: Backend = Backend.SHELLSIM
     creations: int = 0
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         ShellSimMachineFactory().check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:

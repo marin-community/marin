@@ -33,9 +33,15 @@ from shellbox.backends.local.python_environment import (
     PythonEnvironment,
     build_python_environment,
 )
+from shellbox.context import MachineRoute
+from shellbox.image import RegistryImage, is_digest_pinned_image
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mount, NetworkPolicy
 
-from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
+from taskcompendium.models import (
+    DEFAULT_WORKSPACE,
+    EnvironmentRequirements,
+)
+from taskcompendium.runtime.requirements import require_resolved_environment
 
 # Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
 # pure-Python sources, so the runtime identity, image, and exports stay platform-neutral.
@@ -267,9 +273,27 @@ class LocalGraderMachines:
     def identity(self) -> dict[str, Any]:
         return {"backend": Backend.LOCAL.value, "python": DEFAULT_PYTHON_VERSION}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
+    def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
+        """Return the local route for declared packages, a lock, or a pinned image.
+
+        ``memory_mb`` is advisory; an unpinned image has no local route.
+        """
+        require_resolved_environment(environment)
+        if environment.docker_image is not None:
+            if not is_digest_pinned_image(environment.docker_image):
+                return ()
+            return (
+                MachineRoute(
+                    local_factory(),
+                    MachineSpec(
+                        RegistryImage(environment.docker_image),
+                        network=NetworkPolicy.DENY,
+                        memory_mb=memory_mb,
+                        workdir=environment.working_directory if environment.working_directory is not None else "",
+                    ),
+                ),
+            )
         if environment.packages_lock is None and environment.package_spec is None:
-            raise ValueError("A local grader requires a package spec or packages lock")
-        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)
-        return local_factory(), spec
+            return ()
+        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, memory_mb=memory_mb)
+        return (MachineRoute(local_factory(), spec),)

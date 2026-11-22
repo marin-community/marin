@@ -18,9 +18,9 @@ from uuid import uuid4
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import UnsupportedMachineSpec
+from shellbox.machine import Backend, UnsupportedMachineSpec
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
@@ -28,9 +28,10 @@ from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.fingerprints import callable_identity
+from taskcompendium.pipeline.machine_routes import attach_machine_route
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
@@ -47,9 +48,15 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
-from taskcompendium.runtime.models import RolloutRecord
+from taskcompendium.pipeline.verification_trials import (
+    HistoricalTrial,
+    SampleResult,
+    TrialEvidence,
+    VerificationTrial,
+    sample_result_routes,
+)
 
-SOURCE_VERIFICATION_REVISION = "14"
+SOURCE_VERIFICATION_REVISION = "15"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 """The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
@@ -85,41 +92,6 @@ class SourceVerificationStatus(StrEnum):
 class VerificationSample:
     eligible_count: int
     rows: list[dict[str, Any]]
-
-
-class VerificationTrial(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    attempt: int
-    status: CheckStatus
-    checks: list[CheckResult]
-    rollouts: tuple[RolloutRecord, ...]
-
-
-class TrialEvidence(BaseModel):
-    """Identity and original execution provenance for one independent trial."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_id: str
-    task_sha256: str
-    verification_identity: str
-    attempt: int
-    execution_id: str
-    original_report: str
-    reused_from: str | None = None
-
-
-class HistoricalTrial(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    trial: VerificationTrial
-    evidence: TrialEvidence
-
-
-class SampleResult(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_id: str
-    source: Source
-    trials: list[VerificationTrial]
-    previous_trials: list[HistoricalTrial] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -379,9 +351,22 @@ def _verify_sample_with_evidence(
             metrics.update_counter("verification/infra_error_retries", 1)
         for check in report.checks:
             metrics.update_counter(f"verification/control/{check.check}/{check.status.value}", 1)
+        for verdict in report.verdicts:
+            metrics.update_counter(f"verification/tier/{verdict.tier}/{verdict.status.value}", 1)
         status = _trial_status(report.checks)
         metrics.update_counter(f"verification/trial/{status.value}", 1)
-        trials.append(VerificationTrial(attempt=attempt, status=status, checks=report.checks, rollouts=report.rollouts))
+        if report.route_backends:
+            metrics.update_counter(f"verification/route/{report.route_backends[0]}", 1)
+        trials.append(
+            VerificationTrial(
+                attempt=attempt,
+                status=status,
+                checks=report.checks,
+                rollouts=report.rollouts,
+                verdicts=report.verdicts,
+                route_backends=report.route_backends,
+            )
+        )
         evidence.append(
             TrialEvidence(
                 task_id=task.id,
@@ -454,6 +439,7 @@ def gate_source_row(
     *,
     status: SourceVerificationStatus,
     results: dict[str, list[CheckResult]],
+    routes_by_task: Mapping[str, tuple[Backend, ...]] | None = None,
 ) -> dict[str, Any]:
     if row["task_id"] in results:
         checks = results[row["task_id"]]
@@ -465,6 +451,9 @@ def gate_source_row(
         failed = [f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES]
         if failed:
             row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(set(failed))]}
+    route = () if routes_by_task is None else routes_by_task.get(row["task_id"], ())
+    if is_accepted(row):
+        row = attach_machine_route(row, route)
     if not is_accepted(row):
         return row
     if status == SourceVerificationStatus.VALIDATED:
@@ -663,13 +652,14 @@ def _gate_with_previous(
     status: SourceVerificationStatus,
     results: dict[str, list[CheckResult]],
     previous: dict[str, dict[str, list[CheckResult]]],
+    routes_by_task: Mapping[str, tuple[Backend, ...]],
 ) -> dict[str, Any]:
     if row["task_id"] not in results and row["task_id"] in previous and is_accepted(row):
         digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
         checks = previous[row["task_id"]].get(digest)
         if checks is not None:
-            return gate_source_row(row, status=status, results={row["task_id"]: checks})
-    return gate_source_row(row, status=status, results=results)
+            return gate_source_row(row, status=status, results={row["task_id"]: checks}, routes_by_task=routes_by_task)
+    return gate_source_row(row, status=status, results=results, routes_by_task=routes_by_task)
 
 
 def _gate_rows(
@@ -692,6 +682,7 @@ def _gate_rows(
         ]
         if any(check.status in REJECTING_CHECK_STATUSES for check in checks):
             previous.setdefault(saved.evidence.task_id, {}).setdefault(saved.evidence.task_sha256, []).extend(checks)
+    routes_by_task = {result.task_id: route for result in results if (route := sample_result_routes(result))}
     result = execute_phase(
         run.context,
         Dataset.from_files(run.inputs)
@@ -702,6 +693,7 @@ def _gate_rows(
                 status=decision.status,
                 results={result.task_id: sample_result_checks(result) for result in results},
                 previous=previous,
+                routes_by_task=routes_by_task,
             )
         )
         .map_shard(partial(write_filtered_shard, output=run.output)),

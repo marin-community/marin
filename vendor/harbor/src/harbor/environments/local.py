@@ -6,7 +6,7 @@
 import asyncio
 import tempfile
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -34,7 +34,7 @@ from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
-from shellbox.machine import Command, CommandSemantics
+from shellbox.machine import Command, MachineCapability, TaskRequirements
 from shellbox.process_session import (
     acquire_owned,
     await_cleanup,
@@ -44,14 +44,9 @@ from shellbox.process_session import (
 from shellbox.task import Task
 
 
-@dataclass(frozen=True)
-class _TrialExecutionRequirements:
-    command_semantics: CommandSemantics = CommandSemantics.LINUX_PROCESS
-    capabilities: tuple[str, ...] = ("retained_command_cancellation",)
-    docker_image: str | None = None
-
-
-_TRIAL_EXECUTION_REQUIREMENTS = _TrialExecutionRequirements()
+_TRIAL_EXECUTION_REQUIREMENTS = TaskRequirements(
+    frozenset({MachineCapability.PROCESS, MachineCapability.RETAINED_COMMAND_CANCELLATION})
+)
 
 
 class LocalEnvironment(BaseEnvironment):

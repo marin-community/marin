@@ -34,8 +34,37 @@ class CommandSemantics(StrEnum):
     SHELL_SIMULATOR = "shell_simulator"
 
 
-SHELL_SIMULATOR_CAPABILITIES = frozenset({"shell", "filesystem", "python"})
-LINUX_PROCESS_CAPABILITIES = SHELL_SIMULATOR_CAPABILITIES | {"process", "network", "git_repository"}
+class MachineCapability(StrEnum):
+    SHELL = "shell"
+    FILESYSTEM = "filesystem"
+    PYTHON = "python"
+    PROCESS = "process"
+    NETWORK = "network"
+    GIT_REPOSITORY = "git_repository"
+    RETAINED_COMMAND_CANCELLATION = "retained_command_cancellation"
+    PROCESS_SCOPE = "process_scope"
+
+
+SHELL_SIMULATOR_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+    }
+)
+LINUX_PROCESS_CAPABILITIES = SHELL_SIMULATOR_CAPABILITIES | {
+    MachineCapability.PROCESS,
+    MachineCapability.NETWORK,
+    MachineCapability.GIT_REPOSITORY,
+}
+
+
+@dataclass(frozen=True)
+class TaskRequirements:
+    """Capabilities required by a task, normalized from its serialized execution contract."""
+
+    capabilities: frozenset[MachineCapability]
+    docker_image: str | None = None
 
 
 class ExecutionRequirements(Protocol):
@@ -191,12 +220,26 @@ class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
 
 
+def task_requirements(requirements: ExecutionRequirements) -> TaskRequirements:
+    """Translate serialized command semantics once into required capabilities."""
+    unknown = set(requirements.capabilities) - set(MachineCapability)
+    if unknown:
+        raise UnsupportedMachineSpec(f"Unsupported capabilities: {', '.join(sorted(unknown))}")
+    capabilities = {MachineCapability(value) for value in requirements.capabilities}
+    if requirements.command_semantics is CommandSemantics.LINUX_PROCESS:
+        capabilities.add(MachineCapability.PROCESS)
+    elif requirements.command_semantics is CommandSemantics.SHELL_SIMULATOR:
+        capabilities.add(MachineCapability.SHELL)
+    else:
+        raise UnsupportedMachineSpec("Machine tasks require command semantics")
+    return TaskRequirements(frozenset(capabilities), requirements.docker_image)
+
+
 def check_execution_requirements(
-    requirements: ExecutionRequirements,
+    requirements: TaskRequirements,
     spec: MachineSpec,
     *,
-    semantics: CommandSemantics,
-    capabilities: frozenset[str],
+    capabilities: frozenset[MachineCapability],
     image_reference: str | None = None,
 ) -> None:
     """Check declared execution support and image origin, without acquiring resources.
@@ -204,12 +247,10 @@ def check_execution_requirements(
     Backends check their source and allocation features separately. This does not
     promise installed executables, available capacity or successful acquisition.
     """
-    if requirements.command_semantics != semantics:
-        raise UnsupportedMachineSpec(f"The selected factory requires {semantics} semantics")
-    unsupported = set(requirements.capabilities) - capabilities
+    unsupported = requirements.capabilities - capabilities
     if unsupported:
         raise UnsupportedMachineSpec(f"Unsupported capabilities: {', '.join(sorted(unsupported))}")
-    if "network" in requirements.capabilities and spec.network == NetworkPolicy.DENY:
+    if MachineCapability.NETWORK in requirements.capabilities and spec.network == NetworkPolicy.DENY:
         raise UnsupportedMachineSpec("Network capability requires an allow network policy")
     if requirements.docker_image is not None and requirements.docker_image != image_reference:
         raise UnsupportedMachineSpec("Machine must use the task's required image")
@@ -307,7 +348,7 @@ class MachineFactory(Protocol):
     @property
     def backend(self) -> Backend: ...
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         """Reject unsupported task contracts before preparation or acquisition.
 
         Checks declared features, not available capacity or installed executables.

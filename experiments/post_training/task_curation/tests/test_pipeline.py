@@ -44,6 +44,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult, error_chain
+from experiments.post_training.task_curation.campaign_machines import CampaignMachines
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import semantic_empty_negative
@@ -54,7 +55,6 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
 )
 from experiments.post_training.task_curation.pipeline import (
-    CampaignMachines,
     CurationRecipe,
     DownloadRequest,
     HarborHubSource,

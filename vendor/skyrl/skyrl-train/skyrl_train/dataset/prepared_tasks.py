@@ -28,6 +28,7 @@ PROMPT_LENGTH_COLUMN = "_prompt_token_count"
 # Include the installed preparation code so experimental branches can share the cache safely.
 _PREPARATION_MODULES = (
     "finestore.rl.strata",
+    "marinskyrl.task_machine_factories",
     "rigging.filesystem.path_validation",
     "rolloutengine",
     "shellbox",
@@ -67,7 +68,7 @@ def _preparation_code_digest() -> str | None:
 def prepared_task_cache_key(
     source: PreparedTaskCacheSource,
     tokenizer: PreTrainedTokenizerBase,
-    task_settings: Mapping,
+    environment_configs: Mapping,
     chat_template_kwargs: dict,
 ) -> str | None:
     """Fingerprint one prepared selection, or return None if the inputs are ineligible for caching."""
@@ -100,7 +101,7 @@ def prepared_task_cache_key(
         "files": digests,
         "tokenizer": tokenizer_key,
         "chat_template_kwargs": chat_template_kwargs,
-        "task_settings": task_settings,
+        "environment_configs": environment_configs,
     }
     # Preserve the order of template kwargs and nested tool schemas as seen by Jinja.
     try:

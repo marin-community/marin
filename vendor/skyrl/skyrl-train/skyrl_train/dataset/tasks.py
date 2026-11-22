@@ -23,6 +23,7 @@ from rolloutengine.validation import task_machine_reason
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
+from taskcompendium.runtime.requirements import ROUTE_BACKENDS_LABEL
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
@@ -35,8 +36,12 @@ from taskcompendium.models import (
     task_subset,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
+from shellbox.machine import MachineFactory
+from shellbox.machine import Backend
 from transformers import PreTrainedTokenizerBase
 
+from skyrlrecipe.declared import TASK_MACHINE_BY_TIER
+from skyrl_train.dataset.machine_routing import tier_machine
 from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc, read_prompt_files
 from skyrl_train.dataset.prepared_tasks import (
     PREPARED_TASK_BATCH_SIZE,
@@ -211,9 +216,7 @@ def source_row_task(
         source_session["max_turns"] = int(row_turn_limit)
     session = {**source_session, **config.pop("session", {}), "task_session": session_name}
     requirements = (
-        EnvironmentRequirements()
-        if machine is None
-        else EnvironmentRequirements.model_validate(machine["requirements"])
+        EnvironmentRequirements() if machine is None else EnvironmentRequirements.model_validate(machine["requirements"])
     )
     runtime = None if machine is None else MachineRuntimeSpec.model_validate(machine["runtime"])
     task = source_task(prompt, row, config, source, environment=requirements)
@@ -226,7 +229,13 @@ def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_
     return {**session_parameters(lowered.task).extras, **task_prompt(lowered)}
 
 
-def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mapping[str, dict]) -> dict:
+def _canonical_task_prompt(
+    row: dict,
+    _index: int,
+    *,
+    environment_configs: Mapping[str, dict],
+    machine_factories: Mapping[str, MachineFactory] | None,
+) -> dict:
     """Bind runtime settings when a canonical TaskSpec enters the trainer."""
     task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
     config = environment_configs["task_spec"]
@@ -242,11 +251,17 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
-    if machine is None:
-        # A dataset mixing shell-simulator and Linux tasks binds machines by command semantics. The binding has
-        # no default-config entry, so it appears in a native configuration only when a launch sets it.
-        by_semantics = config.get("task_machine_by_command_semantics", {})
-        machine = by_semantics.get(task.environment_requirements.command_semantics)
+    recorded = task.labels.get(ROUTE_BACKENDS_LABEL)
+    if machine is None or recorded is not None:
+        # Deployments supply backend templates in priority order.
+        templates = config.get(TASK_MACHINE_BY_TIER, {}) if machine is None else {machine["backend"]: machine}
+        machine = tier_machine(
+            task.environment_requirements,
+            templates,
+            () if recorded is None else tuple(Backend(value) for value in json.loads(recorded)),
+            environment_configs,
+            machine_factories,
+        )
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)
         if machine is not None and task_machine_reason(task) is not None
@@ -301,8 +316,10 @@ class SourceTaskDataset(TaskDataset):
         num_workers: int = 8,
         chat_template_kwargs: dict | None = None,
         prepared_cache: PreparedTaskCacheSource | None = None,
+        machine_factories: Mapping[str, MachineFactory] | None = None,
     ):
         self.environment_configs = environment_configs
+        self.machine_factories = machine_factories
         self.prepared_cache = prepared_cache
         identities: dict[str, TaskEvaluationIdentity | None] = {}
 
@@ -354,9 +371,9 @@ class SourceTaskDataset(TaskDataset):
     def _prepared_rows_with_lengths(self) -> Dataset | None:
         cache = self.prepared_cache
         task_settings = self.environment_configs.get("task_spec")
-        if cache is None or self.datasets != [cache.path] or task_settings is None:
+        if cache is None or self.datasets != [cache.path] or task_settings is None or self.machine_factories is not None:
             return None
-        key = prepared_task_cache_key(cache, self.tokenizer, task_settings, self.chat_template_kwargs)
+        key = prepared_task_cache_key(cache, self.tokenizer, self.environment_configs, self.chat_template_kwargs)
         if key is None:
             return None
         with pq.ParquetFile(cache.path) as source:
@@ -391,12 +408,15 @@ class SourceTaskDataset(TaskDataset):
     def _prepare_cached_rows(self, arrow_path: Path) -> Dataset:
         source = read_prompt_files(self.datasets, prepare_source=self._prepare_source)
         environment_configs = self.environment_configs
+        machine_factories = self.machine_factories
         tokenizer = self.tokenizer
         prompt_key = self.prompt_key
         template_kwargs = self.chat_template_kwargs
 
         def prepare(row: dict, index: int) -> dict:
-            result = _canonical_task_prompt(row, index, environment_configs=environment_configs)
+            result = _canonical_task_prompt(
+                row, index, environment_configs=environment_configs, machine_factories=machine_factories
+            )
             result[PROMPT_LENGTH_COLUMN] = task_prompt_token_count(
                 tokenizer,
                 {**result, prompt_key: json.loads(result[prompt_key])},
@@ -413,7 +433,11 @@ class SourceTaskDataset(TaskDataset):
         if TASK_SPEC_COLUMN in dataset.column_names:
             return self._map_task_rows(
                 dataset,
-                partial(_canonical_task_prompt, environment_configs=self.environment_configs),
+                partial(
+                    _canonical_task_prompt,
+                    environment_configs=self.environment_configs,
+                    machine_factories=self.machine_factories,
+                ),
             ).with_transform(_restore_task_prompts)
         return self._map_task_rows(
             dataset,

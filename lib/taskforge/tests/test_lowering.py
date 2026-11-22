@@ -10,7 +10,7 @@ import pytest
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
+from shellbox.machine import Backend, Machine, MachineFactory, MachineSpec, TaskRequirements
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CommandSemantics,
@@ -51,7 +51,7 @@ class AvailableFactory(MachineFactory):
     backend: Backend
 
     @override
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         """The Iris container backend supports this fixture; lowering starts no machine."""
 
     @override
