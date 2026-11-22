@@ -1097,3 +1097,29 @@ The next optimizer cannot mutate weights while their snapshot is running.
 Colocated configurations retain sequential saving because checkpoint residency
 management can sleep their rollout engines. Storage failures retain the existing
 checkpoint failure metric and the last complete checkpoint.
+
+
+## Mochi response-cap cohort
+
+`throughput --spec specs/mochi-context-cap-{16k,32k,64k,96k}.json` uses the same
+native serving path as the decode benchmarks. Each arm issues a finite cohort of
+80 Nemotron validation prompts and 300 uniformly sampled nonagentic training
+prompts, eight paired seeds per prompt. The input producer is `context_workload`;
+it verifies the complete pinned source hashes and publishes only public prompts
+and answer-format metadata to regional storage. It does not change RL validation.
+
+The four arms share TP1/BF16 weights and KV, EP16/DP16, a 131072-token window,
+HBM fraction 0.90, sequence capacity 64 and batched tokens 8192. Only the response
+cap changes. The window fits the longest 5944-token input plus the 98304-token cap.
+Production 08A placement excludes r136. CUDA graphs and compilation stay enabled.
+
+`cohort.json` retains each attempt's finish reason, token count and timing.
+`responses/` retains complete text, tool calls and exact token IDs. A failed or
+unfinished request is not a length stop: partial results include bounds over all
+expected attempts and cannot establish the final truncation fraction. Metrics are
+saved in short chunks; `progress.json` updates approximately every minute. Decode
+rates over the complete cohort include declining concurrency at its tail; use the
+metric chunks for saturated-window comparisons. Hard periodic-tail detection is
+shared with training; it does not detect all circular reasoning. Normal source
+answer extraction can accept raw text, so explicit final markers are also
+reported. Neither signal is a correctness grade.

@@ -29,6 +29,7 @@ RETAINED_METRICS = frozenset(
         "vllm:prefix_cache_queries_total",
         "vllm:prefix_cache_hits_total",
         "vllm:kv_cache_config_info",
+        "vllm:num_preemptions_total",
     }
 )
 
@@ -94,6 +95,7 @@ async def measure_request(
     *,
     seed: int,
     clock: Callable[[], float] = time.perf_counter,
+    on_event: Callable[[dict], None] | None = None,
 ) -> RequestMeasurement:
     """Measure one streaming request without treating SSE chunks as single tokens."""
     body = {
@@ -129,6 +131,8 @@ async def measure_request(
                             first = last
                     if choice.get("finish_reason") is not None:
                         finish_reason = choice["finish_reason"]
+                if on_event is not None:
+                    on_event(event)
                 usage = event.get("usage")
                 if usage is not None:
                     prompt_tokens, output_tokens = usage["prompt_tokens"], usage["completion_tokens"]
@@ -227,6 +231,7 @@ def summarize_metrics(samples: list[dict], gpu_count: int) -> dict:
         "prefix_hit_fraction": None if prefix_hits is None or not prefix_queries else prefix_hits / prefix_queries,
         "kv_cache_configuration": [row for row in first["series"] if row["name"] == "vllm:kv_cache_config_info"],
         "mean_queue_seconds": None if wait_sum is None or not wait_count else wait_sum / wait_count,
+        "preemptions": _counter_delta(first["series"], last["series"], "vllm:num_preemptions_total"),
     }
 
 

@@ -27,6 +27,7 @@ from marin.inference.vllm_backend import VllmBackend
 from marin.inference.vllm_server import VllmEnvironment
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.long_loop.context_cohort import run_cohort
 from experiments.post_training.long_loop.serving import checked_serving_release
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,7 @@ def run_sweep(environment: VllmEnvironment, spec: dict) -> None:
 
 
 def run(spec: dict) -> None:
-    if spec["mode"] not in {"qualify", "benchmark"}:
+    if spec["mode"] not in {"qualify", "benchmark", "cohort"}:
         raise ValueError(f"Unknown mode: {spec['mode']}")
     geometry = ServingGeometry(**spec["geometry"])
     engine = VllmEngineConfig(
@@ -144,6 +145,17 @@ def run(spec: dict) -> None:
                     qualify_environment(environment, spec, started)
                     if spec["mode"] == "benchmark":
                         run_sweep(environment, spec)
+                    elif spec["mode"] == "cohort":
+                        requests = workload_requests(spec["workloads"][0], 17)
+                        asyncio.run(
+                            run_cohort(
+                                environment.server_url,
+                                environment.metrics_url,
+                                spec["model"]["api_model"],
+                                requests,
+                                spec,
+                            )
+                        )
             else:
                 wait_for_iris_vllm_shutdown(launch, environment.check_alive)
             logs = environment.logs()
