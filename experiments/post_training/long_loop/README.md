@@ -1098,8 +1098,11 @@ Colocated configurations retain sequential saving because checkpoint residency
 management can sleep their rollout engines. Storage failures retain the existing
 checkpoint failure metric and the last complete checkpoint.
 
-Direct S3 saving retains the MCore save strategy and its FullyParallel wrapper
-on each policy actor. MCore 0.18 metadata/local/central-plan caching and save
+`trainer.policy.megatron_config.checkpoint_plan_cache` explicitly enables cached
+Direct S3 saving in the prepared Mochi `.122` round. It stays false by default
+for other role plans, including Snowball, until their geometry is qualified.
+With the option enabled, each policy actor retains the MCore save strategy and
+its FullyParallel wrapper. MCore 0.18 metadata/local/central-plan caching and save
 distribution caching stay in memory across destinations. Each save still creates
 a fresh streaming writer and resolves the current tensor payloads. The coordinator
 carries the BF16-to-FP32 master alias map with the plans and reapplies it before

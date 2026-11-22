@@ -93,6 +93,7 @@ rl:
         megatron_config:
           optimizer_config_kwargs: {}
           optimizer_checkpoint_sharding_type: dp_reshardable
+          checkpoint_plan_cache: true
           moe_router_replay: true
       algorithm:
         advantage_estimator: rloo_n

@@ -56,8 +56,8 @@ def _checkpoint_structure(value: object) -> object:
 class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
     """Reuse MCore save plans while writing each checkpoint to fresh regional objects."""
 
-    def __init__(self, checkpoint_dir: str) -> None:
-        super().__init__(cached_metadata=True)
+    def __init__(self, checkpoint_dir: str, *, cached_metadata: bool) -> None:
+        super().__init__(cached_metadata=cached_metadata)
         self.checkpoint_dir = checkpoint_dir
         self.model_aliases: dict[str, str] = {}
         self.save_count = 0

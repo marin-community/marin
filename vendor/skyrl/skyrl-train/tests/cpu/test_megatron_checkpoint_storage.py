@@ -190,8 +190,9 @@ def cached_megatron_save(monkeypatch):
     return direct_checkpoint, dist_checkpointing, ShardedTensor
 
 
+@pytest.mark.parametrize("cache_plans", [True, False])
 @pytest.mark.parametrize("change", ["shape", "dtype", "key"])
-def test_cached_checkpoint_four_saves_restore_and_structure_change_rebuilds(tmp_path, cached_megatron_save, change):
+def test_checkpoint_saves_restore_across_structure_changes(tmp_path, cached_megatron_save, change, cache_plans):
     direct, serialization, sharded_tensor = cached_megatron_save
 
     events = []
@@ -203,7 +204,7 @@ def test_cached_checkpoint_four_saves_restore_and_structure_change_rebuilds(tmp_
     dist.init_process_group("gloo", init_method=f"file://{tmp_path / 'rdzv'}", rank=0, world_size=1)
     expected = []
     try:
-        strategy = direct.DirectS3TorchDistSaveShardedStrategy(str(tmp_path / "step-1"))
+        strategy = direct.DirectS3TorchDistSaveShardedStrategy(str(tmp_path / "step-1"), cached_metadata=True)
         parallel = direct.CachedFullyParallelSaveStrategy(strategy, dist.group.WORLD)
         for step in range(1, 9):
             size = 12 if change == "shape" and step > 4 else 8
@@ -228,7 +229,13 @@ def test_cached_checkpoint_four_saves_restore_and_structure_change_rebuilds(tmp_
             }
             path = tmp_path / f"step-{step}"
             path.mkdir()
-            strategy.checkpoint_dir = str(path)
+            if cache_plans:
+                strategy.checkpoint_dir = str(path)
+            else:
+                strategy = direct.DirectS3TorchDistSaveShardedStrategy(str(path), cached_metadata=False)
+                parallel = direct.FullyParallelSaveStrategyWrapper(
+                    strategy, dist.group.WORLD, do_cache_distribution=False
+                )
             serialization.save(state, path, sharded_strategy=parallel)
             expected.append(
                 (path, name, master_key, model.clone(), master.clone(), state["momentum"].data.clone(), step)
@@ -253,8 +260,11 @@ def test_cached_checkpoint_four_saves_restore_and_structure_change_rebuilds(tmp_
             restored_model = serialization.load(only_model, path)["model"]
             torch.testing.assert_close(restored_model, model, rtol=0, atol=0)
             assert torch.equal(restored_model.contiguous().view(torch.uint8), model.contiguous().view(torch.uint8))
-        assert [event["cache_reused"] for event in events] == [False, False, True, True] * 2
-        assert [event["cache_invalidated"] for event in events] == [True, False, False, False] * 2
+        if cache_plans:
+            assert [event["cache_reused"] for event in events] == [False, False, True, True] * 2
+            assert [event["cache_invalidated"] for event in events] == [True, False, False, False] * 2
+        else:
+            assert all(not event["cache_enabled"] and not event["cache_reused"] for event in events)
     finally:
         logger.remove(sink)
         dist.destroy_process_group()
@@ -314,7 +324,7 @@ def save_cached_distributed_checkpoints(rank: int, path: str, rendezvous: str) -
         else None
     )
     try:
-        strategy = DirectS3TorchDistSaveShardedStrategy(path)
+        strategy = DirectS3TorchDistSaveShardedStrategy(path, cached_metadata=True)
         parallel = CachedFullyParallelSaveStrategy(strategy, dist.group.WORLD)
         with patch(
             "skyrl_train.distributed.megatron.direct_checkpoint.create_s3_filesystem", lambda: LocalFileSystem()

@@ -42,6 +42,9 @@ logprob_chunk_size: 1024
 # tensor/pipeline/context/expert geometry. Loading reads the format from the checkpoint.
 optimizer_checkpoint_sharding_type: fully_reshardable
 
+# Enable only after the role geometry has qualified repeated checkpoint restores.
+checkpoint_plan_cache: false
+
 # Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is
 # from the old log-probs, separating eval repeatability from train/eval drift.
 check_train_eval_parity: false

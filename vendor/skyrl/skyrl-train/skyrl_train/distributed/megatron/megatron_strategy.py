@@ -371,7 +371,8 @@ class MegatronStrategy(DistributedStrategy):
         # Save RNG state.
         sharded_state_dict["rng"] = self.get_rng_state()
         state_fields = {
-            "checkpoint_dir": ckpt_dir, "rank": dist.get_rank(),
+            "checkpoint_dir": ckpt_dir,
+            "rank": dist.get_rank(),
             "prepare_seconds": prepare_seconds,
             "state_build_seconds": perf_counter() - state_started,
         }
@@ -392,13 +393,20 @@ class MegatronStrategy(DistributedStrategy):
                         ckpt_dir,
                     )
             dist.barrier()
-            if self._direct_save_strategy is None:
-                self._direct_save_strategy = CachedFullyParallelSaveStrategy(
-                    DirectS3TorchDistSaveShardedStrategy(ckpt_dir),
+            if self.megatron_config.checkpoint_plan_cache:
+                if self._direct_save_strategy is None:
+                    self._direct_save_strategy = CachedFullyParallelSaveStrategy(
+                        DirectS3TorchDistSaveShardedStrategy(ckpt_dir, cached_metadata=True),
+                        mpu.get_data_parallel_group(with_context_parallel=True),
+                    )
+                self._direct_save_strategy.direct_strategy.checkpoint_dir = ckpt_dir
+                save_strategy = self._direct_save_strategy
+            else:
+                save_strategy = FullyParallelSaveStrategyWrapper(
+                    DirectS3TorchDistSaveShardedStrategy(ckpt_dir, cached_metadata=False),
                     mpu.get_data_parallel_group(with_context_parallel=True),
+                    do_cache_distribution=False,
                 )
-            self._direct_save_strategy.direct_strategy.checkpoint_dir = ckpt_dir
-            save_strategy = self._direct_save_strategy
         else:
             save_strategy = FullyParallelSaveStrategyWrapper(
                 get_default_save_sharded_strategy("torch_dist"),
