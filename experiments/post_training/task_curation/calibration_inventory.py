@@ -24,7 +24,7 @@ from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.harbor.adapter import unsupported_harbor_contract
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskSpec
+from taskcompendium.models import DOCKER_IMAGE_PATTERN, CommandSemantics, TaskSpec
 from taskcompendium.runtime.resources import has_oracle_solution, resource_bytes
 
 from experiments.post_training.task_curation.difficulty_artifacts import regional_lock_url
@@ -80,6 +80,8 @@ def task_blockers(task: TaskSpec) -> set[str]:
         boundary = assess_grading_environment(task)
         return set() if boundary.status == "matched" else {f"grading_environment_{boundary.status}"}
     blockers: set[str] = set()
+    if task.environment_requirements.command_semantics is CommandSemantics.SHELL_SIMULATOR:
+        blockers.add("task_spec_production_backend_required")
     resources = {resource.path: resource for resource in task.resources.verifier}
     native = "harbor" in task.tags and "task.toml" in resources
     if native:

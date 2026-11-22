@@ -24,11 +24,12 @@ from experiments.post_training.task_curation.harbor_inspection import native_tas
 from experiments.post_training.task_curation.oracle_filter import cohort_sha256, row_runtime, row_runtime_hash, row_task
 
 STATIC_REASONS = {
+    "task_spec_production_backend_required": OracleExclusionReason.BACKEND_CONTRACT_UNSUPPORTED,
+    "task_spec_shared_executor_required": OracleExclusionReason.SHARED_EXECUTOR_REQUIRED,
     "grading_environment_mismatch": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
     "grading_environment_unavailable": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
     "no_executable_task_spec_grader": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
     "task_spec_tool_provider_required": OracleExclusionReason.TOOL_PROVIDER_REQUIRED,
-    "task_spec_shared_executor_required": OracleExclusionReason.SHARED_EXECUTOR_REQUIRED,
     "task_spec_state_capture_required": OracleExclusionReason.BACKEND_CONTRACT_UNSUPPORTED,
     "task_spec_provider_contract_invalid": OracleExclusionReason.BACKEND_CONTRACT_UNSUPPORTED,
     "task_spec_unresolved_build": OracleExclusionReason.ENVIRONMENT_CONTRACT_UNRESOLVED,
@@ -82,6 +83,19 @@ def collect_mixed_retention(
             or previous.runtime_sha256 != row_runtime_hash(row)
         ):
             raise ValueError(f"Mixed retention changed the original task or oracle presence: {task.id}")
+        blockers = task_blockers(task) - {"requires_calibration_solution_and_empty_liveness"}
+        if blockers - STATIC_REASONS.keys():
+            raise ValueError(f"Unclassified static blockers for {task.id}: {sorted(blockers)}")
+        identity = {"task_sha256": task_spec_sha256(task), "runtime_sha256": row_runtime_hash(row)}
+        if blockers:
+            primary = next(reason for reason in STATIC_REASONS if reason in blockers)
+            reason = STATIC_REASONS[primary]
+            entries[task.id] = MechanicalOracleTaskReceipt(
+                **identity, has_oracle=oracle, exclusion_reason=reason, evidence=(cohort_evidence,)
+            )
+            diagnostics[task.id] = {"reason": reason.value, "blockers": sorted(blockers)}
+            excluded.append(row)
+            continue
         if oracle:
             entries[task.id] = previous
             if previous.passed:
@@ -91,19 +105,6 @@ def collect_mixed_retention(
                 kept.append(consumed)
             else:
                 excluded.append(row)
-            continue
-        blockers = task_blockers(task) - {"requires_calibration_solution_and_empty_liveness"}
-        if blockers - STATIC_REASONS.keys():
-            raise ValueError(f"Unclassified static blockers for {task.id}: {sorted(blockers)}")
-        identity = {"task_sha256": task_spec_sha256(task), "runtime_sha256": row_runtime_hash(row)}
-        if blockers:
-            primary = next(reason for reason in STATIC_REASONS if reason in blockers)
-            reason = STATIC_REASONS[primary]
-            entries[task.id] = MechanicalOracleTaskReceipt(
-                **identity, has_oracle=False, exclusion_reason=reason, evidence=(cohort_evidence,)
-            )
-            diagnostics[task.id] = {"reason": reason.value, "blockers": sorted(blockers)}
-            excluded.append(row)
             continue
         entries[task.id] = StaticRetainedTaskReceipt(
             **identity,

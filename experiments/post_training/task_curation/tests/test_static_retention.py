@@ -84,11 +84,13 @@ def frozen_cohort(tmp_path, tasks, use=SourceUse.TRAIN, *, row_group_size=None):
     return cohort, rows, context, ContentEvidenceReference(uri=str(cohort), sha256=digest)
 
 
-def test_mixed_retention_keeps_original_oracle_proofs_and_unchanged_no_oracle_rows(tmp_path):
+@pytest.mark.parametrize("semantics", [None, CommandSemantics.SHELL_SIMULATOR])
+def test_mixed_retention_keeps_original_proofs_and_excludes_dev_only_execution(tmp_path, semantics):
     static = no_oracle_answer("static")
     oracle = no_oracle_answer("original").model_copy(
         update={
             "execution_requirements": INITIAL_REQUIREMENTS,
+            "environment_requirements": EnvironmentRequirements(command_semantics=semantics),
             "resources": ResourceGroups(oracle=(inline_resource("solution/answer.txt", b"label"),)),
         }
     )
@@ -124,6 +126,11 @@ def test_mixed_retention_keeps_original_oracle_proofs_and_unchanged_no_oracle_ro
         expected_sha256=hashlib.sha256((output / "oracle-filter.json").read_bytes()).hexdigest(),
     )
     assert loaded == receipt
+    if semantics is CommandSemantics.SHELL_SIMULATOR:
+        assert loaded.tasks[oracle.id].exclusion_reason is OracleExclusionReason.BACKEND_CONTRACT_UNSUPPORTED
+        assert pq.read_table(output / "tasks.parquet").to_pylist() == [rows[0]]
+        assert pq.read_table(output / "excluded-tasks.parquet").to_pylist() == [rows[1]]
+        return
     assert loaded.tasks[oracle.id] == trial
     assert loaded.tasks[static.id].outcome == "static_retained"
     assert loaded.tasks[static.id].executability == "unmeasured"
