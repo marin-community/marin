@@ -18,6 +18,7 @@ import json
 import os
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
@@ -162,20 +163,23 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
     """
     if get_job_info() is None:
         raise RuntimeError("Regenerate the Reasoning Gym label inside the regional Iris CPU job")
-    context = ConversionContext(
-        inputs={},
-        grader_environment=EnvironmentRequirements(
-            command_semantics=CommandSemantics.LINUX_PROCESS,
-            packages_lock=packages_lock,
-        ),
-    )
     wheel = StoragePath(GENERATOR_URL)
     expected_count = generated_row_count(wheel, EXCLUDED_GENERATORS, PYTHON_HASH_SEED)
     if expected_count != GENERATED_ROW_COUNT:
         raise ValueError(f"The generator's row count changed: {expected_count} != {GENERATED_ROW_COUNT}")
     rejections: list[dict] = []
     regenerated: dict[int, str] = {}
-    for part in range(GENERATOR_PARTS):
+
+    def regenerate_part(part: int) -> list[tuple[int, str]]:
+        """One generator part's rows, converted with the repaired pipeline."""
+        context = ConversionContext(
+            inputs={},
+            grader_environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                packages_lock=packages_lock,
+            ),
+        )
+        converted = []
         for index, data in generated_rows(
             wheel, GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, part, GENERATOR_PARTS, None
         ):
@@ -192,7 +196,13 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
             if isinstance(task, ImportRejection):
                 rejections.append({"index": index, **task.model_dump(mode="json")})
                 continue
-            regenerated[index] = task.model_dump_json()
+            converted.append((index, task.model_dump_json()))
+        return converted
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for part_result in pool.map(regenerate_part, range(GENERATOR_PARTS)):
+            for index, raw_task in part_result:
+                regenerated[index] = raw_task
     if len(regenerated) != GENERATED_ROW_COUNT or rejections:
         raise ValueError(
             f"The regeneration kept {len(regenerated)} rows with {len(rejections)} rejections; "
