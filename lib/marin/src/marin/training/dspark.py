@@ -26,9 +26,13 @@ from safetensors import safe_open
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
 from marin.training.dspark_data import (
+    ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
     LM_HEAD,
+    PREPARED_DIR,
+    SAFETENSORS_INDEX,
     SPLITS_FILE,
+    TOKEN_FREQUENCIES_FILE,
     DraftRecipe,
     file_sha256,
     inspect_teacher,
@@ -45,6 +49,7 @@ VLLM_SOURCE_COMMIT = "47a8e415bff17b9376f02d9b92edcc67e962eaee"
 _LOOPBACK_HOST = "127.0.0.1"
 _TEACHER_PORT = 18000
 _EXPORT_RECEIPT = "dspark-export.json"
+_EPOCHS = 1
 _MARKOV_HEAD = "vanilla"
 _D2T_FILE = "d2t.npy"
 _T2D_FILE = "t2d.npy"
@@ -160,7 +165,7 @@ def _teacher_server(command: list[str], env: dict[str, str], port: int) -> Itera
 
 
 def extraction_config(recipe: DraftRecipe, hidden_states: Path) -> tuple[dict, dict]:
-    """Build the published vLLM wheel's prefill-only hidden-state configuration."""
+    """Return vLLM speculative-decoding and KV-transfer configs for teacher prefill."""
 
     speculative = {
         "method": "extract_hidden_states",
@@ -240,7 +245,7 @@ def _publish_checkpoint(
     mapping: np.ndarray,
     packages: dict,
 ) -> None:
-    checkpoint = training / "0"  # Speculators' terminal checkpoint for a one-epoch run.
+    checkpoint = training / str(_EPOCHS - 1)
     state = json.loads((checkpoint / "training_state.json").read_text())
     metrics = json.loads((checkpoint / "val_metrics.json").read_text())
     if (
@@ -253,7 +258,7 @@ def _publish_checkpoint(
     # The training-time staging path is not a portable verifier identity.
     config["speculators_config"]["verifier"]["name_or_path"] = provenance.teacher_identity
     names = sorted(set(tensor_files(checkpoint).values()))
-    index = checkpoint / "model.safetensors.index.json"
+    index = checkpoint / SAFETENSORS_INDEX
     if index.is_file():
         names.append(index.name)
 
@@ -336,7 +341,7 @@ def _trainer_command(
             "target_layer_ids": list(recipe.feature_taps),
         },
         "data": {
-            "data_path": str(data / "dataset"),
+            "data_path": str(data / ARROW_DATASET_DIR),
             "train_data_ratio": split["train_ratio"],
             "hidden_states_backend": "file",
             "total_seq_len": recipe.max_sequence_length,
@@ -353,12 +358,12 @@ def _trainer_command(
         "loss": {
             "loss_fn": json.dumps({"ce": recipe.cross_entropy_weight, "tv": recipe.total_variation_weight}),
         },
-        "optimizer": {"optimizer": "muon", "lr": recipe.learning_rate},
-        "scheduler": {"scheduler_type": "linear"},
+        "optimizer": {"optimizer": recipe.optimizer, "lr": recipe.learning_rate},
+        "scheduler": {"scheduler_type": recipe.lr_schedule},
         "trainer": {
             "save_path": str(training),
             "no_resume_from_checkpoint": True,
-            "epochs": 1,
+            "epochs": _EPOCHS,
             "max_steps": recipe.max_steps,
             "gradient_checkpointing": True,
         },
@@ -381,6 +386,40 @@ def _trainer_command(
     return train
 
 
+def _build_vocab_mappings(
+    python: str, data: Path, scratch: Path, recipe: DraftRecipe, env: dict[str, str]
+) -> dict[str, str]:
+    return json.loads(
+        subprocess.check_output(
+            [
+                python,
+                "-c",
+                _BUILD_VOCAB_MAPPINGS,
+                str(data / TOKEN_FREQUENCIES_FILE),
+                str(scratch / _D2T_FILE),
+                str(scratch / _T2D_FILE),
+                str(recipe.draft_vocab_size),
+                str(recipe.shape.vocab_size),
+                str(recipe.trainer_ranks),
+            ],
+            env=env,
+            text=True,
+        )
+    )
+
+
+def _verify_completed_export(export: StoragePath, provenance: TrainingProvenance) -> bool:
+    receipt_path = export / _EXPORT_RECEIPT
+    if not receipt_path.isfile():
+        return False
+    receipt = json.loads(receipt_path.read_text())
+    if any(receipt[name] != value for name, value in asdict(provenance).items()):
+        raise ValueError(f"Existing DSpark export at {export} has different inputs")
+    for name, digest in receipt["files"].items():
+        verify_sha256(export / name, digest)
+    return True
+
+
 def train_and_export(
     *,
     output: str,
@@ -393,20 +432,14 @@ def train_and_export(
     """Stage the pinned inputs, train on an Iris worker, and publish the draft receipt last."""
 
     export = StoragePath(output) / "hf"
-    receipt_path = export / _EXPORT_RECEIPT
-    if receipt_path.isfile():
-        receipt = json.loads(receipt_path.read_text())
-        if any(receipt[name] != value for name, value in asdict(provenance).items()):
-            raise ValueError(f"Existing DSpark export at {export} has different inputs")
-        for name, digest in receipt["files"].items():
-            verify_sha256(export / name, digest)
+    if _verify_completed_export(export, provenance):
         return
 
     teacher_devices, trainer_devices = gpu_device_split(_worker_gpu_devices(), recipe)
     source = StoragePath(teacher)
     manifest = StoragePath(teacher_manifest)
     decoder = inspect_teacher(source, manifest, provenance.teacher_manifest_sha256, recipe)
-    prepared_source = StoragePath(prepared) / "prepared"
+    prepared_source = StoragePath(prepared) / PREPARED_DIR
     if json.loads((prepared_source / DRAFT_CONFIG_FILE).read_text()) != decoder:
         raise ValueError("Prepared draft config disagrees with the teacher")
 
@@ -426,23 +459,7 @@ def train_and_export(
         logger.info("Staging verified DSpark inputs for %s", provenance.teacher_identity)
         stage_teacher(source, manifest, provenance.teacher_manifest_sha256, teacher_path)
         prepared_source.download_to(str(data), recursive=True, batch_size=8)
-        packages = json.loads(
-            subprocess.check_output(
-                [
-                    python,
-                    "-c",
-                    _BUILD_VOCAB_MAPPINGS,
-                    str(data / "token_frequencies.json"),
-                    str(scratch / _D2T_FILE),
-                    str(scratch / _T2D_FILE),
-                    str(recipe.draft_vocab_size),
-                    str(recipe.shape.vocab_size),
-                    str(recipe.trainer_ranks),
-                ],
-                env=trainer_env,
-                text=True,
-            )
-        )
+        packages = _build_vocab_mappings(python, data, scratch, recipe, trainer_env)
         server = _teacher_command(teacher_path, recipe, hidden_states)
         train = _trainer_command(teacher_path, recipe, python, data, scratch, training, hidden_states)
         logger.info("Training DSpark for %s at %s", provenance.teacher_identity, output)

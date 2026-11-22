@@ -13,17 +13,23 @@ from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 import datasets
 import pyarrow.parquet as pq
 from levanter.data.text.formats import ChatProcessor
+from levanter.models.snowball import GRUG_MOE_ARCHITECTURE, GRUG_MOE_MODEL_TYPE
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
 
-GRUG_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MASK_TOKEN = "<|finetune_right_pad_id|>"
+PREPARED_DIR = "prepared"
+ARROW_DATASET_DIR = "dataset"
 DRAFT_CONFIG_FILE = "draft_config.json"
+TOKEN_FREQUENCIES_FILE = "token_frequencies.json"
+SAFETENSORS_INDEX = "model.safetensors.index.json"
+_SAFETENSORS_FILE = "model.safetensors"
 SPLITS_FILE = "splits.json"
 _MAX_SAFETENSORS_HEADER = 100_000_000
 EMBEDDING = "model.embed_tokens.weight"
@@ -58,6 +64,8 @@ class DraftRecipe:
     teacher_replicas: int
     cross_entropy_weight: float
     total_variation_weight: float
+    optimizer: Literal["muon", "adamw"]
+    lr_schedule: Literal["linear", "cosine", "none"]
     draft_vocab_size: int = 32000
     draft_layers: int = 3
     block_size: int = 8
@@ -127,11 +135,11 @@ def _manifest(path: StoragePath, expected: str) -> dict:
 def tensor_files(root: Path) -> dict[str, str]:
     """Map tensor names to relative safetensors filenames."""
 
-    index = root / "model.safetensors.index.json"
+    index = root / SAFETENSORS_INDEX
     if index.is_file():
         return json.loads(index.read_text())["weight_map"]
-    with safe_open(root / "model.safetensors", framework="np") as weights:
-        return dict.fromkeys(weights.keys(), "model.safetensors")
+    with safe_open(root / _SAFETENSORS_FILE, framework="np") as weights:
+        return dict.fromkeys(weights.keys(), _SAFETENSORS_FILE)
 
 
 def _teacher_files(
@@ -155,12 +163,12 @@ def _tensor_header(path: StoragePath) -> dict:
 
 
 def _check_teacher_tensors(files: dict[str, StoragePath], metadata: Path, shape: GrugShape) -> None:
-    index = metadata / "model.safetensors.index.json"
+    index = metadata / SAFETENSORS_INDEX
     if index.is_file():
         weights = json.loads(index.read_text())["weight_map"]
         headers = {}
     else:
-        name = "model.safetensors"
+        name = _SAFETENSORS_FILE
         headers = {name: _tensor_header(files[name])}
         weights = dict.fromkeys(headers[name], name)
     missing = set(weights.values()) - files.keys()
@@ -207,8 +215,8 @@ def stage_teacher(root: StoragePath, manifest: StoragePath, manifest_sha256: str
 
 def _teacher_decoder(target: dict, recipe: DraftRecipe) -> dict[str, str | int | float | bool | None]:
     if (
-        target["model_type"] != "grug_moe"
-        or target["architectures"] != [GRUG_ARCHITECTURE]
+        target["model_type"] != GRUG_MOE_MODEL_TYPE
+        or target["architectures"] != [GRUG_MOE_ARCHITECTURE]
         or target.get("quantization_config")
     ):
         raise ValueError("Expected an unquantized GrugMoE HF SFT export")
@@ -299,7 +307,7 @@ def _chat_rows(files: dict[str, StoragePath]) -> Iterator[dict]:
 def _tokenized_rows(
     files: dict[str, StoragePath], processor: ChatProcessor, recipe: DraftRecipe
 ) -> Iterator[tuple[bytes, dict]]:
-    """Yield each clipped token row and its token-ID digest for overlap checks."""
+    """Yield the clipped token-ID digest alongside its row for overlap checks."""
 
     for batch in batched(_chat_rows(files), 64):
         for row in processor(batch):
@@ -330,25 +338,13 @@ def inspect_mix(
     return train_files, val_files
 
 
-def prepare_data(
-    *,
-    output: str,
-    teacher: str,
-    teacher_manifest: str,
-    teacher_sha256: str,
-    mix: str,
-    mix_sha256: str,
+def _write_masked_dataset(
+    prepared: Path,
+    train_files: dict[str, StoragePath],
+    val_files: dict[str, StoragePath],
+    tokenizer: MarinTokenizer,
     recipe: DraftRecipe,
-) -> None:
-    """Write the Speculators Arrow dataset with a trailing, disjoint holdout."""
-
-    destination = StoragePath(output) / "prepared"
-    if (destination / SPLITS_FILE).isfile():
-        return
-
-    decoder, tokenizer = _teacher_inputs(StoragePath(teacher), StoragePath(teacher_manifest), teacher_sha256, recipe)
-    train_files, val_files = inspect_mix(StoragePath(mix), mix_sha256, verify_shards=True)
-
+) -> dict[str, int | float]:
     processor = ChatProcessor(tokenizer)
     frequencies: Counter[int] = Counter()
     validation_keys: set[bytes] = set()
@@ -374,26 +370,47 @@ def prepare_data(
             "seq_len": datasets.Value("int32"),
         }
     )
-    with TemporaryDirectory(prefix="dspark-prepare-") as directory:
-        prepared = Path(directory) / "prepared"
-        prepared.mkdir()
-        val = datasets.Dataset.from_generator(generate_validation, features=features, cache_dir=directory)
-        train = datasets.Dataset.from_generator(generate_train, features=features, cache_dir=directory)
-        if len(train) < recipe.trainer_ranks or len(val) < recipe.trainer_ranks:
-            raise ValueError("Each split needs at least one usable row per trainer rank")
-        # Speculators floors len(dataset) * train_data_ratio. Use the midpoint
-        # between split boundaries so rounding cannot move a row into validation.
-        train_ratio = (len(train) + 0.5) / (len(train) + len(val))
-        datasets.concatenate_datasets([train, val]).save_to_disk(str(prepared / "dataset"))
+    val = datasets.Dataset.from_generator(generate_validation, features=features, cache_dir=str(prepared.parent))
+    train = datasets.Dataset.from_generator(generate_train, features=features, cache_dir=str(prepared.parent))
+    if len(train) < recipe.trainer_ranks or len(val) < recipe.trainer_ranks:
+        raise ValueError("Each split needs at least one usable row per trainer rank")
+    # Speculators floors len(dataset) * train_data_ratio. Use the midpoint
+    # between split boundaries so rounding cannot move a row into validation.
+    train_ratio = (len(train) + 0.5) / (len(train) + len(val))
+    datasets.concatenate_datasets([train, val]).save_to_disk(str(prepared / ARROW_DATASET_DIR))
 
+    (prepared / TOKEN_FREQUENCIES_FILE).write_text(json.dumps(frequencies, sort_keys=True) + "\n")
+    return {"train": len(train), "validation": len(val), "train_ratio": train_ratio}
+
+
+def prepare_data(
+    *,
+    output: str,
+    teacher: str,
+    teacher_manifest: str,
+    teacher_sha256: str,
+    mix: str,
+    mix_sha256: str,
+    recipe: DraftRecipe,
+) -> None:
+    """Write the Speculators Arrow dataset with a trailing, disjoint holdout."""
+
+    destination = StoragePath(output) / PREPARED_DIR
+    if (destination / SPLITS_FILE).isfile():
+        return
+
+    decoder, tokenizer = _teacher_inputs(StoragePath(teacher), StoragePath(teacher_manifest), teacher_sha256, recipe)
+    train_files, val_files = inspect_mix(StoragePath(mix), mix_sha256, verify_shards=True)
+
+    with TemporaryDirectory(prefix="dspark-prepare-") as directory:
+        prepared = Path(directory) / PREPARED_DIR
+        prepared.mkdir()
+        splits = _write_masked_dataset(prepared, train_files, val_files, tokenizer, recipe)
         (prepared / DRAFT_CONFIG_FILE).write_text(json.dumps(decoder, indent=2) + "\n")
-        (prepared / "token_frequencies.json").write_text(json.dumps(frequencies, sort_keys=True) + "\n")
         for file in sorted(prepared.rglob("*")):
             if file.is_file():
                 target = destination / file.relative_to(prepared).as_posix()
                 target.parent.mkdirs()
                 target.upload_from(str(file))
         # The artifact runner serializes writers. Publish the split descriptor last.
-        (destination / SPLITS_FILE).write_text(
-            json.dumps({"train": len(train), "validation": len(val), "train_ratio": train_ratio}, indent=2) + "\n"
-        )
+        (destination / SPLITS_FILE).write_text(json.dumps(splits, indent=2) + "\n")

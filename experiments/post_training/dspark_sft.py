@@ -86,6 +86,8 @@ class OfflineDSpark:
             teacher_replicas=self.teacher_replicas,
             cross_entropy_weight=0.1,
             total_variation_weight=0.9,
+            optimizer="muon",
+            lr_schedule="linear",
             seed=self.seed,
         )
 

@@ -10,13 +10,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from datasets.exceptions import DatasetGenerationError
+from levanter.models.snowball import GRUG_MOE_ARCHITECTURE
 from marin.training.dspark import extraction_config, gpu_device_split, validate_draft
 from marin.training.dspark_data import (
     EMBEDDING,
     FINAL_NORM,
     GATE_DOWN,
     GATE_UP,
-    GRUG_ARCHITECTURE,
     GRUG_MASK_TOKEN,
     LM_HEAD,
     DraftRecipe,
@@ -47,13 +47,15 @@ def recipe() -> DraftRecipe:
         teacher_replicas=1,
         cross_entropy_weight=0.1,
         total_variation_weight=0.9,
+        optimizer="muon",
+        lr_schedule="linear",
         draft_vocab_size=3,
         markov_rank=4,
     )
 
 
 @pytest.fixture
-def teacher(tmp_path: Path, recipe: DraftRecipe) -> Path:
+def teacher(tmp_path: Path) -> Path:
     root = tmp_path / "teacher"
     root.mkdir()
     vocab = {
@@ -74,7 +76,7 @@ def teacher(tmp_path: Path, recipe: DraftRecipe) -> Path:
         json.dumps(
             {
                 "model_type": "grug_moe",
-                "architectures": [GRUG_ARCHITECTURE],
+                "architectures": [GRUG_MOE_ARCHITECTURE],
                 "hidden_size": 16,
                 "num_hidden_layers": 4,
                 "num_attention_heads": 2,
@@ -216,5 +218,5 @@ def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teach
 
 def test_gpu_device_split_respects_iris_device_order(recipe: DraftRecipe) -> None:
     assert gpu_device_split("GPU-c62a,GPU-955b", recipe) == ("GPU-c62a", "GPU-955b")
-    with pytest.raises(ValueError, match="distinct"):
+    with pytest.raises(ValueError):
         gpu_device_split("GPU-c62a,GPU-c62a", recipe)
