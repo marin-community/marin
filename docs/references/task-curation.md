@@ -5072,6 +5072,10 @@ calibration. They set `task_sha256` to the hash of `calibrated_task_spec`, which
 contains the measured actor and verifier allocations and final `task.toml`.
 Changes to those fields can change the TaskSpec hash even when the source
 package and runtime checksums remain unchanged.
+Collection and population preparation serialize `task.source_document()` through
+`task_spec_json` to preserve absent source fields. Adding a default such as
+`integrity_contract=null` changes a frozen TaskSpec identity. Validate each
+projected task/runtime row against its receipt before retention and publication.
 Original oracle trials and reward maps remain unchanged. A scored oracle failure
 with a physical nop receipt retains the calibrated consumed TaskSpec identity,
 including its measured allocations and final `task.toml`. The failed task stays
