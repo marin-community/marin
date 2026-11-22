@@ -11,10 +11,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from verifyit.adapters.open_instruct_ifeval import compute_score as score_open_instruct_ifeval
+from verifyit.adapters.open_instruct_ifeval import normalize_ground_truth as normalize_open_instruct_ifeval
+
 from skyrl_gym.envs.aime import utils as aime_utils
 from skyrl_gym.envs.aime.verifier import AIMEVerifier
 from skyrl_gym.envs.gsm8k import utils as gsm8k_utils
-from skyrl_gym.envs.ifeval import utils as ifeval_utils
 from skyrl_gym.envs.lcb.livecodebench import normalize_lcb_ground_truth
 from skyrl_gym.envs.mcq.utils import extract_mcq_answer
 from skyrl_gym.envs.nupa.answers import parse_ground_truth
@@ -69,11 +71,11 @@ def _normalize_ifeval(ground_truth: Any) -> str:
             raise ValueError("IFeval ground_truth must be valid JSON.") from exc
     if not isinstance(ground_truth, (Mapping, list)):
         raise ValueError("IFeval ground_truth must be a constraint mapping or list of constraint mappings.")
-    return ifeval_utils.normalize_ground_truth(ground_truth)
+    return normalize_open_instruct_ifeval(ground_truth)
 
 
 def _ifeval_is_correct(response: str, ground_truth: str) -> bool:
-    return ifeval_utils.compute_score(response, ground_truth)["score"] == 1.0
+    return score_open_instruct_ifeval(response, ground_truth)["acc"]
 
 
 def _reasoning_gym_is_correct(response: str, ground_truth: str) -> bool:

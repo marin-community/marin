@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL grade scripts score replies with the vendored scorers in the grader image.
+"""SkyRL grade scripts score replies in the grader image.
 
 Each test converts a fixture row and grades it the way a campaign does, in a fresh container of the
 locally built grader image. See ``local_grader`` for building the image these tests run.
@@ -61,7 +61,7 @@ def test_declared_control_passes_in_the_grader_image(name, control, machines):
         ("apps", "apps_testing_util.py"),
         ("verifiable_code", "livecodebench.py"),
         ("gretel_text_to_sql", "text_to_sql_scoring.py"),
-        ("rlvr_ifeval", "ifeval_utils.py"),
+        ("rlvr_ifeval", "nemotron_if_grade.py"),
     ],
 )
 def test_grade_script_fails_rather_than_scoring_when_its_scorer_cannot_import(name, scorer, machines):
@@ -106,6 +106,30 @@ def test_nemotron_paragraphs_follow_the_prompts_markdown_divider(reply, reward, 
     }
     result = grade(converted_task(RECIPES["nemotron_if"], row), reply, machines)
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "passing", "failing"),
+    [
+        ({"func_name": "verify_paragraph_count", "N": 2}, "First.\n***\nSecond.", "First.\n\nSecond."),
+        ({"func_name": "verify_bullet_points", "N": 2}, "**Items:**\n* One\n* Two\n* * *", "* One\n* * *"),
+        (
+            {"func_name": "validate_sections", "N": 2, "section_splitter": "SECTION"},
+            "<<Guide to SECTION 1>>\nSECTION 1\nFirst body.\nSECTION 2\nSecond body.",
+            "<<Guide to SECTION 1>>\nSECTION 1\nFirst body.",
+        ),
+        ({"func_name": "validate_highlighted_sections", "N": 2}, "**First** and **second**.", "**Only one**."),
+    ],
+)
+def test_rlvr_ifeval_grader_accepts_reported_format_cases_and_rejects_ignored_instructions(
+    descriptor, passing, failing, machines
+):
+    row = {**ROWS["rlvr_ifeval"], "ground_truth": json.dumps(descriptor)}
+    task = converted_task(RECIPES["rlvr_ifeval"], row)
+    positive = grade(task, passing, machines)
+    negative = grade(task, failing, machines)
+    assert (positive.status, positive.reward) == (Outcome.GRADED, 1.0)
+    assert (negative.status, negative.reward) == (Outcome.GRADED, 0.0)
 
 
 @pytest.mark.parametrize(

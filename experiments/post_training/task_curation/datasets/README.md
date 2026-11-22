@@ -67,7 +67,7 @@ ones stay out of `final/`.
 | [cascade/tasks.py](cascade/tasks.py) | Cascade-2 TRAIN subsets with original NeMo MCQA, structured-output and configured symbolic math grading. Unsupported IF, workplace and SWE runtime contracts retain typed rejections. Pending final-pin qualification. |
 | [skyrl/math.py](skyrl/math.py) | MarinSkyRL math and numeric-answer sets, graded in process. |
 | [skyrl/code.py](skyrl/code.py) | APPS, Eurus-2 code, verifiable coding problems and Gretel text-to-SQL, graded by `apps_grade.py`, `lcb_grade.py` and `sql_grade.py`. |
-| [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by `ifeval_grade.py` with the vendored SkyRL IFEval scorer; the only control is an empty reply, since the sources publish no passing replies. |
+| [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by `nemotron_if_grade.py` with verifyit; the only control is an empty reply, since the sources publish no passing replies. RLVR IFEval uses source version 2 because its rewards changed when its scorer moved to verifyit. |
 | [skyrl/mcq.py](skyrl/mcq.py) | GPQA and OpenScience multiple choice. |
 | [skyrl/preference.py](skyrl/preference.py) | HH-RLHF and KTO preference components; no runnable grader. |
 | [nemotron_ultra/components.py](nemotron_ultra/components.py) | Nemotron RL Ultra blends: one `COMPONENTS` table over the mopd, rlvr1 and rlvr2 blends. [graders.py](nemotron_ultra/graders.py) converts the rows; a graded component ships a `*_grade.py` script with the vendored NeMo Gym scorer it calls, except the math components, which the verifyit math comparator grades in process. |

@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical full-population harness IFEval and native IFBench instruction evaluations."""
+"""Full-population IFEval and IFBench instruction evaluations.
+
+IFEval protocol 2026.11.22 grades through verifyit; scores can differ from the earlier harness checkers.
+IFBench keeps its source checkers and protocol.
+"""
 
 from functools import partial
 
@@ -80,7 +84,7 @@ def instruction_following_evaluation(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version="2026.11.22" if profile is InstructionProfile.HARNESS else "2026.11.02",
                 operation=(
                     OperationKind.TEXT_GENERATION
                     if profile is InstructionProfile.HARNESS

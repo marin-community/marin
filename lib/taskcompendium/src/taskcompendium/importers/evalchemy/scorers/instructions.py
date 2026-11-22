@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict/loose metrics using the original harness IFEval and AI2 IFBench checkers."""
+"""Strict/loose metrics using verifyit IFEval and source IFBench checkers."""
 
 from collections import defaultdict
 from collections.abc import Mapping
@@ -10,7 +10,8 @@ from importlib import import_module
 from typing import Any, Protocol, cast
 
 from verifyit.grade import InvalidTask, Reward, scored
-from verifyit.spec import Constraint
+from verifyit.modes.grade_ifeval import grade_ifeval_candidate, resolve_checks
+from verifyit.spec import Constraint, IfevalSpec
 
 from .instruction_spec import InstructionProfile, InstructionSpec
 
@@ -25,16 +26,19 @@ class Instruction(Protocol):
 @lru_cache
 def source_registry(profile: InstructionProfile) -> Mapping[str, type[Instruction]]:
     """Load optional checker dependencies only for their explicitly selected protocol."""
-    modules = {
-        InstructionProfile.HARNESS: f"{__package__}.ifeval.instructions_registry",
-        InstructionProfile.IFBENCH: f"{__package__}.ifbench.instructions_registry",
-    }
-    return cast(Mapping[str, type[Instruction]], import_module(modules[profile]).INSTRUCTION_DICT)
+    if profile is not InstructionProfile.IFBENCH:
+        raise ValueError(f"No source registry for {profile}")
+    return cast(
+        Mapping[str, type[Instruction]], import_module(f"{__package__}.ifbench.instructions_registry").INSTRUCTION_DICT
+    )
 
 
 def validate_source_instructions(spec: InstructionSpec) -> None:
     if not spec.constraints:
         raise InvalidTask("Instruction benchmarks require nonempty constraints")
+    if spec.profile is InstructionProfile.HARNESS:
+        resolve_checks(tuple(_harness_constraint(spec, constraint) for constraint in spec.constraints))
+        return
     unknown = sorted({constraint.name for constraint in spec.constraints} - source_registry(spec.profile).keys())
     if unknown:
         raise InvalidTask(f"Unknown source instruction checkers: {unknown}")
@@ -53,6 +57,12 @@ def _instruction(spec: InstructionSpec, constraint: Constraint) -> Instruction:
     if args and "prompt" in args:
         instruction.build_description(prompt=spec.prompt)
     return instruction
+
+
+def _harness_constraint(spec: InstructionSpec, constraint: Constraint) -> Constraint:
+    if constraint.name == "combination:repeat_prompt":
+        return Constraint(constraint.name, {**constraint.params, "prompt": spec.prompt})
+    return constraint
 
 
 def loose_responses(response: str) -> tuple[str, ...]:
@@ -83,8 +93,15 @@ def grade_source_instructions(spec: InstructionSpec, response: str) -> Reward:
         candidates = (response,) if mode == "strict" else loose_responses(response)
         flags = []
         for constraint in spec.constraints:
-            instruction = _instruction(spec, constraint)
-            flags.append(any(candidate.strip() and instruction.check_following(candidate) for candidate in candidates))
+            if spec.profile is InstructionProfile.HARNESS:
+                prepared = _harness_constraint(spec, constraint)
+                ifeval = IfevalSpec((prepared,))
+                flags.append(any(grade_ifeval_candidate(ifeval, candidate).reward == 1.0 for candidate in candidates))
+            else:
+                instruction = _instruction(spec, constraint)
+                flags.append(
+                    any(candidate.strip() and instruction.check_following(candidate) for candidate in candidates)
+                )
         instruction_pass[mode] = flags
         if spec.profile is InstructionProfile.HARNESS:
             prompt_name = f"prompt_level_{mode}_acc,none"

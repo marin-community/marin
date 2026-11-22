@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL instruction-following sources. Each rewards the fraction of constraints a reply satisfies.
-
-RLVR-IFeval rows carry SkyRL constraint descriptors and are graded by the vendored SkyRL IFEval
-scorer; conversion normalizes them with the scorer's own preparation function, which rejects unknown
-constraints and missing arguments. Nemotron rows carry IFEval instruction ids and arguments, and their
-prompts use IFEval's wording, so they are graded by verifyit's IFEval checks, which follow that wording.
-The sources publish no passing replies, so the controls check only that an empty reply scores 0.
-"""
+"""SkyRL instruction-following sources graded with verifyit IFEval checks."""
 
 import json
 from collections.abc import Mapping, Sequence
@@ -19,24 +12,23 @@ from typing import Any
 from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.script_grader import grade_script, script_package
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.models import ConversationInput, TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
+from verifyit.adapters.open_instruct_ifeval import constraints_from_descriptors, normalize_ground_truth
 from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import DEFAULT_OUTPUT, Constraint
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
-SCORERS = HERE / "scorers"
-IFEVAL_GRADE = grade_script(HERE / "ifeval_grade.py", *shipped_files(SCORERS, "ifeval_utils.py"))
-NEMOTRON_GRADE = grade_script(HERE / "nemotron_if_grade.py")
+IFEVAL_GRADE = grade_script(HERE / "nemotron_if_grade.py")
+NEMOTRON_GRADE = IFEVAL_GRADE
 GRADER_TIMEOUT = 40.0
 
 RUBRIC_REQUESTS = """
@@ -55,8 +47,8 @@ Missing requested documents or inputs are defects.
 RUBRIC = (
     RUBRIC_REQUESTS
     + """
-The source scorer rewards the fraction of constraints satisfied; TaskTrove similarly named checks can differ in
-counting and punctuation semantics.
+The scorer rewards the fraction of constraints satisfied with verifyit's IFEval checks. Some scores differ from
+the source checker, especially for language, punctuation, and Markdown formatting.
 """
     + RUBRIC_DEFECTS
 )
@@ -144,10 +136,11 @@ def ifeval_task(
     evidence: Mapping[str, Any],
 ) -> TaskSpec | ImportRejection:
     try:
-        normalized = json.loads(ifeval_utils.normalize_ground_truth(constraints))
-    except (ValueError, TypeError) as error:
+        normalized = json.loads(normalize_ground_truth(constraints))
+        converted = constraints_from_descriptors(normalized)
+    except (InvalidTask, ValueError, TypeError) as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
-    return scripted_task(row, context, events, IFEVAL_GRADE, normalized, evidence)
+    return scripted_task(row, context, events, IFEVAL_GRADE, [asdict(constraint) for constraint in converted], evidence)
 
 
 def convert_nemotron_if(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -236,7 +229,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_rlvr_ifeval,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,

@@ -362,11 +362,11 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert grader_config(task)["test_cases"] == [{"input": "1 2\n", "output": "3\n", "testtype": "stdin"}]
 
 
-def test_rlvr_ifeval_task_gives_the_scorer_skyrl_constraints():
+def test_rlvr_ifeval_task_gives_verifyit_normalized_constraints():
     task = converted_task(RECIPES["rlvr_ifeval"], ROWS["rlvr_ifeval"])
     assert isinstance(task.grader, ScriptGrader)
     assert task.grader.environment == fixture_context(RECIPES["rlvr_ifeval"]).grader_environment
-    assert grader_config(task)["constraints"] == [{"func_name": "validate_no_commas"}]
+    assert grader_config(task)["constraints"] == [{"name": "punctuation:no_comma", "params": {}}]
 
 
 def test_nemotron_task_gives_verifyit_the_ifeval_instructions_without_null_arguments():

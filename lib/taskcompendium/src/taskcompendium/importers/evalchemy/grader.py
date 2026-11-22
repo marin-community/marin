@@ -46,7 +46,7 @@ DEPENDENCIES = {
 @cache
 def scorer_files(scorer: str) -> tuple[TaskResource, ...]:
     paths = ["__init__.py", "main.py", "lm-evaluation-harness-MIT.txt", *DEPENDENCIES[scorer]]
-    if scorer in {"ifeval", "ifbench"}:
+    if scorer == "ifbench":
         paths.extend(
             str(path.relative_to(SCORERS))
             for path in sorted((SCORERS / scorer).rglob("*"))
