@@ -12,8 +12,7 @@ changed number, word or operator, or an added constraint).
 the same item, so positives and negatives sit in text that shares the item's rare window and topic.
 
 Labels: ``label_q`` is 1 when the right text holds the item's question; ``label_qa`` is 1 when it
-also holds the answer text after the question; ``label`` (the one-output model) is 1 when it holds
-this item, so the same question with other choices has ``label_q`` 1 and ``label`` 0.
+also shows the item's answer.
 """
 
 import argparse
@@ -135,7 +134,7 @@ def variant(item: dict[str, Any], others: list[dict[str, Any]], rng: random.Rand
     return None
 
 
-def _row(item: dict[str, Any], right: str, kind: str, label: int, label_q: int, label_qa: int) -> dict[str, Any]:
+def _row(item: dict[str, Any], right: str, kind: str, label_q: int, label_qa: int) -> dict[str, Any]:
     return {
         "eval": item["eval"],
         "item": item.get("id", ""),
@@ -144,7 +143,6 @@ def _row(item: dict[str, Any], right: str, kind: str, label: int, label_q: int, 
         "answer": item["answer"] or "",
         "right": right,
         "kind": kind,
-        "label": label,
         "label_q": label_q,
         "label_qa": label_qa,
     }
@@ -164,25 +162,25 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
 
     for item in items:
         inserted = layout(item, rng)
-        yield _row(item, placed(inserted.text), "copy", 1, 1, int(inserted.shows_answer))
-        yield _row(item, placed(question_only(item, rng)), "question_only", 1, 1, 0)
+        yield _row(item, placed(inserted.text), "copy", 1, int(inserted.shows_answer))
+        yield _row(item, placed(question_only(item, rng)), "question_only", 1, 0)
         if len(item["question"].split()) >= 15 and rng.random() < 0.5:
-            yield _row(item, placed(truncated(item, rng)), "truncated", 1, 1, 0)
+            yield _row(item, placed(truncated(item, rng)), "truncated", 1, 0)
         others = [items[rng.randrange(len(items))] for _ in range(3)]
         if found := variant(item, others, rng):
-            yield _row(item, placed(layout({**item, "question": found[1]}, rng).text), f"variant_{found[0]}", 0, 0, 0)
+            yield _row(item, placed(layout({**item, "question": found[1]}, rng).text), f"variant_{found[0]}", 0, 0)
         kind = rng.choice(["none", "other", "same_question"])
         if kind == "same_question" and len(by_question[item["question"]]) > 1:
             kind = "other"
             same = [items[i] for i in by_question[item["question"]] if items[i]["answer"] != item["answer"]]
             if same:
                 # The same question with other choices: the question is there, this item is not.
-                yield _row(item, placed(layout(rng.choice(same), rng).text), "same_question", 0, 1, 0)
+                yield _row(item, placed(layout(rng.choice(same), rng).text), "same_question", 1, 0)
                 continue
         if kind == "other":
-            yield _row(item, placed(layout(rng.choice(items), rng).text), "other", 0, 0, 0)
+            yield _row(item, placed(layout(rng.choice(items), rng).text), "other", 0, 0)
         else:
-            yield _row(item, placed(""), "none", 0, 0, 0)
+            yield _row(item, placed(""), "none", 0, 0)
 
 
 def context_pairs(candidates: pd.DataFrame, rng: random.Random) -> Iterator[dict[str, Any]]:
@@ -205,14 +203,14 @@ def context_pairs(candidates: pd.DataFrame, rng: random.Random) -> Iterator[dict
         cut = rng.randrange(len(right) // 3, max(len(right) // 3 + 1, 2 * len(right) // 3))
         before, after = right[:cut], right[cut:]
         inserted = layout(item, rng)
-        yield _row(item, before + "\n" + inserted.text + "\n" + after, "ctx_copy", 1, 1, int(inserted.shows_answer))
+        yield _row(item, before + "\n" + inserted.text + "\n" + after, "ctx_copy", 1, int(inserted.shows_answer))
         if holds_item[number]:
             # The candidate already holds the item, so a variant written into it is not a negative.
             continue
         others = [items[rng.randrange(len(items))] for _ in range(3)]
         if found := variant(item, others, rng):
             changed = layout({**item, "question": found[1]}, rng).text
-            yield _row(item, before + "\n" + changed + "\n" + after, f"ctx_variant_{found[0]}", 0, 0, 0)
+            yield _row(item, before + "\n" + changed + "\n" + after, f"ctx_variant_{found[0]}", 0, 0)
 
 
 def main() -> None:

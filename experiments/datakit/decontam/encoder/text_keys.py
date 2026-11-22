@@ -24,6 +24,7 @@ WINDOW = 20
 _TEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 _NOT_STREAM = re.compile(r"[\W_]+")
 _MULTIPLIER = np.uint64(0x9E3779B97F4A7C15)
+_LETTERS = "abcdefghijklmnopqrstuvwxyz"
 # Levels of JSON escaping that a record reading undoes.
 ESCAPE_DEPTH = 2
 # One JSON escape. An escaped backslash is one unit, so a JSON-escaped LaTeX command (two
@@ -36,6 +37,15 @@ def text_stream(text: str) -> str:
     """The lowercase letters and digits of *text*, after NFKC and without LaTeX commands."""
     folded = unicodedata.normalize("NFKC", text or "")
     return _NOT_STREAM.sub("", _TEX_COMMAND.sub(" ", folded).lower())
+
+
+def item_stream(question: str, choices: list[str]) -> str:
+    """The stream that an item's keys come from: its question, or, for a question shorter than a
+    window, the question followed by each choice with its letter (a, b, ...)."""
+    stream = text_stream(question)
+    if len(stream) < WINDOW and choices:
+        stream += "".join(_LETTERS[i % len(_LETTERS)] + text_stream(c) for i, c in enumerate(choices))
+    return stream
 
 
 def json_unescaped(text: str) -> str:

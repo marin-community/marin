@@ -21,7 +21,7 @@ from rigging.log_setup import configure_logging
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame, write_frame
-from experiments.datakit.decontam.encoder.train import predict, with_pair_text
+from experiments.datakit.decontam.encoder.train import OUTPUTS, predict, with_pair_text
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ def main() -> None:
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, help="storage prefix of the saved model")
-    parser.add_argument("--heads", nargs="+", required=True, help="names of the model outputs, in order")
     parser.add_argument("--pairs", required=True, help="pairs output with pairs/*.parquet")
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-length", type=int, default=1024)
@@ -46,12 +45,12 @@ def main() -> None:
         fetch_model(args.model, directory)
         tokenizer = AutoTokenizer.from_pretrained(directory)
         model = AutoModelForSequenceClassification.from_pretrained(directory).to("cuda")
-    assert model.config.num_labels == len(args.heads), "--heads must name every model output"
+    assert model.config.num_labels == len(OUTPUTS), "the model must have the trainer's outputs"
     started = time.time()
     scores = predict(model, tokenizer, with_pair_text(pairs), args.max_length, "cuda")
     seconds = time.time() - started
     logger.info("scored %d pairs in %.0f s: %.0f pairs/s", len(pairs), seconds, len(pairs) / seconds)
-    for number, head in enumerate(args.heads):
+    for number, head in enumerate(OUTPUTS):
         pairs[f"score_{head}"] = scores[:, number]
     write_frame(pairs, args.output)
 

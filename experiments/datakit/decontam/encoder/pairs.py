@@ -26,7 +26,7 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, readings, text_stream
+from experiments.datakit.decontam.encoder.text_keys import WINDOW, item_stream, readings, text_stream
 
 logger = logging.getLogger(__name__)
 BEFORE = 1500
@@ -68,7 +68,8 @@ def _offset(text: str, position: int) -> int:
 def _located(streams: list[tuple[str, str]], question: str, key: str, offset: int) -> tuple[str, str, int]:
     """The first reading with the question or key, its stream, and estimated item position (-1 if absent)."""
     for text, stream in streams:
-        at = stream.find(question) if question else -1
+        # A question shorter than a window is no place marker: it can occur anywhere. Its key holds the choices.
+        at = stream.find(question) if len(question) >= WINDOW else -1
         if at < 0 and key:
             # The record holds the key (stage 1 found it); the item starts that far before it.
             hit = stream.find(key)
@@ -98,7 +99,9 @@ def make_extract(output: str):
                     item = items[item_id]
                     question = text_stream(item["question"])
                     offset = item.get("key1_offset", -1)
-                    key = question[offset : offset + WINDOW] if offset is not None and offset >= 0 else ""
+                    # The key window comes from the stream that stage 1 keyed (see text_keys.item_stream).
+                    keyed = item_stream(item["question"], list(item["choices"] or []))
+                    key = keyed[offset : offset + WINDOW] if offset is not None and offset >= 0 else ""
                     text, stream, at = _located(streams, question, key, offset)
                     start = _offset(text, max(at, 0)) - 1 if at >= 0 else 0
                     right = text[max(0, start - BEFORE) : start + len(item["question"]) + AFTER]

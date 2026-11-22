@@ -3,9 +3,8 @@
 
 """Fine-tune a pretrained multilingual encoder to say whether `right` contains `left`.
 
-`left` is an eval item and `right` is record text (see ``pair_left``). With ``--heads 2`` the
-model has two outputs: the record holds the question, and the record holds the question with
-its answer. With ``--heads 1`` it has one output: the judges' "contaminated" label.
+`left` is an eval item and `right` is record text (see ``pair_left``). The model has two outputs
+(``OUTPUTS``): the record holds the question, and the record holds the question with its answer.
 Results (metrics, test scores, model) go to ``--output``.
 """
 
@@ -30,6 +29,8 @@ from experiments.datakit.decontam.encoder.tables import read_frame, write_frame
 
 _SPACE = re.compile(r"\s+")
 TARGET_PRECISION = 0.95
+# The model's outputs, in order: the record holds the question; it holds the question with its answer.
+OUTPUTS = ("label_q", "label_qa")
 # One in this many train items of the real label sets goes to the dev split.
 DEV_EVERY = 4
 # Judged pairs of the earlier block-rule candidates, in --data.
@@ -175,12 +176,10 @@ def metrics(scores: np.ndarray, labels: np.ndarray, threshold: float) -> dict:
     }
 
 
-def evaluation(
-    label_columns: list[str], dev: pd.DataFrame, dev_scores: np.ndarray, test: pd.DataFrame, test_scores: np.ndarray
-) -> dict:
+def evaluation(dev: pd.DataFrame, dev_scores: np.ndarray, test: pd.DataFrame, test_scores: np.ndarray) -> dict:
     """Per output: the dev threshold, and metrics on dev, on judged and synthetic test pairs, and per test source."""
     results: dict = {}
-    for head, column in enumerate(label_columns):
+    for head, column in enumerate(OUTPUTS):
         threshold = threshold_for(dev_scores[:, head], dev[column].to_numpy())
         results[column] = {
             "threshold": threshold,
@@ -189,9 +188,6 @@ def evaluation(
         for name, part in (("judged", test.source != "synthetic"), ("synthetic", test.source == "synthetic")):
             results[column][name] = metrics(
                 test_scores[part.to_numpy(), head], test.loc[part, column].to_numpy(), threshold
-            )
-            results[column][f"{name}_vs_label"] = metrics(
-                test_scores[part.to_numpy(), head], test.loc[part, "label"].to_numpy(), threshold
             )
         for source in sorted(set(test["source"]) - {"synthetic", "judged"}):
             part = (test["source"] == source).to_numpy()
@@ -202,7 +198,6 @@ def evaluation(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, help="pretrained encoder, for example jhu-clsp/mmBERT-base")
-    parser.add_argument("--heads", type=int, choices=[1, 2], default=2)
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=1024)
@@ -220,11 +215,10 @@ def main() -> None:
     if device == "cuda":
         # The cuDNN attention backend builds no plan for these padded bf16 batches; the others do.
         torch.backends.cuda.enable_cudnn_sdp(False)
-    label_columns = ["label_q", "label_qa"] if args.heads == 2 else ["label"]
     train, dev, test = load(args.data, args.synthetic, args.extra)
     print("train", len(train), "dev", len(dev), "test", len(test), "device", device, flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(label_columns)).to(device)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(OUTPUTS)).to(device)
     steps = math.ceil(len(train) / args.batch) * args.epochs
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     schedule = get_linear_schedule_with_warmup(optimizer, int(0.06 * steps), int(steps))
@@ -232,7 +226,7 @@ def main() -> None:
     step, started = 0, time.time()
     while step < steps:
         for group, encoded in batches(train, tokenizer, args.batch, args.max_length, True):
-            labels = torch.tensor(train.iloc[group][label_columns].to_numpy(), dtype=torch.float32)
+            labels = torch.tensor(train.iloc[group][list(OUTPUTS)].to_numpy(), dtype=torch.float32)
             with torch.autocast(device, dtype=torch.bfloat16, enabled=device == "cuda"):
                 logits = model(**{k: v.to(device) for k, v in encoded.items()}).logits
             loss = loss_fn(logits.float(), labels.to(device))
@@ -256,13 +250,12 @@ def main() -> None:
     rate = (len(dev) + len(test)) / (time.time() - started)
     results: dict = {
         "seed": args.seed,
-        "heads": args.heads,
         "model": args.model,
         "max_length": args.max_length,
         "pairs_per_second": rate,
     }
-    results.update(evaluation(label_columns, dev, dev_scores, test, test_scores))
-    for head, column in enumerate(label_columns):
+    results.update(evaluation(dev, dev_scores, test, test_scores))
+    for head, column in enumerate(OUTPUTS):
         test[f"score_{column}"] = test_scores[:, head]
     print(json.dumps(results, indent=1), flush=True)
     run = prefix_join(args.output, args.tag)

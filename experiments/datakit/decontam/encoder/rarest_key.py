@@ -36,12 +36,11 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, record_hit_indices, text_stream, window_hashes
+from experiments.datakit.decontam.encoder.text_keys import WINDOW, item_stream, record_hit_indices, window_hashes
 
 logger = logging.getLogger(__name__)
 WINDOWS_PER_ITEM = 16
 MAX_DOC_CHARS = 5_000_000
-LETTERS = "abcdefghijklmnopqrstuvwxyz"
 SAMPLE_ROWS_PER_SHARD = 400
 MEASURE_SEED = 7
 REFERENCE_SEED = 11
@@ -52,11 +51,8 @@ def item_streams(root: str) -> tuple[list[str], list[str]]:
     ids, streams = [], []
     for path in parquet_files(root):
         for row in read_table(path, ["id", "question", "choices"]).to_pylist():
-            stream = text_stream(row["question"])
-            if len(stream) < WINDOW and row["choices"]:
-                stream += "".join(LETTERS[i % 26] + text_stream(c) for i, c in enumerate(row["choices"]))
             ids.append(row["id"])
-            streams.append(stream)
+            streams.append(item_stream(row["question"], row["choices"] or []))
     return ids, streams
 
 

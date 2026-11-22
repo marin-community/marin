@@ -114,7 +114,6 @@ TRAINING_COLUMNS = [
     "choices",
     "answer",
     "right",
-    "label",
     "label_q",
     "label_qa",
     "split",
@@ -141,8 +140,7 @@ def merge(pairs: pd.DataFrame, first: pd.DataFrame, second: pd.DataFrame, name: 
     )
     answers = [column for column in frame.columns if column.endswith("_answer")]
     frame = frame[contaminated | clean].copy()
-    frame["label"] = contaminated[contaminated | clean].astype(int)
-    frame["label_q"] = frame["label"]
+    frame["label_q"] = contaminated[contaminated | clean].astype(int)
     frame["label_qa"] = (frame[answers] == "YES").all(axis=1).astype(int)
     items = frame["item"].unique()
     test_items = set(np.random.default_rng(11).choice(items, int(len(items) * TEST_SHARE), replace=False))
@@ -156,7 +154,7 @@ def silver(pairs: pd.DataFrame, excluded: set[str], size: int, seed: int) -> pd.
     pairs = pairs[~pairs["item"].isin(excluded)]
     overlap = np.array([word_overlap(q, r) for q, r in zip(pairs["question"], pairs["right"], strict=True)])
     frame = pairs[overlap < SILVER_OVERLAP].sample(frac=1, random_state=seed).head(size).copy()
-    frame["label"] = frame["label_q"] = frame["label_qa"] = 0
+    frame["label_q"] = frame["label_qa"] = 0
     frame["split"], frame["source"], frame["kind"] = "train", "silver", f"overlap<{SILVER_OVERLAP}"
     return frame.reset_index(drop=True)[TRAINING_COLUMNS]
 
@@ -197,7 +195,7 @@ def main() -> None:
     pairs = pd.read_parquet(directory / "pairs.parquet")
     rows = merge(pairs, *(judge_labels(directory, judge) for judge in args.judges), directory.name)
     write_frame(rows, args.output)
-    logger.info("wrote %d rows: %s", len(rows), rows.groupby(["split", "label", "label_qa"]).size().to_dict())
+    logger.info("wrote %d rows: %s", len(rows), rows.groupby(["split", "label_q", "label_qa"]).size().to_dict())
 
 
 if __name__ == "__main__":

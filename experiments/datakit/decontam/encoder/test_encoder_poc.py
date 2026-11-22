@@ -11,10 +11,13 @@ import pytest
 
 from experiments.datakit.decontam.encoder import rarest_key
 from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
+from experiments.datakit.decontam.encoder.pairs import _located
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
 from experiments.datakit.decontam.encoder.text_keys import (
     WINDOW,
     hit_indices,
+    item_stream,
+    readings,
     record_hit_indices,
     text_stream,
     window_hashes,
@@ -161,7 +164,7 @@ def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overl
     assert keys.loc["b", "key1_hash"] == 0
 
 
-def test_synthetic_labels_separate_the_question_from_the_item():
+def test_synthetic_question_without_its_answer_counts_for_the_question_output_only():
     items = [
         {
             "id": f"i{n}",
@@ -174,11 +177,11 @@ def test_synthetic_labels_separate_the_question_from_the_item():
         for n in range(40)
     ]
     rows = pd.DataFrame(list(generic_pairs(items, ["host text " * 80], random.Random(0))))
-    labels = rows.groupby("kind")[["label", "label_q", "label_qa"]].max()
-    # The same question with other choices holds the question but not this item.
-    assert labels.loc["same_question"].tolist() == [0, 1, 0]
-    assert labels.loc["question_only"].tolist() == [1, 1, 0]
-    assert rows.loc[rows["kind"].str.startswith("variant"), ["label", "label_q", "label_qa"]].eq(0).all().all()
+    labels = rows.groupby("kind")[["label_q", "label_qa"]].max()
+    # The same question with other choices, or the question alone, holds the question but not the answer.
+    assert labels.loc["same_question"].tolist() == [1, 0]
+    assert labels.loc["question_only"].tolist() == [1, 0]
+    assert rows.loc[rows["kind"].str.startswith("variant"), ["label_q", "label_qa"]].eq(0).all().all()
 
 
 def test_missing_answer_words_stay_out_of_the_question_hint():
@@ -230,3 +233,18 @@ def test_context_variants_skip_candidates_that_already_hold_the_item():
     variants = rows[rows["kind"].str.startswith("ctx_variant")]
     assert set(variants["item"]) == {"i1"}
     assert set(rows.loc[rows["kind"] == "ctx_copy", "item"]) == {"i0", "i1"}
+
+
+def test_a_short_question_is_located_by_its_key_with_the_choices():
+    question, choices = "Which is it?", ["the first rather long choice", "the second rather long choice"]
+    keyed = item_stream(question, choices)
+    offset = len(keyed) - WINDOW
+    record = (
+        "Which is it? "
+        + "filler words " * 400
+        + "Which is it?\nA. the first rather long choice\nB. the second rather long choice"
+    )
+    streams = [(reading, text_stream(reading)) for reading in readings(record)]
+    _, stream, at = _located(streams, text_stream(question), keyed[offset : offset + WINDOW], offset)
+    # The copy with its choices starts after the filler, not at the record's first "Which is it?".
+    assert at == stream.rindex(text_stream(question))

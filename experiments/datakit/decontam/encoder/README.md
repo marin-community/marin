@@ -68,7 +68,7 @@ iris --cluster=cw-us-east-02a job run --extra=cpu --job-name decon-pairs-extract
   python -m experiments.datakit.decontam.encoder.pairs extract $PAIRS
 iris --cluster=cw-us-east-02a job run --extra=gpu --gpu H100x1 --enable-extra-resources --memory 64GB --cpu 8 --disk 100GB \
   -e TOKENIZERS_PARALLELISM false --job-name decon-score -- python -m experiments.datakit.decontam.encoder.score \
-  --model $T/train/<tag>/model --heads label_q label_qa --pairs $T/pairs --output $T/pairs/scored.parquet
+  --model $T/train/<tag>/model --pairs $T/pairs --output $T/pairs/scored.parquet
 
 # Training data (CPU jobs). EXCLUDE lists the item files of every label set, so that no test item
 # is seen in training through synthetic or silver pairs.
@@ -88,7 +88,7 @@ iris --cluster=cw-us-east-02a job run $CPU --job-name decon-silver -- \
 # Training (about 25 minutes on one H100 for 2 epochs of about 80k pairs).
 iris --cluster=cw-us-east-02a job run --extra=gpu --gpu H100x1 --enable-extra-resources --memory 64GB --cpu 8 --disk 100GB \
   -e TOKENIZERS_PARALLELISM false -e OMP_NUM_THREADS 8 --job-name decon-train -- \
-  python -m experiments.datakit.decontam.encoder.train --tag <tag> --model jhu-clsp/mmBERT-base --heads 2 \
+  python -m experiments.datakit.decontam.encoder.train --tag <tag> --model jhu-clsp/mmBERT-base \
   --data $T/data --synthetic synthetic_generic.parquet --extra $T/data/set11.parquet --extra $T/data/set12.parquet \
   --extra $T/data/silver.parquet --extra $T/data/synthetic_ctx.parquet --output $T/train
 ```
