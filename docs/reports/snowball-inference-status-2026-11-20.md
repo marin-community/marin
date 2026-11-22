@@ -988,6 +988,16 @@ export keeps separate gate and up arrays, and reload preserves the
 in-memory layout.
 [Packed layout numerical check](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-v5p8-packed-expert-output-check-20261122-v2)
 
+With 80 contexts, the second retained span, packed weights, and
+the original contraction order, native reached 536.23 output
+tok/s, 2.4% behind compiled vLLM. All 373 paired output lengths
+matched and both runs had zero errors. On those turns active
+decode reached 35.32 versus 35.57 tok/s. Compared with the
+wide-tile combination on those same turns, p90 TTFT fell from
+3.75 to 3.24 s and active decode fell from 35.90 to 35.32 tok/s.
+The primed serial medians were within 4 ms of compiled vLLM.
+[Original-contraction replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v5p8-c128-20261122-v38-80-contexts-packed-experts-standard-contraction)
+
 One packed v5p trace ran 16 concurrent sequences at 51,870 input tokens.
 Its 260 ms device round spent about 98 ms in the seven full-attention
 kernels. The 512-token trace took 157 ms. Limiting internal slots to
@@ -1142,6 +1152,26 @@ turns with the 256-token-bucket control, output lengths matched, p90
 TTFT rose from 2.16 to 2.39 s, and active decode fell from 44.31 to
 43.49 tok/s. Both runs had zero profiling errors.
 [Parallel tokenization trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v28-parallel-chat-tokenizer)
+
+Using shorter decode rounds only while prefill requests were pending
+reached 590.86 output tok/s on the same worker as the 256-token control.
+Across 398 shared turns, active decode fell from 44.31 to 43.24 tok/s
+and p90 TTFT moved from 2.16 to 2.18 s. The retry matched all paired
+output lengths with zero errors.
+[Adaptive decode rounds](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v27-adaptive-decode-rounds)
+
+Increasing the v6e-8 prefill batch limit from four to eight sequences
+reached 593.64 output tok/s on another v6e-8 worker. On all 401 shared
+turns, output lengths matched and active decode was 44.36 versus
+44.31 tok/s. Paired p90 TTFT was 2.11 versus 2.15 s.
+[Eight-sequence prefill trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v29-eight-prefill-sequences)
+
+Interleaving 8,192-token prefill chunks and 16-step decode rounds
+reached 592.18 output tok/s after warming all continuation bucket
+shapes. On the same worker and 398 shared turns, all paired output lengths
+matched and active decode rose from 44.28 to 58.14 tok/s. Paired p90 TTFT
+rose from 2.14 to 5.38 s. Both runs had zero profiling errors.
+[Warmed chunked prefill](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v30-warmed-live-prefill-chunks)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
