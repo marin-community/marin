@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,31 @@ from marin.experiment.cli import graph_handles
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.round_runner import adopted_round_rl, load_round
+from experiments.post_training.task_curation.exp4_curriculum import (
+    SOURCE_ROUTES,
+    exp4_rl_curriculum,
+    exp4_validation_from_manifest,
+    exp4_validation_split,
+)
+from marin.rl.curriculum import PoolRow
+
+
+def _pools_rows() -> dict[str, tuple[PoolRow, ...]]:
+    """Synthetic row identities over the eight Exp4 labels, enough for the 200-prompt draw."""
+    counts = {
+        "long-loop-smartie-swesmith": 80,
+        "nemotron_if": 40,
+        "open-thoughts/TaskTrove": 30,
+        "Reasoning Gym:reasoning_gym": 30,
+        "nvidia/OpenScience": 30,
+        "nvidia/Nemotron-RL-Ultra-Training-Blends": 20,
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": 20,
+        "PRIME-RL/Eurus-2-RL-Data": 20,
+    }
+    return {
+        label: tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(count))
+        for label, count in counts.items()
+    }
 
 ROUND_DIR = Path(__file__).parents[1] / "rounds"
 
@@ -33,8 +59,28 @@ def round_inputs(tmp_path, monkeypatch):
     (model / "config.json").write_bytes(config)
     data = tmp_path / "data"
     data.mkdir()
-    (data / "train.parquet").write_bytes(b"pinned training fixture")
-    (data / "validation.parquet").write_bytes(b"pinned validation fixture")
+    curriculum = exp4_rl_curriculum(exp4_validation_split(_pools_rows()).validation)
+    rows = curriculum.validation.rows
+    payload = {
+        "size": curriculum.validation.size,
+        "seed": curriculum.validation.seed,
+        "rows": [{"label": row.label, "id": row.id, "sha256": row.sha256} for row in rows],
+    }
+    composition = Counter(row.label for row in rows)
+    files = {"validation.parquet": hashlib.sha256(b"pinned validation fixture").hexdigest()}
+    for label in sorted(composition):
+        content = f"pinned training fixture for {label}".encode()
+        (data / label).mkdir(parents=True)
+        (data / label / "train.parquet").write_bytes(content)
+        files[f"{label}/train.parquet"] = hashlib.sha256(content).hexdigest()
+    manifest = {
+        "curriculum": curriculum.identity,
+        "validation": payload,
+        "composition": dict(sorted(composition.items())),
+        "routes": dict(sorted(SOURCE_ROUTES.items())),
+        "files": files,
+    }
+    (data / "manifest.json").write_text(json.dumps(manifest))
     return model, data
 
 
@@ -44,16 +90,6 @@ def local_round(round_inputs, profile):
     spec = load_round(ROUND_DIR / f"mochi-{profile}.yaml")
     pins = {
         name: hashlib.sha256((model / name).read_bytes()).hexdigest() for name in ("config.json", "export-manifest.json")
-    }
-    train = {
-        "uri": str(data),
-        "file": "train.parquet",
-        "sha256": hashlib.sha256((data / "train.parquet").read_bytes()).hexdigest(),
-    }
-    validation = {
-        "uri": str(data),
-        "file": "validation.parquet",
-        "sha256": hashlib.sha256((data / "validation.parquet").read_bytes()).hexdigest(),
     }
     return dataclasses.replace(
         spec,
@@ -65,8 +101,7 @@ def local_round(round_inputs, profile):
         ),
         rl=dataclasses.replace(
             spec.rl,
-            train_data={"mixed": train},
-            validation_data=validation,
+            pools={"uri": str(data)},
             max_steps=15,
         ),
     )
@@ -101,7 +136,8 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
         assert launch["inputs"]["starting_checkpoint"]["uri"].endswith("/global_step_13")
     else:
         assert "starting_checkpoint" not in launch["inputs"]
-    (data / "train.parquet").write_bytes(b"changed after adoption")
+    label = sorted(json.loads((data / "manifest.json").read_text())["composition"])[0]
+    (data / label / "train.parquet").write_bytes(b"changed after adoption")
     with pytest.raises(ValueError, match="Round data changed"):
         terminal.build_config(context)
 

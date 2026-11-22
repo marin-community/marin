@@ -15,6 +15,10 @@ from taskcompendium.models import (
     TextMessage,
 )
 
+from experiments.post_training.task_curation.datasets.long_loop_rl import (
+    REASONING_GYM_LABEL,
+    REASONING_GYM_SOURCE,
+)
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_REVISION, NEMOTRON_SOURCE, stamped_rows
 
 
@@ -39,6 +43,16 @@ def test_admitted_task_stamping_preserves_task_semantics_and_refuses_delivery_co
     with pytest.raises(ValueError, match="runtime"):
         stamped_rows([{"task_spec": atlas, "runtime": '{"required":"runtime"}'}], nemotron=True)
     original = task.model_dump_json()
-    carry, normalized = stamped_rows([{"task_spec": original}], nemotron=False)
-    assert carry == [{"task_spec": original, "teacher_route": NEMOTRON_SOURCE}]
+    carry_task = task.model_copy(
+        update={"source": Source(dataset=REASONING_GYM_SOURCE, revision="1", row="1", importer_revision="1")}
+    )
+    carry, normalized = stamped_rows([{"task_spec": carry_task.model_dump_json()}], nemotron=False)
+    assert carry == [{"task_spec": carry_task.model_dump_json(), "teacher_route": REASONING_GYM_LABEL}]
     assert normalized == 0
+    admitted = task.model_copy(
+        update={"source": Source(dataset="open-thoughts/TaskTrove", revision="1", row="1", importer_revision="1")}
+    )
+    routed, _ = stamped_rows([{"task_spec": admitted.model_dump_json()}], nemotron=False)
+    assert routed[0]["teacher_route"] == "open-thoughts/TaskTrove"
+    with pytest.raises(ValueError, match="unadmitted data_source"):
+        stamped_rows([{"task_spec": original}], nemotron=False)

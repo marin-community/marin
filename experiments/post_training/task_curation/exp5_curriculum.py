@@ -11,15 +11,17 @@ import math
 from dataclasses import replace
 from types import MappingProxyType
 
-from marin.rl.curriculum import CurriculumEntry, RlCurriculum, SamplingMode, SourcePin
+from marin.rl.curriculum import CurriculumEntry, CurriculumValidation, RlCurriculum, SamplingMode, SourcePin
 
+from experiments.post_training.task_curation.curriculum import curriculum_entries
 from experiments.post_training.task_curation.exp4_curriculum import (
     AGENTIC_TRAIN_SOURCE,
     CARRY_OVER_SHARES,
+    EXP4_CATALOG,
     NEMOTRON_IF_LABEL,
     SEED,
-    exp4_rl_curriculum,
 )
+from experiments.post_training.task_curation.exp4_curriculum import TARGET_SHARES as EXP4_TARGET_SHARES
 
 IFBENCH_LABEL = "AllenAI:IF_multi_constraints_upto5"
 OPENRESEARCHER_LABEL = "OpenResearcher:OpenResearcher-Dataset"
@@ -61,9 +63,16 @@ PENDING_SOURCES = MappingProxyType(
 )
 
 
-def exp5_rl_curriculum() -> RlCurriculum:
-    """Record the complete policy without dropping the unresolved research share."""
-    inherited = tuple(replace(entry, weight=TARGET_SHARES[entry.label]) for entry in exp4_rl_curriculum().entries)
+def exp5_rl_curriculum(validation: CurriculumValidation) -> RlCurriculum:
+    """Record the complete policy with its recorded holdout.
+
+    ``validation`` is the split the pool step drew for the eleven labels once
+    their pools exist — the three added sources are still pending admission, so
+    no pool builds it today; the split is drawn when they do."""
+    inherited = tuple(
+        replace(entry, weight=TARGET_SHARES[entry.label])
+        for entry in curriculum_entries("long-loop/exp4-rl", "2026.11.18", weights=dict(EXP4_TARGET_SHARES), catalog=EXP4_CATALOG)
+    )
     additions = (
         (
             IFBENCH_LABEL,
@@ -88,6 +97,7 @@ def exp5_rl_curriculum() -> RlCurriculum:
         name="long-loop/exp5-rl",
         version="2026.11.20",
         mode=SamplingMode.WEIGHTED,
+        validation=validation,
         entries=inherited
         + tuple(
             CurriculumEntry(

@@ -118,6 +118,15 @@ if not math.isclose(sum(TARGET_SHARES.values()), 1.0, abs_tol=1e-9):
 
 VALIDATION_SIZE = 200
 
+EXP4_CATALOG: Mapping[str, object] = MappingProxyType(
+    {
+        AGENTIC_TRAIN_SOURCE: AGENTIC_RELEASE,
+        NEMOTRON_IF_LABEL: runnable_sources()[NEMOTRON_IF_LABEL],
+        **dict.fromkeys(CARRY_OVER_SHARES, NONAGENTIC_RELEASE),
+    }
+)
+"""Each Exp4 label and the catalog source its population comes from."""
+
 
 def exp4_validation_split(pool_rows: Mapping[str, Sequence[PoolRow]]) -> ValidationSplit:
     """Draw the Exp4 holdout: 200 prompts apportioned over the eight source shares.
@@ -143,16 +152,11 @@ def exp4_rl_curriculum(validation: CurriculumValidation) -> RlCurriculum:
     ``validation`` is the split the pool step drew and recorded — read back with
     :func:`exp4_validation_from_manifest`, or drawn with
     :func:`exp4_validation_split` from the stamped pools' row identities."""
-    catalog = {
-        AGENTIC_TRAIN_SOURCE: AGENTIC_RELEASE,
-        NEMOTRON_IF_LABEL: runnable_sources()[NEMOTRON_IF_LABEL],
-        **dict.fromkeys(CARRY_OVER_SHARES, NONAGENTIC_RELEASE),
-    }
     return curriculum_with_validation(
         CURRICULUM_NAME,
         CURRICULUM_VERSION,
         weights=TARGET_SHARES,
         seed=SEED,
         validation=validation,
-        catalog=catalog,
+        catalog=EXP4_CATALOG,
     )

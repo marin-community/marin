@@ -17,6 +17,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -251,16 +252,7 @@ PROFILES = MappingProxyType(
 )
 
 
-def route_quotas(recipe: SkyRLRecipe, groups: int, smoke: bool) -> dict[str, int]:
-    """Smoke batches shrink, so their quotas derive from the smoke batch; otherwise the
-    round's declared split is preserved and must partition the batch, matching the
-    rollout buffer's runtime invariant (positive shares summing to batch_size)."""
-    declared = recipe.trainer.rollout_buffer.consumed_route_quotas
-    if smoke:
-        return {"agentic": groups // 2, "nonagentic": groups // 2}
-    if declared and (any(value < 1 for value in declared.values()) or sum(declared.values()) != groups):
-        raise ValueError("consumed_route_quotas must be positive and sum to the training batch groups")
-    return declared
+
 
 
 def build_run(
@@ -285,6 +277,7 @@ def build_run(
     retention: SkyRLRetentionPolicy = RETENTION,
     openresearcher_service: OpenResearcherService | None = None,
     gpu_variant: str = "GB200",
+    curriculum: RlCurriculum | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Build an RL training artifact from model, data and optional native checkpoint handles.
 
@@ -297,6 +290,12 @@ def build_run(
         raise ValueError("Snowball NVL72 profiles are bounded parity smokes")
     if not smoke and not validation_data:
         raise ValueError("Normal Mochi RL requires held-out data; select smoke explicitly to omit evaluation")
+    if not smoke and curriculum is None:
+        raise ValueError(
+            "A long-loop RL round trains only against a fixed curriculum: its holdout is the "
+            "validation set and its mixture derives the rollout buffer's route quotas; a launch "
+            "without one would evaluate a hand-composed validation parquet"
+        )
     if profile.data_namespace is not None and data_sha256 is None:
         raise ValueError(f"{profile.output_name} requires data_sha256")
     if data_sha256 is not None and len(train_data) != 1:
@@ -368,9 +367,15 @@ def build_run(
                 eval_interval=-1 if smoke else eval_interval,
                 ckpt_interval=checkpoint_interval,
                 callbacks=tuple(callbacks),
-                rollout_buffer=sections.RolloutBuffer(
-                    consumed_route_quotas=route_quotas(recipe, groups, smoke),
-                    max_in_flight=SMOKE_BATCH_GROUPS if smoke else recipe.trainer.rollout_buffer.max_in_flight,
+                rollout_buffer=(
+                    # A curriculum derives the window's consumed quotas at the spec; a smoke
+                    # parity diagnostic has no curriculum and shrinks the equal split.
+                    sections.RolloutBuffer(max_in_flight=recipe.trainer.rollout_buffer.max_in_flight)
+                    if curriculum is not None
+                    else sections.RolloutBuffer(
+                        consumed_route_quotas={"agentic": groups // 2, "nonagentic": groups // 2},
+                        max_in_flight=SMOKE_BATCH_GROUPS,
+                    )
                 ),
                 micro_forward_batch_size_per_gpu=profile.role_plan.micro_train_batch_size_per_gpu,
                 policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**asdict(profile.megatron))),
@@ -398,6 +403,7 @@ def build_run(
             retention=retention,
             seed=SEED,
             starting_checkpoint=resume,
+            curriculum=curriculum,
         ),
         execution or profile.execution,
         export_hf=False,
@@ -451,10 +457,16 @@ def profile_run(
     openresearcher_service: OpenResearcherService | None = None,
     validation_data_uri: tuple[str, ...] = (),
     validation_data_file: str = "validation.parquet",
+    curriculum: RlCurriculum | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     selected = PROFILES[profile]
     if not smoke and not validation_data_uri:
         raise click.UsageError("--validation-data-uri is required for normal RL; select --smoke to omit evaluation")
+    if not smoke and curriculum is None:
+        raise click.UsageError(
+            "A long-loop RL round trains only against a fixed curriculum: its holdout is the "
+            "validation set and its mixture derives the route quotas; select --smoke to omit evaluation"
+        )
     if selected.data_namespace is not None and data_sha256 is None:
         raise click.UsageError(f"--data-sha256 is required for {profile}")
     if data_sha256 is not None and len(data_uri) != 1 and openresearcher_service is None:
@@ -504,6 +516,7 @@ def profile_run(
         train_data=train_data,
         validation_data=validation_data,
         smoke=smoke,
+        curriculum=curriculum,
         batch_groups=batch_groups,
         eval_interval=eval_interval,
         checkpoint_interval=checkpoint_interval,
@@ -548,6 +561,7 @@ class NVL72RunSpec:
     ttl_days: int = RETENTION.temporary_storage_ttl_days
     batch_groups: int | None = None
     eval_interval: int | None = None
+    curriculum: RlCurriculum | None = None
     checkpoint_interval: int | None = None
     validation_data_uri: tuple[str, ...] = ()
     validation_data_file: str = "validation.parquet"
@@ -564,11 +578,13 @@ def run_from_spec(spec: NVL72RunSpec, *, smoke: bool, config_output: Path) -> Ar
         raise ValueError("marin_revision must be a full Git commit")
     if len(spec.data_sha256) != 64 or any(c not in "0123456789abcdef" for c in spec.data_sha256):
         raise ValueError("data_sha256 must be a SHA-256 digest")
+    curriculum = spec.curriculum
     args = asdict(spec)
     args["openresearcher_service"] = spec.openresearcher_service
     for key in ("format", "marin_revision", "output_prefix"):
         args.pop(key)
-    return profile_run(**args, smoke=smoke, config_output=config_output)
+    args.pop("curriculum")
+    return profile_run(**args, smoke=smoke, config_output=config_output, curriculum=curriculum)
 
 
 def validate_model_geometry(config: dict, profile: MochiProfile) -> None:
