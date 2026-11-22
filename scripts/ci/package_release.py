@@ -35,6 +35,11 @@ IRIS_DISTRIBUTION = "marin-iris"
 # `iris.version` reads this first, so it has to be cleared to prove the date came
 # out of the artifact rather than out of the environment running the check.
 IRIS_REVISION_DATE_ENV = "IRIS_REVISION_DATE"
+# uv writes its own lockfile format revision, so a newer uv changes it on each re-lock.
+LOCK_FORMAT_KEYS = frozenset({"revision"})
+# uv releases spell environment markers differently. The targeted-change guard ignores them,
+# and a marker change holds the update for a person to review instead.
+LOCK_MARKER_KEYS = frozenset({"resolution-markers", "marker"})
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
 
 
@@ -88,6 +93,16 @@ class BuildOperation(StrEnum):
     MACOS = "macos"
     PYTHON = "python"
     SDIST = "sdist"
+
+
+class FloorUpdate(StrEnum):
+    """Outcome of raising one native compatibility floor."""
+
+    # The floor already admits the release.
+    CURRENT = "current"
+    RAISED = "raised"
+    # The floor advanced, and environment markers changed outside the released packages.
+    MARKERS_CHANGED = "markers_changed"
 
 
 @dataclass(frozen=True)
@@ -588,13 +603,20 @@ def published_artifacts(distribution: str, version: str) -> list[PublishedArtifa
     ]
 
 
-def _canonical_package_entries(lock_text: str) -> tuple[dict, dict[str, list[str]]]:
+def _without_keys(value: object, ignored_keys: frozenset[str]) -> object:
+    if isinstance(value, dict):
+        return {key: _without_keys(item, ignored_keys) for key, item in value.items() if key not in ignored_keys}
+    if isinstance(value, list):
+        return [_without_keys(item, ignored_keys) for item in value]
+    return value
+
+
+def _canonical_package_entries(lock_text: str, ignored_keys: frozenset[str]) -> tuple[object, dict[str, list[str]]]:
     lock = tomllib.loads(lock_text)
-    # uv writes its own lockfile format revision, so a newer uv changes it on each re-lock.
-    metadata = {key: value for key, value in lock.items() if key not in ("package", "revision")}
+    metadata = _without_keys({key: value for key, value in lock.items() if key != "package"}, ignored_keys)
     packages: dict[str, list[str]] = {}
     for package in lock.get("package", []):
-        packages.setdefault(package["name"], []).append(json.dumps(package, sort_keys=True))
+        packages.setdefault(package["name"], []).append(json.dumps(_without_keys(package, ignored_keys), sort_keys=True))
     for entries in packages.values():
         entries.sort()
     return metadata, packages
@@ -608,9 +630,13 @@ def validate_targeted_lock_change(
     *,
     allowed_packages: Iterable[str] = (),
 ) -> None:
-    """Reject lock changes outside the released distribution and requirement owner."""
-    before_metadata, before_packages = _canonical_package_entries(before)
-    after_metadata, after_packages = _canonical_package_entries(after)
+    """Reject lock changes outside the released distribution and requirement owner.
+
+    Environment markers are not compared; `lock_changed_outside` reports a marker change.
+    """
+    ignored_keys = LOCK_FORMAT_KEYS | LOCK_MARKER_KEYS
+    before_metadata, before_packages = _canonical_package_entries(before, ignored_keys)
+    after_metadata, after_packages = _canonical_package_entries(after, ignored_keys)
     if before_metadata != after_metadata:
         raise ValueError("Targeted native lock update changed lockfile metadata")
 
@@ -633,6 +659,19 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
+def lock_changed_outside(before: str, after: str, allowed_packages: Iterable[str]) -> bool:
+    """Return whether anything but the format revision changed outside `allowed_packages`.
+
+    After `validate_targeted_lock_change` passes, a True result means only markers changed.
+    """
+    before_metadata, before_packages = _canonical_package_entries(before, LOCK_FORMAT_KEYS)
+    after_metadata, after_packages = _canonical_package_entries(after, LOCK_FORMAT_KEYS)
+    names = (set(before_packages) | set(after_packages)) - set(allowed_packages)
+    return before_metadata != after_metadata or any(
+        before_packages.get(name) != after_packages.get(name) for name in names
+    )
+
+
 def emit_github_output(path: Path | None, **values: str) -> None:
     """Append single-line values to a GitHub Actions output file when configured."""
     if path is None:
@@ -646,7 +685,7 @@ def bump_native_requirement(
     package_name: str,
     version: str,
     repo_root: Path,
-) -> None:
+) -> FloorUpdate:
     """Advance the compatibility floor and exact universal lock entry."""
     package = PACKAGES[package_name]
     build = package.build
@@ -656,29 +695,21 @@ def bump_native_requirement(
     requirement_path = repo_root / build.requirement_path
     lock_path = repo_root / "uv.lock"
     original_requirement = requirement_path.read_text()
-    _, changed = update_native_requirement(
+    # The floor is raised in place, so it stays in whichever section declares it.
+    updated_requirement, changed = update_native_requirement(
         original_requirement,
         build.requirement_distribution,
         version,
     )
     if not changed:
-        return
+        return FloorUpdate.CURRENT
 
     original_lock = lock_path.read_text()
-    command = [
-        "uv",
-        "add",
-        "--package",
-        build.requirement_owner,
-        f"{build.requirement_distribution}>={version}",
-        "--upgrade-package",
-        f"{build.requirement_distribution}=={version}",
-        "--no-sync",
-    ]
+    requirement_path.write_text(updated_requirement)
+    command = ["uv", "lock", "--upgrade-package", f"{build.requirement_distribution}=={version}"]
     for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
         if delay:
             time.sleep(delay)
-        requirement_path.write_text(original_requirement)
         lock_path.write_text(original_lock)
         result = subprocess.run(command, cwd=repo_root)
         if result.returncode != 0:
@@ -707,7 +738,13 @@ def bump_native_requirement(
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise RuntimeError(f"`uv lock --check` failed after {attempt} attempts")
-        return
+        if lock_changed_outside(
+            original_lock,
+            updated_lock,
+            (build.requirement_distribution, build.requirement_owner),
+        ):
+            return FloorUpdate.MARKERS_CHANGED
+        return FloorUpdate.RAISED
     raise AssertionError("Unreachable lock retry loop")
 
 
@@ -1034,12 +1071,12 @@ def _bump_releases_command(args: argparse.Namespace) -> None:
     selected = [name for name in sorted(versions) if isinstance(PACKAGES[name].build, NativeBuild)]
     requirement_paths = requirement_paths_for_packages(selected)
     before = {path: (args.repo_root / path).read_text() for path in requirement_paths}
-    for name in selected:
-        bump_native_requirement(name, versions[name]["version"], args.repo_root)
+    updates = [bump_native_requirement(name, versions[name]["version"], args.repo_root) for name in selected]
     changed_paths = [path for path in requirement_paths if (args.repo_root / path).read_text() != before[path]]
     emit_github_output(
         args.github_output,
         changed=str(bool(changed_paths)).lower(),
+        markers_changed=str(FloorUpdate.MARKERS_CHANGED in updates).lower(),
         requirement_paths=" ".join(path.as_posix() for path in changed_paths),
     )
 

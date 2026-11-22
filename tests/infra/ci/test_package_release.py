@@ -23,6 +23,7 @@ from scripts.ci.package_release import (
     cargo_compatible_version,
     latest_native_release_versions,
     latest_supported_version,
+    lock_changed_outside,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -427,6 +428,39 @@ source = { registry = "https://pypi.org/simple" }
         validate_targeted_lock_change(
             before, newer_uv.replace("version = 1", "version = 2"), "marin-iris-native", "0.1.4.dev30194118926"
         )
+
+
+def test_marker_changes_pass_the_lock_guard_and_are_reported() -> None:
+    # uv 0.13.9 factors shared terms out of the markers that uv 0.13.8 and earlier wrote.
+    expanded = (
+        "(python_full_version < '3.13' and sys_platform == 'linux') or "
+        "(python_full_version < '3.13' and sys_platform == 'darwin')"
+    )
+    factored = "python_full_version < '3.13' and (sys_platform == 'darwin' or sys_platform == 'linux')"
+    lock = """\
+version = 1
+revision = 3
+resolution-markers = ["{marker}"]
+
+[[package]]
+name = "jax"
+version = "0.8.0"
+source = {{ registry = "https://pypi.org/simple" }}
+dependencies = [{{ name = "jaxlib", marker = "{marker}" }}]
+
+[[package]]
+name = "marin-iris-native"
+version = "{native}"
+source = {{ registry = "https://pypi.org/simple" }}
+"""
+    before = lock.format(marker=expanded, native="0.1.3")
+    target = "0.1.4.dev30194118926"
+    bumped = lock.format(marker=expanded, native=target)
+    respelled = lock.format(marker=factored, native=target)
+
+    validate_targeted_lock_change(before, respelled, "marin-iris-native", target)
+    assert lock_changed_outside(before, respelled, ("marin-iris-native",))
+    assert not lock_changed_outside(before, bumped, ("marin-iris-native",))
 
 
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:
