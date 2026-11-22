@@ -70,7 +70,6 @@ RL_REQUIRED_FIELDS = (
     "trainer.policy.megatron_config.transformer_config_kwargs.cp_comm_type",
     "trainer.rollout_buffer.max_staleness_steps",
     "trainer.rollout_buffer.max_in_flight",
-    "trainer.rollout_buffer.consumed_route_quotas",
     "trainer.rollout_buffer.source_routes",
     "environment.task_sessions.task_spec.session.max_turns",
     "environment.task_sessions.task_spec.session.attempt_timeout",

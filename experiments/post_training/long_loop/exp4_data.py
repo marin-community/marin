@@ -15,11 +15,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
-from marin.rl.curriculum import PoolRow, validation_payload
-from taskcompendium.identity import canonical_sha256
 from marin.experiment.cli import build_options
+from marin.rl.curriculum import PoolRow, validation_payload
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
@@ -172,7 +172,10 @@ def prepare_pool(*, output: str, sources: list[dict]) -> None:
             train_rows[route].append({"task_spec": raw, "teacher_route": route})
         else:
             raise ValueError(f"Exp4 pool row {route!r}/{task['id']!r} landed on neither side of the holdout")
-    files = {f"{label}/train.parquet": _write_pool_file(destination, f"{label}/train.parquet", rows) for label, rows in train_rows.items()}
+    files = {
+        f"{label}/train.parquet": _write_pool_file(destination, f"{label}/train.parquet", rows)
+        for label, rows in train_rows.items()
+    }
     files["validation.parquet"] = _write_pool_file(destination, "validation.parquet", held)
     (destination / "manifest.json").write_text(
         json.dumps(

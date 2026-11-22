@@ -37,7 +37,7 @@ from levanter.training_budget import WallClockCooldown
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
-from marin.rl.curriculum import RlCurriculum
+from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLRolePlan
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
@@ -403,7 +403,14 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     )
     heldout = ArtifactDataSource(pools, relative_path="validation.parquet")
     # The curriculum derives the rollout buffer's per-route window quotas at the
-    # run's batch size; a declared value here would have to match it exactly.
+    # run's batch size; a declared value must match it exactly or name nothing.
+    derived_quotas = consumed_route_quotas(curriculum, pools_manifest["routes"], roles.train_batch_size)
+    declared_quotas = recipe["trainer"]["rollout_buffer"].get("consumed_route_quotas")
+    if declared_quotas is not None and declared_quotas != derived_quotas:
+        raise ValueError(
+            f"trainer.rollout_buffer.consumed_route_quotas={declared_quotas!r} disagrees with the quotas "
+            f"the round curriculum derives at batch {roles.train_batch_size}: {derived_quotas!r}"
+        )
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     declared_routes = recipe["trainer"]["rollout_buffer"].get("source_routes") or {}
     if set(declared_routes) != set(pools_manifest["routes"]):
@@ -435,6 +442,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         smoke=smoke,
         recipe_document=recipe,
         gpu_variant=rl.gpu_variant,
+        curriculum=curriculum,
     )
     original_build = step.build_config
 

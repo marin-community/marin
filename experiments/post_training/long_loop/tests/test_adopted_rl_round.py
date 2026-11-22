@@ -12,6 +12,7 @@ import pytest
 import yaml
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
+from marin.rl.curriculum import PoolRow, consumed_route_quotas
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.launch_validation import validate_launch
@@ -22,7 +23,6 @@ from experiments.post_training.task_curation.exp4_curriculum import (
     exp4_validation_from_manifest,
     exp4_validation_split,
 )
-from marin.rl.curriculum import PoolRow
 
 
 def _pools_rows() -> dict[str, tuple[PoolRow, ...]]:
@@ -41,6 +41,7 @@ def _pools_rows() -> dict[str, tuple[PoolRow, ...]]:
         label: tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(count))
         for label, count in counts.items()
     }
+
 
 ROUND_DIR = Path(__file__).parents[1] / "rounds"
 
@@ -68,6 +69,7 @@ def round_inputs(tmp_path, monkeypatch):
     }
     composition = Counter(row.label for row in rows)
     files = {"validation.parquet": hashlib.sha256(b"pinned validation fixture").hexdigest()}
+    (data / "validation.parquet").write_bytes(b"pinned validation fixture")
     for label in sorted(composition):
         content = f"pinned training fixture for {label}".encode()
         (data / label).mkdir(parents=True)
@@ -130,7 +132,8 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
     callbacks = {cb["type"]: cb for cb in launch["skyrl"]["trainer"]["callbacks"]}
     assert callbacks["checkpoint"]["save_steps"] == 2
     assert callbacks["wall_time_budget"]["seconds"] == 36000
-    assert callbacks["best_checkpoint"]["minimum_scored_tasks"] == 108
+    assert callbacks["best_checkpoint"]["expected_tasks"] == 200
+    assert callbacks["best_checkpoint"]["minimum_scored_tasks"] == 180
     assert callbacks["best_checkpoint"]["selection_eligibility"] == "covered"
     if resume:
         assert launch["inputs"]["starting_checkpoint"]["uri"].endswith("/global_step_13")
@@ -191,10 +194,12 @@ def test_round_rejects_schema1_step_mismatch(round_inputs, local_round):
         adopted_round_rl(spec)
 
 
-@pytest.mark.parametrize("profile", ["one-rack"])
-def test_round_preserves_explicit_route_quotas(local_round, tmp_path):
+@pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
+def test_round_derives_route_quotas_from_the_curriculum(local_round, tmp_path):
+    """No declared quotas: the buffer's window quotas derive from the pools
+    curriculum's own mixture at the run's batch size."""
     recipe = copy.deepcopy(local_round.rl.recipe)
-    recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {"agentic": 11, "nonagentic": 21}
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
     terminal = adopted_round_rl(spec)
     context = StepContext.for_run(
@@ -202,31 +207,41 @@ def test_round_preserves_explicit_route_quotas(local_round, tmp_path):
     )
     launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
     buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
-    assert buffer["consumed_route_quotas"] == {"agentic": 11, "nonagentic": 21}
+    manifest = json.loads((Path(local_round.rl.pools["uri"]) / "manifest.json").read_text())
+    curriculum = exp4_rl_curriculum(exp4_validation_from_manifest(manifest["validation"]))
+    batch = launch["skyrl"]["trainer"]["train_batch_size"]
+    derived = consumed_route_quotas(curriculum, buffer["source_routes"], batch)
+    assert buffer["consumed_route_quotas"] == derived
+    assert sum(buffer["consumed_route_quotas"].values()) == batch
 
 
 @pytest.mark.parametrize("profile", ["one-rack"])
-def test_round_rejects_route_quotas_that_do_not_partition_the_batch(local_round):
+def test_round_accepts_a_declared_quota_that_matches_the_derivation(local_round, tmp_path):
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
+    plain_spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    plain = adopted_round_rl(plain_spec)
+    context = StepContext.for_run(str(tmp_path / "run"), str(tmp_path), deps=plain.deps, runtime_args=plain.runtime_args)
+    launch = yaml.safe_load(plain.build_config(context).launch_config_yaml)
+    derived = launch["skyrl"]["trainer"]["rollout_buffer"]["consumed_route_quotas"]
+    declared = copy.deepcopy(local_round.rl.recipe)
+    declared["trainer"]["rollout_buffer"]["consumed_route_quotas"] = derived
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=declared))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "declared"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    assert launch["skyrl"]["trainer"]["rollout_buffer"]["consumed_route_quotas"] == derived
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_rejects_a_declared_quota_that_disagrees_with_the_derivation(local_round):
     recipe = copy.deepcopy(local_round.rl.recipe)
     recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {"agentic": 22, "nonagentic": 42}
     spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
-    with pytest.raises(ValueError, match="sum to the training batch groups"):
+    with pytest.raises(ValueError, match="disagrees with the quotas"):
         adopted_round_rl(spec)
-
-
-@pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
-def test_round_preserves_disabled_route_quotas(local_round, tmp_path):
-    recipe = copy.deepcopy(local_round.rl.recipe)
-    recipe["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {}
-    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
-    terminal = adopted_round_rl(spec)
-    context = StepContext.for_run(
-        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
-    )
-    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
-    buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
-    assert buffer["consumed_route_quotas"] == {}
-    assert buffer["batch_policy"] == "full_batch"
 
 
 @pytest.mark.parametrize("profile", ["one-rack", "three-rack"])

@@ -15,7 +15,7 @@ qualification evidence.
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 

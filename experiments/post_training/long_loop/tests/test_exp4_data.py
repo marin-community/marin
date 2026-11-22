@@ -15,11 +15,11 @@ from taskcompendium.models import (
     TextMessage,
 )
 
+from experiments.post_training.long_loop.exp4_data import NEMOTRON_REVISION, NEMOTRON_SOURCE, stamped_rows
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
     REASONING_GYM_LABEL,
     REASONING_GYM_SOURCE,
 )
-from experiments.post_training.long_loop.exp4_data import NEMOTRON_REVISION, NEMOTRON_SOURCE, stamped_rows
 
 
 def test_admitted_task_stamping_preserves_task_semantics_and_refuses_delivery_contracts():

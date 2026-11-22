@@ -78,8 +78,7 @@ def _exp5_validation():
 
     labels = dict(TARGET_SHARES)
     rows = {
-        label: tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(60))
-        for label in labels
+        label: tuple(PoolRow(id=f"{label}-{index}", sha256=f"{index:064x}") for index in range(60)) for label in labels
     }
     return draw_validation_split(dict(labels), rows, size=200, seed=20261020).validation
 

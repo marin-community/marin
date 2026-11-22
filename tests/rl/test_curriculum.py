@@ -167,7 +167,9 @@ def test_validation_split_partitions_the_pools():
 
 def test_validation_split_follows_the_mixture():
     """Per-label holdout counts are the mixture's largest-remainder apportionment of the size."""
-    split = draw_validation_split({"gsm8k": 0.7, "svamp": 0.3}, _rows_by_label({"gsm8k": 1000, "svamp": 1000}), size=200, seed=17)
+    split = draw_validation_split(
+        {"gsm8k": 0.7, "svamp": 0.3}, _rows_by_label({"gsm8k": 1000, "svamp": 1000}), size=200, seed=17
+    )
     assert Counter(row.label for row in split.validation.rows) == {"gsm8k": 140, "svamp": 60}
     thirds = draw_validation_split(
         {"a": 1 / 3, "b": 1 / 3, "c": 1 / 3}, _rows_by_label({"a": 500, "b": 500, "c": 500}), size=200, seed=17
@@ -203,7 +205,9 @@ def test_curriculum_fingerprint_covers_the_validation_split():
 
 
 def test_curriculum_rejects_a_validation_seed_mismatch():
-    split = draw_validation_split({"gsm8k": 0.7, "svamp": 0.3}, _rows_by_label({"gsm8k": 1000, "svamp": 1000}), size=200, seed=17)
+    split = draw_validation_split(
+        {"gsm8k": 0.7, "svamp": 0.3}, _rows_by_label({"gsm8k": 1000, "svamp": 1000}), size=200, seed=17
+    )
     with pytest.raises(ValueError, match="validation seed"):
         RlCurriculum(
             name="post-training/math-mix",
@@ -218,7 +222,10 @@ def test_curriculum_rejects_a_validation_seed_mismatch():
 
 def test_curriculum_rejects_validation_rows_from_undeclared_sources():
     split = draw_validation_split(
-        {"gsm8k": 0.7, "svamp": 0.3, "web": 1.0}, _rows_by_label({"gsm8k": 100, "svamp": 100, "web": 100}), size=100, seed=17
+        {"gsm8k": 0.7, "svamp": 0.3, "web": 1.0},
+        _rows_by_label({"gsm8k": 100, "svamp": 100, "web": 100}),
+        size=100,
+        seed=17,
     )
     with pytest.raises(ValueError, match="undeclared"):
         RlCurriculum(

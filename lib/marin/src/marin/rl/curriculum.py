@@ -314,9 +314,7 @@ class RlCurriculum:
             )
         unknown = sorted({row.label for row in self.validation.rows} - set(labels))
         if unknown:
-            raise ValueError(
-                f"curriculum {self.name}@{self.version} holds out rows from undeclared sources: {unknown}"
-            )
+            raise ValueError(f"curriculum {self.name}@{self.version} holds out rows from undeclared sources: {unknown}")
         object.__setattr__(self, "fingerprint", fingerprint_hash(canonical_json(self._fingerprint_payload())))
 
     def _fingerprint_payload(self) -> dict:

@@ -71,7 +71,9 @@ def exp5_rl_curriculum(validation: CurriculumValidation) -> RlCurriculum:
     no pool builds it today; the split is drawn when they do."""
     inherited = tuple(
         replace(entry, weight=TARGET_SHARES[entry.label])
-        for entry in curriculum_entries("long-loop/exp4-rl", "2026.11.18", weights=dict(EXP4_TARGET_SHARES), catalog=EXP4_CATALOG)
+        for entry in curriculum_entries(
+            "long-loop/exp4-rl", "2026.11.18", weights=dict(EXP4_TARGET_SHARES), catalog=EXP4_CATALOG
+        )
     )
     additions = (
         (

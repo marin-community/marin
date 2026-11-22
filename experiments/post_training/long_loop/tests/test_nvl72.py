@@ -60,7 +60,14 @@ def test_profile_build_preserves_native_resume_and_nvlink_roles(run_spec, tmp_pa
 
 def _curriculum():
     """A small fixed curriculum so a non-smoke launch can bind its holdout."""
-    from marin.rl.curriculum import CurriculumEntry, PoolRow, RlCurriculum, SamplingMode, SourcePin, draw_validation_split
+    from marin.rl.curriculum import (
+        CurriculumEntry,
+        PoolRow,
+        RlCurriculum,
+        SamplingMode,
+        SourcePin,
+        draw_validation_split,
+    )
 
     labels = ("gsm8k", "svamp")
     rows = {label: tuple(PoolRow(id=f"{label}-{i}", sha256=f"{i:064x}") for i in range(500)) for label in labels}
@@ -74,7 +81,9 @@ def _curriculum():
                 label=label,
                 source=label,
                 version="1",
-                pin=SourcePin(name="openai/gsm8k", revision="e53f048", url="https://huggingface.co/datasets/openai/gsm8k"),
+                pin=SourcePin(
+                    name="openai/gsm8k", revision="e53f048", url="https://huggingface.co/datasets/openai/gsm8k"
+                ),
                 recipe="experiments.post_training.task_curation.pipeline.process_rows",
                 weight=w,
             )
@@ -88,7 +97,9 @@ def _curriculum():
 
 def test_normal_run_binds_distinct_training_and_heldout_data(run_spec, tmp_path):
     output = tmp_path / "launch.yaml"
-    spec = replace(run_spec, profile="one-rack", validation_data_uri=(str(tmp_path / "heldout"),), curriculum=_curriculum())
+    spec = replace(
+        run_spec, profile="one-rack", validation_data_uri=(str(tmp_path / "heldout"),), curriculum=_curriculum()
+    )
     with build_context(BuildContext(versions=VersionCodex(default="2026.11.17.2"))):
         run_from_spec(spec, smoke=False, config_output=output)
     launch = yaml.safe_load(output.read_text())

@@ -21,7 +21,7 @@ import draccus
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
-from marin.rl.curriculum import CurriculumEntry, CurriculumValidation, RlCurriculum, SamplingMode, SourcePin
+from marin.rl.curriculum import CurriculumValidation, RlCurriculum
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 

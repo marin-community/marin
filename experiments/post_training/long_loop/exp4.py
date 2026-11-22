@@ -288,7 +288,9 @@ def main(
             sort_keys=True,
         ).encode()
     ).hexdigest()
-    terminal = build_spec_graph(resolved, version, through="archive", data_artifacts=pools, curriculum=curriculum, sft_release=handle)
+    terminal = build_spec_graph(
+        resolved, version, through="archive", data_artifacts=pools, curriculum=curriculum, sft_release=handle
+    )
     validation_output.mkdir(parents=True, exist_ok=True)
     (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
     (validation_output / "optimizer-groups.json").write_text(

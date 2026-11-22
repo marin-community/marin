@@ -19,8 +19,6 @@ from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_RELEASE_URL,
     AGENTIC_ROUTE,
     AGENTIC_TRAIN_ROWS,
-    AdoptedFile,
-    AdoptedRelease,
     EURUS_ROWS,
     NEMOTRON_BLENDS_ROWS,
     NONAGENTIC_MANIFEST_SHA256,
@@ -31,22 +29,11 @@ from experiments.post_training.task_curation.datasets.long_loop_rl import (
     REASONING_GYM_ROWS,
     REASONING_GYM_SOURCE,
     SNOWBALL_SMARTIE_ROWS,
-    AGENTIC_TRAIN_SOURCE,
     TASKTROVE_ROWS,
+    AdoptedFile,
+    AdoptedRelease,
     adopt_release,
     verify_release,
-)
-from experiments.post_training.task_curation.datasets.long_loop_rl import (
-    AGENTIC_ROUTE,
-    AGENTIC_TRAIN_ROWS,
-    EURUS_ROWS,
-    NEMOTRON_BLENDS_ROWS,
-    NONAGENTIC_ROUTE,
-    OPEN_SCIENCE_ROWS,
-    REASONING_GYM_ROWS,
-    REASONING_GYM_SOURCE,
-    SNOWBALL_SMARTIE_ROWS,
-    TASKTROVE_ROWS,
 )
 from experiments.post_training.task_curation.exp3_curriculum import (
     BATCH_GROUPS,
