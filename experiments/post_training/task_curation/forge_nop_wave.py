@@ -30,10 +30,12 @@ import pyarrow.parquet as pq
 from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExecutionRequirements
+from taskcompendium.harbor.adapter import TASK_SPEC_FILE
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
+from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.oracle_filter import negative_control_applicability
 
+from experiments.post_training.task_curation.calibration_projection import calibrated_task_spec
 from experiments.post_training.task_curation.negative_controls import negative_control_from_archive
 from experiments.post_training.task_curation.oracle_filter import row_task
 
@@ -91,6 +93,15 @@ def control_request(
     control's.
     """
     requirements = measured_requirements(package)
+    task = TaskSpec.model_validate_json((package / TASK_SPEC_FILE).read_text())
+    if task.id != task_id or task_spec_sha256(task) != entry["task_sha256"]:
+        raise ValueError(f"Calibrated package differs from its source task: {task_id}")
+    consumed = calibrated_task_spec(
+        task,
+        requirements,
+        ExecutionRequirements.model_validate(measured_verifier) if measured_verifier is not None else None,
+        (package / "task.toml").read_bytes(),
+    )
     return {
         "trial": {
             "task": {
@@ -107,7 +118,7 @@ def control_request(
             "task_id": task_id,
             "source_task_sha256": entry["task_sha256"],
             "source_task_checksum": entry["source_task_checksum"],
-            "task_sha256": entry["task_sha256"],
+            "task_sha256": task_spec_sha256(consumed),
             "runtime_sha256": entry.get("runtime_sha256"),
             "task_checksum": entry["task_checksum"],
             "execution_requirements": requirements.model_dump(mode="json"),

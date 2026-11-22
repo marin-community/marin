@@ -5044,6 +5044,11 @@ source_task_checksum=..., execution_requirements=...)`. Pass JSONL records of
 `{"task_id": ..., "receipt": ...}` to `collect --negative-controls controls.jsonl`.
 The collector verifies the archive, setup script, physical result and verdict
 bytes before binding the control to the exact original and consumed contracts.
+Control requests preserve `source_task_sha256` as the TaskSpec hash before
+calibration. They set `task_sha256` to the hash of `calibrated_task_spec`, which
+contains the measured actor and verifier allocations and final `task.toml`.
+Changes to those fields can change the TaskSpec hash even when the source
+package and runtime checksums remain unchanged.
 Original oracle trials and reward maps remain unchanged. A scored oracle failure
 with a physical nop receipt retains the calibrated consumed TaskSpec identity,
 including its measured allocations and final `task.toml`. The failed task stays
