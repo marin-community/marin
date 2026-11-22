@@ -888,6 +888,7 @@ class SnowballAttention(eqx.Module):
         *,
         use_long: bool,
         kv_append: SnowballKvAppendImplementation = "separate",
+        max_active_tokens: int | None = None,
     ) -> tuple[jax.Array, KvPageCache]:
         """Attend a flat batch of serving tokens with the June attention recipe."""
         cfg = self.cfg
@@ -904,7 +905,12 @@ class SnowballAttention(eqx.Module):
         cache_k = reshard(cache_k, P(None, kv_axis, None))
         cache_v = reshard(cache_v, P(None, kv_axis, None))
         if kv_append == "separate":
-            cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+            cache = cache.update(
+                batch_info,
+                hax.named(cache_k, kv_axes),
+                hax.named(cache_v, kv_axes),
+                max_active_tokens=max_active_tokens,
+            )
         if cfg.shared_attention_implementation == "fixed_schedule":
             out = _fixed_shared_attention_decode(q, cache, batch_info, pos_ids, use_long=use_long, cfg=cfg)
             return self._project_output(x, out, v), cache
@@ -2060,6 +2066,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                     pos_ids.array,
                     use_long=True if num_layers == 1 else use_long,
                     kv_append=kv_append,
+                    max_active_tokens=max_active_tokens,
                 )
             else:
                 attn_out, cache = jax.lax.cond(
@@ -2071,6 +2078,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                         pos_ids.array,
                         use_long=True,
                         kv_append=kv_append,
+                        max_active_tokens=max_active_tokens,
                     ),
                     lambda _: block.attn.decode(
                         attn_in,
@@ -2079,6 +2087,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                         pos_ids.array,
                         use_long=False,
                         kv_append=kv_append,
+                        max_active_tokens=max_active_tokens,
                     ),
                     operand=None,
                 )
