@@ -8,28 +8,27 @@ fixture. Full-model learner replay parity and external rollout/learner
 integration remain open.
 
 The full BF16 67B checkpoint completed matched 64K AgentX replays at 128
-offered clients on v5p-8, v6e-8, and eight H100s. The table shows the best
-completed throughput on each backend and p90 HTTP time to first token
-from the same runs. The v5p-8 row includes the experimental wide
-expert contraction tile. The v6e-8 row uses experimental chunked
-prefill with four decode steps between chunks.
+offered clients. Each TPU comparison ran both backends on the same
+physical slice. The H100 comparison uses the repeat runs on eight
+80 GB GPUs.
 
-| Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM p90 TTFT |
+| Hardware | Native output tok/s | Compiled vLLM output tok/s | Native / vLLM loaded p90 TTFT |
 | --- | ---: | ---: | ---: |
-| v5p-8 | 538.58 | 549.46 | 3.74 / 1.34 s |
-| v6e-8 | 605.66 | 554.00 | 2.57 / 1.31 s |
-| 8× H100 | 621.18 | 593.09 | 1.01 / 1.44 s |
+| [v5p-8](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-v5p8-c128-pair-20261122-v45-vllm-metrics-fix) | 537.39 | 536.72 | 3.00 / 1.54 s |
+| [v6e-8 native](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v24-256-token-prefill-bucket) and [compiled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-vllm-v6e8-c128-20261122-v2-repeat) | 591.75 | 554.00 | 2.15 / 1.31 s |
+| [8× H100 native](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-c128-20261122-v29-singleton-repeat) and [compiled](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-vllm-c128-20261122-v3-repeat) | 621.18 | 590.24 | 1.01 / 1.43 s |
 
-The v6e-8 same-worker repeat reached 595.38 versus 554.00 output tok/s.
-The published branch with four-step decode rounds reached 583.52
-output tok/s and narrowed native p90 TTFT to 1.50 s. The v5p-8
-configuration with the original expert contraction order reached
-537.39 output tok/s versus 536.72 for compiled vLLM on the same slice.
-For serial raw HTTP prefill at 64,512 fresh prompt tokens, native reached
-35.1k versus 33.2k prompt tok/s on v5p-8 and 48.2k versus 43.8k on v6e-8.
-The five primed serial medians on each TPU type were within 5 ms of
-compiled vLLM. Loaded TTFT remains higher on both TPUs. The native
-v5p-8 rate was 2.2% below the strongest compiled repeat on a different slice.
+The same TPU runs measured serial HTTP prefill at five lengths. At
+64,512 fresh prompt tokens, native processed 34.7k versus 32.5k prompt
+tok/s on v5p-8 and 47.9k versus 43.8k on v6e-8. Primed median TTFT
+at that length was 116 versus 115 ms on v5p-8 and 86 versus 85 ms on
+v6e-8. Paired active decode was higher on native on all three hardware
+types.
+
+Loaded TTFT remains higher on both TPUs. The four-step v6e-8 run
+reached 583.52 output tok/s and 1.50 s p90 TTFT. The 537.39 tok/s
+v5p-8 native rate was 2.2% below the strongest compiled repeat from
+a different slice.
 
 The initial publication snapshots accepted code at
 `fcc3167fef231ed2dacdd9e21cd48a564668e7ee`. The publication commit adds documentation
@@ -1323,6 +1322,14 @@ fell from 38.96 to 35.46 tok/s. The same compiled vLLM profile
 reached 36.35 active decode tok/s on 389 shared turns. All paired
 output lengths matched and both native runs reported zero errors.
 [Two-step unchunked replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v36-two-round-unchunked)
+
+Three decode steps on a replacement v6e-8 reached 574.63 output
+tok/s. On 395 turns shared with the four-step run, median TTFT
+fell from 376 to 309 ms, p90 TTFT rose from 1.49 to 1.52 s, and
+active decode fell from 39.41 to 36.88 tok/s. On 390 turns paired
+with compiled vLLM, active decode was 36.47 versus 36.34 tok/s.
+The paired output lengths matched and profiling recorded zero errors.
+[Three-step unchunked replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-native-v6e8-c128-20261122-v37-three-round-unchunked)
 
 On one v6e chip, batched KV page release took 0.46 ms versus 12.83 ms for
 one newly finished slot following 20 stale finish flags. With four newly
