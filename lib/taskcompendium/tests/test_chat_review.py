@@ -383,3 +383,37 @@ def test_direct_review_retries_uncertain_completion_instead_of_replaying_cache(t
     assert len(chat.requests) == 2
     assert reviewer.review([task], rubric).reviews == result.reviews
     assert len(chat.requests) == 2
+
+
+@pytest.mark.parametrize("cache_queries", [False, True])
+def test_guided_review_binds_returned_identity_to_the_final_request(tmp_path, cache_queries):
+    task = svamp_row_task(
+        RawRow(
+            "long-task-identity",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    rubric = ReviewRubric("fixture", "1", ("Check the supplied count.",))
+
+    class GuidedChat(ReviewChat):
+        def complete(self, body):
+            output = super().complete(body)
+            schema = body["tools"][0]["function"]["parameters"]
+            function = output["choices"][0]["message"]["tool_calls"][0]["function"]
+            verdict = json.loads(function["arguments"])
+            # A guided decoder can copy the ID exactly only when the wire schema binds it.
+            verdict["task_id"] = schema["properties"]["task_id"].get("const", "mistyped-identity")
+            function["arguments"] = json.dumps(verdict)
+            return output
+
+    reviewer = ChatReviewer(
+        GuidedChat(),
+        reviewer_spec("fixture", "deployment"),
+        query_cache_root=str(tmp_path / "cache") if cache_queries else None,
+    )
+    result = reviewer.review([task], rubric)
+    assert is_conclusive(result.reviews[0])
+    assert result.reviews[0].task_id == task.id
+    assert result.reviews[0].verdict is not None
+    assert result.reviews[0].verdict.task_id == task.id

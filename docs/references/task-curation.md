@@ -4148,6 +4148,10 @@ Retries and batch completion use that same conclusive-review rule. A saved
 pending. Resuming an older batch completion marker reuses its conclusive rows
 and retries the uncertain rows. Query caches also reuse only conclusive
 responses; prior immutable attempts remain available as evidence.
+Each request also binds the tool response's `task_id` to its exact request ID
+with a JSON Schema constant, including IDs normalized for query caching.
+The parser still rejects a mismatched ID; the schema prevents a guided decoder
+from mistyping that metadata while returning its quality judgment.
 
 Keep the seed and panel fixed. Do not replace or resample missing tasks.
 Preserve each missing task ID, status and exact reason, bounded-attempt evidence,

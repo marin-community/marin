@@ -521,6 +521,7 @@ def completion_body(
             ensure_ascii=False,
         )
     schema = ReviewVerdict.model_json_schema()
+    schema["properties"]["task_id"]["const"] = task.id
     return {
         "model": spec.model,
         "messages": [
