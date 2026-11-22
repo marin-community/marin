@@ -578,8 +578,32 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
     return _config_values(_comparison_document(launch, recorded))
 
 
-def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
+def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
+    """Resolve a worker's draft mirror back to the exact Hub source requested by the plan."""
+    path = "skyrl.generator.speculative_decoding.model"
+    draft, expected = get_path(config, path), get_path(expected_launch, path)
+    if not isinstance(draft, dict) or not isinstance(expected, dict) or not expected["source_uri"].startswith("hf://"):
+        return
+    mirrors = config["inputs"].get("hugging_face_models", [])
+    matches = [
+        mirror
+        for mirror in mirrors
+        if mirror["uri"] == draft["source_uri"]
+        and mirror["identity"] == draft["source_identity"]
+        and mirror["model_id"] == expected["source_uri"].removeprefix("hf://")
+        and mirror["revision"] == mirror["resolved_revision"] == expected["source_identity"]
+    ]
+    if len(matches) == 1:
+        draft.update(source_uri=expected["source_uri"], source_identity=expected["source_identity"])
+        config["inputs"]["hugging_face_models"] = [mirror for mirror in mirrors if mirror is not matches[0]]
+
+
+def _gate_config(
+    launch: dict, recorded: RecordedLaunch | None = None, *, expected_launch: dict | None = None
+) -> dict[str, object]:
     config = _comparison_document(launch, recorded)
+    if expected_launch is not None:
+        _normalize_draft_mirror(config, expected_launch)
     config["iris"].pop("priority", None)
     return _config_values(config)
 
@@ -721,7 +745,8 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
 def _check_control_config(
     config: dict, current_config: dict, recorded: RecordedLaunch | None = None, *, preset: presets.Preset
 ) -> None:
-    observed, current = _gate_config(config, recorded), _gate_config(current_config)
+    observed = _gate_config(config, recorded, expected_launch=current_config)
+    current = _gate_config(current_config)
     differences = _changed_config_keys(observed, current)
     missing = {key for key in differences if key not in observed}
     if missing:
@@ -806,7 +831,8 @@ def _write_gate(
         explicit = _setting_keys(inputs, set(current) | set(expected))
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
-            differences = _changed_config_keys(_gate_config(candidate.config, candidate.recorded), expected)
+            observed = _gate_config(candidate.config, candidate.recorded, expected_launch=expected_config)
+            differences = _changed_config_keys(observed, expected)
             if differences:
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"

@@ -136,6 +136,33 @@ def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
     assert invalid["verdict"] == "invalid" and "skyrl.trainer.policy.model.tokenizer_path" in invalid["reason"]
 
 
+def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/mirrored-draft", speed=102)
+    wrong_mirror = recorded_runs(preset, "users/test/wrong-draft-mirror", speed=102)
+    for root in (*control_roots, candidate, wrong_mirror):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            draft = launch["skyrl"]["generator"]["speculative_decoding"]["model"]
+            commit = draft["source_identity"]
+            uri, identity = "s3://test-bucket/draft-mirror", "sha256:" + "f" * 64
+            launch["inputs"]["hugging_face_models"] = [
+                {
+                    "model_id": draft["source_uri"].removeprefix("hf://"),
+                    "revision": commit,
+                    "resolved_revision": "a" * 40 if root == wrong_mirror else commit,
+                    "uri": uri,
+                    "identity": identity,
+                }
+            ]
+            draft.update(source_uri=uri, source_identity=identity)
+
+    assert compare(preset, "--candidate", "users/test/mirrored-draft")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-draft-mirror")
+    assert invalid["verdict"] == "invalid" and "skyrl.generator.speculative_decoding.model" in invalid["reason"]
+
+
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     preset = snowball_model.SNOWBALL.by_name["speed-medium"]
     key = "policy/raw_grad_norm"
