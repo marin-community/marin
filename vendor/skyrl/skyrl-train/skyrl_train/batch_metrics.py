@@ -9,7 +9,6 @@ import torch
 from omegaconf import DictConfig
 from torch import Tensor
 
-from marinskyrl.runtime_options import AdvantageEstimator
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.rollouts.buffer import RowFacts
@@ -267,22 +266,20 @@ def forward_metrics(
 def advantage_metrics(
     batch: TrainingInputBatch,
     *,
-    algorithm: DictConfig,
-    reduction: MetricReduction = LocalReduction(),
     step_wise: bool,
+    reduction: MetricReduction = LocalReduction(),
     group_scores: tuple[Sequence[str], Tensor] | None = None,
 ) -> dict[str, float]:
     """Report reward and advantage diagnostics for finalized training credit."""
-    metrics = {}
     rows = batch.batch_size - batch.metadata.get("pad_size", 0)
-    uids, group_rewards = (
-        (batch.metadata["uids"][:rows], batch["rewards"][:rows]) if group_scores is None else group_scores
-    )
-    if algorithm.advantage_estimator == AdvantageEstimator.GRPO and not step_wise:
-        metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(uids, group_rewards.sum(-1))
-    rewards = batch["rewards"].sum(-1)[:rows]
+    uids = batch.metadata["uids"][:rows]
+    rewards = batch["rewards"][:rows].sum(-1)
     if step_wise:
-        rewards = rewards[batch["is_last_step"][:rows]]
+        final_steps = batch["is_last_step"][:rows].bool()
+        uids = [uid for uid, is_final in zip(uids, final_steps.tolist(), strict=True) if is_final]
+        rewards = rewards[final_steps]
+    group_uids, group_rewards = (uids, rewards) if group_scores is None else group_scores
+    metrics = {"reward/zero_std_group_fraction": _zero_std_group_fraction(group_uids, group_rewards)}
     advantages = torch.masked_select(batch["advantages"][:rows], batch["response_mask"][:rows].bool())
     average_reward = reduction.mean(rewards)
     average_advantage = reduction.mean(advantages)

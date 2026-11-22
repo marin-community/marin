@@ -1,0 +1,23 @@
+{
+  "name": "",
+  "version": "",
+  "fingerprint": "",
+  "result_type": "",
+  "output_path": "s3:/launch-census/census-root/users/benfeuer/checkpoints/skyrl-port-smoke/train/2026.10.24",
+  "deps": [],
+  "dep_paths": [],
+  "config": null,
+  "source": null,
+  "result": {
+    "hf_model_uri": "s3:/launch-census/census-root/policy",
+    "global_step": 2,
+    "tokenizer_uri": "Qwen/Qwen2.5-0.5B-Instruct",
+    "tokenizer_revision": "pinned",
+    "checkpoint_root": "s3:/launch-census/census-root/saved-checkpoints",
+    "draft_checkpoint_root": null,
+    "terminal_manifest_uri": "s3:/launch-census/census-root/terminal.json",
+    "iris_job_id": "/test/train"
+  },
+  "fingerprint_payload": null,
+  "provenance": null
+}

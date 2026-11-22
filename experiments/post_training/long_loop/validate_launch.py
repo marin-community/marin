@@ -28,7 +28,7 @@ from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
 from skyrl_train.rollouts.workers import WorkerShard
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
-from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
+from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
 
 
 async def validate_rollout_worker(launch) -> dict:

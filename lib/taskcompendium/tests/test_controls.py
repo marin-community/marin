@@ -34,6 +34,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
 )
@@ -215,6 +216,12 @@ def test_empty_control_runs_the_script_grader_on_an_empty_answer_file(script, st
     # The second grader rewards only an empty /app/answer.txt, so its defect shows the grader ran on one.
     images = RecordingImages()
     task = script_graded(answer_task(), script)
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    environment = grader.environment.model_copy(
+        update={"setup_commands": ("test -f /app/answer.txt && test ! -s /app/answer.txt",)}
+    )
+    task = task.model_copy(update={"grader": grader.model_copy(update={"environment": environment})})
     assert checks(task, Controls(), FixtureGradingMachines(images)) == {"empty": status}
     assert [machine.image for machine in images.created] == [GRADER_IMAGE]
 

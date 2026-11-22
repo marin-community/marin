@@ -266,8 +266,9 @@ def restore_first_checkpoint(state, checkpointer, mesh):
     expected = checkpoint_samples(state)
     # on_step returns early on a step it already saved and leaves a queued request unconsumed, so
     # the gate's temporary request must target a step no earlier save has covered or it would
-    # attach to a later step and leave a queued extra save.
-    assert checkpointer._last_save_step < step
+    # attach to a later step and leave a queued extra save. The checkpointer records None until
+    # its first save.
+    assert checkpointer._last_save_step is None or checkpointer._last_save_step < step
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     checkpointer.on_step(tree=state, step=step)
     checkpointer.wait_until_finished()

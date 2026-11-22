@@ -1037,7 +1037,10 @@ async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task
         answer_path=None,
         reward=ExitCodeReward(),
         environment=GRADER_ENVIRONMENT.model_copy(
-            update={"working_directory": "/app", "setup_commands": ("echo initial > solution.txt",)}
+            update={
+                "working_directory": "/app",
+                "setup_commands": ("test ! -e solution.txt && echo initial > solution.txt",),
+            }
         ),
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ("/app/solution.txt",)})

@@ -63,6 +63,7 @@ from levanter.data.text.length_bucket import (
     LengthBucketTokenSeqDataset,
     load_bucket_length_stats,
 )
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.store.cache import CacheCatalog, CacheCatalogEntry, CacheLedger, CacheOptions, TreeCache
@@ -401,7 +402,7 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
-    if isinstance(fmt, TextLmDatasetFormat):
+    if isinstance(fmt, TextLmDatasetFormat | SerializedChatLmDatasetFormat):
         return False
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
@@ -558,23 +559,31 @@ def dataset_for_component(
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     if component.pack_lookahead_window is not None and not pack:
-        raise ValueError("Document lookahead requires explicit packing")
+        raise ValueError(
+            f"Component {component.cache_dir} sets pack_lookahead_window but pack={pack!r} disables packing; "
+            "the lookahead window only applies to packed datasets."
+        )
     fmt = component.format
     if isinstance(fmt, SerializedChatLmDatasetFormat):
-        max_segments, slice_strategy = _resolve_pack_config(pack) if pack else (1, "left")
+        max_segments, slice_strategy = _resolve_pack_config(pack)
         dataset = PackedTokenDataset(
             cache,
             Pos,
             max_segments_per_example=max_segments,
             slice_strategy=slice_strategy,
-            block_cross_document_attention=block_cross_document_attention,
             lookahead_window=component.pack_lookahead_window,
         )
-        return dataset.map(
-            functools.partial(
-                mask_serialized_chat, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
+
+        def apply_chat_mask(example: GrugLmExample) -> GrugLmExample:
+            masked = mask_serialized_chat(
+                example, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
             )
-        )
+            # Loss masking needs each document's boundary even with cross-document attention.
+            if not block_cross_document_attention:
+                masked = dataclasses.replace(masked, attn_mask=GrugAttentionMask.causal())
+            return masked
+
+        return dataset.map(apply_chat_mask)
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)

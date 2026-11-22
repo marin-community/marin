@@ -37,7 +37,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.locality import RoleTopologyMode
 
 from experiments.post_training.long_loop.openresearcher_service import (
@@ -383,11 +383,17 @@ def build_run(
     if openresearcher_service is not None:
         buffer = recipe.trainer.rollout_buffer.replace(consumed_route_quotas={}, source_routes={})
         recipe = recipe.replace(trainer=recipe.trainer.replace(rollout_buffer=buffer))
+    document = recipe.to_skyrl()
+    # Marin derives the entrypoint from the plan; the round YAML's declared value
+    # moves onto the role plan instead of staying in the recipe document.
+    declared_entrypoint = RLEntrypoint(document.pop("entrypoint", RLEntrypoint.STANDARD.value))
+    if declared_entrypoint is RLEntrypoint.GENERATE:
+        raise ValueError("RL rounds with a generate entrypoint use the evaluation step instead")
     step = skyrl_step(
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(recipe.to_skyrl(), sort_keys=False),
+            config_yaml=yaml.safe_dump(document, sort_keys=False),
             model=model,
             train_data=train_data,
             validation_data=validation_data,
@@ -395,7 +401,7 @@ def build_run(
                 num_nodes=profile.role_plan.num_nodes,
                 gpus_per_node=profile.role_plan.policy_num_gpus_per_node,
                 gpu_variant=gpu_variant,
-                role_plan=profile.role_plan,
+                role_plan=replace(profile.role_plan, entrypoint=declared_entrypoint.value),
             ),
             retention=retention,
             seed=SEED,

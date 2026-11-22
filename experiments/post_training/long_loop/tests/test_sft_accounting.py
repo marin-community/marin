@@ -38,15 +38,18 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
         bos_token="t8",
     )
     tokenizer.save_pretrained(tokenizer_path)
+    # Unpacked transcripts must fit the sequence length: over-long documents raise
+    # instead of being silently truncated, so the unpacked axis uses fitting sizes.
+    sizes = [2, 6, 19, 25, 9] if pack else [2, 6, 9, 10, 9]
     documents = [
-        np.asarray([1, 7, 3, 4] + [50 + i] * size + [9], dtype=np.int32) for i, size in enumerate([2, 6, 19, 25, 9])
+        np.asarray([1, 7, 3, 4] + [50 + i] * size + [9], dtype=np.int32) for i, size in enumerate(sizes)
     ]
     chat = tmp_path / "chat"
     replay = tmp_path / "replay"
     with SerialCacheWriter(str(chat), {"input_ids": np.empty(0, dtype=np.int32)}) as writer:
         writer.write_batch([{"input_ids": tokens} for tokens in documents])
     with SerialCacheWriter(str(replay), {"input_ids": np.empty(0, dtype=np.int32)}) as writer:
-        writer.write_batch([{"input_ids": np.arange(64, dtype=np.int32)}])
+        writer.write_batch([{"input_ids": np.arange(64 if pack else 16, dtype=np.int32)}])
     chat_component = DatasetComponent(
         cache_dir=str(chat),
         flat_cache=True,
@@ -126,7 +129,12 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     report = json.loads((output / "realized-truncation-padding.json").read_text())
     assert report["overall"]["sequences"] == 320
     assert report["overall"]["positions"] == 5120
-    assert report["overall"]["left_truncated_traces"] > 0
+    # Packed runs truncate over-long documents; unpacked ones raise instead, so only
+    # the packed axis records left-truncated traces.
+    if pack:
+        assert report["overall"]["left_truncated_traces"] > 0
+    else:
+        assert report["overall"]["left_truncated_traces"] == 0
     assert report["overall"]["pad_tokens"] > 0
     assert report["overall"]["real_tokens"] + report["overall"]["pad_tokens"] == 5120
     replay = [row for row in rows if not row["is_sft"]]

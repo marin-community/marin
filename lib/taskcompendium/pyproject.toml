@@ -60,8 +60,7 @@ disable-project-excludes-heuristics = true
 use-ignore-files = false
 project-includes = ["src/**/*.py"]
 project-excludes = [
-    # Canonical upstream instruction checkers; wrappers remain checked.
-    "src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    # Vendored IFBench instruction checkers; wrappers remain checked.
     "src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
 ]
 search-path = ["src", "../verifyit/src", "../rigging/src", "src/taskcompendium/importers/evalchemy/assets"]

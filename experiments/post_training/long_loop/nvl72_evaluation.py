@@ -14,11 +14,12 @@ from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.namespacing import user_owned_name
+
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
+    SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
-    SkyRLRolePlan,
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
@@ -81,18 +82,15 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         raise ValueError("Pinned micro evaluation data differs from its SHA-256")
     recipe = yaml.safe_load(RECIPE.read_text())
     config = judge_runtime_config(recipe["config"], draccus.decode(JudgeConfig, recipe["judge"]))
-    plan = SkyRLRolePlan(
-        colocate_all=True,
-        policy_num_nodes=3,
-        policy_num_gpus_per_node=4,
+    # The generation-only launch derives its entrypoint from the plan, never the recipe.
+    config.pop("entrypoint", None)
+    plan = SkyRLGenerationPlan(
+        gpus_per_node=4,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=12,
         inference_engine_expert_parallel_size=12,
-        train_batch_size=1,
-        policy_mini_batch_size=1,
-        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=1,
     )
     _materialize_role_plan_config(config, plan)
@@ -129,7 +127,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
             validation_data=(ArtifactDataSource(dataset, relative_path="rollouts.parquet"),),
             topology=SkyRLTopology(
                 num_nodes=plan.num_nodes,
-                gpus_per_node=plan.policy_num_gpus_per_node,
+                gpus_per_node=plan.gpus_per_node,
                 gpu_variant="GB200",
                 role_plan=plan,
             ),

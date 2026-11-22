@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 from shellbox.backends.daytona.machine import DaytonaImageBuild
+from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
 HARBOR_EXCEPTION = "harbor_exception_type"
 HARBOR_MODEL_LIMIT = "harbor_model_limit"
@@ -39,20 +40,6 @@ class VerifierConfig(BaseModel):
     override_timeout_sec: float | None = None
     max_timeout_sec: float | None = None
     disable: bool = False
-
-
-DEFAULT_RETRY_EXCLUSIONS = frozenset(
-    {
-        "AgentTimeoutError",
-        "VerifierTimeoutError",
-        "AddTestsDirError",
-        "DownloadVerifierDirError",
-        "VerifierRuntimeError",
-        "RewardFileNotFoundError",
-        "RewardFileEmptyError",
-        "VerifierOutputParseError",
-    }
-)
 
 
 class RetryConfig(BaseModel):

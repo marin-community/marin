@@ -17,6 +17,15 @@ from taskcompendium.models import TaskSpec
 
 from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
+OUTPUT_LIMIT_OPTION_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def reply_options_match(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    """Check whether the model options can belong to the same conversation."""
+    return {key: value for key, value in previous.items() if key not in OUTPUT_LIMIT_OPTION_KEYS} == {
+        key: value for key, value in current.items() if key not in OUTPUT_LIMIT_OPTION_KEYS
+    }
+
 
 class HarnessCleanup(Protocol):
     """The attempt's cleanup scope: it closes resources after the record is committed and graded."""
@@ -81,8 +90,7 @@ class ModelSession(Protocol):
 
         ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
         under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
-        ``options`` replaces the request options without resetting the conversation; omitted options reuse
-        the last successful request's settings.
+        ``options`` supplies the full options for the request. Only the output limits may change.
         """
         ...
 

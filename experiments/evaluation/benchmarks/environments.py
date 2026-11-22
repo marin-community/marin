@@ -8,6 +8,8 @@ from experiments.post_training.task_curation.environment import Archive, Environ
 
 BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
+# The vendored LiveCodeBench scorer preloads NumPy and pandas for every submission.
+LIVECODEBENCH_GRADER = Environment(requirements=(*PYTHON_GRADER.requirements, "pandas==2.2.2"))
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
 MATH_GRADER = Environment(
@@ -31,11 +33,7 @@ ENGLISH_TAGGER = Archive(
 )
 COMMON_REQUIREMENTS = ("nltk==3.10.3", "tomli-w==1.2.0")
 PUNKT_FILES = {NLTK_DATA_ROOT + "/tokenizers/punkt_tab/english": PUNKT_TAB}
-IFEVAL_GRADER = Environment(
-    requirements=(*COMMON_REQUIREMENTS, "langdetect==1.0.9", "immutabledict==4.3.1"),
-    files=PUNKT_FILES,
-    env={"NLTK_DATA": NLTK_DATA_ROOT},
-)
+IFEVAL_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "langdetect==1.0.9"))
 IFBENCH_GRADER = Environment(
     requirements=(*COMMON_REQUIREMENTS, "emoji==2.16.0", "syllapy==0.8.0"),
     files={

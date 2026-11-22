@@ -80,6 +80,12 @@ POLICY_REFERENCE = Micro210PolicyReference(
 )
 
 
+# The prepared table re-hosts benchmark items that must not be public, so it lives in a
+# private repository that CoreWeave tasks read with the standard HF_TOKEN.
+PREPARED_REPO = "open-athena/micro210-prepared-tasks"
+PREPARED_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
+
+
 @dataclass(frozen=True)
 class Micro210Model:
     """Immutable model and tokenizer identities, with no generation settings."""

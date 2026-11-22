@@ -188,7 +188,7 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         model=HFModel(
             model_ref=verified_initializer_model(recipe["initializer_receipt"], recipe["initializer_receipt_sha256"]),
             tokenizer_path=data.tokenizer,
-            model_type="snowball",
+            model=draccus.decode(SnowballConfig, recipe["model"]),
             eos_token_ids=(128001, 128009),
             task_timeout_seconds=recipe["task_timeout_seconds"],
             priority=priority_band_value("production"),
@@ -196,7 +196,6 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=(),
         prepared_data=data,
-        model_config=draccus.decode(SnowballConfig, recipe["model"]),
         trainer_config=replace(
             trainer,
             tracker=WandbConfig(entity=recipe["wandb_entity"], project=recipe["wandb_project"], tags=["exp3", "sft"]),

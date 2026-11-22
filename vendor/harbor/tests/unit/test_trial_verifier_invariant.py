@@ -297,7 +297,7 @@ async def test_verifier_failure_preserves_unscored_result_without_replaying_agen
     assert saved["exception_info"]["exception_type"] == verifier_failure
 
 
-async def test_verifier_failure_retains_the_preceding_cancellation_cleanup_receipt(tmp_path, monkeypatch):
+async def test_verifier_failure_retains_the_preceding_cancellation_cleanup_note(tmp_path, monkeypatch):
     diagnostic = json.dumps({"operation": "stop_command", "status_code": 400, "message": "provider rejected cleanup"})
 
     class CleanupFailedAgent(TimeoutAgent):

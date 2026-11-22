@@ -155,6 +155,7 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         reloaded,
         attention_implementation=requested.attention_implementation,
         router_dot_fp32=requested.router_dot_fp32,
+        router_combine_fp32=requested.router_combine_fp32,
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         expert_weight_sharding=requested.expert_weight_sharding,
@@ -343,13 +344,11 @@ def main(config: TrainLmConfig):
                 model, example, z_loss_weight=config.z_loss_weight, reduction=reduction
             )
         else:
-            loss = model.compute_next_token_loss(
+            loss, metrics = model.next_token_loss_and_metrics(
                 example, key=key, logsumexp_weight=config.z_loss_weight, reduction=reduction
             )
-            metrics = {}
-        if config.snowball_sft is None:
-            return loss
-        metrics.update(snowball_batch_metrics(example))
+        if config.snowball_sft is not None:
+            metrics.update(snowball_batch_metrics(example))
         return loss, metrics
 
     def loss_weight(example: LmExample, *, key=None):

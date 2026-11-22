@@ -12,9 +12,9 @@ from typing import Any, Protocol
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _retain_task
-from rolloutengine.harness.core import HarnessContext, ModelSession
+from rolloutengine.harness.core import HarnessContext, ModelSession, reply_options_match
 from rolloutengine.harness.shell import task_prompt
-from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import LENGTH_STOP_REASON, ContextRecovery, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
 
 class AgentCompletion(Protocol):
@@ -25,46 +25,64 @@ AgentRun = Callable[[HarnessContext, AgentCompletion], Coroutine[Any, Any, None]
 """An agent: it gets the attempt's context and a completion function, and sends one prompt at a time."""
 
 
-def messages_equal(left: tuple[dict[str, Any], ...], right: tuple[dict[str, Any], ...]) -> bool:
-    """Compare agent history while ignoring lossless chat/tool-JSON reserialization."""
+def _messages_equal(left: tuple[dict[str, Any], ...], right: tuple[dict[str, Any], ...]) -> bool:
+    """Compare messages after normalizing empty fields and tool argument JSON."""
     return len(left) == len(right) and all(
-        _semantic_message(a) == _semantic_message(b) for a, b in zip(left, right, strict=True)
+        a == b or _normalized_message(a) == _normalized_message(b) for a, b in zip(left, right, strict=True)
     )
 
 
-def _semantic_message(message: dict[str, Any]) -> dict[str, Any]:
+def _normalized_message(message: dict[str, Any]) -> dict[str, Any]:
     result = {
         key: value
         for key, value in message.items()
-        if value is not None and not (key in {"reasoning", "reasoning_content", "content"} and value == "")
+        if value is not None and (key not in {"reasoning", "reasoning_content", "content"} or value != "")
     }
-    if not result.get("tool_calls"):
-        return result
-    calls = []
-    for call in result["tool_calls"]:
-        function = dict(call["function"])
-        arguments = function["arguments"]
-        if isinstance(arguments, str):
-            try:
-                function["arguments"] = json.loads(arguments)
-            except json.JSONDecodeError:
-                # Invalid JSON is preserved literally; it is not a lossless reserialization.
-                pass
-        calls.append({**call, "function": function})
-    return {**result, "tool_calls": calls}
+    if result.get("tool_calls"):
+        result["tool_calls"] = [_normalized_tool_call(call) for call in result["tool_calls"]]
+    return result
+
+
+def _normalized_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+    function = call.get("function")
+    if not isinstance(function, dict) or not isinstance(function.get("arguments"), str):
+        return call
+    try:
+        arguments = json.dumps(json.loads(function["arguments"]), sort_keys=True)
+    except json.JSONDecodeError:
+        return call
+    return {**call, "function": {**function, "arguments": arguments}}
+
+
+async def complete_agent_prompt(
+    session: ModelSession, prompt: Prompt, last: tuple[Prompt, ModelTurn] | None
+) -> ModelTurn:
+    """Serve an external agent's prompt as a repeat, reply, or new conversation."""
+    if last is not None:
+        previous, turn = last
+        if prompt == previous:
+            return turn
+        history = (*previous.messages, turn.message)
+        prefix = prompt.messages[: len(history)]
+        exact_reply = prefix == history and prompt.options == previous.options
+        text_reply = (
+            prompt.token_ids is None
+            and turn.stop_reason != LENGTH_STOP_REASON
+            and reply_options_match(previous.options, prompt.options)
+            and _messages_equal(prefix, history)
+        )
+        if exact_reply or text_reply:
+            return await session.reply(
+                prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
+            )
+    return await session.start(prompt)
 
 
 @dataclass(frozen=True)
 class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
-    Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
-    does not await, such as HTTP handlers. A prompt that semantically extends the last prompt with the model's
-    message is a reply with its current options; a history rewrite starts a new conversation. An identical
-    repeated prompt gets the same turn. One model request can be open at a time. When the attempt ends, calls
-    wait until cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
-    not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
-    cancelled calls and for the shutdown of the agent.
+    See the task rollouts reference for conversation, cancellation, and shutdown rules.
     """
 
     context_recovery = ContextRecovery.ALWAYS
@@ -98,18 +116,12 @@ class AgentHarness:
             agent.result()
 
 
-@dataclass(frozen=True)
-class _Answered:
-    prompt: Prompt
-    turn: ModelTurn
-
-
 class _Completions:
     """Answer the agent's completion calls with the model session, each call in its caller's task."""
 
     def __init__(self, session: ModelSession):
         self.session = session
-        self.last: _Answered | None = None
+        self.last: tuple[Prompt, ModelTurn] | None = None
         self.ended: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.released = asyncio.Event()
         self.reported = False
@@ -122,26 +134,12 @@ class _Completions:
         # Each call yields, so that an agent that calls in a loop cannot block a deadline.
         await asyncio.sleep(0)
         if not self.ended.done():
-            last = self.last
-            if (
-                last is not None
-                and prompt.options == last.prompt.options
-                and prompt.token_ids == last.prompt.token_ids
-                and messages_equal(prompt.messages, last.prompt.messages)
-            ):
-                return last.turn
-            history = () if last is None else (*last.prompt.messages, last.turn.message)
             try:
-                if last is not None and messages_equal(prompt.messages[: len(history)], history):
-                    turn = await self.session.reply(
-                        prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
-                    )
-                else:
-                    turn = await self.session.start(prompt)
+                turn = await complete_agent_prompt(self.session, prompt, self.last)
             except RolloutEnded:
                 self.end()
             else:
-                self.last = _Answered(prompt, turn)
+                self.last = prompt, turn
                 return turn
         await self.released.wait()
         raise RolloutEnded("The rollout ended")

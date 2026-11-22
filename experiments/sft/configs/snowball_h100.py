@@ -8,6 +8,7 @@ the optimizer starts fresh. This recipe keeps conversations separate; callers
 can explicitly select packing with Snowball's segment-aware attention.
 """
 
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
@@ -23,7 +24,7 @@ SPEC = SFTSpec(
     version="2026.09.23",
     model=HFModel(
         model_ref=f"{HF_MODEL}@{HF_REVISION}",
-        model_type="snowball",
+        model=SnowballConfig(),
         eos_token_ids=(128001, 128009),
     ),
     chat_template=MARIN_CHAT_TEMPLATE,

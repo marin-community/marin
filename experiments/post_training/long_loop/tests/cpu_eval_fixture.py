@@ -23,7 +23,9 @@ from rolloutengine.test_support import arithmetic_task, rollout_spec
 from skyrl_gym.task_factories import episode_factories
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
+from skyrl_train.inference_engines.vllm.stats import InferenceStatsSnapshot
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
@@ -56,6 +58,10 @@ class ScriptedEngine:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
         self.model_name = "cpu-fixture"
+
+    async def get_stats(self, read_mode=None):
+        # The trainer polls engine stats each step; the CPU fixture serves empty snapshots.
+        return InferenceStatsSnapshot(engines=(), http_bridge=None)
 
     async def tokenize(self, request):
         return {"tokens": self.tokenizer.encode("six plus six", add_special_tokens=False)}
@@ -117,6 +123,8 @@ class WorkerSpec:
 
 class TinyDataset:
     def __init__(self):
+        # The trainer logs this dataset-owned counter every step; the CPU fixture drops nothing.
+        self.prompts_dropped_too_long = 0
         self.rows = []
         for name, harness in [("native", ASSISTANT_PREFIX_HARNESS), ("installed", HARBOR_TRIAL_SESSION)]:
             task = text_task(name, prompt="six plus six", source=name).model_copy(
@@ -153,6 +161,9 @@ class LocalTracker:
     def __exit__(self, *args):
         pass
 
+    def start(self, *, resumed_step: int | None, checkpoint=None) -> None:
+        pass
+
     def log(self, results, **kwargs):
         pass
 
@@ -162,6 +173,8 @@ class CPUEntry(EvalOnlyEntrypoint):
         self.cfg = cfg
         self.tokenizer = tokenizer_from_config(cfg)
         self.eval_dataset = TinyDataset()
+        # The base entrypoint resolves these in its __init__, which this CPU stub skips.
+        self.evaluation_profiles = resolve_evaluation_profiles(cfg)
 
     def create_inference_engine_client(self, **kwargs):
         return ScriptedEngine(self.tokenizer)
@@ -183,6 +196,8 @@ def configuration(root):
     tokenizer.save_pretrained(root / "tokenizer")
     cfg = get_default_config()
     OmegaConf.set_struct(cfg, False)
+    # The launcher-owned runtime identity the generate entrypoint reads from the config.
+    OmegaConf.update(cfg, "runtime", {"attempt_id": "cpu-eval", "run_id": "cpu-eval"}, force_add=True)
     cfg.trainer.policy.model.tokenizer_path = str(root / "tokenizer")
     cfg.trainer.policy.model.lora.adapter_path = None
     cfg.trainer.eval_num_prompts = None

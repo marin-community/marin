@@ -15,9 +15,9 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Protocol
 
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import (
     AdmissionRejection,
@@ -44,13 +44,6 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
 
-class BatchPolicy(StrEnum):
-    """How committed groups are assigned to training batches; the two coincide at ``max_staleness_steps=0``."""
-
-    FULL_BATCH = "full_batch"
-    ROLLING = "rolling"
-
-
 @dataclass(frozen=True)
 class RolloutBufferConfig:
     """Batch shape, generation concurrency, and selection rules of one training run.
@@ -66,6 +59,7 @@ class RolloutBufferConfig:
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
     consumed_route_quotas: dict[str, int] = field(default_factory=dict)
+    groups_per_family: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.consumed_route_quotas:
@@ -104,6 +98,7 @@ class RolloutLease:
     policy_step: int
     batch_id: int
     route: str | None = None
+    family: str | None = None
 
 
 @dataclass(frozen=True)
@@ -569,6 +564,7 @@ class RolloutBuffer:
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
         self._route_order = collections.deque(config.consumed_route_quotas)
+        self._family_order = collections.deque(config.groups_per_family)
         self._leases: dict[str, RolloutLease] = {}
         self._leasing_paused = False
         self._aborted_leases: set[str] = set()
@@ -616,7 +612,8 @@ class RolloutBuffer:
                 while self._route_order[0] != route:
                     self._route_order.rotate(-1)
                 self._route_order.rotate(-1)
-            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route)
+            family = self._lease_family(batch_id) if self.config.groups_per_family else None
+            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route, family)
             self._leases[lease.lease_id] = lease
             return lease
 
@@ -640,6 +637,19 @@ class RolloutBuffer:
             self._logged_admission_gate = gate
         return batch_id is not None
 
+    def _lease_family(self, batch_id: int) -> str:
+        occupied = collections.Counter(
+            lease.family for lease in self._leases.values() if lease.batch_id == batch_id and lease.family is not None
+        )
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._ready if group.batch_id == batch_id)
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._admitted[batch_id])
+        for _ in range(len(self._family_order)):
+            family = self._family_order[0]
+            self._family_order.rotate(-1)
+            if occupied[family] < self.config.groups_per_family[family]:
+                return family
+        raise RuntimeError(f"No group slot remains for this family in rollout batch {batch_id}")
+
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
@@ -648,6 +658,8 @@ class RolloutBuffer:
             lease = self._leases[lease_id]
             if lease.route is not None and prompt.get("group_route") != lease.route:
                 raise ValueError("Committed prompt does not match its consumed-route lease")
+            if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
+                raise ValueError("Committed prompt family does not match its rollout lease")
             del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
             self._ready.append(
@@ -745,6 +757,12 @@ class RolloutBuffer:
                 metrics = stats.metrics(self.config.dynamic_sampling)
                 if self.config.consumed_route_quotas:
                     metrics.update({f"async/consumed_route/{name}": float(count) for name, count in route_counts.items()})
+                if self.config.groups_per_family:
+                    counts = collections.Counter(
+                        group.prompt[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
+                    )
+                    if counts != self.config.groups_per_family:
+                        raise RuntimeError(f"Rollout batch does not meet {GROUPS_PER_FAMILY_KEY}")
                 selection = BatchSelection(metrics, stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
@@ -797,6 +815,13 @@ class RolloutBuffer:
         async with self._changed:
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
+            if self.config.groups_per_family:
+                occupied = collections.Counter((row.batch_id, row.prompt.get(FAMILY_COLUMN)) for row in snapshot.ready)
+                if any(
+                    family is None or count > self.config.groups_per_family.get(family, 0)
+                    for (_, family), count in occupied.items()
+                ):
+                    raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
 

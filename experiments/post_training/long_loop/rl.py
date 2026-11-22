@@ -22,6 +22,7 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
+from skyrlrecipe import RLEntrypoint
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.stage_config import validate_stage_config
@@ -46,6 +47,11 @@ def configured_rl_step(
     validate_stage_config(config, "rl")
     if not execution.wandb_entity or not config["trainer"].get("project_name"):
         raise ValueError("Long-loop RL requires explicit W&B entity and project")
+    declared_entrypoint = RLEntrypoint(config.get("entrypoint", RLEntrypoint.STANDARD.value))
+    if declared_entrypoint is RLEntrypoint.GENERATE:
+        raise ValueError("RL rounds with a generate entrypoint use the evaluation step instead")
+    plan = replace(plan, entrypoint=declared_entrypoint.value)
+    config = {key: value for key, value in config.items() if key != "entrypoint"}
     buffer = config.get("trainer", {}).get("rollout_buffer", {})
     quotas = buffer.get("consumed_route_quotas", {})
     if quotas and set(buffer.get("source_routes", {}).values()) != set(quotas):

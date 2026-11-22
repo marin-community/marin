@@ -22,6 +22,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     ArtifactModel,
     IrisSkyRLExecution,
+    SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -35,7 +36,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import require_secret
+from rigging.secrets import require_secret, resolve_secret_spec
 from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig
@@ -79,7 +80,7 @@ class Micro210ServingProfile:
     """Model-specific serving resources; evaluation protocol fields stay frozen."""
 
     gpu_variant: str
-    role_plan: SkyRLRolePlan
+    role_plan: SkyRLRolePlan | SkyRLGenerationPlan
     execution: IrisSkyRLExecution
     generator: dict
     engine_init_kwargs: dict
@@ -101,10 +102,16 @@ def registered_serving_profile(name: ServingProfileName) -> Micro210ServingProfi
     profiles = yaml.safe_load(Path(__file__).with_name("micro210-serving-profiles.yaml").read_text())
     profile = profiles[name.value]
     execution = profile["execution"]
+    plan = profile["role_plan"]
+    role_plan = (
+        draccus.decode(SkyRLGenerationPlan, plan)
+        if "policy_num_nodes" not in plan
+        else draccus.decode(SkyRLRolePlan, plan)
+    )
     return Micro210ServingProfile(
         **{
             **profile,
-            "role_plan": draccus.decode(SkyRLRolePlan, profile["role_plan"]),
+            "role_plan": role_plan,
             "execution": IrisSkyRLExecution(**{**execution, "required_env_vars": tuple(execution["required_env_vars"])}),
         }
     )
@@ -317,6 +324,18 @@ def micro210_artifact_step(
     judge = draccus.decode(JudgeConfig, policy["judge"])
     execution = replace(execution, coordinator_secret_sources=((JUDGE_API_KEY, judge.credential),))
     config = judge_runtime_config(config, judge)
+    if isinstance(roles, SkyRLRolePlan):
+        # The judged evaluation is a generation-only launch: carry the policy's
+        # inference geometry as a generation plan so the entrypoint is plan-derived.
+        roles = SkyRLGenerationPlan(
+            gpus_per_node=roles.policy_num_gpus_per_node,
+            num_inference_engines=roles.num_inference_engines,
+            inference_engine_tensor_parallel_size=roles.inference_engine_tensor_parallel_size,
+            inference_engine_pipeline_parallel_size=roles.inference_engine_pipeline_parallel_size,
+            inference_engine_data_parallel_size=roles.inference_engine_data_parallel_size,
+            inference_engine_expert_parallel_size=roles.inference_engine_expert_parallel_size,
+            n_samples_per_prompt=roles.n_samples_per_prompt,
+        )
     step = skyrl_step(
         SkyRLSpec(
             name=name,
@@ -325,7 +344,7 @@ def micro210_artifact_step(
             model=model,
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=policy["data_relative_path"]),),
-            topology=SkyRLTopology(roles.num_nodes, roles.policy_num_gpus_per_node, gpu_variant, roles),
+            topology=SkyRLTopology(roles.num_nodes, roles.gpus_per_node, gpu_variant, roles),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=policy["seed"],
         ),

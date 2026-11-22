@@ -337,7 +337,7 @@ class TestPiAgent:
             )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("http_idle_timeout", [None, 60])
+    @pytest.mark.parametrize("http_idle_timeout", [None, 360])
     async def test_run_without_model_limits_preserves_pi_compaction_settings(
         self, temp_dir, monkeypatch, http_idle_timeout
     ):
@@ -354,7 +354,8 @@ class TestPiAgent:
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
         original_settings = {
-            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000}
+            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000},
+            "theme": "dark",
         }
         settings_path.write_text(json.dumps(original_settings))
         agent = Pi(
@@ -365,10 +366,10 @@ class TestPiAgent:
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
-        expected = dict(original_settings)
+        expected_settings = dict(original_settings)
         if http_idle_timeout is not None:
-            expected["httpIdleTimeoutMs"] = 60000
-        assert json.loads(settings_path.read_text()) == expected
+            expected_settings["httpIdleTimeoutMs"] = 360000
+        assert json.loads(settings_path.read_text()) == expected_settings
 
 
 @pytest.mark.asyncio
@@ -679,11 +680,12 @@ async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider
             "16385 input tokens, for a total of at least 32769 tokens.",
             ContextLengthExceededError,
         ),
+        ('400: {"message":"Generation stopped: max_turns","type":"generation_stopped","code":400}', None),
     ],
-    ids=["connection", "context-overflow"],
+    ids=["connection", "context-overflow", "generation-stopped"],
 )
 @pytest.mark.asyncio
-async def test_hosted_vllm_failure_is_classified(
+async def test_hosted_vllm_request_end_is_classified(
     temp_dir, monkeypatch, error_message, expected_error
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
@@ -717,6 +719,10 @@ async def test_hosted_vllm_failure_is_classified(
         thinking_format="qwen-chat-template",
     )
 
+    if expected_error is None:
+        # A normal return lets Harbor keep the verifier score when generation reaches its turn limit.
+        assert await agent.run("Fix the bug", shell.environment, AgentContext()) is None
+        return
     with pytest.raises(expected_error) as error:
         await agent.run("Fix the bug", shell.environment, AgentContext())
 

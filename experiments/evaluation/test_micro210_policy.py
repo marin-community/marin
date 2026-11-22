@@ -32,11 +32,13 @@ from experiments.evaluation.micro210 import (
     run_micro210,
     validate_judge_availability,
 )
+from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     Micro210Model,
     micro210_evaluation,
+    read_micro210_policy,
     runtime_policy_config,
 )
 from experiments.post_training.long_loop.launch_validation import validate_launch
@@ -272,6 +274,14 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding(profile):
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72", serving_profile=profile)
     plan = lower(step)
     assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
+
+
+@pytest.mark.parametrize("change", ["digest", "byte_size"])
+def test_policy_reference_verifies_hash_and_size(policy_reference, change):
+    bad = replace(policy_reference, **({"sha256": "0" * 64} if change == "digest" else {"byte_size": 1}))
+    with pytest.raises(ValueError, match="hash mismatch"):
+        read_micro210_policy(bad)
+    assert read_micro210_policy(policy_reference)["evaluation"]["judge"]["model"] == MICRO210_JUDGE.model
 
 
 @pytest.mark.parametrize(

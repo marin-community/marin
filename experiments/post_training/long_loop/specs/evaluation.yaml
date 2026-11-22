@@ -36,7 +36,7 @@ config:
         expert_tensor_parallel_size: 1
     logger: console
     placement:
-      colocate_all: true
+      colocate_all: false
       colocate_policy_ref: true
       policy_num_nodes: 16
       policy_num_gpus_per_node: 8

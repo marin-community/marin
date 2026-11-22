@@ -287,8 +287,6 @@ rl:
           override_setup_timeout_sec: 360
           kwargs:
             version: 0.87.0
-            max_turns: 128
-            temperature: 0.7
             mcp_adapter_version: 7.0.0
             thinking: high
             thinking_format: chat-template

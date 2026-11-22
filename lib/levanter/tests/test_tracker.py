@@ -148,6 +148,10 @@ def test_wandb_tracker_skips_artifacts_larger_than_20_mb_without_raising(tmp_pat
         WandbTracker(FakeRun()).log_artifact(artifact_path)
     assert any(record.levelno == logging.WARNING for record in caplog.records)
 
+    # The skip is exactly one warning, not a raise and not an error traceback.
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 

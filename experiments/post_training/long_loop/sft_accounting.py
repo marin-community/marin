@@ -66,9 +66,11 @@ async def sample_origin(
         packed = dataset.packed
         if packed.lookahead_window is not None and loss_mode is None:
             raise ValueError("Lookahead accounting requires an explicit source loss mode")
-        if packed.slice_strategy != "left":
-            raise ValueError("SFT accounting requires the explicit left-slice view")
         rows = packed._pack_indices[index]
+        if packed.slice_strategy != "left" and not (packed.slice_strategy == "raise" and len(rows) == 1):
+            # Packed views slice left; an unpacked view ("raise") holds exactly one
+            # whole document per pack because over-long documents raise at build.
+            raise ValueError("SFT accounting requires the explicit left-slice view")
         lengths = packed._lengths["input_ids"]
         documents = tuple(
             DocumentOrigin(

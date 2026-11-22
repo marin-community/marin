@@ -19,7 +19,7 @@ from skyrl_train.rollouts.buffer import GroupRewards, PayloadReference, RolloutB
 from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
 from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.tokenizer import tokenizer_from_config
-from skyrl_train.utils.utils import validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg
 
 
 async def probe(compiled: Path, data_root: Path, destination: Path) -> None:

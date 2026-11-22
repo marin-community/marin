@@ -50,11 +50,13 @@ class _InferenceClient:
     def __init__(self, response_ids, finish_reason):
         self.response_ids = response_ids
         self.finish_reason = finish_reason
+        self.chat_requests = []
 
     async def tokenize(self, request):
         return {"tokens": [PLAN]}
 
     async def chat_completion(self, request):
+        self.chat_requests.append(request["json"])
         content = _LlamaStyleTokenizer().decode(self.response_ids, skip_special_tokens=False)
         message = {"role": "assistant", "content": content}
         return {"choices": [{"message": message, "token_ids": self.response_ids, "finish_reason": self.finish_reason}]}
@@ -221,3 +223,28 @@ def test_completion_reply_excludes_the_terminator_of_an_ended_turn(finish_reason
 
     assert output["responses"] == [expected]
     assert output["response_ids"] == [response_ids]
+
+
+@pytest.mark.parametrize(
+    ("options", "effective_cap"),
+    [
+        ({"max_tokens": 64}, 64),
+        ({"max_tokens": 96, "max_completion_tokens": 64, "max_output_tokens": 127}, 64),
+        ({"max_tokens": 256}, 128),
+    ],
+)
+def test_agent_output_cap_reaches_the_chat_server(options, effective_cap):
+    engine = _InferenceClient([PLAN], "stop")
+    output = asyncio.run(
+        DirectModelClient(engine).generate(
+            InferenceEngineInput(
+                prompts=[[{"role": "user", "content": "go"}]],
+                chat_completion_params=[options],
+                sampling_params={"max_tokens": 128},
+            )
+        )
+    )
+    [request] = engine.chat_requests
+    assert request["max_completion_tokens"] == effective_cap
+    assert "max_tokens" not in request
+    assert output["generation_token_budgets"] == [effective_cap]

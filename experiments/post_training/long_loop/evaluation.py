@@ -18,6 +18,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     IrisSkyRLExecution,
     ResolvedModelLocator,
+    SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -26,6 +27,7 @@ from marin.rl.skyrl import (
     _materialize_role_plan_config,
     skyrl_step,
 )
+from skyrlrecipe import RLEntrypoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.models import TaskRolloutSpec
@@ -124,6 +126,20 @@ class TerminalPolicy:
         )
 
 
+def _differing_paths(left: dict, right: dict, prefix: str = "") -> list[str]:
+    """The dotted paths where two recipe documents differ, for precise disagreement errors."""
+    paths = []
+    for key in sorted(set(left) | set(right)):
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if key not in left or key not in right:
+            paths.append(path)
+        elif isinstance(left[key], dict) and isinstance(right[key], dict):
+            paths.extend(_differing_paths(left[key], right[key], path))
+        elif left[key] != right[key]:
+            paths.append(path)
+    return paths
+
+
 def configured_evaluation_step(
     version: str,
     trained: ArtifactStep[SkyRLRun],
@@ -143,10 +159,26 @@ def configured_evaluation_step(
     """Bind an explicit evaluation recipe to pinned data and the committed model."""
     config = judge_runtime_config(config, judge)
     validate_stage_config(config, "evaluation")
+    declared_entrypoint = RLEntrypoint(config.pop("entrypoint", RLEntrypoint.STANDARD.value))
+    if declared_entrypoint is RLEntrypoint.GENERATE:
+        # A generation-only evaluation binds whole-node inference geometry; the
+        # colocated role plan's engine layout carries over unchanged.
+        plan: SkyRLRolePlan | SkyRLGenerationPlan = SkyRLGenerationPlan(
+            gpus_per_node=role_plan.policy_num_gpus_per_node,
+            num_inference_engines=role_plan.num_inference_engines,
+            inference_engine_tensor_parallel_size=role_plan.inference_engine_tensor_parallel_size,
+            inference_engine_pipeline_parallel_size=role_plan.inference_engine_pipeline_parallel_size,
+            inference_engine_data_parallel_size=role_plan.inference_engine_data_parallel_size,
+            inference_engine_expert_parallel_size=role_plan.inference_engine_expert_parallel_size,
+            n_samples_per_prompt=role_plan.n_samples_per_prompt,
+        )
+    else:
+        plan = replace(role_plan, entrypoint=declared_entrypoint.value)
     materialized = deepcopy(config)
-    _materialize_role_plan_config(materialized, role_plan)
+    _materialize_role_plan_config(materialized, plan)
     if materialized != config:
-        raise ValueError("Evaluation recipe and explicit role plan disagree")
+        differences = _differing_paths(config, materialized)
+        raise ValueError(f"Evaluation recipe and explicit role plan disagree at: {differences}")
     retention = config["generator"]["trajectory_retention"]
     if not (
         retention["enabled"]
@@ -164,10 +196,10 @@ def configured_evaluation_step(
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path=data_relative_path),),
             topology=SkyRLTopology(
-                num_nodes=role_plan.num_nodes,
+                num_nodes=plan.num_nodes,
                 gpus_per_node=role_plan.policy_num_gpus_per_node,
                 gpu_variant=gpu_variant,
-                role_plan=role_plan,
+                role_plan=plan,
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=seed,

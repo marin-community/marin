@@ -62,23 +62,41 @@ def policy_export_path(export_root: str, global_step: int) -> str:
     return join_resource_path(export_root, f"{GLOBAL_STEP_PREFIX}{global_step}", POLICY_CHECKPOINT_SUBDIRECTORY)
 
 
-def selected_export_step(checkpoint_root: str, selection: str, latest_step: int) -> int:
-    """Resolve the native checkpoint selected for terminal HF conversion."""
+@dataclass(frozen=True)
+class ExportCheckpoint:
+    step: int
+    initializer_uri: str | None = None
+
+
+def selected_export_checkpoint(checkpoint_root: str, selection: str, latest_step: int) -> ExportCheckpoint | None:
+    """Resolve the checkpoint selected for HF export, if one is eligible."""
     if selection == "latest":
-        return latest_step
+        return ExportCheckpoint(latest_step)
     if selection != "best":
         raise ValueError(f"Unknown HF checkpoint selection: {selection}")
-    path = StoragePath(join_resource_path(checkpoint_root, BEST_CHECKPOINT_FILENAME))
-    if path.exists():
-        best = json.loads(path.read_text())
-        if best["model_format"] == "native":
-            step = int(best["step"])
-            committed = StoragePath(
-                join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}", "trainer_state.pt")
-            )
-            if not committed.exists():
-                raise ValueError(f"Selected best native checkpoint is not committed: step {step}")
-            return step
+    try:
+        evidence = (StoragePath(checkpoint_root) / BEST_CHECKPOINT_FILENAME).read_text()
+    except FileNotFoundError:
+        return _fallback_export_checkpoint(checkpoint_root, latest_step)
+    best = json.loads(evidence)
+    step = int(best["step"])
+    if best["model_format"] == "native":
+        committed = StoragePath(
+            join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}", "trainer_state.pt")
+        )
+        if not committed.exists():
+            raise ValueError(f"Selected best native checkpoint is not committed: step {step}")
+        return ExportCheckpoint(step)
+    if best["model_format"] == "hf" and step == 0:
+        uri = best.get("model_uri")
+        if isinstance(uri, str) and uri.strip():
+            return ExportCheckpoint(step, initializer_uri=uri)
+        raise ValueError("The best step-zero checkpoint requires an initializer HF model URI")
+    raise ValueError(f"Unsupported best checkpoint format {best['model_format']!r} at step {step}")
+
+
+def _fallback_export_checkpoint(checkpoint_root: str, latest_step: int) -> ExportCheckpoint:
+    """Refuse a fallback when eligible validation exists; otherwise export the committed final step."""
     receipts_path = StoragePath(join_resource_path(checkpoint_root, VALIDATION_RECEIPTS_FILENAME))
     receipts = json.loads(receipts_path.read_text()) if receipts_path.exists() else []
     eligible_steps = {row["step"] for row in receipts if row["eligible"] and row["step"] > 0}
@@ -94,7 +112,7 @@ def selected_export_step(checkpoint_root: str, selection: str, latest_step: int)
     if not final_state.exists() or not marker.exists() or int(marker.read_text().strip()) != latest_step:
         raise ValueError("No committed best or final native checkpoint is available")
     logger.warning("FINAL CHECKPOINT FALLBACK: no eligible trained validation; exporting final step %s", latest_step)
-    return latest_step
+    return ExportCheckpoint(latest_step)
 
 
 def trailing_validation_ema(

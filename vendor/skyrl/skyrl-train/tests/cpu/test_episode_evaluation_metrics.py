@@ -9,7 +9,8 @@ from skyrl_train.evaluate import _calculate_eval_metrics
 from skyrl_train.rollouts.task_projections import episode_statistics
 from skyrl_train.rollouts.training_record import TrainingRollout
 from skyrl_train.trajectory_runners.trajectory_processing import concatenate_trajectory_batches
-from skyrl_train.utils.trainer_utils import calculate_per_dataset_metrics, cleanup_old_checkpoints
+from skyrl_train.checkpoint_listing import cleanup_old_checkpoints
+from skyrl_train.utils.trainer_utils import calculate_per_dataset_metrics
 
 
 def test_checkpoint_retention_keeps_latest_three_and_selected_best(tmp_path):

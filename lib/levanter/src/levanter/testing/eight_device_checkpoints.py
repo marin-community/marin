@@ -4,16 +4,18 @@
 """Checkpoint scenarios that need more devices or processes than the test runtime has.
 
 The XLA device count is fixed for the life of a process, so the scenarios spawn fresh
-interpreters for eight-device sharding and two-process distributed restores. A spawned child
+interpreters for eight-device sharding and for two-process saves and restores. A spawned child
 imports the module its target came from, so the scenarios live on the installed package where
 any interpreter can import them regardless of its working directory.
 """
 
+import contextlib
 import json
 import multiprocessing
 import os
+import pathlib
 import socket
-from collections.abc import Callable
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,10 +27,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from rigging.training_journal import TrainingJournal, verify_training_journals
 
+from levanter import tensorstore_serialization
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
 from levanter.config import register_codecs
 from levanter.tensorstore_serialization import (
@@ -41,13 +45,22 @@ from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
+from levanter.utils.jax_utils import barrier_sync
 
 EIGHT_DEVICE_COUNT = 8
 DISTRIBUTED_PROCESS_COUNT = 2
 DISTRIBUTED_ARRAY_SIZE = 4096
 _CHUNK_READ_METRIC = "/tensorstore/cache/chunk_cache/reads"
 _LOOPBACK_ADDRESS = "127.0.0.1"
+# Spawned children reach the loopback coordinator directly, not through a proxy.
+_PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 _PINNED_HOST_MEMORY_KIND = "pinned_host"
+_SHARED_ARRAY_NAMES = ("a", "b", "c")
+_MANIFEST_LOCK = f"manifest.ocdbt{tensorstore_serialization._LOCK_FILE_SUFFIX}"
+# Long enough that a save ignoring the lock commits well before the lock is released.
+_HELD_LOCK_SECONDS = 2.0
+# A save that never reaches the lock sweep or never commits fails instead of hanging.
+_SAVE_DEADLINE_SECONDS = 60.0
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
 
@@ -77,10 +90,9 @@ class _DistributedRestoreResult:
     tensorstore_chunk_reads: int
 
 
-def _distributed_scenario[T](
-    scenario: Callable[[str], T], process_id: int, coordinator: str, checkpoint_path: str
-) -> T:
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+@contextlib.contextmanager
+def _distributed_process(process_id: int, coordinator: str):
+    for name in _PROXY_ENV_VARS:
         os.environ.pop(name, None)
     jax.distributed.initialize(
         coordinator_address=coordinator,
@@ -89,48 +101,51 @@ def _distributed_scenario[T](
         local_device_ids=[process_id],
     )
     try:
-        return scenario(checkpoint_path)
+        yield
     finally:
         jax.distributed.shutdown()
 
 
-def _run_across_processes[T](scenario: Callable[[str], T], checkpoint_path: str) -> list[T]:
+def _run_on_distributed_processes(scenario, *args) -> list:
+    """Run ``scenario(process_id, coordinator, *args)`` in one spawned one-CPU-device process per rank."""
     with socket.socket() as listener:
         listener.bind((_LOOPBACK_ADDRESS, 0))
         port = listener.getsockname()[1]
     coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
+
     with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
         with ProcessPoolExecutor(
             max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
         ) as pool:
             futures = [
-                pool.submit(_distributed_scenario, scenario, process_id, coordinator, checkpoint_path)
+                pool.submit(scenario, process_id, coordinator, *args)
                 for process_id in range(DISTRIBUTED_PROCESS_COUNT)
             ]
             return [future.result() for future in futures]
 
 
-def _distributed_restore(checkpoint_path: str) -> _DistributedRestoreResult:
-    mesh = Mesh(np.array(jax.devices()), ("replica",))
-    sharding = NamedSharding(mesh, P())
-    pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
+def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str) -> _DistributedRestoreResult:
+    with _distributed_process(process_id, coordinator):
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        sharding = NamedSharding(mesh, P())
+        pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
 
-    with jax.set_mesh(mesh):
-        before = _tensorstore_chunk_reads()
-        restored = tree_deserialize_leaves_tensorstore(
-            checkpoint_path,
-            {
-                name: jax.ShapeDtypeStruct((DISTRIBUTED_ARRAY_SIZE,), jnp.float32, sharding=pinned)
-                for name in ("a", "c")
-            },
-        )
-        after = _tensorstore_chunk_reads()
-        on_device = {name: jax.device_put(array, sharding) for name, array in restored.items()}
-        return _DistributedRestoreResult(
-            arrays={name: np.asarray(array) for name, array in on_device.items()},
-            memory_kinds=frozenset(array.sharding.memory_kind for array in restored.values()),
-            tensorstore_chunk_reads=after - before,
-        )
+        with jax.set_mesh(mesh):
+            before = _tensorstore_chunk_reads()
+            restored = tree_deserialize_leaves_tensorstore(
+                checkpoint_path,
+                {
+                    name: jax.ShapeDtypeStruct((DISTRIBUTED_ARRAY_SIZE,), jnp.float32, sharding=pinned)
+                    for name in ("a", "c")
+                },
+            )
+            after = _tensorstore_chunk_reads()
+            on_device = {name: jax.device_put(array, sharding) for name, array in restored.items()}
+            return _DistributedRestoreResult(
+                arrays={name: np.asarray(array) for name, array in on_device.items()},
+                memory_kinds=frozenset(array.sharding.memory_kind for array in restored.values()),
+                tensorstore_chunk_reads=after - before,
+            )
 
 
 def replica_aware_restore_across_processes() -> None:
@@ -140,7 +155,7 @@ def replica_aware_restore_across_processes() -> None:
             "c": np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32) + 1,
         }
         tree_serialize_leaves_tensorstore(tmpdir, expected)
-        results = _run_across_processes(_distributed_restore, tmpdir)
+        results = _run_on_distributed_processes(_distributed_restore, tmpdir)
 
     for result in results:
         for name in expected:
@@ -149,34 +164,35 @@ def replica_aware_restore_across_processes() -> None:
     assert sum(result.tensorstore_chunk_reads for result in results) == len(expected)
 
 
-def _async_checkpoint_roundtrip(checkpoint_path: str) -> np.ndarray:
-    register_codecs()
-    config = CheckpointerConfig(
-        base_path=checkpoint_path, append_run_id_to_base_path=False, save_interval=None, keep=None
-    )
-    config = draccus.decode(CheckpointerConfig, json.loads(json.dumps(draccus.encode(config))))
-    journal = TrainingJournal(
-        str(Path(checkpoint_path) / "telemetry"), "async-wire-roundtrip", "sft", f"rank-{jax.process_index()}"
-    )
-    checkpointer = config.create("async-wire-roundtrip", training_journal=journal)
-    mesh = Mesh(np.array(jax.devices()), ("replica",))
-    expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
-    with jax.set_mesh(mesh):
-        source = {"model": jax.device_put(expected, NamedSharding(mesh, P()))}
-        checkpointer.save_checkpoint(source, step=1, destination="step-1", is_temporary=False)
-        checkpointer.wait_until_finished()
-        saved = str(Path(checkpoint_path) / "step-1")
-        metadata = load_checkpoint_metadata(saved)
-        assert metadata["step"] == 1 and metadata["is_temporary"] is False
-        restored = np.asarray(checkpointer.load_checkpoint(source, saved)["model"])
-    journal.log({"checkpoint/restored_values": int(restored.size)}, step=metadata["step"], commit=True)
-    journal.finish(status="completed")
-    return restored
+def _async_checkpoint_roundtrip(process_id: int, coordinator: str, checkpoint_path: str) -> np.ndarray:
+    with _distributed_process(process_id, coordinator):
+        register_codecs()
+        config = CheckpointerConfig(
+            base_path=checkpoint_path, append_run_id_to_base_path=False, save_interval=None, keep=None
+        )
+        config = draccus.decode(CheckpointerConfig, json.loads(json.dumps(draccus.encode(config))))
+        journal = TrainingJournal(
+            str(Path(checkpoint_path) / "telemetry"), "async-wire-roundtrip", "sft", f"rank-{jax.process_index()}"
+        )
+        checkpointer = config.create("async-wire-roundtrip", training_journal=journal)
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        with jax.set_mesh(mesh):
+            source = {"model": jax.device_put(expected, NamedSharding(mesh, P()))}
+            checkpointer.save_checkpoint(source, step=1, destination="step-1", is_temporary=False)
+            checkpointer.wait_until_finished()
+            saved = str(Path(checkpoint_path) / "step-1")
+            metadata = load_checkpoint_metadata(saved)
+            assert metadata["step"] == 1 and metadata["is_temporary"] is False
+            restored = np.asarray(checkpointer.load_checkpoint(source, saved)["model"])
+        journal.log({"checkpoint/restored_values": int(restored.size)}, step=metadata["step"], commit=True)
+        journal.finish(status="completed")
+        return restored
 
 
 def async_checkpoint_roundtrip_across_processes() -> None:
     with TemporaryDirectory() as tmpdir:
-        results = _run_across_processes(_async_checkpoint_roundtrip, tmpdir)
+        results = _run_on_distributed_processes(_async_checkpoint_roundtrip, tmpdir)
         verify_training_journals(
             str(Path(tmpdir) / "telemetry"),
             {f"rank-{rank}" for rank in range(DISTRIBUTED_PROCESS_COUNT)},
@@ -184,6 +200,94 @@ def async_checkpoint_roundtrip_across_processes() -> None:
         )
     for result in results:
         np.testing.assert_array_equal(result, np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32))
+
+
+def _save_halves(checkpoint_path: str, split: NamedSharding, values: np.ndarray) -> None:
+    # Each process holds, and so must write, half of every array.
+    source = {
+        name: jax.make_array_from_callback(values.shape, split, lambda index, o=offset: values[index] + o)
+        for offset, name in enumerate(_SHARED_ARRAY_NAMES)
+    }
+    tree_serialize_leaves_tensorstore(checkpoint_path, source)
+
+
+def _resave_after_interrupted_save(process_id: int, coordinator: str, checkpoint_path: str) -> np.ndarray:
+    with _distributed_process(process_id, coordinator):
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        values = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        with jax.set_mesh(mesh):
+            _save_halves(checkpoint_path, split, -values)
+            # A save killed mid-commit leaves its lock file behind; a resumed run that reaches the
+            # same step saves to the same directory again.
+            if process_id == 0:
+                pathlib.Path(checkpoint_path, _MANIFEST_LOCK).touch()
+            barrier_sync()
+            _save_halves(checkpoint_path, split, values)
+            restored = tree_deserialize_leaves_tensorstore(
+                checkpoint_path,
+                {
+                    name: jax.ShapeDtypeStruct(values.shape, values.dtype, sharding=split)
+                    for name in _SHARED_ARRAY_NAMES
+                },
+            )
+            return np.stack(
+                [
+                    np.asarray(multihost_utils.process_allgather(restored[name], tiled=True))
+                    for name in _SHARED_ARRAY_NAMES
+                ]
+            )
+
+
+def resave_after_interrupted_save_across_processes() -> list[np.ndarray]:
+    """Save to a local directory twice from two processes, with a lock file abandoned in between."""
+    with TemporaryDirectory() as tmpdir:
+        return _run_on_distributed_processes(_resave_after_interrupted_save, f"{tmpdir}/step-10")
+
+
+def _save_waits_for_held_lock(process_id: int, coordinator: str, checkpoint_path: str) -> bool | None:
+    with _distributed_process(process_id, coordinator):
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        values = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        lock = pathlib.Path(checkpoint_path, _MANIFEST_LOCK)
+        lock_held = threading.Event()
+        sweep = tensorstore_serialization._remove_abandoned_lock_files
+
+        def sweep_then_hold_lock(checkpoint_dir: str) -> None:
+            # Another node's commit takes the manifest lock once the save has cleared abandoned
+            # locks, which this node cannot see as an OS lock.
+            sweep(checkpoint_dir)
+            lock.touch()
+            lock_held.set()
+
+        with (
+            jax.set_mesh(mesh),
+            mock.patch.object(tensorstore_serialization, "_remove_abandoned_lock_files", sweep_then_hold_lock),
+        ):
+            if process_id != 0:
+                _save_halves(checkpoint_path, split, values)
+                return None
+            saved = threading.Event()
+
+            def save() -> None:
+                _save_halves(checkpoint_path, split, values)
+                saved.set()
+
+            # A daemon, so a save that hangs fails the deadline below instead of the interpreter's exit.
+            saver = threading.Thread(target=save, daemon=True)
+            saver.start()
+            assert lock_held.wait(timeout=_SAVE_DEADLINE_SECONDS), "the save never swept for abandoned locks"
+            blocked = not saved.wait(timeout=_HELD_LOCK_SECONDS)
+            lock.unlink()
+            return blocked and saved.wait(timeout=_SAVE_DEADLINE_SECONDS)
+
+
+def save_waits_for_held_lock_across_processes() -> bool:
+    """Whether a two-process save to a local path waits for another writer's lock file, then commits."""
+    with TemporaryDirectory() as tmpdir:
+        results = _run_on_distributed_processes(_save_waits_for_held_lock, f"{tmpdir}/step-10")
+    return results[0]
 
 
 def _mesh(shape: tuple[int, int] = (2, 4)) -> Mesh:
