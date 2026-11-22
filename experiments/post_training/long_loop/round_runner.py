@@ -75,6 +75,7 @@ from experiments.post_training.long_loop.recipe_bundle import require_clean_revi
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph, runtime_execution
+from experiments.post_training.task_curation.datasets.long_loop_rl import TEACHER_ROUTE_LABELS
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
@@ -412,10 +413,19 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
             f"the round curriculum derives at batch {roles.train_batch_size}: {derived_quotas!r}"
         )
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
+    # The runtime classifies each row by its raw ``data_source``; the stamped pools
+    # rename provenance in ``teacher_route`` only, so alias the raw names the
+    # stamping renamed (the reasoning-gym wheel URL and the Nemotron IF dataset)
+    # to their teacher routes alongside the manifest's route map.
+    routes = dict(pools_manifest["routes"])
+    for raw, teacher in TEACHER_ROUTE_LABELS.items():
+        if teacher in routes:
+            routes.setdefault(raw, routes[teacher])
+    routes.setdefault(NEMOTRON_SOURCE, routes["nemotron_if"])
     declared_routes = recipe["trainer"]["rollout_buffer"].get("source_routes") or {}
     if set(declared_routes) != set(pools_manifest["routes"]):
         raise ValueError("Round source routes differ from the pools manifest's teacher-route map")
-    recipe["trainer"]["rollout_buffer"]["source_routes"] = dict(pools_manifest["routes"])
+    recipe["trainer"]["rollout_buffer"]["source_routes"] = routes
     for callback in recipe["trainer"]["callbacks"]:
         if callback["type"] == "best_checkpoint":
             callback["expected_tasks"] = curriculum.validation.size

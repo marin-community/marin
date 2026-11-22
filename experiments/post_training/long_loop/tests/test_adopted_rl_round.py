@@ -244,6 +244,30 @@ def test_round_rejects_a_declared_quota_that_disagrees_with_the_derivation(local
         adopted_round_rl(spec)
 
 
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_aliases_raw_row_sources_to_their_teacher_routes(local_round, tmp_path):
+    """The stamped pools keep raw ``data_source`` values; the compiled launch must
+    classify them so the runtime's route check passes."""
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    routes = launch["skyrl"]["trainer"]["rollout_buffer"]["source_routes"]
+    manifest = json.loads((Path(local_round.rl.pools["uri"]) / "manifest.json").read_text())
+    for label, route in manifest["routes"].items():
+        assert routes[label] == route
+    assert routes["nvidia/Llama-Nemotron-Post-Training-Dataset"] == routes["nemotron_if"]
+    reasoning_gym_url = (
+        "https://files.pythonhosted.org/packages/42/21/"
+        "bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl"
+    )
+    assert routes[reasoning_gym_url] == routes["Reasoning Gym:reasoning_gym"]
+
+
 @pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
 def test_round_best_and_final_native_checkpoints_use_permanent_storage(
     local_round, tmp_path, permanent_path, monkeypatch
