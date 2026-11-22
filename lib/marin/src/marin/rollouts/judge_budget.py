@@ -6,12 +6,19 @@
 import asyncio
 import json
 from decimal import ROUND_CEILING, Decimal
+from typing import TypedDict
 
 from evalrecords.records import JudgeCallBudget
 from finestore.store import DataStore
 from taskcompendium.grading_result import GradeResult, Outcome
 
 BUDGET_OBJECT = "evaluation/judge-budget.json"
+
+
+class JudgeReservation(TypedDict):
+    calls: int
+    microdollars: int
+    settled: bool
 
 
 class JudgeBudget:
@@ -21,7 +28,7 @@ class JudgeBudget:
         self.store = store
         self.limits = limits
         saved = store.read_view().read_blob(BUDGET_OBJECT)
-        self.entries = json.loads(saved) if saved else {}
+        self.entries: dict[str, JudgeReservation] = json.loads(saved) if saved else {}
         self.active: set[str] = set()
         self.changed = asyncio.Condition()
 
