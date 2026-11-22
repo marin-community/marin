@@ -13,7 +13,7 @@ evaluations:
       judge:
         budget:
           max_calls: 195
-          max_microdollars: 1500000
+          max_microdollars: 1200000
           microdollars_per_call: 150000
         deployment: openrouter/deepinfra/fp8
         models:
@@ -36,7 +36,7 @@ evaluations:
       judge:
         budget:
           max_calls: 195
-          max_microdollars: 1500000
+          max_microdollars: 1200000
           microdollars_per_call: 150000
         deployment: openrouter/deepinfra/fp8
         models:

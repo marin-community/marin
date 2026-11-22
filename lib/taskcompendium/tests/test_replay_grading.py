@@ -36,10 +36,12 @@ FORBIDDEN_VARIABLE = "REPLAY_FORBIDDEN_SECRET"
 @pytest.fixture
 def replay_task():
     grader = ScriptGrader(
-        placement=GraderMachine(environment=EnvironmentRequirements(
-            docker_image=GRADER_IMAGE,
-            command_semantics=CommandSemantics.LINUX_PROCESS,
-        )),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(
+                docker_image=GRADER_IMAGE,
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+            )
+        ),
         argv=("python3", "/tests/grade.py"),
         cwd="/app",
         answer_path=None,

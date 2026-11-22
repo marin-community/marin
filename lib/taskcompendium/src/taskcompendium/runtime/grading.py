@@ -612,7 +612,9 @@ async def grade_in_agent_machine(
     try:
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             archive_path = Path(directory) / "grading.tar"
-            await asyncio.to_thread(write_archive, archive_path, [*_grading_files(task, attempt, grading, []), *answers], [])
+            await asyncio.to_thread(
+                write_archive, archive_path, [*_grading_files(task, attempt, grading, []), *answers], []
+            )
             await _run_checked(
                 task_machine,
                 Command(

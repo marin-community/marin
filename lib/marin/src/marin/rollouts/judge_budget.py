@@ -35,10 +35,8 @@ class JudgeBudget:
             if key in self.entries or calls <= 0:
                 raise ValueError("Invalid or duplicate judge reservation")
             while (
-                calls + sum(entry["calls"] for entry in self.entries.values())
-                > self.limits.max_calls
-                or cost + sum(entry["microdollars"] for entry in self.entries.values())
-                > self.limits.max_microdollars
+                calls + sum(entry["calls"] for entry in self.entries.values()) > self.limits.max_calls
+                or cost + sum(entry["microdollars"] for entry in self.entries.values()) > self.limits.max_microdollars
             ):
                 if not self.active:
                     raise RuntimeError("Judge budget exhausted, including outstanding reservations")
