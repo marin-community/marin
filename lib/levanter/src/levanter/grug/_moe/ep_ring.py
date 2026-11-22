@@ -29,15 +29,16 @@ def _moe_mlp_ep_ring_local(
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
     token_valid_local: Bool[Array, "Tlocal"],
-    moe_w13_local: Float[Array, "Elocal H I2"],
+    gate_or_packed: Float[Array, "Elocal H W"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    up_weight: Float[Array, "Elocal H I"] | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
-    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
+    """Gather routes and scatter expert outputs using packed or separate gate and up weights."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
@@ -52,7 +53,7 @@ def _moe_mlp_ep_ring_local(
         expert_flat = selected_experts_global.reshape(assignments)
         weight_flat = combine_weights_global.reshape(assignments)
 
-        local_experts = moe_w13_local.shape[0]
+        local_experts = gate_or_packed.shape[0]
         if num_experts % local_experts != 0:
             raise ValueError(
                 f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
@@ -112,10 +113,13 @@ def _moe_mlp_ep_ring_local(
         with jax.named_scope("moe_up_down"):
             # Omit unused rows from the grouped dots and mask their unwritten results.
             active_rows = valid[:, None]
-            w13_out = jnp.where(active_rows, ragged_dot(x_dispatch, moe_w13_local, accepted_counts), 0)
-            w13_out = tree_checkpoint_name(w13_out, _CHECKPOINT_EXPERT_HIDDEN)
-            moe_dim = moe_w2_local.shape[1]
-            gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+            gate_out = jnp.where(active_rows, ragged_dot(x_dispatch, gate_or_packed, accepted_counts), 0)
+            if up_weight is None:
+                gate_out = tree_checkpoint_name(gate_out, _CHECKPOINT_EXPERT_HIDDEN)
+                gate, up = jnp.split(gate_out, [moe_w2_local.shape[1]], axis=-1)
+            else:
+                gate = gate_out
+                up = jnp.where(active_rows, ragged_dot(x_dispatch, up_weight, accepted_counts), 0)
             out_dispatch = jnp.where(
                 active_rows, ragged_dot(activation_fn(gate) * up, moe_w2_local, accepted_counts), 0
             )

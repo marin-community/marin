@@ -602,6 +602,49 @@ class MoEExpertMlp(eqx.Module):
         )
 
     @named_call
+    def prefill_ep(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        *,
+        token_valid: Bool[Array, "T"],
+        mesh: jax.sharding.AbstractMesh,
+    ) -> Float[Array, "T D"]:
+        """Run ring dispatch with separate gate and up weights to avoid packing during prefill."""
+        token_spec = _token_spec_from_x(x, mesh)
+        token_axes = _axis_names(token_spec[0])
+        if "expert" not in token_axes or self.implementation != "ring":
+            raise ValueError("Expert-parallel prefill uses ring dispatch over disjoint expert token shards")
+        activation = (
+            self.activation.to_jax_fn() if isinstance(self.activation, ActivationFunctionEnum) else self.activation
+        )
+        expert_spec = P("expert", None, None)
+        run = shard_map(
+            partial(
+                _moe_mlp_ep_ring_local,
+                activation_fn=activation,
+                num_experts=self.w_gate.shape[0],
+                capacity_factor=self.capacity_factor,
+                token_sharding_axes=token_axes,
+            ),
+            mesh=mesh,
+            in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),
+            out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
+            check_vma=False,
+        )
+        out, _ = run(
+            _reshard_for_shard_map(x, mesh, token_spec),
+            _reshard_for_shard_map(selected_experts, mesh, token_spec),
+            _reshard_for_shard_map(combine_weights, mesh, token_spec),
+            _reshard_for_shard_map(token_valid, mesh, token_spec),
+            _reshard_for_shard_map(self.w_gate, mesh, expert_spec),
+            _reshard_for_shard_map(self.w_down, mesh, expert_spec),
+            _reshard_for_shard_map(self.w_up, mesh, expert_spec),
+        )
+        return out
+
+    @named_call
     def decode_small_ep(
         self,
         x: Float[Array, "T D"],

@@ -1361,7 +1361,7 @@ class SnowballMoEMLP(eqx.Module):
         token_valid: jax.Array | None = None,
         route_capture: PreparedMoERouteCapture | None = None,
         capture_routes: bool = False,
-        expert_implementation: SnowballDecodeExpertImplementation = "grouped",
+        expert_implementation: SnowballDecodeExpertImplementation | Literal["prefill_ring"] = "grouped",
         max_active_tokens: int | None = None,
     ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
         b, s, _ = x.shape
@@ -1415,11 +1415,12 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        expert_mlp = (
-            partial(self.expert_mlp.decode_small_ep, max_active_tokens=max_active_tokens)
-            if expert_implementation == "split"
-            else self.expert_mlp
-        )
+        if expert_implementation == "split":
+            expert_mlp = partial(self.expert_mlp.decode_small_ep, max_active_tokens=max_active_tokens)
+        elif expert_implementation == "prefill_ring":
+            expert_mlp = self.expert_mlp.prefill_ep
+        else:
+            expert_mlp = self.expert_mlp
         routed_flat = expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
@@ -2043,11 +2044,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
-        expert_implementation = (
-            self.config.inference_expert_implementation
-            if expert_size > 1 and tokens.shape[0] == expert_size and sample_indices is None and not capture_routes
-            else "grouped"
-        )
+        expert_implementation: SnowballDecodeExpertImplementation | Literal["prefill_ring"] = "grouped"
+        if expert_size > 1 and not capture_routes:
+            if sample_indices is not None and jax.default_backend() == "tpu":
+                expert_implementation = "prefill_ring"
+            elif sample_indices is None and tokens.shape[0] == expert_size:
+                expert_implementation = self.config.inference_expert_implementation
         kv_append = (
             self.config.inference_kv_append
             if sample_indices is None and not capture_routes and tokens.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS

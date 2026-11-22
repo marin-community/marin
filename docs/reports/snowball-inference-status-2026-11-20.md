@@ -238,6 +238,14 @@ length. On the same 26 AgentX turns, native active decode fell to
 153.95 tokens/s and p90 TTFT rose to 918 ms. The full run measured
 53.86 output tokens/s over 27 turns. [Finer-bucket run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v9)
 
+Computing the gate and up projections separately eliminated expert weight
+packing on TPU and lowered all ten prefill medians. At 2,048 tokens
+native fresh and primed latency were 0.123 and 0.082 s, down from 0.140
+and 0.100 s with finer buckets alone. The 64,512-token medians were
+1.875 and 0.142 s. On the same 26 AgentX turns, active decode reached
+159.78 tokens/s with 746 ms p90 TTFT. The full run measured 58.37
+output tokens/s over 28 turns. [Separate projections](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-prefill-native-v5p8-20261121-v10)
+
 The fresh prefill trace spent most of its device time in routed expert
 matmuls and long attention. In the primed trace, async copies and packing
 expert weights were among the largest costs. A BF16 expert microbenchmark
@@ -341,6 +349,12 @@ A clean rerun with the selected expert kernel and static KV writes measured
 48.61 output tokens/s overall, 116.58 active decode tokens/s, and
 906.13 ms streamed p90 TTFT on the same 26 turns. It again matched all
 9,092 output token counts. [Clean H100 rerun](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v12-clean)
+
+Replicating the single decode activation while retaining sharded expert
+weights and KV pages improved native to 50.51 output tokens/s overall,
+14% below vLLM. On the same 26 turns and 9,092 outputs, active decode
+reached 137.29 tokens/s against 164.79 for vLLM. Streamed p90 TTFT was
+877.80 ms against 942.61 ms. [Replicated activation trial](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-agentx-h100-native-64k-c1-20261121-v19-replicated-activation)
 
 ## What works
 
