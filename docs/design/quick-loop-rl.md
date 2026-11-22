@@ -16,12 +16,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The third `2026.11.20.6` child passed all 25 updates, 208 receiver checks, the terminal checkpoint marker and both 100-task panels. | Use this completed control in the matched comparison. |
-| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child completed the 100-task baseline and first two updates, with 24 zero-mismatch receiver checks through version 2. | Verify all 25 updates on the third child and compare with the completed control. |
+| Levanter learner with vLLM | The frozen 40-H100 smoke passed exact restart, training and byte-verified publication. Two `2026.11.20.7` GPU children lost their CPU coordinator. The third child completed the 100-task baseline and the five-update prefix audit with 48 zero-mismatch receiver checks. | Verify all 25 updates on the third child and compare with the completed control. |
 | Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched 25-update comparison is underway. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | Native 67B serving cleared the cache at install and generated four full-length policy-2 responses. Fused replay passed 611 real tool-turn targets. The original scatter path had one clip crossing in the full-context group. Ordered MoE gather passed four byte-identical short repeats. | Pass the full-context clip gate with ordered gather, then run the held-learner comparison. |
+| Native inventory backend | Ordered gather served a verified 67B live swap and returned byte-identical first, repeat and cold replies. Both serving variants completed the 32,768-target capture. Their real tool-turn fused checks passed. The full-context score gate found three crossings for ordered gather and one for scatter. | Isolate the full-context scoring discrepancy and measure the held-learner comparison. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -843,6 +843,17 @@ terminal metrics with its own initial panel.
 [Second Levanter child][iris-matched-levanter-retry] ·
 [Third Levanter child][iris-matched-levanter-third]
 
+The third child's first five updates verified all 48 receiver checks
+through version 5. Across the four warm updates, median step time was
+465.3 seconds for Levanter and 153.1 seconds for Megatron. Group admission
+was about a second per group in each. The mean extra Levanter time was
+203.9 seconds in publication, 80.4 in policy training and 25.2 in learner
+preparation. The independently captured 64 MiB NCCL all-to-all preflight
+had similar median bus bandwidth on all 40 original ranks, 44.17 GB/s
+for the third Levanter child and 43.47 GB/s for the accepted Megatron
+child. The collective preflight measures a different path from export,
+CPU staging and the per-expert publication sends.
+
 The built-in `hub` route submits through the Marin hub and delegates the
 CPU coordinator to `cw-us-east-02a`. The controller rejects federation of a
 nested GPU job from a hub-resident parent. A regional coordinator can use
@@ -1649,11 +1660,21 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   scored all 32,768 original targets. The independent audit recomputed
   one upper crossing at response offset 6,167 in request 60,001. Its
   ratio was 1.2528 against the 1.20 limit. The p99 absolute log-ratio
-  was `1.58e-4`. The current ordered-gather run uses the same checkpoint
-  bytes and clip gate. It released policy 2 with zero cache ownership
-  and produced byte-identical first and repeated short replies in the
-  original process. It then admitted the full four-response group.
-  The CPU fixture retains its byte-equality check.
+  was `1.58e-4`. Ordered gather used the same checkpoint bytes and clip
+  gate. It released policy 2 with zero cache ownership, and the first,
+  repeat and independent cold replies were byte-identical. Its four
+  long responses finished in 1,476.0 seconds and captured identical
+  positions, ordered routes, and thresholds across their common
+  16,384-token prompt. The independent fused scorer passed 167 sampled
+  tool-turn targets. It scored all 32,768 full-context targets with
+  three crossings, two below 0.80 and one above 1.20. Each was a
+  standalone period under a fully matching token history in the
+  scatter and gather captures. Their predictor expert sets still
+  differed between serving implementations. Compare the saved frames
+  with the learner's named-axis mapping and compare vocabulary
+  projections on the same selected activations. Preserve the
+  serving-score parity measurements alongside the learner's separate
+  current-versus-old policy ratio.
   [Full-context run][iris-native-cache-ownership] ·
   [Archived exact-task source][native-full-capture-archive] ·
   [Replay-only scorer][iris-native-b-scorer] ·
