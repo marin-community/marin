@@ -57,18 +57,20 @@ def test_stamp_helpers_read_the_generated_rows_verifier_config():
                     "path": "config.json",
                     "source": {
                         "kind": "inline_file",
-                        "content_base64": base64.b64encode(
-                            json.dumps(
-                                {
-                                    "contract": {
-                                        "entry": {
-                                            "question": "Count the flips.",
-                                            "metadata": {"source_dataset": "coin_flip", "source_index": 7},
+                        "content_base64": (
+                            base64.b64encode(
+                                json.dumps(
+                                    {
+                                        "contract": {
+                                            "entry": {
+                                                "question": "Count the flips.",
+                                                "metadata": {"source_dataset": "coin_flip", "source_index": 7},
+                                            }
                                         }
                                     }
-                                }
-                            ).encode()
-                        ).decode(),
+                                ).encode()
+                            ).decode()
+                        ),
                     },
                 }
             ]

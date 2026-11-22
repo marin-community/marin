@@ -116,9 +116,7 @@ def _row_family(task: dict) -> str | None:
     """The Reasoning Gym family a stamped row's verifier config records, when it carries one."""
     for resource in (task.get("resources") or {}).get("verifier") or []:
         if resource.get("path", "").endswith("config.json"):
-            content = base64.b64decode((resource.get("source") or {}).get("content_base64", "")).decode(
-                errors="replace"
-            )
+            content = base64.b64decode((resource.get("source") or {}).get("content_base64", "")).decode(errors="replace")
             config = json.loads(content)
             return (config.get("contract") or {}).get("entry", {}).get("metadata", {}).get("source_dataset")
     return None
@@ -131,9 +129,7 @@ def _cycle_index(task: dict) -> int:
 def _old_question(task: dict) -> str:
     for resource in (task.get("resources") or {}).get("verifier") or []:
         if resource.get("path", "").endswith("config.json"):
-            content = base64.b64decode((resource.get("source") or {}).get("content_base64", "")).decode(
-                errors="replace"
-            )
+            content = base64.b64decode((resource.get("source") or {}).get("content_base64", "")).decode(errors="replace")
             config = json.loads(content)
             return config["contract"]["entry"]["question"]
     raise ValueError(f"Generated row {task.get('id')!r} carries no verifier config")
@@ -324,9 +320,7 @@ def prepare_pool(*, output: str, agentic: str, blend: str, nemotron: str, grader
     if dict(counts) != EXPECTED_COMPOSITION:
         raise ValueError(f"The pool composition differs: {dict(counts)} != {EXPECTED_COMPOSITION}")
     if len(nemotron_rejections) != NEMOTRON_REJECTED_ROWS:
-        raise ValueError(
-            f"nemotron_if rejected {len(nemotron_rejections)} rows, expected {NEMOTRON_REJECTED_ROWS}"
-        )
+        raise ValueError(f"nemotron_if rejected {len(nemotron_rejections)} rows, expected {NEMOTRON_REJECTED_ROWS}")
     pool_rows = {
         label: tuple(
             PoolRow(id=json.loads(raw)["id"], sha256=canonical_sha256(json.loads(raw)))
