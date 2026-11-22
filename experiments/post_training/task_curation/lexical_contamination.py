@@ -23,7 +23,7 @@ from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_json
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec, format_conversation
 from taskcompendium.pipeline.deduplication import DROP_SCHEMA, unique_documents
 from taskcompendium.pipeline.inputs import SourceFormat
@@ -161,7 +161,7 @@ def write_text_population(documents: Iterable[tuple[dict, dict]], output_path: s
                 # Preserve case and paragraph boundaries: the shared eval bloom uses this policy.
                 # Fingerprints use this same renderer, then normalize its text for similarity ranking.
                 text = format_conversation(task.context.events)
-                serialized = task.model_dump_json()
+                serialized = task_spec_json(task)
                 text_digest.update(json.dumps([task.id, text], ensure_ascii=False).encode())
                 spec_digest.update(serialized.encode())
                 texts.append({"id": task.id, "text": text, "partition_id": partition})

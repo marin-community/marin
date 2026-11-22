@@ -130,6 +130,7 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
     leaked = " ".join(f"DistinctiveEvalWord{index}" for index in range(40))
     unrelated = " ".join(f"IndependentTaskWord{index}" for index in range(40))
     first = lexical_task("public-copy", leaked, "private witness")
+    first.pop("integrity_contract")
     second = lexical_task("private-only", unrelated, leaked)
     population = write_text_population([(first, {}), (second, {})], str(tmp_path / "normalized"))
     assert population.task_count == 2
@@ -140,6 +141,7 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
     }
     specs = pq.read_table(tmp_path / "normalized/specs/part-000000.parquet").to_pylist()
     assert {json.loads(r["task_spec"])["id"] for r in specs} == {"public-copy", "private-only"}
+    assert json.loads(next(row["task_spec"] for row in specs if row["id"] == "public-copy")) == first
     evals = tmp_path / "evals"
     evals.mkdir()
     pq.write_table(

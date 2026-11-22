@@ -22,7 +22,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 
-from taskcompendium.identity import task_identity
+from taskcompendium.identity import task_identity, task_spec_json
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.conversion import ConvertedRow
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
@@ -319,7 +319,7 @@ def unique_documents(
                 task = TaskSpec.model_validate_json(json.dumps(document))
                 database.execute(
                     "INSERT INTO tasks VALUES (?, ?, ?, ?)",
-                    (task.id, task_identity(task), task.model_dump_json(), json.dumps(runtime)),
+                    (task.id, task_identity(task), task_spec_json(task), json.dumps(runtime)),
                 )
             database.execute("CREATE INDEX contracts ON tasks(contract)")
             database.execute("CREATE TABLE kept AS SELECT contract, MIN(id) AS id FROM tasks GROUP BY contract")
