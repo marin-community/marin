@@ -624,6 +624,8 @@ class MoEExpertMlp(eqx.Module):
         token_tile = 128 if x.shape[0] <= 8192 else 256
         # Snowball's 1,280-wide projections use a whole output tile on v6e.
         output_tile = 1280 if chip == pltpu.ChipVersion.TPU_V6E else None
+        if chip == pltpu.ChipVersion.TPU_V5P and x.shape[0] <= 2048 and self.w_gate.shape[1:] == (2560, 1280):
+            token_tile, output_tile = 64, 1280
         expert_spec = P("expert", None, None)
         run = shard_map(
             partial(
