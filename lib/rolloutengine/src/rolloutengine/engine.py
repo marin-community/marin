@@ -104,7 +104,8 @@ class RolloutEngine:
         """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
 
         The events of the attempt and ``Rollout.run_id`` carry ``run_id``, a new random ID unless the caller gives
-        one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. Queued
+        one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. A given ID
+        must be new for each call, a retry included, because ``(run_id, index)`` identifies an event. Queued
         events go to the observer within the cleanup deadline after the attempt releases its resources, and
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.

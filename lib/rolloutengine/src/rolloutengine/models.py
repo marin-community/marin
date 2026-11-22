@@ -443,7 +443,8 @@ class RolloutEvent:
     """One event of the attempt that ``RolloutEngine.run_task`` started with ``run_id`` for task ``task_id``.
 
     ``index`` is the event's position in the attempt, counted when the engine emits it, so a missing index
-    is an event that the observer did not receive. The last events of an attempt can be lost without a gap,
+    is an event that the observer did not receive. ``(run_id, index)`` identifies the event, because each
+    ``run_task`` call has its own ``run_id``. The last events of an attempt can be lost without a gap,
     so the events are complete when ``AttemptEnded`` is among them and every lower index is present.
     ``emitted_at`` is the wall-clock time of the emit in seconds since the epoch, because delivery is later.
     """

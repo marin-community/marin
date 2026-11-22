@@ -461,8 +461,9 @@ is an event that the observer did not receive. The last events of an attempt can
 events are complete when `AttemptEnded` is among them and every lower index is present. `emitted_at` is the
 wall-clock time of the emit in seconds since the epoch, because delivery is later.
 `run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
-of repeated attempts of a task stay apart. `Rollout.run_id` returns the ID, so a caller can match a rollout with
-its events.
+of repeated attempts of a task stay apart. `(run_id, index)` identifies an event and `index` starts at 0 in each
+attempt, so a caller that sets the run ID must give each `run_task` call a new one, also when it retries the same
+task. `Rollout.run_id` returns the ID, so a caller can match a rollout with its events.
 Each payload is a frozen dataclass from `rolloutengine.models` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
