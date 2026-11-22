@@ -42,6 +42,8 @@ WINDOWS_PER_ITEM = 16
 MAX_DOC_CHARS = 5_000_000
 LETTERS = "abcdefghijklmnopqrstuvwxyz"
 SAMPLE_ROWS_PER_SHARD = 400
+MEASURE_SEED = 7
+REFERENCE_SEED = 11
 
 
 def item_streams(root: str) -> tuple[list[str], list[str]]:
@@ -260,17 +262,21 @@ def make_measure(output: str):
     return measure
 
 
-def shard_lists(sources_path: str, input_root: str) -> tuple[list[str], list[str]]:
-    """Measure shards (1 per source) and disjoint reference shards (2 per source).
+def shard_lists(
+    sources_path: str, input_root: str, measure_seed: int, excluded: frozenset[str]
+) -> tuple[list[str], list[str]]:
+    """Measure shards (1 per source) and disjoint reference shards (2 per source), none of them in *excluded*.
 
     The draws use one random stream each, in the order of the source list, so the list order fixes the sample.
     """
     with StoragePath(sources_path).open("r") as source:
         names = json.load(source)
-    measure_rng, reference_rng = random.Random(7), random.Random(11)
+    measure_rng, reference_rng = random.Random(measure_seed), random.Random(REFERENCE_SEED)
     measure, reference = [], []
     for name in names:
-        shards = parquet_files(prefix_join(input_root, f"{name}/outputs/main"))
+        shards = [
+            shard for shard in parquet_files(prefix_join(input_root, f"{name}/outputs/main")) if shard not in excluded
+        ]
         picked = measure_rng.sample(shards, min(1, len(shards)))
         measure += picked
         rest = [shard for shard in shards if shard not in picked]
@@ -289,6 +295,11 @@ def main() -> None:
     parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet)")
     parser.add_argument("--output", required=True)
     parser.add_argument("--ram", default="32g")
+    parser.add_argument("--measure-seed", type=int, default=MEASURE_SEED, help="seed of the measure-shard draw")
+    parser.add_argument(
+        "--exclude-shards",
+        help="shards.json of another stage-1 run whose shards are not drawn; copy its keys.parquet to --output first",
+    )
     args = parser.parse_args()
     if args.step == "prepare":
         prepare(args.items, args.output)
@@ -296,7 +307,11 @@ def main() -> None:
     if args.step == "choose":
         choose(args.output)
         return
-    measure, reference = shard_lists(args.sources, args.input_root)
+    excluded: frozenset[str] = frozenset()
+    if args.exclude_shards:
+        drawn = json.loads(StoragePath(args.exclude_shards).read_text())
+        excluded = frozenset(drawn["measure"] + drawn["reference"])
+    measure, reference = shard_lists(args.sources, args.input_root, args.measure_seed, excluded)
     with StoragePath(prefix_join(args.output, "shards.json")).open("w") as sink:
         json.dump({"measure": measure, "reference": reference}, sink)
     files = reference if args.step == "count" else measure
