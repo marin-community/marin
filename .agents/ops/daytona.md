@@ -97,6 +97,14 @@ Shellbox for the shared actor/verifier machine. A conflicting declared policy
 fails before creation. Preserve this file in control archives; a historical
 archive without it does not prove its declared network policy was applied.
 
+The coordinator-authorized Terminal-Lego historical reconstruction is a separate
+`network_policy_reconstructed_native` record. It binds archived task.toml,
+TrialResult environment configuration, source runtime and pinned implementation
+SHAs. Before using it, compare at least 20 fresh physical policy receipts with
+the reconstructed policies and seal every comparison. Any mismatch rejects the
+reconstruction. The historical trial/calibration records stay unchanged; never
+write a reconstructed policy as a physical `network-policy.json`.
+
 ## Sandbox ownership evidence
 
 For a single-trial subprocess started by your campaign, preserve its trial

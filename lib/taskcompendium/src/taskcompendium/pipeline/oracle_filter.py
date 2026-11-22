@@ -21,6 +21,7 @@ from taskcompendium.grading_environment import (
     assess_grading_environment,
 )
 from taskcompendium.harbor.adapter import actor_machine_required
+from taskcompendium.harbor.native_network import ReconstructedNativeNetworkPolicy
 from taskcompendium.harbor.negative_control import (
     NegativeControlSetupKind,
     negative_control_setup_kind,
@@ -399,8 +400,24 @@ class OracleTrialReceipt(BaseModel):
         )
 
 
-def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleTrialReceipt) -> bool:
+def trial_network_qualified(
+    task: TaskSpec,
+    runtime: dict | None,
+    trial: OracleTrialReceipt,
+    reconstruction: ReconstructedNativeNetworkPolicy | None = None,
+) -> bool:
     """Require observed policies for source-declared machine network permissions."""
+    observed = trial.network_policy
+    if reconstruction is not None:
+        if observed is not None:
+            raise ValueError("A physical network receipt cannot be replaced by native reconstruction")
+        reconstruction.require_trial(task.id, trial.result, trial.path)
+        if (task.source.dataset, task.source.revision) != (
+            reconstruction.inputs.source_dataset_id,
+            reconstruction.inputs.source_dataset_revision,
+        ):
+            raise ValueError("Native policy reconstruction belongs to another source generation")
+        observed = reconstruction.policy
     if is_nonagentic_task(task):
         return True
     binding = (
@@ -412,7 +429,7 @@ def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleT
         if runtime is not None
         else None
     )
-    return network_policy_qualified(binding, trial.network_policy)
+    return network_policy_qualified(binding, observed)
 
 
 class VerifierResourceProfile(BaseModel):
@@ -1391,6 +1408,24 @@ class OracleTaskReceipt(BaseModel):
     source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
     source_verifier_error: SourceVerifierError | None = Field(default=None, exclude_if=lambda value: value is None)
     infrastructure_retries: tuple[InfrastructureRetryTransition, ...] = ()
+    network_policy_reconstructed_native: ReconstructedNativeNetworkPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def validate_network_reconstruction(self):
+        reconstruction = self.network_policy_reconstructed_native
+        if reconstruction is not None:
+            trial = self.calibration.attempts[-1]
+            if trial.network_policy is not None:
+                raise ValueError("Native reconstruction cannot replace a physical network observation")
+            reconstruction.require_trial(reconstruction.inputs.task_id, trial.result, trial.path)
+            binding = TaskSpecRuntimeBinding.model_validate_json(reconstruction.inputs.source_runtime.text)
+            if reconstruction.policy.source_runtime_sha256 != self.runtime_sha256 or binding.task_sha256 != (
+                self.source_task_sha256 or self.task_sha256
+            ):
+                raise ValueError("Native reconstruction belongs to another source task/runtime")
+        return self
 
     @model_validator(mode="after")
     def validate_negative_control(self):
@@ -1762,6 +1797,10 @@ class OracleFilterReceipt(BaseModel):
                 if static is not None:
                     NoOracleStaticBlocker(entry.exclusion_reason.value)
                 continue
+            if entry.network_policy_reconstructed_native is not None:
+                entry.network_policy_reconstructed_native.require_trial(
+                    task_id, entry.calibration.attempts[-1].result, entry.calibration.attempts[-1].path
+                )
             if static is not None:
                 raise ValueError("Static no-oracle receipts cannot contain fabricated or calibration-only Trials")
             if entry.native_success_policy is not None and (
@@ -1859,7 +1898,9 @@ class OracleFilterReceipt(BaseModel):
         qualification = entry.legacy_role_qualification
         if qualification is not None and oracle_actor_required(task) != (qualification.actor is not None):
             raise ValueError(f"Legacy qualification changed the original actor plan: {task.id}")
-        return entry.passed and trial_network_qualified(task, runtime, entry.calibration.attempts[-1])
+        return entry.passed and trial_network_qualified(
+            task, runtime, entry.calibration.attempts[-1], entry.network_policy_reconstructed_native
+        )
 
     @property
     def uniform_requirements(self) -> ExecutionRequirements | None:

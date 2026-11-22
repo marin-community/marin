@@ -31,6 +31,7 @@ from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_limits
 from taskcompendium.harbor.archive_paths import resolve_archive_path
 from taskcompendium.harbor.execution import native_execution_limits
+from taskcompendium.harbor.native_network import ReconstructedNativeNetworkPolicy, verify_native_network_canary
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
@@ -506,6 +507,7 @@ def filter_cohort(
     source_verifier_errors: Path | None = None,
     recollection: RecollectionWaiver | None = None,
     archive_roots: Mapping[str, str] | None = None,
+    native_network_reconstructions: Mapping[str, ReconstructedNativeNetworkPolicy] | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -521,6 +523,29 @@ def filter_cohort(
     decision = negative_control_policy.decision
     if file_sha256(StoragePath(decision.uri)) != decision.sha256:
         raise ValueError("Standing negative-control policy decision bytes changed")
+    verified_network_canaries = set()
+    verified_network_authorities = set()
+    verified_network_executions = set()
+    for proof in (native_network_reconstructions or {}).values():
+        canary = proof.canary.evidence
+        canary_key = (canary.uri, canary.sha256, canonical_sha256(proof.canary.model_dump(mode="json")))
+        if canary_key not in verified_network_canaries:
+            verify_native_network_canary(proof.canary, StoragePath(canary.uri).read_bytes())
+            verified_network_canaries.add(canary_key)
+        execution = proof.inputs.execution_provenance
+        execution_key = (execution.uri, execution.sha256, proof.inputs.implementation_revision)
+        if execution_key not in verified_network_executions:
+            raw = StoragePath(execution.uri).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != execution.sha256:
+                raise ValueError("Native network execution provenance bytes changed")
+            if json.loads(raw)["source_revision"] != proof.inputs.implementation_revision:
+                raise ValueError("Native reconstruction implementation differs from its recorded execution")
+            verified_network_executions.add(execution_key)
+        authority = proof.authority
+        if (authority.uri, authority.sha256) not in verified_network_authorities:
+            if file_sha256(StoragePath(authority.uri)) != authority.sha256:
+                raise ValueError("Native network reconstruction authority bytes changed")
+            verified_network_authorities.add((authority.uri, authority.sha256))
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
@@ -792,8 +817,11 @@ def filter_cohort(
                     reason = None
                 else:
                     reason = oracle_failure_reason(final, incompatibility, source_error)
-                if reason is None and not trial_network_qualified(task, row_runtime(row), final):
-                    reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
+                reconstruction = (native_network_reconstructions or {}).get(task.id)
+                if reconstruction is not None or reason is None:
+                    network_qualified = trial_network_qualified(task, row_runtime(row), final, reconstruction)
+                    if reason is None and not network_qualified:
+                        reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
                 if (
                     not oracle
                     and reason in {None, OracleExclusionReason.ORACLE_FAILED}
@@ -839,12 +867,15 @@ def filter_cohort(
                     source_environment_incompatibility=incompatibility,
                     source_verifier_error=source_error,
                     infrastructure_retries=history,
+                    network_policy_reconstructed_native=reconstruction,
                 )
                 entries[task.id] = entry
                 if entry.passed:
                     kept.append(row)
                 else:
                     excluded.append(original_row)
+    if set(native_network_reconstructions or {}) - entries.keys():
+        raise ValueError("Native network reconstructions contain tasks outside the frozen cohort")
     extra = set(mappings) - set(entries)
     if extra:
         raise ValueError(f"Task map contains unknown TaskSpecs: {sorted(extra)[:5]}")
