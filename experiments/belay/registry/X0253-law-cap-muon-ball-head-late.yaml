@@ -97,3 +97,18 @@ trials:
   steps: 20023
   baseline: s7n-d1280L16 2.2706 (same commit, seed 0)
   step_time_change: +4%
+projection:
+  delta: -0.0058
+  multiplier: 1.138
+  alpha: 0.08699
+  recipe_alpha: 0.08657
+  hero_flops: 9.234e+23
+  extrapolation: 4023
+  protocol: equal_steps
+  trials:
+  - t001
+  - t002
+  - t003
+  - t004
+  basis: Belay Ckpt Oct 20 2026 (s7n) fit of 2026-11-01, on s7n-d512, s7n-d768, s7n-d1024 and s7n-d1280L16
+  date: '2026-11-22'
