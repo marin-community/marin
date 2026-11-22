@@ -565,6 +565,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "8f532da2",
             "2026.11.20.3": "dc52613e",
             "2026.11.22.1": "31d3c06f",
+            "2026.11.22.2": "dce24258",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -572,6 +573,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "cb07d91c",
             "2026.11.20.1": "a379319d",
             "2026.11.20.3": "d4749482",
+            "2026.11.22.2": "43b4c17c",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -580,6 +582,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "8b7e47c8",
             "2026.11.20.3": "dbc38bdf",
             "2026.11.22.1": "eded19d9",
+            "2026.11.22.2": "3d5693c0",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -589,6 +592,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
+            "2026.11.22.2": "cf281241",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -598,6 +602,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
+            "2026.11.22.2": "cf281241",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -605,6 +610,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "9edc7b70",
             "2026.11.20.1": "3d1fe22d",
             "2026.11.20.3": "87feb546",
+            "2026.11.22.2": "0d2cff7d",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -614,24 +620,28 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.2": "412d0576",
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
+            "2026.11.22.2": "8f00501f",
         },
         "train-long-harbor": {
             "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
             "2026.11.20.7": "9ceb90cb",
+            "2026.11.22.2": "965dcf45",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
+            "2026.11.22.2": "09cc792c",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
-        "train-medium-tools": {"2026.11.20.1": "45b0a101"},
+        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f", "2026.11.22.2": "f793a47f"},
+        "train-medium-tools": {"2026.11.20.1": "45b0a101", "2026.11.22.2": "5b4d7a2e"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
+            "2026.11.22.2": "655b38d2",
         },
     }
     configs = assert_revisioned_native_configs(
@@ -718,6 +728,19 @@ def test_speed_short_can_disable_speculation_without_changing_the_workload(selec
     assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
     assert default["skyrl"]["generator"] == plain["skyrl"]["generator"]
     assert default["inputs"] == plain["inputs"]
+
+
+def test_snowball_draft_is_bound_to_the_pinned_initializer(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["eval-short"]
+    initializer = ArtifactHfModel(
+        ArtifactStep.adopt("tests/alternate-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint),
+        relative_path="",
+    )
+    [alternate] = snowball.build_experiment(preset, table=table, init=initializer).runs
+    config = yaml.safe_load(materialized_config(alternate, str(tmp_path)).launch_config_yaml)
+
+    assert config["skyrl"]["generator"].get("speculative_decoding") is None
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):

@@ -66,17 +66,13 @@ EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
-_DSPARK_PATCH = RecipePatch(
-    generator=sections.Generator(
-        speculative_decoding=sections.SpeculativeDecoding(
-            method="dspark",
-            model=sections.SpeculatorModel(
-                source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft_datakit-sft-mix_itw-20261016",
-                source_identity="1afb722f20de52941daaad3ed60c56d1c73e168a",
-            ),
-            num_speculative_tokens=8,
-        )
-    )
+_DSPARK = sections.SpeculativeDecoding(
+    method="dspark",
+    model=sections.SpeculatorModel(
+        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
+    ),
+    num_speculative_tokens=8,
 )
 
 _DEFAULT_MODEL = ArtifactHfModel(
@@ -251,9 +247,10 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.3",
+    revision="2026.11.22.2",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
+    default_speculative_decoding=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -263,7 +260,6 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
-    revision="2026.11.20.4",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     checkpoints="best",
     export="best",
@@ -288,7 +284,6 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.20.4",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
@@ -351,7 +346,6 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
-        revision="2026.11.20.5",
         recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
@@ -383,7 +377,6 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
-        revision="2026.11.20.1",
         recipe=replace(
             _TRAIN_LONG.recipe,
             config=_TRAIN_LONG.recipe.config.merge(
@@ -415,9 +408,8 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
-        revision="2026.11.22.1",
         checkpoints="none",
-        recipe=replace(_GENERATING, fixed_reply_tokens=4096, config=_GENERATING.config.merge(_DSPARK_PATCH)),
+        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
         updates=0,
         measured=range(1),
         control_preset="speed-short",
@@ -446,12 +438,11 @@ _PRESETS = (
     _snowball(
         evaluations=(),
         name="speed-medium",
-        revision="2026.11.22.1",
         checkpoints="none",
         recipe=replace(
             _ASYNC_P40,
             fixed_reply_tokens=4096,
-            config=_ASYNC_P40.config.merge(_DSPARK_PATCH).merge(
+            config=_ASYNC_P40.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
                 )
@@ -497,7 +488,6 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.7",
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),

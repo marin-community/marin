@@ -29,7 +29,7 @@ from marin.execution.artifact import (
     validate_path_segment,
 )
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -476,6 +476,15 @@ def run_spec(
     model_name: str | None = None,
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
+    model = (resume.model if resume is not None else None) or init or preset.model
+    if preset.default_speculative_decoding is not None and (
+        model == preset.model
+        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
+    ):
+        config = preset.recipe.config.merge(
+            RecipePatch(generator=sections.Generator(speculative_decoding=preset.default_speculative_decoding))
+        )
+        preset = replace(preset, recipe=replace(preset.recipe, config=config))
     config = _training_config(preset, settings)
     explicit = override_document(settings)
     authored = config.to_skyrl()
@@ -518,7 +527,6 @@ def run_spec(
             RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
         )
     preset = preset.with_updates(config.trainer.max_steps)
-    model = (resume.model if resume is not None else None) or init or preset.model
     initial_model_uri = None
     if preset.checkpoints == "best":
         prefix = run_prefix(preset)

@@ -424,7 +424,7 @@ generator:
 
   engine_init_kwargs: {}
 
-  # Managed EAGLE serving and optional online draft training. vLLM resolves immutable
+  # Managed speculative decoding with optional online training for EAGLE3. vLLM resolves immutable
   # Hugging Face revisions or streams object-store checkpoints through Run:ai.
   speculative_decoding: null
 
