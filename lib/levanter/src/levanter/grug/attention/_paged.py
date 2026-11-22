@@ -173,7 +173,11 @@ def ragged_paged_attention_append(
     sm_scale: float,
     sliding_window: int | None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Append BF16 keys and values during RPA v3 attention on a bounded batch."""
+    """Append BF16 keys and values during RPA v3 attention on a bounded batch.
+
+    Sequences may share read-only prefix pages. Each sequence must append to
+    a private page.
+    """
     if jax.default_backend() != "tpu" or pltpu.get_tpu_info().chip_version not in _RPA_V3_VMEM_LIMIT_BYTES:
         raise ValueError("Fused paged KV append requires TPU v5p or v6e")
     if q.shape[0] > FUSED_KV_PREFILL_MAX_TOKENS:
@@ -224,15 +228,13 @@ def _tpu_v3(
     chip = pltpu.get_tpu_info().chip_version
     decode_block = (512 if sliding_window is not None else 1024) if append else 2048
     decode_compute_block = 512
-    # This tile was tuned for one Snowball KV head per v6e chip.
-    if (
-        chip == pltpu.ChipVersion.TPU_V6E
-        and append
-        and sliding_window is None
-        and q.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS
-        and q.shape[1:3] == (1, 4)
-    ):
-        decode_block, decode_compute_block = 4096, 2048
+    decode_cores = 1
+    if append and sliding_window is None and q.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS and q.shape[2] == 4:
+        if chip == pltpu.ChipVersion.TPU_V6E and q.shape[1] == 1:
+            decode_block, decode_compute_block = 4096, 2048
+        elif chip == pltpu.ChipVersion.TPU_V5P and q.shape[1] == 2:
+            decode_cores = 2
+            decode_block, decode_compute_block = 4096, 2048
     output, updated = tpu_ragged_paged_attention_v3(
         q.reshape(q.shape[0], -1, q.shape[-1]),
         dummy_kv if k is None else k,
@@ -247,6 +249,7 @@ def _tpu_v3(
         soft_cap=soft_cap,
         sliding_window=sliding_window,
         out_dtype=jnp.float32,
+        decode_cores=decode_cores,
         d_block_sizes=(1, decode_block, 1, decode_compute_block),
         m_block_sizes=(min(q.shape[0], 128), 1024, min(q.shape[0], 64), 512),
         vmem_limit_bytes=_RPA_V3_VMEM_LIMIT_BYTES[chip],

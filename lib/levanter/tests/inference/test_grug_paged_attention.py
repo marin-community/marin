@@ -249,6 +249,7 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
         (2048, (2048,), 5),
         (4096, (3207,), 5),
         pytest.param(16, (1, 1, 1), 1, id="single-kv-head"),
+        pytest.param(16, (1, 1, 1), 2, id="two-kv-heads"),
     ],
 )
 def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, queries, heads):
@@ -257,11 +258,13 @@ def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, quer
     k = jnp.asarray(rng.normal(size=(width, heads, 128)), jnp.bfloat16)
     v = jnp.asarray(rng.normal(size=(width, heads, 128)), jnp.bfloat16)
     page_size = 128
-    pages_per_seq, first_length = (64, 6208) if heads == 1 else (32, 2208)
+    pages_per_seq, first_length = (64, 6208) if heads <= 2 else (32, 2208)
     active = len(queries)
     num_pages = active * pages_per_seq
     pages = jnp.asarray(rng.normal(size=(num_pages, page_size, 2 * heads, 128)), jnp.bfloat16)
     indices = jnp.asarray(rng.permutation(num_pages).reshape(active, pages_per_seq), jnp.int32)
+    if heads == 2:
+        indices = indices.at[1:, :4].set(indices[0, :4])
     lengths = jnp.maximum(first_length + 31 * jnp.arange(active, dtype=jnp.int32), jnp.asarray(queries) + 127)
     offsets = jnp.asarray(np.cumsum((0, *queries)), jnp.int32)
     num_seqs = jnp.array(active, jnp.int32)

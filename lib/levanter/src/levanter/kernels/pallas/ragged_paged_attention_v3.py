@@ -155,14 +155,23 @@ def get_kv_cache_shape(
     )
 
 
-def _ragged_paged_attention_kernel(*args, **kwargs):
+def _ragged_paged_attention_kernel(*args, core_count, **kwargs):
     distribution_ref = args[3]
     start_seq_idx, end_seq_idx = kwargs["case"].get_range(distribution_ref)
+    if core_count > 1:
+        # Each TensorCore pipelines a disjoint range of sequences.
+        core = pl.program_id(0)
+        sequence_count = end_seq_idx - start_seq_idx
+        first = start_seq_idx + cdiv(sequence_count * core, core_count)
+        end_seq_idx = start_seq_idx + cdiv(sequence_count * (core + 1), core_count)
+        start_seq_idx = first
 
     @pl.loop(start_seq_idx, end_seq_idx)
     def _(seq_idx):
         return _ragged_paged_attention_kernel_loop(
             seq_idx,
+            start_seq_idx,
+            end_seq_idx,
             *args,
             **kwargs,
         )
@@ -170,12 +179,14 @@ def _ragged_paged_attention_kernel(*args, **kwargs):
 
 def _ragged_paged_attention_kernel_loop(
     seq_idx,
+    start_seq_idx,
+    end_seq_idx,
     # Prefetch
     kv_lens_ref,  # [max_num_seqs]
     page_indices_ref,  # [max_num_seqs * pages_per_seq]
     cu_q_lens_ref,  # [max_num_seqs + 1]
     # TODO(jevinjiang): merge these into one so we can save SMEM.
-    distribution_ref,  # [3] (decode_end, prefill_end, mixed_end)
+    _distribution_ref,  # [3] (decode_end, prefill_end, mixed_end)
     sem_ids_ref,  # [3] (bq_sem_idx, bkv_sem_idx, bo_sem_idx)
     bo_ids_ref,  # [4] (bo_sem_0_seq_idx, bo_sem_1_seq_idx, bo_sem_0_bo_idx, bo_sem_1_bo_idx)
     bkv_update_ids_ref,  # [6] (bkv_sem_0_seq_idx, bkv_sem_1_seq_idx, bkv_sem_0_offset, bkv_sem_1_offset, bkv_sem_0_sz, bkv_sem_1_sz)
@@ -254,7 +265,6 @@ def _ragged_paged_attention_kernel_loop(
     assert head_dim % 128 == 0
     assert bkv_sz % page_size == 0
     bkv_p = bkv_sz // page_size
-    start_seq_idx, end_seq_idx = case.get_range(distribution_ref)
     num_seqs = end_seq_idx - start_seq_idx
 
     q_start = cu_q_lens_ref[seq_idx]
@@ -1404,6 +1414,7 @@ def get_default_block_sizes(
         "k_scale",
         "v_scale",
         "chunk_prefill_size",
+        "decode_cores",
         "d_block_sizes",
         "p_block_sizes",
         "m_block_sizes",
@@ -1443,6 +1454,7 @@ def ragged_paged_attention(
     # - bkv_sz: the block size for the kv fetching.
     # - bq_csz: the compute size of the block query.
     # - bkv_csz: the compute size of the block kv.
+    decode_cores: int = 1,
     d_block_sizes: tuple[int, int, int, int] | None = None,
     p_block_sizes: tuple[int, int, int, int] | None = None,
     m_block_sizes: tuple[int, int, int, int] | None = None,
@@ -1480,6 +1492,8 @@ def ragged_paged_attention(
       k_scale: the scale for the key.
       v_scale: the scale for the value.
       chunk_prefill_size: the chunk prefill size for the attention.
+      decode_cores: number of TensorCores processing independent decode ranges.
+        Each sequence must have a private append page when updating KV.
       d_block_sizes: the block sizes for the decode case.
       p_block_sizes: the block sizes for the prefill case.
       m_block_sizes: the block sizes for the mixed case.
@@ -1572,6 +1586,7 @@ def ragged_paged_attention(
         static_q_len=None,
         case: RpaCase = RpaCase.MIXED,
     ):
+        core_count = decode_cores if case == RpaCase.DECODE else 1
         in_specs = [
             pl.BlockSpec(memory_space=pltpu.HBM),
             pl.BlockSpec(memory_space=pltpu.HBM),
@@ -1639,6 +1654,7 @@ def ragged_paged_attention(
         kernel = pl.pallas_call(
             functools.partial(
                 _ragged_paged_attention_kernel,
+                core_count=core_count,
                 use_causal_mask=use_causal_mask,
                 update_kv_cache=update_kv_cache,
                 skip_kv_mask=skip_kv_mask,
@@ -1661,13 +1677,11 @@ def ragged_paged_attention(
                 num_scalar_prefetch=len(scalar_prefetches),
                 in_specs=in_specs,
                 out_specs=out_specs,
-                grid=(1,),
+                grid=(core_count,),
                 scratch_shapes=scratch_shapes,
             ),
             compiler_params=pltpu.CompilerParams(
-                # TODO(jevinjiang): since each sequence depends on the previous
-                # one, we need some extra work to support Megacore mode.
-                dimension_semantics=("arbitrary",),
+                dimension_semantics=("parallel" if core_count > 1 else "arbitrary",),
                 vmem_limit_bytes=vmem_limit_bytes,
                 # Paged attention invokes multiple small DMAs for each pages
                 # instead of a single large DMA. Therefore, the overhead of bounds
