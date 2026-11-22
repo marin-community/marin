@@ -253,8 +253,17 @@ entering it; the other three time out. This proves the cache-dependent barrier
 is unsafe, but does not establish why rank 3 missed the hardware run's barrier.
 A follow-up keeps the existing timeouts and kernels and adds opt-in phase,
 coordination, and main-thread stack receipts for checkpoint-validation smokes.
-The next repair must check cross-rank agreement at a deterministic host command
-boundary and keep the fixed XLA computation independent of trace-cache state.
+The repair checks cross-rank agreement at every deterministic host command
+boundary, including cache hits, and passes an immutable projection plan through
+the traced loss. That path checks exact geometry, dtypes, and options without a
+Python collective. A four-process test now completes the same cache-divergent
+case, with bit-exact FP32/BF16 XLA losses and gradients (maximum deviation zero).
+Plan, profile, and mode mismatches fail on all hosts before tracing. Production
+data4/expert8 geometry with a 512-row batch and 32-row execution microbatches also
+passes locally, as do native checkpoint/restart and default FP32 compatibility
+checks. Generic unprepared callers retain their prior behavior; this repair
+does not qualify their multihost tracing or optimized GPU kernels. The repaired
+native path still requires a new H100 acceptance run.
 
 Native initialization
 budget is 3,600 seconds, matching SkyRL's existing outer model-setup budget;

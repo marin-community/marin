@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass
 from functools import lru_cache, partial
 import hashlib
 import json
@@ -251,6 +252,151 @@ def _autotune_process_ids(*values: jax.Array) -> tuple[int, ...]:
 
 
 _AUTOTUNE_DIAGNOSTIC_SEQUENCE = itertools.count()
+
+
+@dataclass(frozen=True)
+class FixedCESignature:
+    x_shape: tuple[int, int]
+    labels_shape: tuple[int]
+    w_shape: tuple[int, int]
+    x_dtype: str
+    labels_dtype: str
+    w_dtype: str
+
+
+@dataclass(frozen=True)
+class FixedCEPlan:
+    """Exact fixed-XLA calls approved outside tracing by every participating host."""
+
+    signatures: tuple[FixedCESignature, ...]
+    block_size: int
+    dtype: str = "float32"
+    logits_dtype: str | None = None
+    implementation: str = "xla"
+    precision: str = "None"
+    logit_soft_cap: float | None = None
+    return_argmax: bool = False
+    reduction: str | None = None
+    logsumexp_weight: float = 0.0
+    execution_profile_sha256: str = ""
+
+
+def _validate_fixed_ce_definition(plan: FixedCEPlan | None) -> None:
+    if plan is None or not plan.signatures or plan.block_size <= 0:
+        raise ValueError("A fixed CE plan requires exact signatures and a positive block size")
+    if (
+        plan.implementation,
+        plan.dtype,
+        plan.precision,
+        plan.logit_soft_cap,
+        plan.return_argmax,
+        plan.reduction,
+        plan.logsumexp_weight,
+    ) != ("xla", "float32", "None", None, False, None, 0.0) or plan.logits_dtype not in (
+        None,
+        "float32",
+        "bfloat16",
+    ):
+        raise ValueError("Only fixed XLA tokenwise FP32-softmax projection is prepared")
+    for signature in plan.signatures:
+        b, h = signature.x_shape
+        if b <= 0 or h <= 0 or signature.labels_shape != (b,) or signature.w_shape[0] != h:
+            raise ValueError("Invalid fixed CE projection geometry")
+        if signature.w_shape[1] <= 0 or signature.labels_dtype != "int32":
+            raise ValueError("Invalid fixed CE labels or vocabulary")
+        if signature.x_dtype not in ("float32", "bfloat16") or signature.w_dtype != signature.x_dtype:
+            raise ValueError("Fixed CE operands must have matching FP32 or BF16 dtypes")
+
+
+def prepare_fixed_ce_plan(
+    plan: FixedCEPlan | None,
+    *,
+    execution_profile: dict,
+    command: dict,
+    process_ids: tuple[int, ...],
+    timeout_seconds: float = 200.0,
+    local_error: str | None = None,
+) -> FixedCEPlan:
+    """Agree on a fixed execution profile and command, including on JIT-cache hits.
+
+    Local validation failures join the rendezvous as errors so peers fail before
+    entering JIT. Command step/version/content hashes are deliberately not static
+    plan fields. Unprepared callers retain the legacy selection path.
+    """
+    try:
+        if local_error is not None:
+            raise ValueError(local_error)
+        _validate_fixed_ce_definition(plan)
+        assert plan is not None
+        profile_json = json.dumps(execution_profile, sort_keys=True)
+        profile_hash = hashlib.sha256(profile_json.encode()).hexdigest()
+        if plan.execution_profile_sha256 != profile_hash:
+            raise ValueError("Fixed CE plan does not describe its execution profile")
+        envelope = {"ok": True, "plan": asdict(plan), "profile": execution_profile, "command": command}
+        json.dumps(envelope)
+    except Exception as error:
+        envelope = {"ok": False, "error": f"{type(error).__name__}: {error}"}
+    if process_ids == tuple(range(jax.process_count())):
+        peers = multihost_allgather_sync(envelope, timeout=timeout_seconds)
+    else:
+        peers = multihost_allgather_sync(envelope, timeout=timeout_seconds, process_ids=process_ids)
+    errors = [(rank, peer.get("error")) for rank, peer in zip(process_ids, peers) if not peer.get("ok")]
+    if errors:
+        raise ValueError(f"Fixed CE command rejected before tracing: {errors}")
+    if any(peer != peers[0] for peer in peers[1:]):
+        raise ValueError("Fixed CE execution profile, plan or command differs across JAX processes")
+    assert plan is not None
+    return plan
+
+
+def _validate_fixed_ce_call(
+    plan: FixedCEPlan,
+    x,
+    labels,
+    w,
+    *,
+    block_size,
+    block_sizes,
+    dtype,
+    logits_dtype,
+    implementation,
+    reduction,
+    weight,
+    logsumexp_weight,
+    logit_soft_cap,
+    precision,
+    return_argmax,
+):
+    _validate_fixed_ce_definition(plan)
+    signature = FixedCESignature(
+        tuple(x.shape), tuple(labels.shape), tuple(w.shape), str(x.dtype), str(labels.dtype), str(w.dtype)
+    )
+    if signature not in plan.signatures:
+        raise ValueError(f"Fixed CE received an unapproved projection signature: {signature}")
+    actual = (
+        implementation,
+        block_size,
+        None if dtype is None else str(jnp.dtype(dtype)),
+        None if logits_dtype is None else str(jnp.dtype(logits_dtype)),
+        str(precision),
+        logit_soft_cap,
+        return_argmax,
+        reduction,
+        logsumexp_weight,
+    )
+    expected = (
+        plan.implementation,
+        plan.block_size,
+        plan.dtype,
+        plan.logits_dtype,
+        plan.precision,
+        plan.logit_soft_cap,
+        plan.return_argmax,
+        plan.reduction,
+        plan.logsumexp_weight,
+    )
+    if actual != expected or block_sizes is not None or weight is not None:
+        raise ValueError("Fixed CE projection options differ from the approved plan")
 
 
 def _autotune_allgather(value, process_ids: tuple[int, ...]):
@@ -773,6 +919,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
     return_argmax: Literal[False] = False,
+    fixed_plan: FixedCEPlan | None = None,
 ) -> jax.Array: ...
 
 
@@ -793,6 +940,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
     return_argmax: Literal[True] = True,
+    fixed_plan: FixedCEPlan | None = None,
 ) -> tuple[jax.Array, jax.Array]: ...
 
 
@@ -812,6 +960,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
     return_argmax: bool = False,
+    fixed_plan: FixedCEPlan | None = None,
 ) -> jax.Array | tuple[jax.Array, jax.Array]:
     """Fused cross-entropy + logsumexp penalty on raw arrays.
 
@@ -837,6 +986,24 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         If return_argmax=True: tuple of (loss, argmax_ids[B]).
     """
     _validate_inputs(x, labels, w)
+    if fixed_plan is not None:
+        _validate_fixed_ce_call(
+            fixed_plan,
+            x,
+            labels,
+            w,
+            block_size=block_size,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logits_dtype=logits_dtype,
+            implementation=implementation,
+            reduction=reduction,
+            weight=weight,
+            logsumexp_weight=logsumexp_weight,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=return_argmax,
+        )
     if logits_dtype is not None:
         if implementation is None:
             implementation = "xla"
@@ -874,7 +1041,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         inferred, has_tuned_match = None, False
 
     process_ids = _autotune_process_ids(x, labels, w)
-    if len(process_ids) > 1:
+    if fixed_plan is None and len(process_ids) > 1:
         # The sweep's rendezvous cannot help if one rank takes a tuned-table hit,
         # disables tuning, or chooses a different implementation before entering it.
         plan = {
@@ -1036,6 +1203,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
 
 __all__ = [
+    "FixedCEPlan",
+    "FixedCESignature",
+    "prepare_fixed_ce_plan",
     "BlockSizes",
     "Implementation",
     "IMPLEMENTATIONS",

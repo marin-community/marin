@@ -3,10 +3,18 @@
 
 import re
 import json
+import hashlib
+import os
+import socket
+import subprocess
+import sys
 import threading
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import jax
@@ -1668,6 +1676,113 @@ def test_pallas_tpu_non_vmem_runtime_error_still_raises(
         )
 
     assert called["xla"] == 0
+
+
+def _fixed_projection_plan(x, labels, w, *, logits_dtype=None, block_size=8):
+    profile = {"test_projection": "fixed-xla"}
+    plan = fused_api.FixedCEPlan(
+        (fused_api.FixedCESignature(x.shape, labels.shape, w.shape, str(x.dtype), str(labels.dtype), str(w.dtype)),),
+        block_size,
+        logits_dtype=None if logits_dtype is None else str(jnp.dtype(logits_dtype)),
+        execution_profile_sha256=hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest(),
+    )
+    return fused_api.prepare_fixed_ce_plan(plan, execution_profile=profile, command={"step": 1}, process_ids=(0,))
+
+
+@pytest.mark.parametrize("operand_dtype,logits_dtype", [(jnp.float32, None), (jnp.bfloat16, jnp.bfloat16)])
+def test_prepared_fixed_xla_preserves_values_and_gradients(operand_dtype, logits_dtype):
+    x = (jnp.arange(32).reshape(4, 8) / 32).astype(operand_dtype)
+    w = (jnp.arange(128).reshape(8, 16) / 128).astype(operand_dtype)
+    labels = jnp.arange(4, dtype=jnp.int32)
+    plan = _fixed_projection_plan(x, labels, w, logits_dtype=logits_dtype)
+
+    def loss(x, w, fixed_plan):
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            labels,
+            w,
+            reduction=None,
+            implementation="xla",
+            block_size=8,
+            logits_dtype=logits_dtype,
+            fixed_plan=fixed_plan,
+        ).sum()
+
+    expected = jax.value_and_grad(loss, (0, 1))(x, w, None)
+    actual = jax.jit(jax.value_and_grad(lambda x, w: loss(x, w, plan), (0, 1)))(x, w)
+    for wanted, got in zip(jax.tree.leaves(expected), jax.tree.leaves(actual), strict=True):
+        np.testing.assert_allclose(
+            np.asarray(got, dtype=np.float32), np.asarray(wanted, dtype=np.float32), rtol=1e-5, atol=1e-5
+        )
+
+
+@pytest.mark.parametrize("mutation", ["shape", "dtype", "block_size", "implementation"])
+def test_prepared_fixed_xla_rejects_unapproved_call(mutation):
+    x, w, labels = jnp.ones((4, 8)), jnp.ones((8, 16)), jnp.arange(4, dtype=jnp.int32)
+    plan = _fixed_projection_plan(x, labels, w)
+    kwargs = {"reduction": None, "implementation": "xla", "block_size": 8, "fixed_plan": plan}
+    if mutation == "shape":
+        x, labels = x[:2], labels[:2]
+    elif mutation == "dtype":
+        x = x.astype(jnp.bfloat16)
+    elif mutation == "block_size":
+        kwargs["block_size"] = 16
+    else:
+        kwargs["implementation"] = "reference"
+    with pytest.raises(ValueError, match="Fixed CE"):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(x, labels, w, **kwargs)
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(90)
+def test_fixed_ce_cached_rank_and_peer_profile_error_complete_on_all_processes(tmp_path):
+    if jax.default_backend() != "cpu":
+        pytest.skip("The process-coordination regression runs on local CPU devices")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        address = f"127.0.0.1:{listener.getsockname()[1]}"
+    environment = {
+        **os.environ,
+        "JAX_PLATFORMS": "cpu",
+        "JAX_NUM_CPU_DEVICES": "1",
+        "XLA_FLAGS": "--xla_force_host_platform_device_count=1",
+        "OMP_NUM_THREADS": "1",
+    }
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        environment.pop(name, None)
+    children = []
+    with ExitStack() as logs:
+        try:
+            for rank in range(4):
+                output = logs.enter_context((tmp_path / f"rank{rank}.log").open("w"))
+                children.append(
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(Path(__file__).with_name("fixed_ce_process.py")),
+                            str(rank),
+                            address,
+                            str(tmp_path),
+                        ],
+                        env=environment,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                    )
+                )
+            deadline = time.monotonic() + 60
+            for rank, child in enumerate(children):
+                assert child.wait(timeout=max(1, deadline - time.monotonic())) == 0, (
+                    tmp_path / f"rank{rank}.log"
+                ).read_text()
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=10)
+    results = [json.loads((tmp_path / f"rank{rank}.json").read_text()) for rank in range(4)]
+    assert {result["rank"] for result in results} == set(range(4))
+    assert all(result["cached_execution_exact"] and result["peer_profile_error_rejected"] for result in results)
+    assert len({result["loss"] for result in results}) == 1
 
 
 @pytest.mark.parametrize("enabled", [False, True])

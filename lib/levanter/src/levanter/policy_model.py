@@ -11,6 +11,7 @@ import numpy as np
 from haliax import NamedArray
 
 from levanter.data.packing import pack_documents
+from levanter.kernels.pallas.fused_cross_entropy_loss.api import FixedCEPlan
 from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.layers.attention import AttentionMask
 from levanter.metrics import Metric
@@ -139,6 +140,7 @@ def response_logprobs(
     key: jax.Array | None = None,
     block_size: int = 1024,
     logits_dtype: jnp.dtype | None = None,
+    projection_plan: FixedCEPlan | None = None,
 ) -> NamedArray:
     """Score raw-policy response tokens without materializing full-vocab logits.
 
@@ -187,6 +189,8 @@ def response_logprobs(
         block_size=block_size,
         dtype=jnp.float32,
         logits_dtype=logits_dtype,
+        implementation="xla" if projection_plan is not None else None,
+        fixed_plan=projection_plan,
     )
     return -loss.rearrange(("batch", "response"))
 
@@ -200,9 +204,12 @@ def policy_model_loss(
     accumulation_steps: int,
     block_size: int,
     logits_dtype: jnp.dtype | None = None,
+    projection_plan: FixedCEPlan | None = None,
 ) -> tuple[jax.Array, dict[str, Metric]]:
     """Return policy loss and metrics for a complete model batch."""
-    current = response_logprobs(model, batch, key=key, block_size=block_size, logits_dtype=logits_dtype)
+    current = response_logprobs(
+        model, batch, key=key, block_size=block_size, logits_dtype=logits_dtype, projection_plan=projection_plan
+    )
     return clipped_policy_loss(
         current,
         batch.old_logprobs,

@@ -24,6 +24,7 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import jaxlib
 import jmp
 import numpy as np
 import optax
@@ -32,6 +33,7 @@ from jax.sharding import NamedSharding, PartitionSpec
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.distributed import DistributedConfig
+from levanter.kernels.pallas.fused_cross_entropy_loss.api import FixedCEPlan, FixedCESignature, prepare_fixed_ce_plan
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import SpmdPolicyLearner
@@ -39,6 +41,7 @@ from levanter.policy_model import PolicyBatch, policy_model_loss
 from levanter.tensorstore_serialization import _transfer_shard_to_pageable_host
 from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.utils.jax_utils import multihost_allgather_sync
 from levanter.utils.mesh import MeshConfig
 
 from marin.rl.levanter_publication import SnowballPublication
@@ -272,7 +275,7 @@ class NativePolicyRuntime:
         self.settings: dict = {}
         self.trainer = None
         self.state = None
-        self.learner = None
+        self.learner: SpmdPolicyLearner | None = None
         self.publisher = None
         self.version = 0
         self.source_identity = None
@@ -423,15 +426,239 @@ class NativePolicyRuntime:
             timer.cancel()
             _diagnostic_receipt("request_end", method=method, request_id=request_id)
 
+    def _projection_profile(self, payload: dict) -> tuple[dict, FixedCEPlan]:
+        """Describe the closed Snowball/BF16/XLA execution, without tracing attention or CE."""
+        runtime = self.settings["runtime"]
+        if "LEVANTER_CE_XLA_FAST_BWD" in os.environ:
+            raise ValueError("Native prepared projection requires LEVANTER_CE_XLA_FAST_BWD to be unset")
+        if type(self.state.model) is not SnowballLMHeadModel or _projection_dtype(runtime) != jnp.bfloat16:
+            raise ValueError("Native prepared projection requires Snowball with explicit BF16 logits")
+        if self.state.model.config.fp32_activations or self.state.model.config.attention_implementation not in (
+            "reference",
+            "gpu_fa4_cute",
+        ):
+            raise ValueError("Native prepared projection requires the covered Snowball activation/attention profile")
+        overrides = {name: str(dtype) for name, dtype in self.trainer.config.field_dtype_overrides.items()}
+        if overrides != {"router": "float32", "router_bias": "float32"}:
+            raise ValueError("Native prepared projection requires the matched router-only FP32 overrides")
+        mesh = self.trainer.device_mesh
+        if any(mesh.shape[name] != 1 for name in ("context", "replica", "model")):
+            raise ValueError("Native prepared projection requires context=replica=model=1")
+        mapping = self.trainer.compute_axis_mapping
+        canonical_mapping = MeshConfig(
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"}, param_mapping={}
+        )
+        if (
+            mapping != canonical_mapping.resolved_compute_mapping
+            or self.trainer.parameter_axis_mapping != canonical_mapping.resolved_param_mapping
+            or self.trainer.hooks.jit_hooks
+        ):
+            raise ValueError("Native prepared projection requires the fixed learner mappings without JIT hooks")
+        arrays = payload["arrays"]
+        batch_size, sequence_length = arrays["tokens"].shape
+        response_length = payload["response_length"]
+        microbatch = self.trainer.config.microbatch_size
+        if (
+            batch_size != self.settings["mini_batch_size"]
+            or microbatch is None
+            or batch_size % microbatch
+            or not 0 < response_length < sequence_length
+        ):
+            raise ValueError("Native prepared projection requires a complete divisible optimizer batch")
+        for name in ("tokens", "attention_mask", "position_ids", "response_mask"):
+            if arrays.get(name) is None:
+                raise ValueError(f"Missing native policy array {name}")
+        input_dtypes = {
+            "tokens": "int32",
+            "attention_mask": "bool",
+            "position_ids": "int32",
+            "response_mask": "bool",
+            **{
+                name: "float32"
+                for name in (
+                    "advantages",
+                    "old_logprobs",
+                    "policy_weights",
+                    "kl_weights",
+                    "reference_logprobs",
+                    "loss_mask",
+                )
+            },
+        }
+        for name, array in arrays.items():
+            if name not in input_dtypes or (array is not None and str(array.dtype) != input_dtypes[name]):
+                raise ValueError(f"Unsupported native policy array or dtype: {name}")
+            if array is not None:
+                expected = (
+                    batch_size,
+                    sequence_length if name in ("tokens", "attention_mask", "position_ids") else response_length,
+                )
+                if array.shape != expected:
+                    raise ValueError(f"Native policy array {name} does not have shape {expected}")
+        if arrays.get("reference_logprobs") is not None or arrays.get("segment_ids") is not None:
+            raise ValueError("Native prepared projection currently supports the unpacked KL-off recipe")
+        compute = eqx.filter_eval_shape(self.trainer.mp.cast_to_compute, self.state.model)
+        for path, value in jax.tree_util.tree_flatten_with_path(compute)[0]:
+            if isinstance(value, jax.ShapeDtypeStruct) and jnp.issubdtype(value.dtype, jnp.floating):
+                expected_dtype = overrides.get(getattr(path[-1], "name", None), "bfloat16")
+                if str(value.dtype) != expected_dtype:
+                    raise ValueError(f"Unsupported native compute dtype at {jax.tree_util.keystr(path)}")
+        head = eqx.filter_eval_shape(lambda model: model.get_lm_head(), compute)
+        embedding_dtype = compute.transformer.token_embed.dtype
+        normalized = eqx.filter_eval_shape(
+            lambda norm, gate, x: gate(norm(x)),
+            compute.transformer.final_norm,
+            compute.transformer.final_gated_norm,
+            jax.ShapeDtypeStruct(
+                (compute.Embed.size,), embedding_dtype, sharding=NamedSharding(mesh, PartitionSpec(None))
+            ),
+        )
+        if embedding_dtype != jnp.bfloat16 or head.array.dtype != jnp.bfloat16 or normalized.dtype != jnp.bfloat16:
+            raise ValueError("Native prepared projection requires a proven BF16 Snowball compute view")
+        loss_mapping = {name: mapping[name] for name in ("batch", "response") if name in mapping}
+
+        def partition_factor(name):
+            axes = loss_mapping.get(name, ())
+            axes = (axes,) if isinstance(axes, str) else axes
+            return math.prod(mesh.shape[axis] for axis in axes)
+
+        batch_factor, response_factor = partition_factor("batch"), partition_factor("response")
+        if batch_size % batch_factor or microbatch % batch_factor or response_length % response_factor:
+            raise ValueError("Fixed CE batch axes must divide their actual loss mesh partitions")
+        h, v = head.resolve_axis(self.state.model.Embed).size, head.resolve_axis(self.state.model.Vocab).size
+        rows = tuple(
+            sorted({size // batch_factor * (response_length // response_factor) for size in (batch_size, microbatch)})
+        )
+        signatures = tuple(FixedCESignature((row, h), (row,), (h, v), "bfloat16", "int32", "bfloat16") for row in rows)
+        profile = {
+            "model_config": dataclasses.asdict(self.state.model.config),
+            "source": self.source_identity,
+            "versions": {"jax": jax.__version__, "jaxlib": jaxlib.__version__, "python": sys.version},
+            "jax_numerics": {
+                "default_matmul_precision": jax.config.jax_default_matmul_precision,
+                "enable_x64": jax.config.jax_enable_x64,
+                "default_prng_impl": jax.config.jax_default_prng_impl,
+            },
+            "mesh": {
+                "axes": list(mesh.axis_names),
+                "shape": dict(mesh.shape),
+                "devices": [
+                    {
+                        "id": device.id,
+                        "process": device.process_index,
+                        "kind": device.device_kind,
+                        "coordinates": list(coordinates),
+                    }
+                    for coordinates, device in np.ndenumerate(mesh.devices)
+                ],
+            },
+            "compute_mapping": dict(mapping),
+            "parameter_mapping": dict(self.trainer.parameter_axis_mapping),
+            "loss_mapping": loss_mapping,
+            "mp": {
+                name: str(getattr(self.trainer.mp, name)) for name in ("param_dtype", "compute_dtype", "output_dtype")
+            },
+            "field_dtype_overrides": {
+                name: str(dtype) for name, dtype in self.trainer.config.field_dtype_overrides.items()
+            },
+            "compute_leaves": [
+                (jax.tree_util.keystr(path), value.shape, str(value.dtype), str(value.sharding.spec))
+                for path, value in jax.tree_util.tree_flatten_with_path(compute)[0]
+                if isinstance(value, jax.ShapeDtypeStruct)
+            ],
+            "head": {"axes": [(axis.name, axis.size) for axis in head.axes], "dtype": str(head.array.dtype)},
+            "activation_dtype": str(normalized.dtype),
+            "arrays": {
+                name: None if array is None else {"shape": array.shape, "dtype": str(array.dtype)}
+                for name, array in sorted(arrays.items())
+            },
+            "response_length": response_length,
+            "microbatch": microbatch,
+            "optimizer_batch": batch_size,
+            "accumulation_steps": batch_size // microbatch,
+            "optimizer": self.settings["optimizer"],
+            "optimizer_kind": "optax.chain(clip_by_global_norm,adamw)",
+            "policy": {"eps_clip_low": self.settings["eps_clip_low"], "eps_clip_high": self.settings["eps_clip_high"]},
+            "projection": {
+                "block_size": runtime["projection_block_size"],
+                "logits_dtype": "bfloat16",
+                "dtype": "float32",
+                "implementation": "xla",
+                "fast_backward": False,
+            },
+        }
+        profile_hash = hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
+        return profile, FixedCEPlan(
+            signatures, runtime["projection_block_size"], logits_dtype="bfloat16", execution_profile_sha256=profile_hash
+        )
+
+    def _prepare_projection(self, payload: dict, method: str) -> FixedCEPlan | None:
+        profile, plan, error = {}, None, None
+        command = {"method": method, "version": self.version, "global_step": payload.get("global_step")}
+        try:
+            command["optimizer_step"] = int(self.state.step)
+            digest = hashlib.sha256()
+            for name, array in sorted(payload["arrays"].items()):
+                digest.update(name.encode())
+                if array is not None:
+                    digest.update(str((array.shape, array.dtype)).encode())
+                    digest.update(np.asarray(array).tobytes())
+            command["payload_sha256"] = digest.hexdigest()
+            command["response_length"] = payload["response_length"]
+            mode = "fixed-xla" if _projection_dtype(self.settings["runtime"]) == jnp.bfloat16 else "legacy"
+            mode_envelope = {"ok": True, "mode": mode, "command": command}
+            json.dumps(mode_envelope)
+        except Exception as exc:
+            mode_envelope = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        modes = multihost_allgather_sync(mode_envelope)
+        if any(not peer.get("ok") for peer in modes):
+            raise ValueError(f"Native projection command rejected before tracing: {modes}")
+        if any(peer != modes[0] for peer in modes[1:]):
+            raise ValueError("Native projection mode or command differs across JAX processes")
+        if modes[0]["mode"] == "legacy":
+            # FP32/default GPU projection keeps its existing kernel selection. The
+            # generic unprepared tracing-coordination hazard is a separate gate.
+            if method == "train" and payload["arrays"]["tokens"].shape[0] != self.settings["mini_batch_size"]:
+                raise ValueError("Every native update requires a complete optimizer minibatch")
+            return None
+        try:
+            profile, plan = self._projection_profile(payload)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        diagnostics = self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False)
+        if diagnostics:
+            _diagnostic_receipt("projection_prepare_begin", method=method)
+        prepared = prepare_fixed_ce_plan(
+            plan,
+            execution_profile=profile,
+            command=command,
+            process_ids=tuple(range(jax.process_count())),
+            local_error=error,
+        )
+        if diagnostics:
+            _diagnostic_receipt(
+                "projection_prepare_end",
+                method=method,
+                profile_sha256=prepared.execution_profile_sha256,
+                signatures=[dataclasses.asdict(signature) for signature in prepared.signatures],
+            )
+        return prepared
+
     def forward(self, payload: dict) -> dict:
+        plan = self._prepare_projection(payload, "forward")
+        assert self.learner is not None
+        assert self.state is not None
+        learner = dataclasses.replace(self.learner, projection_plan=plan)
         batch = self._batch(payload)
-        scored = self.learner.score(self.state, batch)
+        scored = learner.score(self.state, batch)
         values = np.asarray(multihost_utils.process_allgather(scored.old_logprobs.array, tiled=True))
         return {"output": values if jax.process_index() == 0 else None, "version": self.version}
 
     def train(self, payload: dict) -> dict:
-        if payload["arrays"]["tokens"].shape[0] != self.settings["mini_batch_size"]:
-            raise ValueError("Every native update requires a complete optimizer minibatch")
+        plan = self._prepare_projection(payload, "train")
+        assert self.learner is not None
+        assert self.state is not None
+        learner = dataclasses.replace(self.learner, projection_plan=plan)
         frozen_fingerprint = _payload_fingerprint(payload)
         diagnostics = self.settings["runtime"].get("validate_checkpoint_roundtrip", False)
         if diagnostics:
@@ -444,7 +671,7 @@ class NativePolicyRuntime:
         batch = self._batch(payload)
         if diagnostics:
             _diagnostic_receipt("update_begin")
-        result = self.learner.update(self.state, batch)
+        result = learner.update(self.state, batch)
         if diagnostics:
             _diagnostic_receipt("update_end")
         self.state = result.state

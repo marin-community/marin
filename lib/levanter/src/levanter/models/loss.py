@@ -17,6 +17,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
+from levanter.kernels.pallas.fused_cross_entropy_loss.api import FixedCEPlan
 from levanter.sharding import partition_spec_of
 
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
@@ -202,6 +203,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | None = None,
     return_argmax: Literal[False] = False,
+    fixed_plan: FixedCEPlan | None = None,
 ) -> NamedArray: ...
 
 
@@ -224,6 +226,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | None = None,
     return_argmax: Literal[True] = True,
+    fixed_plan: FixedCEPlan | None = None,
 ) -> tuple[NamedArray, NamedArray]: ...
 
 
@@ -245,6 +248,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | None = None,
     return_argmax: bool = False,
+    fixed_plan: FixedCEPlan | None = None,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
     Compute cross-entropy loss and logsumexp penalty using the fused Pallas kernel.
@@ -300,6 +304,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             precision=precision,
             implementation=implementation,
             return_argmax=return_argmax,
+            fixed_plan=fixed_plan,
         )
         if return_argmax:
             loss_flat, argmax_flat = cast(tuple[jax.Array, jax.Array], kernel_output)

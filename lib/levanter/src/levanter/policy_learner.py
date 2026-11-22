@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from haliax.partitioning import named_jit
 
 from levanter.policy_model import PolicyBatch, response_logprobs
+from levanter.kernels.pallas.fused_cross_entropy_loss.api import FixedCEPlan
 from levanter.trainer import Trainer
 from levanter.trainer_state import TrainerState
 
@@ -40,8 +41,14 @@ class PolicyLearner(Protocol[S]):
 
 
 @named_jit
-def _score_microbatch(model, batch, *, mp, block_size, logits_dtype):
-    return response_logprobs(mp.cast_to_compute(model), batch, block_size=block_size, logits_dtype=logits_dtype)
+def _score_microbatch(model, batch, *, mp, block_size, logits_dtype, projection_plan=None):
+    return response_logprobs(
+        mp.cast_to_compute(model),
+        batch,
+        block_size=block_size,
+        logits_dtype=logits_dtype,
+        projection_plan=projection_plan,
+    )
 
 
 def _slice_batch(value, *, start: int, size: int):
@@ -68,6 +75,7 @@ class SpmdPolicyLearner:
     trainer: Trainer
     block_size: int
     logits_dtype: jnp.dtype | None = None
+    projection_plan: FixedCEPlan | None = None
 
     def score(self, state: TrainerStateT, batch: PolicyBatch) -> PolicyBatch:
         """Recompute old-policy scores with the update's execution shape."""
@@ -91,11 +99,13 @@ class SpmdPolicyLearner:
                         mp=self.trainer.mp,
                         block_size=self.block_size,
                         logits_dtype=self.logits_dtype,
+                        projection_plan=self.projection_plan,
                     )
                 )
         return eqx.tree_at(lambda x: x.old_logprobs, batch, hax.concatenate(Batch, scores))
 
     def update(self, state: TrainerStateT, batch: PolicyBatch) -> PolicyStep[TrainerStateT]:
         """Apply the Trainer's optimizer and model averaging to a scored batch."""
-        info = self.trainer.train_step(state, batch)
+        kwargs = {} if self.projection_plan is None else {"projection_plan": self.projection_plan}
+        info = self.trainer.train_step(state, batch, **kwargs)
         return PolicyStep(info.state, info.loss)
