@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from harbor_config.constants import ORG_NAME_PATTERN
 
 
-def reject_environment_setup(document: dict[str, Any]) -> None:
+def reject_environment_setup(document: dict[str, Any], *, source: str) -> None:
     """Refuse a setup declaration that native Harbor cannot execute."""
     environment = document.get("environment")
     if isinstance(environment, dict) and "setup" in environment:
-        raise ValueError("Harbor task packages do not support [environment.setup]")
+        raise ValueError(f"{source}: native Harbor does not support [environment.setup]")
 
 
 class TaskOS(str, Enum):
@@ -489,9 +489,9 @@ class TaskConfig(BaseModel):
         return data
 
     @classmethod
-    def model_validate_toml(cls, toml_data: str) -> "TaskConfig":
+    def model_validate_toml(cls, toml_data: str, *, source: str = "Harbor task package") -> "TaskConfig":
         toml_dict = tomllib.loads(toml_data)
-        reject_environment_setup(toml_dict)
+        reject_environment_setup(toml_dict, source=source)
         return cls.model_validate(toml_dict)
 
     def model_dump_toml(self) -> str:

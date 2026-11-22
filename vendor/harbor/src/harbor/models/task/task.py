@@ -70,7 +70,9 @@ class Task:
         self.extra_instruction_paths = extra_instruction_paths or []
         self._extra_instructions = self._read_extra_instructions()
         self.paths = TaskPaths(self._task_dir)
-        self.config = TaskConfig.model_validate_toml(self.paths.config_path.read_text())
+        self.config = TaskConfig.model_validate_toml(
+            self.paths.config_path.read_text(), source=str(self.paths.config_path)
+        )
         if self.config.task is not None:
             self.name = self.config.task.name
         else:
@@ -108,7 +110,7 @@ class Task:
             return False
 
         try:
-            config = TaskConfig.model_validate_toml(paths.config_path.read_text())
+            config = TaskConfig.model_validate_toml(paths.config_path.read_text(), source=str(paths.config_path))
         except (OSError, tomllib.TOMLDecodeError, ValidationError):
             return False
 

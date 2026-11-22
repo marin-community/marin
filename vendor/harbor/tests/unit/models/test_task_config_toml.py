@@ -7,20 +7,26 @@ from benchmarks import tasktrove_compare
 from pydantic import Field, ValidationError
 
 from harbor.models.task.config import TaskConfig
+from harbor.models.task.task import Task
 
 
-def test_rejects_declared_environment_setup():
-    with pytest.raises(ValueError, match=r"\[environment\.setup\]"):
-        TaskConfig.model_validate_toml('[environment.setup]\ncommand = "true"\n')
+def test_discovery_rejects_declared_environment_setup_with_package_path(tmp_path):
+    (tmp_path / "environment").mkdir()
+    config_path = tmp_path / "task.toml"
+    config_path.write_text('[environment.setup]\ncommand = "true"\n')
+    with pytest.raises(ValueError, match=r"\[environment\.setup\]") as error:
+        Task.is_valid_dir(tmp_path)
+    assert str(config_path) in str(error.value)
 
 
 async def test_comparison_refuses_declared_setup_before_starting_either_backend(tmp_path, monkeypatch):
-    package = tmp_path / "tasks/00000"
-    package.mkdir(parents=True)
-    (package / "task.toml").write_text('[environment.setup]\ncommand = "true"\n')
-    (tmp_path / "sample.json").write_text(
-        json.dumps({"tasks": [{"row_index": 0, "has_solution": False, "dockerfile_id": "fixture", "mode": "fixture"}]})
-    )
+    tasks = []
+    for index, config in enumerate(("", '[environment.setup]\ncommand = "true"\n')):
+        package = tmp_path / "tasks" / f"{index:05d}"
+        package.mkdir(parents=True)
+        (package / "task.toml").write_text(config)
+        tasks.append({"row_index": index, "has_solution": False, "dockerfile_id": "fixture", "mode": "fixture"})
+    (tmp_path / "sample.json").write_text(json.dumps({"tasks": tasks}))
 
     async def unexpected_backend(*args, **kwargs):
         pytest.fail("The comparison started a backend for an unsupported setup declaration")
@@ -28,7 +34,7 @@ async def test_comparison_refuses_declared_setup_before_starting_either_backend(
     monkeypatch.setattr(tasktrove_compare, "docker_check", unexpected_backend)
     monkeypatch.setattr(tasktrove_compare, "qemu_check", unexpected_backend)
     with pytest.raises(ValueError, match=r"\[environment\.setup\]"):
-        await tasktrove_compare.compare(tmp_path, limit=1, concurrency=1)
+        await tasktrove_compare.compare(tmp_path, limit=2, concurrency=1)
 
 
 def test_rejects_unsupported_step_agent_environment():

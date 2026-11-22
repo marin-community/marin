@@ -104,8 +104,10 @@ async def docker_check(task: Path, image: str, check: str, output: Path) -> dict
 
 
 async def qemu_check(
-    task: Path, bundle: Path, check: str, output: Path, config: EnvironmentConfig, guest_memory_mb: int = 512
+    task: Path, bundle: Path, check: str, output: Path, guest_memory_mb: int = 512
 ) -> dict:
+    with (task / "task.toml").open("rb") as source:
+        config = tomllib.load(source)
     paths = TrialPaths(output / "qemu-trials" / task.name / check)
     paths.mkdir()
     env = QemuEnvironment(
@@ -113,7 +115,7 @@ async def qemu_check(
         environment_name=task.name,
         session_id=f"{task.name}-{check}",
         trial_paths=paths,
-        task_env_config=config,
+        task_env_config=EnvironmentConfig.model_validate(config.get("environment", {})),
         guest_bundle=str(bundle),
         network_policy="deny",
         guest_memory_mb=guest_memory_mb,
@@ -187,12 +189,10 @@ async def compare(root: Path, limit: int | None, concurrency: int) -> None:
     async def run_check(row: dict, check: str) -> None:
         async with semaphore:
             task = root / "tasks" / f"{row['row_index']:05d}"
-            config = tomllib.loads((task / "task.toml").read_text())
-            reject_environment_setup(config)
             image = f"tasktrove-clean-qemu:{row['dockerfile_id']}"
             bundle = root / "bundles" / row["dockerfile_id"]
             docker = await docker_check(task, image, check, root)
-            qemu = await qemu_check(task, bundle, check, root, EnvironmentConfig.model_validate(config.get("environment", {})))
+            qemu = await qemu_check(task, bundle, check, root)
             result = {
                 "row_index": row["row_index"],
                 "mode": row["mode"],
@@ -212,7 +212,11 @@ async def compare(root: Path, limit: int | None, concurrency: int) -> None:
                 flush=True,
             )
 
-    await asyncio.gather(*(run_check(row, check) for row, check in pending[:limit]))
+    pending = pending[:limit]
+    for row, _ in pending:
+        config_path = root / "tasks" / f"{row['row_index']:05d}" / "task.toml"
+        reject_environment_setup(tomllib.loads(config_path.read_text()), source=str(config_path))
+    await asyncio.gather(*(run_check(row, check) for row, check in pending))
     recorded = [json.loads(line) for line in results.read_text().splitlines()]
     failures = [
         (row["row_index"], row["check"])
