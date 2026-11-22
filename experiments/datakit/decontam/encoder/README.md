@@ -23,7 +23,7 @@ twice. Without this, a copy stored in a JSON dump loses about a third of its win
 |---|---|---|
 | Item table: one row per required eval record (question, choices, answer, passage) | `items.py` | `items/<eval>.parquet` |
 | Key choice: count candidate windows in reference shards, keep the rarest | `rarest_key.py prepare, count, choose` | `keys.parquet` |
-| Candidate volume and a candidate sample on measure shards | `rarest_key.py measure` | `measure/*.json`, `sample/*.parquet` |
+| Candidate volume, and a sample of key-1 candidates, on measure shards | `rarest_key.py measure` | `measure/*.json`, `sample/*.parquet` |
 | Candidate pairs: the record text around each sampled key hit | `pairs.py items, extract` | `pairs/*.parquet` |
 | Synthetic pairs with exact labels | `synthetic.py generic, context` | one parquet |
 | Judge label sets from real candidates, and training rows from two judges | `labels.py sample, merge`, `RUBRIC.md` | batches, one parquet |
@@ -33,7 +33,9 @@ twice. Without this, a copy stored in a JSON dump loses about a third of its win
 | Stage-1 recall on judged copies | `key_recall.py` | `key_recall.json` |
 
 `sources.json` lists the 160 normalized sources of the sample. `rarest_key.py` draws one measure
-shard per source (seed 7) and two other reference shards per source (seed 11), in list order.
+shard per source (seed 7) and two other reference shards per source (seed 11), in list order. A
+validation sample uses another seed and `--exclude-shards` with the first run's `shards.json`, so it
+shares no shard with it; copy the first run's `keys.parquet` into its output to keep the keys frozen.
 
 ## Commands
 
@@ -115,24 +117,25 @@ All numbers come from cluster runs of these modules or of their earlier versions
 (record, item) pair that stage 1 sends to stage 2. *Real test* pairs are the test splits of the
 judge-labeled candidate sets; their items never appear in training.
 
-**Stage 1** (160 measure shards, one per source, 27,361,567 records; item table v3):
+**Stage 1.** The measure sample holds one shard per source, so a projection to the catalog weights
+each shard by its source's shard count. Calibration (160 shards, 27.4M records) and validation (128
+new shards, 20.8M records) agree on the weighted numbers (catalog: 1.9e10 records):
 
-| Key | Records with a candidate | Candidates per record | Candidates in the catalog (1.9e10 records) |
-|---|---|---|---|
-| First 20-character window | 21.9% | 61.6 | 1.2e12 |
-| Rarest window (key 1) | 0.337% | 0.0364 | 6.9e8 |
-| Key 1 or key 2 | 2.37% | 0.161 | 3.1e9 |
+| Key | Records with a candidate | Candidates in the catalog |
+|---|---|---|
+| First 20-character window | 24.1% | - |
+| Rarest window (key 1) | 0.09-0.10% | 4.2e7 (0.0022 per record) |
+| Key 1 or key 2 | - | 8.2e9 |
 
-With the JSON readings (item table v6, same shards), the load does not change: key 1 still sends
-0.337% of records (0.0364 candidates per record). The CPU time of the measure step grows from 18.2
-to 29.5 worker-hours, because a record with backslashes is read three times. That is about 20,000
-worker-hours for the catalog.
+At 441 pairs per second on one H100 (mmBERT-base, 1,024 tokens), key 1 costs about 27 H100-hours
+for the catalog. Stage 1 itself costs about 24,000 CPU worker-hours for the catalog with the JSON
+readings, and 17,500 without them. The readings do not change the load. An unweighted projection
+(every source equal) gives 6.9e8 key-1 candidates: small sources have higher candidate rates per
+record, and the unweighted projection counts them as much as large ones.
 
-At 441 pairs per second on one H100 (mmBERT-base, 1,024 tokens), key 1 alone costs about 440
-H100-hours for the catalog. Key recall on judged copies from earlier candidate sets: 0.963 with the
-plain reading on item table v1. On table v3 it is 0.882 for the 237 judged copies that still match an
-item, and 0.932 with the JSON readings. The other misses are long items whose judged excerpt is
-shorter than the item.
+Key recall on judged copies from earlier candidate sets: 0.963 with the plain reading on item table
+v1. On table v3 it is 0.882 for the 237 judged copies that still match an item, and 0.932 with the
+JSON readings. The other misses are long items whose judged excerpt is shorter than the item.
 
 **Stage 2.** Iterations on real test pairs:
 
@@ -144,25 +147,43 @@ shorter than the item.
 | 8 | + set 12 | sets 11-12 (69 copies) | 0.963-0.971 |
 | 9 | item input: choices shown, answer words out of the question hint | sets 11-12 | 0.971 / 0.968 (old input 0.950 / 0.960) |
 | 10 | + set 13, dev split from the label sets | sets 11-13 (151 copies) | 0.961 / 0.973 |
+| 11 | answer labels only for layouts that mark the answer; no context variant in a candidate that holds the item | sets 11-13 | 0.979 / 0.971 (answer output 0.958 / 0.943, was 0.922 / 0.923) |
 
 Rejected on the way: 512 and 2,048 tokens, repeated judge-labeled pairs, a reference-frequency hint
 (set-11 AUC 0.936 against 0.972), one output instead of two, and averaging two seeds.
 
-The reference model is iteration 10, seed 1. On the pooled real test (691 pairs, 151 copies; the
-bound is the Jeffreys 5th percentile):
+The reference model is iteration 11, seed 0, chosen by pooled AUC before the validation labels
+existed. Stage 2 sees only key-1 candidates, so the key-1 view is the one that matters for a run;
+about 60% of the real test pairs came from key 2 in older samples (bound: Jeffreys 5th percentile):
 
-| Score at least | Marks | Precision [bound] | Recall | Without DROP: precision [bound] / recall |
-|---|---|---|---|---|
-| 0.5 | 158 | 0.82 [0.77] | 0.86 | 0.77 [0.69] / 0.80 |
-| 0.9 | 121 | 0.92 [0.87] | 0.74 | 0.88 [0.79] / 0.59 |
-| 0.99 | 83 | 0.98 [0.93] | 0.54 | 0.96 [0.86] / 0.31 |
+| Score at least | All test pairs (691, 151 copies): marks, precision [bound], recall | Key-1 pairs (260, 118 copies) | Key-1 without DROP (173, 54 copies) |
+|---|---|---|---|
+| 0.5 | 171, 0.81 [0.76], 0.92 | 133, 0.81 [0.75], 0.92 | 65, 0.69 [0.59], 0.83 |
+| 0.9 | 128, 0.89 [0.84], 0.75 | 105, 0.87 [0.80], 0.77 | 42, 0.69 [0.57], 0.54 |
+| 0.99 | 85, 0.95 [0.90], 0.54 | 70, 0.94 [0.88], 0.56 | 18, 0.78 [0.59], 0.26 |
 
-The answer output has AUC 0.922 (57 copies show the answer); at 0.9 it gives precision 0.96 and
-recall 0.44. The test pairs are a stratified sample: most come from candidates whose record holds at
+Question AUC is 0.979 on all test pairs and 0.940 on key-1 pairs; the key-1 negatives are near
+misses. Seed 1 of the same recipe gives key-1 precision 0.92 [0.86] at 0.9 and 0.95 [0.89] at 0.99.
+
+The answer output has AUC 0.958 (57 copies show the answer); at 0.9 it gives precision 0.94 and
+recall 0.54. The test pairs are a stratified sample: most come from candidates whose record holds at
 least 90% of the question's words, where the copies are. On set 13, which the iteration-9 model never
 saw, weighting the strata to the whole candidate sample gives that model a precision of 0.95 at its
 dev threshold (0.94) and 0.98 at 0.99. Recall outside the high-overlap stratum rests on 2 copies among
 100 labeled low-score pairs, so it is not measured.
+
+**Validation on new shards.** Set 14 comes from 128 shards that share none with calibration, with
+the keys, the models and the thresholds frozen before labeling. Both judges agree on 338 of 356
+pairs (160 copies, 106 of them DROP). Precision is weighted to the validation candidate pool, and
+the bound is an item-clustered stratified bootstrap 5th percentile:
+
+| Model | Score at least 0.9: precision [bound], high-band recall | At least 0.99 | At least 0.99, without DROP |
+|---|---|---|---|
+| Iteration 11, seed 0 (reference) | 0.958 [0.928], 0.86 | 0.971 [0.941], 0.62 | 0.954 [0.871], 0.37 (21 marks) |
+| Iteration 10, seed 1 | 0.891 [0.847], 0.84 | 0.980 [0.954], 0.64 | 1.000, 0.31 (16 marks) |
+
+154 of the 160 copies have word overlap of at least 0.9 (the high band), and recall is reported
+there. The low band holds 1 copy in 99 labeled pairs.
 
 Most remaining false marks are variants that drop or add one condition ("of the first half"), or that
 show the same passage with another question. Most missed copies are edited copies (reworded
@@ -170,10 +191,14 @@ problems, other versions of a code file) and short CoLA sentences.
 
 ## Limits
 
-- **The precision target is not met.** The goal is a precision whose lower bound is at least 0.95
-  on real candidates. The reference model reaches a point precision of 0.98 at score 0.99, with a
-  bound of 0.93, at 54% recall. Also, no split sets the threshold well. The dev split (261 pairs, 45
-  copies) holds a few clean pairs that score near 1.0, so its 0.95 threshold is 0.9997, at 8% recall.
+- **The precision target is met only in part.** The goal is a precision whose lower bound is at
+  least 0.95 on real candidates. On the validation shards, iteration 10 seed 1 meets it at score 0.99
+  over all evals (0.954), and the reference model just misses it (0.941); outside DROP there are too
+  few marks for a bound. On key-1 test pairs the reference model reaches a point precision of 0.94 at
+  score 0.99, with a bound of 0.88, at 56% recall; without DROP it is 0.78. The dev split (261
+  pairs, 45 copies) puts the 0.95 point at a score of 0.991; on key-1 test pairs that threshold
+  gives precision 0.94 [0.88] at 55% recall. A bound of 0.95 needs about 290 labeled marks at a
+  true precision of 0.97, and about 1,200 at 0.96.
 - **One training run is noisy.** The same recipe and data, with only GPU nondeterminism between
   runs, gave set-11 test AUCs of 0.973 and 0.948. Compare recipes on the pooled real test with more
   than one seed.
