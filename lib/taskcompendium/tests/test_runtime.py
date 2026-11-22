@@ -7,9 +7,12 @@ import asyncio
 import io
 import json
 import os
+import signal
 import sys
 import tarfile
 import tomllib
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -27,6 +30,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
+from shellbox.process_session import SubprocessSession
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import (
     RUBRIC_LABELS,
@@ -318,6 +322,25 @@ class LocalGradingMachine:
     async def close(self):
         self.closed = True
 
+    async def open_process(self, command: Command) -> SubprocessSession:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            *command.argv[1:],
+            cwd=self.local(command.cwd or self.workdir),
+            env={**os.environ, **self.env, **command.env},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+
+        async def stop():
+            if process.returncode is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            await process.wait()
+
+        return SubprocessSession(process, stop=stop)
+
     async def run(self, command: Command):
         program = command.argv[0]
         if command.argv[:2] == ("rm", "-f"):
@@ -549,6 +572,56 @@ def test_script_judge_receives_explicit_connection_without_serializing_credentia
     assert all(
         b"runtime-private-key" not in path.read_bytes() for path in (tmp_path / "tests").rglob("*") if path.is_file()
     )
+
+
+@pytest.mark.asyncio
+async def test_daytona_native_script_judge_uses_host_transport(tmp_path, script_grading_task, judge_server):
+    class DaytonaGradingMachines(LocalGradingMachines):
+        backend = Backend.DAYTONA
+
+    judge_server.rejected_user_agent_prefix = "Python-urllib"
+    body = {"model": "pinned-judge", "messages": [{"role": "user", "content": "frozen native prompt"}], "top_k": 20}
+    base_url = f"http://127.0.0.1:{judge_server.server_port}/v1"
+    request = urllib.request.Request(base_url + "/chat/completions", data=json.dumps(body).encode())
+    with pytest.raises(urllib.error.HTTPError, match="403"):
+        await asyncio.to_thread(urllib.request.urlopen, request)
+    script = (
+        "import json,os,sys,urllib.request\nfrom pathlib import Path\n"
+        "assert os.environ['VERIFYIT_JUDGE_API_KEY']=='machine-local-judge-relay'\n"
+        f"body={body!r}\n"
+        "request=urllib.request.Request(os.environ['VERIFYIT_JUDGE_BASE_URL']+'/chat/completions',"
+        "data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})\n"
+        "with urllib.request.urlopen(request) as response: answer=json.load(response)\n"
+        "Path(sys.argv[1]).write_text(json.dumps({'status':'scored',"
+        "'reward':float(answer['choices'][0]['message']['content']=='PASS'),'detail':{}}))\n"
+    ).encode()
+    task = script_grading_task.model_copy(
+        update={
+            "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+            "grader": script_grading_task.grader.model_copy(
+                update={
+                    "argv": ("python3", "/tests/grade.py", "/logs/verifier/verdict.json"),
+                    "judge": JudgeSpec(references=("PASS",), exact_gate=False),
+                    "reward": FileReward(
+                        files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                    ),
+                }
+            ),
+        }
+    )
+    factories = DaytonaGradingMachines(tmp_path)
+    result = await grade_in_sandbox(
+        task,
+        GradingAttempt(finished(task)),
+        factories,
+        GRADER_MACHINE,
+        judge_connection=JudgeConnection(base_url, "host-only-key", default_model="pinned-judge"),
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+    assert judge_server.requests == [body, body]
+    assert judge_server.request_headers[-1]["Authorization"] == "Bearer host-only-key"
+    assert judge_server.request_headers[-1]["User-Agent"].startswith("python-httpx/")
+    assert all("host-only-key" not in machine.env.values() and machine.closed for machine in factories.machines)
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])

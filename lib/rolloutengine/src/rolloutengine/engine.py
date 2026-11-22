@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import AnswerType
 from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
@@ -198,8 +199,16 @@ class RolloutEngine:
         cleanup = _CleanupScope(resources, attempt.cleanup)
         context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id)
         failure = await _run_harness(attempt.harness, context, attempt.recorder, attempt_deadline=deadline)
-        # A model failure leaves the completed turns intact, so the engine grades them.
-        if attempt.recorder.has_response and (failure is None or failure[0] == RolloutOperation.MODEL):
+        # An agent timeout still leaves a final workspace state to verify.
+        workspace_timeout = (
+            task.answer_type == AnswerType.WORKSPACE_STATE
+            and failure is not None
+            and failure[0] == RolloutOperation.ADVANCE
+            and isinstance(failure[1], TimeoutError)
+        )
+        if attempt.recorder.has_response and (
+            workspace_timeout or failure is None or failure[0] == RolloutOperation.MODEL
+        ):
             try:
                 await self._grade(attempt, machine, resources)
             except _Interrupted as interrupted:

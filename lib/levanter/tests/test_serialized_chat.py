@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import numpy as np
 import pytest
 from haliax import Axis
@@ -72,3 +74,40 @@ def test_packed_transcript_uses_lookahead_window(tmp_path):
     dataset = _cached_transcript_dataset(tmp_path, [first, second, short], pack=True, length=13, lookahead_window=3)
     example = blocking_wait(dataset.get_batch([0]))[0]
     np.testing.assert_array_equal(np.asarray(example.tokens), first + short)
+
+
+def test_packed_native_transcripts_preserve_document_masks_and_attention_boundaries(tmp_path):
+    documents = [
+        [10, 2, 11, 12, 20, 13, 10, 3, 11, 12, 21, 22, 13],
+        # BOS/text before the next header must not inherit assistant loss.
+        [1, 20, 10, 4, 11, 12, 23, 13, 10, 3, 11, 12, 24, 13],
+    ]
+    with SerialCacheWriter(str(tmp_path), {"input_ids": np.zeros(0, dtype=np.int32)}) as writer:
+        writer.write_batch([{"input_ids": np.asarray(tokens, dtype=np.int32)} for tokens in documents])
+    component = DatasetComponent(
+        cache_dir=str(tmp_path),
+        pack=False,
+        format=SerializedChatLmDatasetFormat(message_start_id=10, assistant_prefix=(10, 3, 11, 12)),
+    )
+    unpacked = dataset_for_component(
+        component, Axis("position", 32), writer.result(), eos_id=None, block_cross_document_attention=True
+    )
+    separate = blocking_wait(unpacked.get_batch([0, 1]))
+    packed = dataset_for_component(
+        dataclasses.replace(component, pack=True),
+        Axis("position", 32),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+    )
+    actual = blocking_wait(packed.get_batch([0]))[0]
+    start = 0
+    for doc_id, (tokens, expected) in enumerate(zip(documents, separate, strict=True)):
+        end = start + len(tokens)
+        np.testing.assert_array_equal(np.asarray(actual.tokens)[start:end], tokens)
+        np.testing.assert_array_equal(
+            np.asarray(actual.loss_weight)[start:end], np.asarray(expected.loss_weight)[: len(tokens)]
+        )
+        np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[start:end], doc_id)
+        start = end
+    np.testing.assert_array_equal(np.asarray(actual.loss_weight)[start:], 0)

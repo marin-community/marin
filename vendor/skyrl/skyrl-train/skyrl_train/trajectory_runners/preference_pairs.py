@@ -58,6 +58,9 @@ class PreferencePairTrajectoryRunner:
         batch = await self.run(task.request)
         return await write_trajectory_batch(task, writer, batch)
 
+    async def abort_training(self, lease_ids: tuple[str, ...]) -> None:
+        """Local preference work has no detached RPCs; joining its caller completes cancellation."""
+
     def set_trajectory_sink(self, sink: RetentionSink) -> None:
         sink.bind_runner(type(self).__name__)
         self.trajectory_sink = sink

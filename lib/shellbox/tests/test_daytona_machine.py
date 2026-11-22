@@ -285,7 +285,7 @@ def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell
 
 class LocalDaytona:
     def __init__(self):
-        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
+        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess(), cpu=1)
         self.deleted = False
         self.closed = False
         self.params = None
@@ -316,6 +316,40 @@ class LocalDaytona:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
+
+
+@pytest.mark.parametrize("image_build", [DaytonaImageBuild.SNAPSHOT, DaytonaImageBuild.DECLARATIVE])
+def test_daytona_lifecycle_reports_provider_cpu_and_delete_request(monkeypatch, image_build):
+    events = []
+    monkeypatch.setattr(
+        "shellbox.backends.daytona.machine.telemetry.event",
+        lambda name, body: events.append((name, body)),
+    )
+
+    class SetupProcess:
+        async def exec(self, *_args, **_kwargs):
+            return SimpleNamespace(exit_code=0, result="")
+
+        async def close(self):
+            pass
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.cpu = 4
+        client.sandbox.process = SetupProcess()
+        machine = await DaytonaMachineFactory(lambda: client, image_build=image_build).create(
+            MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2, workdir="/fixture")
+        )
+        await machine.close()
+        assert events == [
+            (
+                "daytona_sandbox_lifecycle",
+                {"sandbox_name": client.params.name, "state": "acquired", "vcpu": 4},
+            ),
+            ("daytona_sandbox_lifecycle", {"sandbox_name": client.params.name, "state": "delete_requested"}),
+        ]
+
+    asyncio.run(scenario())
 
 
 class FailedDeletion(LocalDaytona):

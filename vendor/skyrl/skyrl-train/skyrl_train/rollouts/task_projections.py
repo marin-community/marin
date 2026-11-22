@@ -21,9 +21,12 @@ from rolloutengine.models import RolloutContractError
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
+    conversation_steps,
+    REASONING_VIOLATIONS_DIAGNOSTIC,
 )
 
 from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.telemetry import record_event
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
@@ -39,10 +42,12 @@ from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     RESPONSE_SPAN_TAGS_KEY,
     ROUTED_EXPERTS_KEY,
+    EpisodeStatistics,
     TrajectoryBatch,
     TaskRequestBatch,
 )
 from skyrl_train.utils.harbor_errors import (
+    AGENT_TIMEOUT_ERROR,
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
     classify_exception_type,
@@ -109,6 +114,13 @@ def _failure_policy(
         if error_handling.enable_error_classification
         else ErrorTreatment.MASK
     )
+    if rollout.failure.exception_type == AGENT_TIMEOUT_ERROR:
+        # Agent execution budgets end generation, not the verifier's verdict.
+        treatment = (
+            ErrorTreatment.PASSTHROUGH
+            if rollout.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+            else ErrorTreatment.MASK
+        )
     return (
         treatment,
         passthrough_logprob_error_type(
@@ -271,6 +283,15 @@ class WholeTaskProjection:
             classes,
             metrics,
         )
+        batch["episode_statistics"] = [episode_statistics(rollout) for rollout in rollouts]
+        batch["rollout_metrics"].update(
+            get_rollout_metrics(
+                batch["response_ids"], batch["rewards"],
+                verification_results=batch["verification_results"],
+                episode_statistics=batch["episode_statistics"],
+                excluded=batch["exclude_from_baseline"],
+            )
+        )
         _attach_reasoning_violations(batch, rollouts, ends_attempt=[True] * len(rollouts))
         _merge_task_metrics(batch, rollouts, request)
         return batch
@@ -321,6 +342,23 @@ class StepTaskProjection:
             {key: value for key, value in sample.metrics.items() if key in TASK_TIMING_KEYS} for sample in samples
         ]
         batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, classes, metrics)
+        expected_turns = [
+            step.turn
+            for rollout in rollouts
+            for step in (
+                tuple(step for conversation in rollout.conversations[:-1] for step in conversation_steps(conversation))
+                + rollout.steps
+            )
+        ]
+        if all(rollout.steps for rollout in rollouts):
+            if len(expected_turns) != len(samples):
+                raise ValueError("Per-turn projection dropped an assistant action")
+            for turn, sample in zip(expected_turns, samples, strict=True):
+                if turn.response_token_ids != sample.response_token_ids or turn.prompt_token_ids != sample.prompt_token_ids:
+                    raise ValueError("Per-turn projection changed the served action or prompt")
+                if turn.logprobs != sample.logprobs:
+                    raise ValueError("Per-turn projection changed behavior log probabilities")
+        record_event("projection_audit", {"source_turns": len(expected_turns), "projected_rows": len(samples)})
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
         _attach_reasoning_violations(batch, samples, ends_attempt=final_steps)
@@ -578,12 +616,13 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
             num_masked_trajectories=sum(masked and last for masked, last in zip(excluded, final_steps, strict=True)),
         )
     )
+    episodes = [episode_statistics(rollout) for rollout in rollouts]
     counters = {
         "tasks": len(rollouts),
-        "turns": sum(len(rollout.steps) for rollout in rollouts),
-        "multi_turn_tasks": sum(len(rollout.steps) > 1 for rollout in rollouts),
-        "tool_tasks": sum(any(step.turn.message.get("tool_calls") for step in rollout.steps) for rollout in rollouts),
-        "generated_tokens": sum(sum(rollout.loss_mask) for rollout in rollouts),
+        "turns": sum(value["assistant_turns"] for value in episodes),
+        "multi_turn_tasks": sum(value["assistant_turns"] > 1 for value in episodes),
+        "tool_tasks": sum(value["tool_calls"] > 0 for value in episodes),
+        "generated_tokens": sum(value["generated_tokens"] for value in episodes),
         "missing_logprob_tokens": sum(sum(rollout.loss_mask) for rollout in rollouts if rollout.logprobs is None),
     }
     metrics.update({f"{TASK_ROLLOUT_METRIC_PREFIX}{name}": float(value) for name, value in counters.items()})
@@ -597,13 +636,38 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
                 metrics[key] = metrics.get(key, 0.0) + value
 
 
+def episode_statistics(rollout: TrainingRollout) -> EpisodeStatistics:
+    """Count generation across the attempt, independently of optimized conversations and masks."""
+    turns = (
+        [step.turn for conversation in rollout.conversations for step in conversation.steps]
+        if rollout.conversations
+        else [step.turn for step in rollout.steps]
+    )
+    return {
+        "generated_tokens": sum(
+            turn.usage.completion_tokens if turn.usage is not None else len(turn.response_token_ids) for turn in turns
+        ),
+        "assistant_turns": len(turns),
+        "tool_calls": sum(len(turn.message.get("tool_calls") or []) for turn in turns),
+        "conversations": len(rollout.conversations),
+    }
+
+
 def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
     """Use exact served prompts and score each transition at its final action token."""
-    if not rollout.steps:
+    steps = tuple(
+        step for conversation in rollout.conversations[:-1] for step in conversation_steps(conversation)
+    ) + rollout.steps
+    if not steps:
         return [rollout]
+    if REASONING_VIOLATIONS_DIAGNOSTIC in rollout.grade.diagnostics:
+        steps = tuple(
+            replace(step, transition=replace(step.transition, reward=None, token_rewards=None, reward_components={}))
+            for step in steps
+        )
     outputs = []
-    for index, step in enumerate(rollout.steps):
-        last = index == len(rollout.steps) - 1
+    for index, step in enumerate(steps):
+        last = index == len(steps) - 1
         grade = rollout.grade
         if grade.status == Outcome.GRADED or grade_skipped(grade):
             grade = step.transition.grade or (grade if last else skipped_grade("No intermediate verifier"))
@@ -626,6 +690,8 @@ def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
                 **step.transition.metrics,
                 **({key: value for key, value in rollout.metrics.items() if key in TASK_TIMING_KEYS} if last else {}),
             },
+            # Every conversation now has its own rows; do not charge earlier violations twice.
+            conversations=(),
         )
         outputs.append(output)
     return outputs

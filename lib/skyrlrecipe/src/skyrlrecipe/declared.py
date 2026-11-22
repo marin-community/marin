@@ -17,6 +17,9 @@ DEFAULT_RETRY_EXCLUSIONS = frozenset(
     {
         "AgentTimeoutError",
         "VerifierTimeoutError",
+        "AddTestsDirError",
+        "DownloadVerifierDirError",
+        "VerifierRuntimeError",
         "RewardFileNotFoundError",
         "RewardFileEmptyError",
         "VerifierOutputParseError",
@@ -106,6 +109,7 @@ class EvaluationImprovement(Section):
 
 
 class CheckpointCallback(Section):
+    save_interval_seconds: int | float | None = unset_field()
     type: Literal["checkpoint"]
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()
@@ -117,6 +121,9 @@ class BestCheckpointCallback(Section):
     initial_model_uri: str
     expected_tasks: int
     minimum_scored_tasks: int
+    ema_window: PositiveInt = unset_field()
+    selection_eligibility: Literal["covered", "complete_window"] = unset_field()
+    evaluation_interval: PositiveInt = unset_field()
     selection_metric: str = unset_field()
     save_after_fraction: int | float = unset_field()
     preservation_max_drop: NumberMap | None = unset_field()
@@ -125,6 +132,13 @@ class BestCheckpointCallback(Section):
 class DistillationTokenBudgetCallback(Section):
     type: Literal["distillation_token_budget"]
     token_budget: PositiveInt
+
+
+class WallTimeBudgetCallback(Section):
+    type: Literal["wall_time_budget"]
+    seconds: int | float
+    drain_margin: int | float
+    groups_per_step: PositiveInt
 
 
 class EvaluationCallback(Section):
@@ -216,6 +230,7 @@ Callback = Annotated[
     CheckpointCallback
     | BestCheckpointCallback
     | DistillationTokenBudgetCallback
+    | WallTimeBudgetCallback
     | EvaluationCallback
     | ReferenceLikelihoodCallback
     | HarborEvaluationCallback

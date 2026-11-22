@@ -4,12 +4,13 @@
 import asyncio
 
 import pytest
+import numpy as np
 from rolloutengine.models import ConversationRecord, ModelTurn, RolloutStep, Transition
 from taskcompendium.grading_result import GradeResult, Outcome
 from verifyit.reasoning_markup import ReasoningViolation
 
 from skyrl_train.inference_engines.base import InferenceEngineInput
-from skyrl_train.rollouts.task_projections import _attach_reasoning_violations, _step_rollouts
+from skyrl_train.rollouts.task_projections import _attach_reasoning_violations, _step_rollouts, _model_channel
 from skyrl_train.rollouts.training_record import (
     TrainingRollout,
     TrainingStep,
@@ -202,9 +203,9 @@ def test_a_marker_penalty_charges_the_violation_token_when_it_has_one(tokens, lo
 @pytest.mark.parametrize(
     ("earlier_violation", "violations", "rewards", "loop_advantages"),
     [
-        (None, [0, 1], [0.0, 1.0], [[0.0, 0.0], [0.0, -0.2]]),  # charged once, at the marker token
-        # An earlier, unoptimized conversation has no token to charge, so the reward pays.
-        (ReasoningViolation.STRAY_END, [0, 2], [0.0, 0.8], [[0.0, 0.0], [0.0, 0.0]]),
+        (None, [0, 0, 1], [0.0, 0.0, 1.0], [[0.0, 0.0], [0.0, 0.0], [0.0, -0.2]]),  # charged once, at the marker token
+        # An earlier conversation remains trainable; its unlocated violation is charged once at the attempt end.
+        (ReasoningViolation.STRAY_END, [1, 0, 1], [0.0, 0.0, 0.8], [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]),
     ],
 )
 def test_step_rows_count_only_their_own_turns(earlier_violation, violations, rewards, loop_advantages):
@@ -213,9 +214,13 @@ def test_step_rows_count_only_their_own_turns(earlier_violation, violations, rew
             message={"role": "assistant", "content": "4"},
             prompt_token_ids=(3,),
             response_token_ids=(4, 4),
-            logprobs=None,
+            logprobs=(-0.2, -0.3),
             stop_reason="stop",
-            metadata={} if token is None else {REASONING_VIOLATION_TOKEN_METADATA_KEY: token},
+            metadata={
+                "response_policy_steps": [2, 2],
+                "routed_experts": np.array([[[1, 3]], [[2, 0]]], dtype=np.int32),
+                **({} if token is None else {REASONING_VIOLATION_TOKEN_METADATA_KEY: token}),
+            },
             reasoning_violation=violation,
         )
 
@@ -239,13 +244,25 @@ def test_step_rows_count_only_their_own_turns(earlier_violation, violations, rew
         conversations=(conversation(turn(earlier_violation)), conversation(*optimized)),
     )
     output = {
-        "response_ids": [[4, 4], [4, 4]],
-        "loss_masks": [[1, 1], [1, 1]],
-        "rewards": [0.0, 1.0],
-        "is_last_step": [False, True],
+        "response_ids": [[4, 4], [4, 4], [4, 4]],
+        "loss_masks": [[1, 1], [1, 1], [1, 1]],
+        "rewards": [0.0, 0.0, 1.0],
+        "is_last_step": [False, False, True],
     }
 
-    _attach_reasoning_violations(output, _step_rollouts(rollout), ends_attempt=[False, True])
+    projected = _step_rollouts(rollout)
+    # The reset used to discard the first turn, including its behavior-policy and router evidence.
+    assert len(projected) == 3
+    for row in projected:
+        assert row.loss_mask == (1, 1)
+        assert row.prompt_token_ids == (3,)
+        assert row.response_token_ids == (4, 4)
+        assert row.logprobs == (-0.2, -0.3)
+        np.testing.assert_array_equal(_model_channel(row, "response_policy_steps", 2, (), np.int32), [2, 2])
+        np.testing.assert_array_equal(
+            _model_channel(row, "routed_experts", 2, (1, 2), np.int32), [[[1, 3]], [[2, 0]]]
+        )
+    _attach_reasoning_violations(output, projected, ends_attempt=[False, False, True])
     _shape(output, target="marker")
 
     assert output["reasoning_span_violations"] == violations

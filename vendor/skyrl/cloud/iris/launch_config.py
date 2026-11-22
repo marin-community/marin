@@ -79,6 +79,11 @@ class SubmissionMode(StrEnum):
     WAIT = "wait"
 
 
+class FinalizationMode(StrEnum):
+    SUCCESS = "success"
+    ANY_TERMINAL = "any_terminal"
+
+
 @dataclass
 class RunConfig:
     """Experiment identity and reproducibility inputs."""
@@ -90,6 +95,7 @@ class RunConfig:
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value
     export_hf: bool = False
+    finalization: str = FinalizationMode.SUCCESS.value
     model: str | None = None
 
 
@@ -163,6 +169,7 @@ class IrisConfig:
     container_profile: str | None = None
     # OmegaConf serializes enum names; launch documents use enum values.
     role_topology: str | None = None
+    excluded_nvlink_domains: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -202,6 +209,7 @@ class InputsConfig:
     validation_data: list[dict[str, Any]] = field(default_factory=list)
     evaluation_data: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     starting_checkpoint: NativeCheckpointLocator | None = None
+    curriculum: dict[str, Any] | None = None
 
 
 @dataclass
@@ -463,6 +471,12 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError(f"unsupported run.mode: {raw['run']['mode']!r}")
     if raw["run"]["submission"] not in set(SubmissionMode):
         raise ValueError(f"unsupported run.submission: {raw['run']['submission']!r}")
+    finalization = FinalizationMode(raw["run"]["finalization"])
+    if finalization == FinalizationMode.ANY_TERMINAL and (
+        raw["run"]["submission"] != SubmissionMode.WAIT or not raw["run"]["export_hf"]
+        or raw["skyrl"]["trainer"]["hf_export_checkpoint"] != "best"
+    ):
+        raise ValueError("Any-terminal finalization requires wait mode and export of the best checkpoint")
     if raw["inputs"]["data_kind"] not in {"tasks", "parquet"}:
         raise ValueError(f"unsupported inputs.data_kind: {raw['inputs']['data_kind']!r}")
     if raw["iris"]["timeout"] < 0:

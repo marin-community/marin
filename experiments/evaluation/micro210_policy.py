@@ -6,6 +6,7 @@
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
@@ -20,6 +21,38 @@ POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e
 POLICY_VERSION = "2026.11.20"
 POLICY_REVISION = f"{POLICY_VERSION}-together"
 POLICY_COMMIT = "fa38e3eacc25137c9febe898119f08d65cc5ce88"
+
+# The prepared table re-hosts benchmark items that must not be public, so it lives in a
+# private repository that CoreWeave tasks read with the standard HF_TOKEN.
+PREPARED_REPO = "open-athena/micro210-prepared-tasks"
+PREPARED_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
+
+
+HARBOR_RUNTIME_FIELD_RENAMES = (
+    ("daytona_provisioning", "daytona_image_build"),
+    ("eval_daytona_provisioning", "eval_daytona_image_build"),
+)
+
+
+@dataclass(frozen=True)
+class Micro210RuntimeConfig:
+    config: dict
+    field_renames: dict[str, str]
+
+
+def runtime_policy_config(policy: dict) -> Micro210RuntimeConfig:
+    """Translate only the approved Harbor names, preserving the frozen policy."""
+    config = deepcopy(policy["evaluation"]["config"])
+    harbor = config["terminal_bench"]["harbor"]
+    applied = {}
+    for previous, current in HARBOR_RUNTIME_FIELD_RENAMES:
+        if previous not in harbor:
+            continue
+        if current in harbor:
+            raise ValueError(f"Canonical Micro210 has ambiguous Harbor fields: {previous}, {current}")
+        harbor[current] = harbor.pop(previous)
+        applied[f"terminal_bench.harbor.{previous}"] = f"terminal_bench.harbor.{current}"
+    return Micro210RuntimeConfig(config, applied)
 
 
 @dataclass(frozen=True)
@@ -96,8 +129,10 @@ class Micro210Evaluation:
         return Micro210Record(POLICY_REFERENCE.sha256, self.model, self.run_id, self.output_uri, POLICY_REFERENCE)
 
 
-def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str) -> Micro210Evaluation:
+def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str, **overrides) -> Micro210Evaluation:
     """Verify the frozen policy and bind the model and run identity."""
+    if overrides:
+        raise ValueError(f"Canonical Micro210 refuses override field: {next(iter(overrides))}")
     request = Micro210Evaluation(model, run_id, output_uri)
     request.policy()
     return request

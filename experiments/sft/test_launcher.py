@@ -143,10 +143,10 @@ def test_sft_plan_refuses_invalid_gpu_geometry(monkeypatch, capsys, changes, mes
 @pytest.mark.parametrize(
     ("scenario", "error"),
     [
-        ("declared", r"prepared_data\.tokenizer must match"),
+        ("declared", r"prepared_manifest\.tokenizer must match"),
         ("manifest", "file tokenizer does not match"),
         ("resolved", "resolved SFT model tokenizer"),
-        ("epochs", "prepared_data requires num_train_steps"),
+        ("epochs", "prepared_manifest requires num_train_steps"),
     ],
 )
 def test_prepared_data_requires_matching_tokenizers_and_fixed_steps(tmp_path, scenario, error):
@@ -165,7 +165,7 @@ def test_prepared_data_requires_matching_tokenizers_and_fixed_steps(tmp_path, sc
     steps = {"num_train_steps": None, "num_train_epochs": 1} if scenario == "epochs" else {}
     (tmp_path / source.file).write_text(json.dumps(draccus.encode(LmDataConfig(tokenizer=tokenizer))))
     with pytest.raises(ValueError, match=error):
-        spec = replace(OPENTHOUGHTS_SPEC, model=model, datasets=(), prepared_data=source, **steps)
+        spec = replace(OPENTHOUGHTS_SPEC, model=model, datasets=(), prepared_manifest=source, **steps)
         materialized_config(replace(OPENTHOUGHTS_32K_4NODE, recipe=spec).model().step, str(tmp_path))
 
 

@@ -1,12 +1,13 @@
 """Megatron checkpoint storage shared by BF16 parameters and FP32 masters."""
 
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 import re
 
 from fsspec import AbstractFileSystem
 from loguru import logger
 import torch
-from torch.distributed.checkpoint import SavePlan
+from torch.distributed.checkpoint import SavePlan, SavePlanner
 from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadata
 from torch.distributed.checkpoint.storage import WriteResult
 
@@ -39,6 +40,12 @@ def _master_weight_aliases(plans: list[SavePlan]) -> dict[str, str]:
     return aliases
 
 
+@dataclass(frozen=True)
+class PreparedCheckpointWrite:
+    plan: SavePlan
+    planner: SavePlanner
+
+
 class MasterWeightsWriter(StreamingFsspecWriter):
     """Share Megatron BF16 model records with their synchronized FP32 masters.
 
@@ -47,9 +54,24 @@ class MasterWeightsWriter(StreamingFsspecWriter):
     Model-only loads read the full FP32 source record before casting to BF16.
     """
 
-    def __init__(self, path: str, *, filesystem: AbstractFileSystem) -> None:
+    def __init__(
+        self, path: str, *, filesystem: AbstractFileSystem, model_aliases: Mapping[str, str] | None = None
+    ) -> None:
         super().__init__(path, filesystem=filesystem)
-        self._model_aliases: dict[str, str] = {}
+        self._model_aliases = dict(model_aliases or {})
+        self._prepared_write: PreparedCheckpointWrite | None = None
+
+    @property
+    def model_aliases(self) -> dict[str, str]:
+        return dict(self._model_aliases)
+
+    def prepare_write_data(self, plan: SavePlan, planner: SavePlanner) -> None:
+        """Accept MCore's planning handoff without staging whole-rank tensor data."""
+        self._prepared_write = PreparedCheckpointWrite(plan, planner)
+
+    def write_planned_data(self) -> list[WriteResult]:
+        assert self._prepared_write is not None, "Checkpoint data must be planned before writing"
+        return self.write_data(self._prepared_write.plan, self._prepared_write.planner).wait()
 
     def prepare_global_plan(self, plans: list[SavePlan]) -> list[SavePlan]:
         # Fully parallel saving can assign a model tensor and its master to

@@ -167,6 +167,12 @@ it is primarily intended to be used with [Direct Cache Construction](../guides/D
 
 `loss_weights` is optional. When provided, it is multiplied by the standard causal mask.
 
+Set component-level `pack: 256` to pack prebuilt prediction-weight caches. Packed
+prebuilt components left-slice over-long documents. Prediction weight `i` supervises
+token `i + 1`; packing preserves these weights without another shift. Producers should
+set each document's final weight to zero to avoid cross-document supervision. Chat
+assistant masks retain their existing single next-token shift.
+
 #### Configuration:
 ```yaml
 format:
@@ -200,7 +206,6 @@ config = LmDataConfig(components={"special": component})
 Direct datasets are expected to yield `LmExample` instances that already include any masking/packing behavior.
 
 ---
-
 
 # API
 

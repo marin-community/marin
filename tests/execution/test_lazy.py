@@ -17,6 +17,7 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact, ArtifactTypeMismatchError, read_record
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, materialized_config, resolve, run
 from marin.execution.remote import remote
+from rigging.timing import Duration
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
 
@@ -237,7 +238,12 @@ def test_remote_artifact_step_round_trips_typed_result(tmp_path, monkeypatch):
         name="checkpoints/remote_dclm_1b",
         version="2026.10.06",
         artifact_type=Ckpt,
-        run=remote(_make_ckpt, resources=resources, env_vars={"REMOTE_SENTINEL": "sentinel-value"}),
+        run=remote(
+            _make_ckpt,
+            resources=resources,
+            env_vars={"REMOTE_SENTINEL": "sentinel-value"},
+            timeout=Duration.from_seconds(259200),
+        ),
         build_config=lambda ctx: TrainCfg(
             out=ctx.output_path,
             data="gs://dclm/tokenized",
@@ -270,6 +276,7 @@ def test_remote_artifact_step_round_trips_typed_result(tmp_path, monkeypatch):
     # dropping the remote wrapper would submit nothing and still produce the same value.
     assert len(spy.requests) == 1
     assert spy.requests[0].resources == resources
+    assert spy.requests[0].timeout == Duration.from_seconds(259200)
     assert spy.requests[0].environment is not None
     assert spy.requests[0].environment.env_vars.get("REMOTE_SENTINEL") == "sentinel-value"
 

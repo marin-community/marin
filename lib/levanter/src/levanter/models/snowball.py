@@ -61,6 +61,7 @@ from levanter.grug.sharding import (
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -152,13 +153,20 @@ def _context_axis() -> str | None:
     return "context" if mesh is not None and not mesh.empty and _mesh_axis_size(mesh, "context") > 1 else None
 
 
+def _batch_axes() -> tuple[str, ...]:
+    mesh = _current_mesh()
+    if _mesh_axis_size(mesh, "replica") > 1:
+        return ("replica_dcn", "replica", "data", "expert")
+    return _BATCH_AXES
+
+
 def _activation_spec(*tail: Any) -> P:
-    return P(_BATCH_AXES, _context_axis(), *tail)
+    return P(_batch_axes(), _context_axis(), *tail)
 
 
 def _token_spec() -> P:
     context = _context_axis()
-    return P((*_BATCH_AXES, context) if context is not None else _BATCH_AXES)
+    return P((*_batch_axes(), context) if context is not None else _batch_axes())
 
 
 def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
@@ -189,6 +197,23 @@ def rms_norm(x: jax.Array, eps: float = _QK_RMS_NORM_EPS) -> jax.Array:
 
 
 # --- Config ------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExpertWeightSharding:
+    """Named mesh axes that partition expert matrices in storage."""
+
+    expert: tuple[str, ...] = ("expert",)
+    hidden: tuple[str, ...] = _FSDP_AXES
+    intermediate: str = "model"
+
+    @property
+    def pspecs(self) -> MoEExpertMlpPspecs:
+        return MoEExpertMlpPspecs(
+            expert=self.expert[0] if len(self.expert) == 1 else self.expert,
+            hidden=self.hidden[0] if len(self.hidden) == 1 else self.hidden,
+            intermediate=self.intermediate,
+        )
 
 
 @LmConfig.register_subclass("snowball")
@@ -224,6 +249,8 @@ class SnowballConfig(HFCompatConfig):
     moe_implementation: Optional[MoeImplementation] = None
     router_dot_fp32: bool = False
     """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
+    expert_weight_sharding: ExpertWeightSharding = ExpertWeightSharding()
+    """Storage partitioning for expert matrices; preserved during HF weight import."""
     moe_capacity_factor: float = 1.0
     """Expert-parallel capacity: each expert shard keeps at most ``factor x assignments / shards`` routed
     assignments and silently drops the rest. At the expert-axis size it covers every assignment (dropless). A
@@ -635,7 +662,7 @@ class SnowballMoEMLP(eqx.Module):
                 activation=silu_fp32 if cfg.fp32_activations else ActivationFunctionEnum.silu,
                 capacity_factor=cfg.moe_capacity_factor,
                 combine_in_fp32=cfg.router_combine_fp32,
-                pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
+                pspecs=cfg.expert_weight_sharding.pspecs,
             ),
             cfg=cfg,
         )
@@ -859,9 +886,9 @@ class SnowballTransformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
-        token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        token_ids = reshard(token_ids, P(_batch_axes(), _context_axis()))
         if token_valid is not None:
-            token_valid = reshard(token_valid, P(_BATCH_AXES, _context_axis()))
+            token_valid = reshard(token_valid, P(_batch_axes(), _context_axis()))
         hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
@@ -1197,17 +1224,17 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_gate) or P()),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_up) or P()),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), partition_spec_of(template.mlp.expert_mlp.w_down) or P()),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
@@ -1245,10 +1272,6 @@ def snowball_from_state_dict(
         snowball_block_from_state_dict(block, state_dict, index, prefix) for index, block in enumerate(model.blocks)
     )
     return eqx.tree_at(lambda model: model.blocks, model, blocks)
-
-
-_EXPERT_GATE_UP_SPEC = P("expert", _FSDP_AXES, "model")
-_EXPERT_DOWN_SPEC = P("expert", "model", _FSDP_AXES)
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:

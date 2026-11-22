@@ -1,0 +1,180 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Validate concrete graph configs before allocating remote workers."""
+
+import hashlib
+import json
+import logging
+import os
+import subprocess
+import tempfile
+from contextlib import nullcontext
+from pathlib import Path
+from uuid import uuid4
+
+import yaml
+from fray.current_client import current_client
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from iris.cli.connect import open_iris_client
+from iris.cluster.client.job_info import get_job_info
+from marin.rl.skyrl import skyrl_cpu_command
+from rigging.config_discovery import find_project_root
+from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import SecretBehavior, get_secret
+from rigging.timing import Duration
+
+from experiments.post_training.long_loop.serving import serving_release
+
+logger = logging.getLogger(__name__)
+
+
+def validate_launch(
+    document: str, directory: Path, *, model_config: bytes | None = None, build_worker: bool = False
+) -> dict:
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / "launch.yaml"
+    source.write_text(document)
+    compiled = directory / "compiled.yaml"
+    command = skyrl_cpu_command(
+        "--group",
+        "harbor-test",
+        "python",
+        "-m",
+        "experiments.post_training.long_loop.validate_launch",
+        str(source),
+        str(compiled),
+    )
+    if model_config is not None:
+        metadata = directory / "model-config.json"
+        metadata.write_bytes(model_config)
+        command.append(str(metadata))
+    if build_worker:
+        command.append("--build-worker")
+    environment = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(key, None)
+    result = subprocess.run(command, env=environment, text=True, capture_output=True)
+    (directory / "validator.log").write_text(result.stderr)
+    if result.returncode:
+        raise ValueError(f"Strict SkyRL composition failed before allocation:\n{result.stderr}")
+    receipt = json.loads(result.stdout)
+    receipt["command"] = command
+    (directory / "receipt.json").write_text(json.dumps(receipt, indent=2))
+    return receipt
+
+
+def regional_preflight(document: str, readable_uris: tuple[str, ...]) -> None:
+    """Read evaluation dependencies and construct its worker in an isolated CPU task."""
+    launch = yaml.safe_load(document)
+    inputs = launch["inputs"]
+    for uri in (
+        *readable_uris,
+        *(str(StoragePath(item["uri"]) / item["relative_path"]) for item in inputs["validation_data"]),
+    ):
+        with StoragePath(uri).open("rb") as stream:
+            stream.read(1)
+    with tempfile.TemporaryDirectory(prefix="long-loop-regional-preflight-") as directory:
+        validate_launch(document, Path(directory), build_worker=True)
+
+
+def validate_before_allocation(
+    document: str, *, readable_uris: tuple[str, ...] = (), secrets: dict[str, str] | None = None
+) -> dict:
+    """Gate every long-loop evaluation on regional CPU admission before GPU allocation."""
+    with tempfile.TemporaryDirectory(prefix="long-loop-validation-") as directory:
+        validation = validate_launch(document, Path(directory))
+    launch = yaml.safe_load(document)
+    sessions = launch["skyrl"]["environment"]["task_sessions"]
+    names = {"CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "DAYTONA_TARGET"}
+    for settings in (
+        sessions.get("remote_judge") or {},
+        sessions.get("daytona") or {},
+        launch["skyrl"]["terminal_bench"].get("harbor", {}),
+    ):
+        names.update(value for key, value in settings.items() if key.endswith("api_key_env") and value is not None)
+    secrets = {**{name: value for name in names if (value := get_secret(name)) is not None}, **(secrets or {})}
+    iris = launch["iris"]
+    nested = get_job_info() is not None
+    request = JobRequest(
+        name=f"long-loop-eval-preflight-{uuid4().hex[:8]}",
+        entrypoint=Entrypoint.from_callable(regional_preflight, args=(document, readable_uris)),
+        resources=ResourceConfig.with_cpu(
+            cpu=4,
+            ram="16GB",
+            disk="64GB",
+            target_cluster=None if nested else iris["target_cluster"],
+            container_profile=iris.get("container_profile"),
+        ),
+        environment=create_environment(extras=["cpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE),
+        timeout=Duration.from_minutes(30),
+    )
+    context = (
+        nullcontext(None)
+        if nested
+        else open_iris_client(
+            config_file=Path(iris["parent_cluster_config"] or iris["cluster_config"]), workspace=find_project_root()
+        )
+    )
+    with context as iris_client:
+        client = current_client() if nested else FrayIrisClient.from_iris_client(iris_client)
+        handle = client.submit(request)
+        logger.info("Waiting for regional evaluation CPU preflight %s", handle.job_id)
+        handle.wait(raise_on_failure=True)
+    validation["regional_preflight_job_id"] = handle.job_id
+    return validation
+
+
+def _vllm_cpu_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VLLM_ALLOW_LONG_MAX_MODEL_LEN"):
+        environment.pop(name, None)
+    environment["UV_PROJECT_ENVIRONMENT"] = str(
+        Path(tempfile.gettempdir()) / f"long-loop-context-{serving_release().source_commit}"
+    )
+    return environment
+
+
+def validate_selected_context(document: str) -> dict:
+    """Validate the actual export config on CPU before allocating any judge GPUs."""
+    launch = yaml.safe_load(document)
+    model = launch["inputs"]["model"]
+    generator = launch["skyrl"]["generator"]
+    overrides = generator.get("engine_init_kwargs", {}).get("hf_overrides", {})
+    requested = launch["skyrl"]["context_budget"]["request_window_tokens"]
+    content = (StoragePath(model["uri"]) / "config.json").read_bytes()
+    with tempfile.TemporaryDirectory(prefix="long-loop-selected-context-") as temporary:
+        root = Path(temporary)
+        (root / "config.json").write_bytes(content)
+        overrides_path = root / "overrides.json"
+        overrides_path.write_text(json.dumps(overrides))
+        receipt_path = root / "context.json"
+        command = skyrl_cpu_command(
+            "python",
+            "-m",
+            "experiments.post_training.long_loop.selected_context_probe",
+            str(root),
+            str(overrides_path),
+            str(requested),
+            str(receipt_path),
+        )
+        # Isolate GPU-wheel dependencies from the ordinary CPU launcher environment.
+        command[command.index("--extra") + 1] = "vllm"
+        result = subprocess.run(command, env=_vllm_cpu_environment(), capture_output=True, text=True, timeout=1800)
+        if result.returncode:
+            raise ValueError(f"Selected checkpoint context failed before judge allocation:\n{result.stderr}")
+        receipt = json.loads(receipt_path.read_text())
+    if receipt["config_sha256"] != hashlib.sha256(content).hexdigest():
+        raise ValueError("Selected checkpoint context receipt refers to different config bytes")
+    if (
+        receipt["requested_window"] != requested
+        or receipt["overrides"] != overrides
+        or receipt["vllm_version"] != serving_release().version
+        or not receipt["accepted"]
+        or receipt["max_model_len"] < requested
+    ):
+        raise ValueError("Selected checkpoint context receipt does not match the launch")
+    receipt["model_uri"] = model["uri"]
+    receipt["model_identity"] = model["identity"]
+    return receipt

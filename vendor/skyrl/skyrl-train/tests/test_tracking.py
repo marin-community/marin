@@ -78,7 +78,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     training_error = RuntimeError("training failed")
 
     def workload():
-        config = OmegaConf.create({"trainer": {"export_path": str(tmp_path)}})
+        config = OmegaConf.create({"trainer": {"wandb_entity": "test", "export_path": str(tmp_path)}})
         with Tracking("project", "experiment", backends=("wandb",), config=config) as tracker:
             tracker.log({"loss": 0.5}, step=7)
             if training_fails:

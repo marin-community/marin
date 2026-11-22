@@ -49,7 +49,7 @@ from rigging.config_discovery import find_project_root, resolve_cluster_config
 from rigging.filesystem.cluster_config import get_bucket_location
 from rigging.timing import Duration
 
-from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
+from cloud.iris.launch_config import FinalizationMode, RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
 from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_script
@@ -138,6 +138,7 @@ def checkpoint_export_launch_config(
     strategy = str(config.skyrl.trainer.strategy)
     config.run.mode = RunMode.CHECKPOINT_EXPORT.value
     config.run.export_hf = False
+    config.run.finalization = FinalizationMode.SUCCESS.value
     config.run.submission = SubmissionMode.DETACH.value if spec.no_wait else SubmissionMode.WAIT.value
     config.run.attempt_id = f"{config.run.attempt_id}-export-{request.step}"
     config.runtime.entrypoint = CHECKPOINT_EXPORT_ENTRYPOINT

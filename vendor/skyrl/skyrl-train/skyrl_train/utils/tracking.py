@@ -16,17 +16,21 @@
 # limitations under the License.
 
 import dataclasses
+import json
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, Dict, Self
+from typing import Any, Dict, List, Self, Union
 from collections.abc import Sequence
 from uuid import uuid4
 from loguru import logger
+from marinskyrl.resource_locator import join_resource_path
+from skyrl_train.io import io
 from rigging.secrets import require_secret
 from rigging.provenance import launch_provenance
+from rigging.training_journal import TrainingJournal
 from omegaconf import DictConfig, OmegaConf, open_dict
 import pprint
 import ray
@@ -63,6 +67,7 @@ class WandbNodeLogger:
         # Initialize wandb with the same run ID to aggregate system metrics
         run = wandb.init(
             project=project_name,
+            entity=config["trainer"].get("wandb_entity"),
             name=experiment_name,
             id=run_id,
             config=config,
@@ -89,7 +94,18 @@ class WandbNodeLogger:
 class Tracking:
     supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
-    def __init__(self, project_name, experiment_name, backends: Sequence[str] = ("console",), config=None):
+    def __init__(
+        self,
+        project_name,
+        experiment_name,
+        backends: Union[str, Sequence[str]] = "console",
+        config=None,
+        *,
+        journal: TrainingJournal | None = None,
+    ):
+        self.journal = journal
+        if isinstance(backends, str):
+            backends = [backends]
         for backend in backends:
             assert backend in self.supported_backends, f"{backend} is not supported"
 
@@ -142,6 +158,7 @@ class Tracking:
 
             run = wandb.init(
                 project=project_name,
+                entity=config["trainer"].get("wandb_entity"),
                 name=experiment_name,
                 id=tracking_config["attempt_id"],
                 config=tracking_config,
@@ -158,6 +175,13 @@ class Tracking:
                 ),
             )
             run_id = run.id
+            export_path = OmegaConf.select(config, "trainer.export_path")
+            if export_path is not None:
+                io.makedirs(export_path, exist_ok=True)
+                io.write_bytes_atomic(
+                    join_resource_path(export_path, "wandb-run.json"),
+                    json.dumps({"entity": run.entity, "project": run.project, "id": run.id, "url": run.url}).encode(),
+                )
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
@@ -250,11 +274,26 @@ class Tracking:
             records.start(resumed_step=resumed_step, checkpoint=checkpoint)
 
     def log(self, data, step, commit=True):
+        journal = self.journal
+        if journal is not None:
+            journal.log(data, step=int(step), commit=commit)
         for logger_name, logger_instance in self.logger.items():
-            if logger_name == "wandb":
-                logger_instance.log(data={**data, _WANDB_STEP_METRIC: step}, commit=commit)
-            else:
-                logger_instance.log(data=data, step=step)
+            try:
+                if logger_name == "wandb":
+                    logger_instance.log(data={**data, _WANDB_STEP_METRIC: step}, commit=commit)
+                else:
+                    logger_instance.log(data=data, step=step)
+            except Exception as error:
+                if journal is None:
+                    raise
+                # Producer history is authoritative in durable mode. Retain a
+                # failure metric for the optional provider mirror as well.
+                journal.log(
+                    {"tracker/backend_log_failures": 1, "tracker/backend": logger_name}, step=int(step), commit=True
+                )
+                logger.warning(
+                    "Tracker mirror {} logging failed; native history retained: {}", logger_name, type(error).__name__
+                )
 
     def __enter__(self) -> Self:
         return self
@@ -269,6 +308,9 @@ class Tracking:
 
     def close(self, *, exit_code: int) -> None:
         """Flush tracker backends without changing the workload's result."""
+        journal = self.journal
+        if journal is not None:
+            journal.finish(status="completed" if exit_code == 0 else "failed")
         if self.remote_loggers:
             try:
                 ray.get([actor.close.remote() for actor in self.remote_loggers], timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT)

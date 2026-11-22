@@ -280,4 +280,3 @@ with Ctrl-C when finished.
 Historical reviews and raw artifacts remain in their original Postgres tables.
 They do not affect current grades. Atlas retains an archive reader; the previous
 manual review, source-verification and difficulty workflows are removed.
-

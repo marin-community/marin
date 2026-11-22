@@ -1,0 +1,77 @@
+{
+  "mode": "cohort",
+  "model": {
+    "weights": "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
+    "api_model": "mochi-throughput",
+    "num_chips": 16,
+    "tensor_parallel_size": 1,
+    "dtype": "bfloat16",
+    "max_model_len": 131072,
+    "chat_template_content": null,
+    "tokenizer": "marin-community/marin-tokenizer-tools",
+    "revision": null,
+    "tokenizer_revision": "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
+  },
+  "engine": {
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 64,
+    "startup_timeout_seconds": 7200,
+    "extra_args": [
+      "--enable-expert-parallel",
+      "--enable-prefix-caching",
+      "--enable-chunked-prefill",
+      "--gpu-memory-utilization",
+      "0.90",
+      "--attention-backend",
+      "FLASH_ATTN",
+      "--moe-backend",
+      "triton",
+      "--enable-return-routed-experts",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser",
+      "hermes",
+      "--default-chat-template-kwargs",
+      "{\"enable_thinking\": true}",
+      "--load-format",
+      "runai_streamer",
+      "--model-loader-extra-config",
+      "{\"distributed\": false, \"concurrency\": 4, \"memory_limit\": 8589934592}",
+      "--compilation-config",
+      "{\"mode\": 3, \"cudagraph_mode\": \"PIECEWISE\", \"splitting_ops\": [\"vllm::unified_attention_with_output\", \"vllm::unified_kv_cache_update\", \"vllm::grug_moe_short_conv\"]}"
+    ]
+  },
+  "geometry": {
+    "tensor_parallel_size": 1,
+    "data_parallel_size": 16,
+    "pipeline_parallel_size": 1,
+    "gpus_per_task": 4
+  },
+  "output_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/96k-20261122b",
+  "seeds": [
+    17
+  ],
+  "concurrencies": [
+    1024
+  ],
+  "warmup_seconds": 120,
+  "measurement_seconds": 1500,
+  "request_timeout_seconds": 600,
+  "workloads": [
+    {
+      "name": "nemotron80-training300",
+      "kind": "replay",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/inputs-20261122a/requests.jsonl",
+      "sha256": "99a0ef75c2de0eeef8daeb29aaa84c1835ac6372abaceb24916a8c5a29e001f4"
+    }
+  ],
+  "cohort": {
+    "metadata_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-throughput/context-cap/inputs-20261122a/metadata.json",
+    "metadata_sha256": "ca15c549bb245f3a982d4ae64c34cef63f6e56dd786c80ece46788cc5659d9d1",
+    "repeats": 8,
+    "concurrency": 1024,
+    "http_idle_timeout": 21600,
+    "wall_budget_seconds": 28800,
+    "max_tokens": 98304,
+    "metrics_timeout_seconds": 30
+  }
+}

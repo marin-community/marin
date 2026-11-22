@@ -51,6 +51,8 @@ from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
 
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
 from cloud.iris.artifacts import (
     ArtifactSource,
     FileEntry,
@@ -100,7 +102,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology
+from cloud.iris.role_topology import RoleTopology, node_physical_labels, validate_role_nodes
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1310,6 +1312,9 @@ def wait_for_nodes(
     expected_nodes: int,
     timeout: int,
     rewrite_cb=None,
+    *,
+    role_topology: RoleTopology | None = None,
+    gpus_per_node: int = 0,
 ) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
@@ -1341,6 +1346,11 @@ def wait_for_nodes(
                 _log(f"Ray nodes alive: {count}/{expected_nodes}")
                 last_count = count
             if count >= expected_nodes:
+                if role_topology is not None:
+                    rows = validate_role_nodes(alive, topology=role_topology, gpus_per_node=gpus_per_node)
+                    report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
+                    (Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / "role-topology.json").write_text(report + "\n")
+                    _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
             time.sleep(STARTUP_POLL_INTERVAL)
@@ -2002,6 +2012,8 @@ def run_head(
             num_tasks,
             args.cluster_join_timeout,
             rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
+            role_topology=args.role_topology,
+            gpus_per_node=args.gpus_per_node,
         )
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
@@ -2190,6 +2202,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_launch_topology(_container(config)).role_topology,
+        gpus_per_node=int(config.iris.allocation.gpus_per_node),
         ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
@@ -2283,6 +2296,11 @@ def _write_final_config(
     destination = _final_config_path(config)
     destination.parent.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(root, destination, resolve=True)
+    # Preserve the exact post-staging bytes consumed below, not only the pre-staging recipe.
+    consumed_uri = prefix_join(str(root.artifacts.attempts_root), f"{root.run.attempt_id}/consumed-config.yaml")
+    consumed_path = StoragePath(consumed_uri)
+    consumed_path.parent.mkdirs()
+    consumed_path.write_bytes(destination.read_bytes())
     return destination
 
 
@@ -2316,7 +2334,16 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        args.ray_labels = args.role_topology.node_labels(_rank())
+        fabric = subprocess.run(["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30)
+        args.ray_labels = {
+            **args.role_topology.node_labels(_rank()),
+            **node_physical_labels(
+                rank=_rank(),
+                gpus_per_node=args.gpus_per_node,
+                host=os.environ["IRIS_NODE_NAME"],
+                fabric_xml=fabric.stdout,
+            ),
+        }
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

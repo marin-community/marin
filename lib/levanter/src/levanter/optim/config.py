@@ -24,6 +24,13 @@ from levanter.optim.util import log_norm_passthrough, scan_aware_clip_by_block_r
 from levanter.utils.jax_utils import leaf_key_paths
 
 
+class ScaledLrSchedule(optax.WrappedSchedule):
+    """Apply the trainer's dynamic LR multiplier before optimizer-specific updates."""
+
+    def __call__(self, state, *, learning_rate_scale=1.0, **extra_args):
+        return super().__call__(state) * learning_rate_scale
+
+
 @dataclass(frozen=True)
 class LrScheduleContext:
     warmup_steps: int

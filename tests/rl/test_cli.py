@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import click
 import pytest
 from click.testing import CliRunner
+from fray.types import GpuConfig
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -118,6 +119,31 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
             Path("/workspace/marin"),
             {},
         )
+
+
+def test_rl_launch_resolves_explicit_credentials_before_remote_submission(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "versioned-judge-key"
+    source.write_text("pinned-judge-key")
+    client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = "/tests/judge-key-coordinator"
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    monkeypatch.setenv("TOGETHER_API_KEY", "unrelated-ambient-key")
+
+    @click.command()
+    @rl_build_options
+    def main() -> ArtifactStep[Artifact]:
+        return _step(
+            dataclasses.replace(_execution(), coordinator_secret_sources=(("JUDGE_API_KEY", f"file:{source}"),))
+        )
+
+    result = CliRunner().invoke(main, ["--version", "2026.11.20", "--run"])
+
+    assert result.exit_code == 0, result.output
+    environment = client.submit.call_args.kwargs["environment"]
+    assert environment.secrets["JUDGE_API_KEY"] == "pinned-judge-key"
+    assert "JUDGE_API_KEY" not in environment.env_vars
+    assert "pinned-judge-key" not in result.output
 
 
 @pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
@@ -272,3 +298,27 @@ def test_launcher_startup_keeps_training_dependencies_unloaded(module: str, args
     assert result.returncode == 0, result.stderr
     if args:
         assert "Show this message and exit." in result.stdout
+
+
+def test_named_coordinator_repeated_submission_preserves_identity():
+    execution = dataclasses.replace(_execution(), coordinator_name="long-loop-plumbing-2026.11.08")
+    handles = [_step(execution)]
+    requests = [
+        _coordinator_request(handles, "experiments.test_rl", ("--run",), Path("/workspace/marin"), {})[1]
+        for _ in range(2)
+    ]
+    assert requests[0].name == requests[1].name == "long-loop-plumbing-2026.11.08"
+
+
+def test_gpu_coordinator_preserves_route_and_priority():
+    execution = dataclasses.replace(_execution(), coordinator_gpu=GpuConfig(variant="H100", count=1))
+    cluster, request = _coordinator_request(
+        [_step(execution)], "experiments.test_rl", ("--run",), Path("/workspace/marin"), {}
+    )
+    assert request.resources.device == execution.coordinator_gpu
+    cpu_cluster, cpu_request = _coordinator_request(
+        [_step(_execution())], "experiments.test_rl", ("--run",), Path("/workspace/marin"), {}
+    )
+    assert cluster == cpu_cluster
+    assert request.resources.target_cluster == cpu_request.resources.target_cluster
+    assert request.priority == cpu_request.priority

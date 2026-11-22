@@ -6,12 +6,18 @@ from dataclasses import dataclass
 from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
-from draccus import PluginRegistry
+from draccus import PluginRegistry, decode
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 from ._batch_tokenizer import BatchTokenizer
+
+
+@decode.register(Callable)
+def _decode_loss_weight_transform(_value) -> Callable[[np.ndarray], np.ndarray]:
+    # Draccus resolves the Callable decoder even when the optional field contains null.
+    raise ValueError("Loss-weight transforms must be supplied programmatically")
 
 
 class TokenSeqDict(TypedDict):
@@ -104,7 +110,6 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     Attributes:
         input_ids_key: Field name containing token ids.
         loss_weights_key: Optional field name containing loss weights.
-        loss_weight_transform: Optional callable to transform loss weights before training.
     """
 
     input_ids_key: str = "input_ids"

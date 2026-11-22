@@ -69,15 +69,20 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
             raise ValueError("Cannot commit from inside jit")
         jit_log(metrics, step=step)
     else:
-        # TODO: do we need to coerce to np here?
         tracker.log(metrics, step=step, commit=commit)
 
 
 def _do_jit_log(metrics, *, step=None):
+    tracker = _active_tracker()
+    if tracker is None:
+        return
+    if tracker.training_journal is not None:
+        # A failed producer-history write must fail the callback. The composite
+        # tracker already isolates optional provider mirrors from that write.
+        tracker.log(metrics, step=step, commit=False)
+        return
     try:
-        tracker = _active_tracker()
-        if tracker is not None:
-            tracker.log(metrics, step=step, commit=False)
+        tracker.log(metrics, step=step, commit=False)
     except Exception:
         logger.exception("Error logging metrics")
 

@@ -16,7 +16,7 @@ from types import ModuleType
 
 import click
 from fray.iris_backend import FrayIrisClient
-from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.types import CpuConfig, Entrypoint, GpuConfig, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
@@ -24,6 +24,7 @@ from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
+from rigging.secrets import resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
@@ -51,6 +52,8 @@ class _IrisSubmissionRoute:
     priority: str
     timeout_hours: int
     container_profile: job_pb2.ContainerProfile | None
+    coordinator_name: str | None
+    coordinator_gpu: GpuConfig | None
 
 
 class _CoordinatorRun(BaseModel):
@@ -127,11 +130,19 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     priorities = {execution.priority for execution in executions}
     if len(priorities) != 1:
         raise ValueError(f"one RL main cannot use multiple coordinator priorities: {sorted(priorities)!r}")
+    names = {execution.coordinator_name for execution in executions}
+    if len(names) != 1:
+        raise ValueError("one RL main must use one coordinator name")
+    devices = {execution.coordinator_gpu for execution in executions}
+    if len(devices) != 1:
+        raise ValueError("one RL main must use one coordinator device allocation")
     cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
+        coordinator_name=names.pop(),
+        coordinator_gpu=devices.pop(),
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
         container_profile=container_profile,
     )
@@ -146,20 +157,29 @@ def _coordinator_request(
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
     selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
+    secret_sources = {}
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
+        for name, source in execution.coordinator_secret_sources:
+            if name in secret_sources and secret_sources[name] != source:
+                raise ValueError(f"RL coordinator has conflicting sources for secret {name!r}")
+            secret_sources[name] = source
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources.items()}
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
-    job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
+    job_name = sanitize_job_name(
+        route.coordinator_name or f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}"
+    )
     request = JobRequest(
         name=job_name,
         entrypoint=Entrypoint.from_binary(
             "python",
             ["-m", module_name, *argv],
         ),
-        resources=ResourceConfig.with_cpu(
+        resources=ResourceConfig(
+            device=route.coordinator_gpu or CpuConfig(),
             cpu=_COORDINATOR_CPU,
             ram=_COORDINATOR_MEMORY,
             disk=_COORDINATOR_DISK,
@@ -168,7 +188,7 @@ def _coordinator_request(
                 job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
             ),
         ),
-        environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
+        environment=create_environment(workspace=str(workspace), env_vars=selected_env, secrets=secrets, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )
@@ -187,7 +207,8 @@ def submit_or_run(
     if get_job_info() is not None:
         if _COORDINATOR_GRAPH_ENV in os.environ:
             validate_coordinator_graph(handles)
-        run(*handles, max_concurrent=max_concurrent)
+        named = _submission_route(_skyrl_executions(handles)).coordinator_name is not None
+        run(*handles, max_concurrent=max_concurrent, force_run_failed=not named)
         return None
 
     workspace = find_project_root()
@@ -199,7 +220,8 @@ def submit_or_run(
         coordinator_env,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
-        handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)
+        named = _submission_route(_skyrl_executions(handles)).coordinator_name is not None
+        handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=named)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
     return JobName.from_wire(handle.job_id)
 

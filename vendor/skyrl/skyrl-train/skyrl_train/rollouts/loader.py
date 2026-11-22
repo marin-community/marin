@@ -145,6 +145,7 @@ class PromptLoader:
         batch_size: int,
         max_stale_retries: int,
         max_unusable_groups: int,
+        routes: Mapping[str, str] | None = None,
         families: Mapping[str, str] | None = None,
         family_minimums: Mapping[str, int] | None = None,
     ):
@@ -160,6 +161,7 @@ class PromptLoader:
                 f"{batch_size}; a batch trains each uid at most once"
             )
         self._dataset = dataset
+        self._routes = dict(routes or {})
         self._families = dict(families or {})
         self._family_minimums = dict(family_minimums or {})
         self._order = order
@@ -184,22 +186,25 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
-        """Offer a prompt in the requested family whose uid is neither live nor quarantined.
+    def next_prompt(self, live: Collection[str], route: str | None = None, family: str | None = None) -> dict | None:
+        """Offer a non-live, non-quarantined prompt in the requested route and family, or None.
 
         Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
         a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
         """
 
         def eligible(uid: str) -> bool:
-            return self._available(uid, live) and (family is None or self._families.get(uid) == family)
+            return self._available(uid, live) and (
+                (route is None or self._routes.get(uid) == route)
+                and (family is None or self._families.get(uid) == family)
+            )
 
         for position, prompt in enumerate(self._retries):
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
         if family is not None:
-            return self._next_family_prompt(live, family)
+            return self._next_family_prompt(live, family, route)
         # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
         if len(live) + len(self._quarantined) >= self._uid_count:
             return None
@@ -215,19 +220,22 @@ class PromptLoader:
                 return self._offer(index)
         return None
 
-    def _next_family_prompt(self, live: Collection[str], family: str) -> dict | None:
+    def _next_family_prompt(self, live: Collection[str], family: str, route: str | None = None) -> dict | None:
         rows = self._family_rows.get(family)
         if not rows:
             return None
-        if len(live) + len(self._quarantined) >= len(rows) and all(
-            not self._available(self._dataset.uid(index), live) for index in rows
-        ):
+
+        def row_eligible(index: int) -> bool:
+            uid = self._dataset.uid(index)
+            return self._available(uid, live) and (route is None or self._routes.get(uid) == route)
+
+        if len(live) + len(self._quarantined) >= len(rows) and all(not row_eligible(index) for index in rows):
             return None
         order = self._family_orders[family]
         # At most the tail of the current pass and one complete pass can contain an available row.
         for _ in range(2 * len(rows) - 1):
             index = rows[order.next_index()]
-            if self._available(self._dataset.uid(index), live):
+            if row_eligible(index):
                 return self._offer(index)
         return None
 
@@ -239,6 +247,10 @@ class PromptLoader:
             self._retries_exhausted += 1
             return
         self._stale_retries[uid] = count + 1
+        self.requeue(prompt)
+
+    def requeue(self, prompt: dict) -> None:
+        """Return an aborted prompt to the queue without spending a staleness retry."""
         self._retries.append(prompt)
 
     def record_disposition(self, uid: str, disposition: str) -> None:
@@ -324,6 +336,8 @@ class PromptLoader:
     def _offer(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])
         self._stale_retries.pop(prompt["uid"], None)
+        if self._routes:
+            prompt["group_route"] = self._routes[prompt["uid"]]
         return self._label_family(prompt)
 
     def _label_family(self, prompt: dict) -> dict:

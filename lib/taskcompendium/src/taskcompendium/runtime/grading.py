@@ -16,13 +16,14 @@ import os
 import tarfile
 import time
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -58,6 +59,11 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
+from taskcompendium.runtime.script_judge_service import (
+    SCRIPT_JUDGE_BASE_URL,
+    SCRIPT_JUDGE_GUEST_KEY,
+    script_judge_service,
+)
 from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
 from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
 
@@ -598,27 +604,43 @@ async def _grade_staged(
                         prepared,
                         env={
                             **prepared.env,
-                            BASE_URL_ENV: judge_connection.base_url,
-                            API_KEY_ENV: judge_connection.api_key,
+                            BASE_URL_ENV: (
+                                SCRIPT_JUDGE_BASE_URL
+                                if factory.backend is Backend.DAYTONA
+                                else judge_connection.base_url
+                            ),
+                            API_KEY_ENV: (
+                                SCRIPT_JUDGE_GUEST_KEY
+                                if factory.backend is Backend.DAYTONA
+                                else judge_connection.api_key
+                            ),
                             MODEL_ENV: model,
                         },
                     )
                 machine = await factory.create(prepared)
             setup_seconds = time.monotonic() - setup_started
             try:
-                result = await _grade_on(
-                    machine,
-                    archive_path,
-                    submission_archive,
-                    grading.workspace,
-                    grading.environment,
-                    grading.spec,
-                    grading.grader,
-                    grading.limit,
-                    preparation_timeout=machine_spec.startup_timeout,
-                    user=setup_user(factory.backend),
-                )
-                return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
+                async with AsyncExitStack() as services:
+                    if (
+                        factory.backend is Backend.DAYTONA
+                        and isinstance(grading.grader, ScriptGrader)
+                        and grading.grader.judge is not None
+                    ):
+                        assert judge_connection is not None
+                        await services.enter_async_context(script_judge_service(machine, judge_connection))
+                    result = await _grade_on(
+                        machine,
+                        archive_path,
+                        submission_archive,
+                        grading.workspace,
+                        grading.environment,
+                        grading.spec,
+                        grading.grader,
+                        grading.limit,
+                        preparation_timeout=machine_spec.startup_timeout,
+                        user=setup_user(factory.backend),
+                    )
+                    return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
             finally:
                 await machine.close()
     except _StepFailed as failure:

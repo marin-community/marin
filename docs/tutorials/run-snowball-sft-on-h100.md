@@ -4,7 +4,11 @@ The [Snowball SFT presets](https://github.com/marin-community/marin/blob/main/ex
 
 The preset is a 32,768-token, ten-step recipe on 32 H100s. A four-node smoke overrode the step count to five and saved a native checkpoint and Hugging Face export at step 4.
 
-The mesh splits each sequence across four nodes and shards experts across eight H100s within a node. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The OpenThoughts preset puts one conversation in each sequence and keeps its first 32,768 tokens. Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence across four nodes and shards experts across eight H100s within a node for the
+`openthoughts-32k-4node` preset. Attention keeps local queries and gathers the full keys and values. Large weight and
+optimizer leaves are sharded over both axes. The OpenThoughts preset puts one conversation in each sequence and keeps
+its first 32,768 tokens; recipes that keep conversations separate (`pack=False`) can explicitly enable Snowball's
+segment-aware packed-document attention. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
@@ -35,6 +39,8 @@ uv run iris --cluster=marin job run --job-name snowball-sft-coord \
 ```
 
 The coordinator and workers need the same storage and Hugging Face credentials. The completed training artifact is recorded under `checkpoints/snowball-openthoughts-agent-sft` in `MARIN_PREFIX`. Change the `SFTSpec` fields in the recipe to choose a different step count, batch size, or context length; increasing context length requires a separate memory and attention validation.
+
+Set `SFTSpec.per_device_parallelism` to limit concurrent examples per batch-parallel rank while increasing `batch_size`. Levanter accumulates microbatch gradients before each optimizer update. For example, eight batch-parallel ranks with `per_device_parallelism=1` process eight sequences at once; `batch_size=256` accumulates 32 microbatches per update. The default `-1` processes the full per-device batch without accumulation.
 
 ## Choose an SFT preset
 

@@ -108,6 +108,19 @@ SNOWBALL_LIKE_SHAPE = dict(
 SNOWBALL_LIKE_DENSE_EXPERTS_SHAPE = {**SNOWBALL_LIKE_SHAPE, "num_local_experts": 32}
 
 
+def test_snowball_provider_preserves_sliding_window_cp_and_rejects_ring_override():
+    config = GrugMoeConfig(vocab_size=1024, num_experts_per_tok=2, **SNOWBALL_LIKE_SHAPE)
+    assert not config.uses_hero_architecture
+    provider = AutoBridge.from_hf_config(config).to_megatron_provider(load_weights=False)
+    # Snowball's five KV heads cannot use all-to-all CP4. Short layers need
+    # KV all-gather; the last layer uses full attention and ring communication.
+    assert provider.cp_comm_type == ["all_gather", "all_gather", "all_gather", "p2p"]
+    provider.context_parallel_size = 4
+    provider.cp_comm_type = "p2p"
+    with pytest.raises(ValueError, match="sliding-window"):
+        provider.provide()
+
+
 @pytest.fixture(params=[torch.float32, torch.bfloat16])
 def embedding_preprocess_model(request, tmp_path):
     require_hoppers(1)

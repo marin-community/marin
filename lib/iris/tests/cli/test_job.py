@@ -127,6 +127,32 @@ def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_
     assert len(recorded_job_submissions) == 1
 
 
+def test_gpu_job_excludes_nvlink_domains_without_losing_federation_or_gang(recorded_job_submissions):
+    result = _run_cli(
+        [
+            "--gpu",
+            "GB200x4",
+            "--replicas",
+            "3",
+            "--enable-extra-resources",
+            "--target-cluster",
+            "cw-us-east-08a",
+            "--exclude-nvlink-domain",
+            "dh1-r136-us-east-08a",
+            "--exclude-nvlink-domain",
+            "dh1-r137-us-east-08a",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    submission = recorded_job_submissions[0]
+    constraints = submission["constraints"]
+    excluded = {c.values[0].value for c in constraints if c.key == "nvlink.domain" and c.op == ConstraintOp.NE}
+    assert excluded == {"dh1-r136-us-east-08a", "dh1-r137-us-east-08a"}
+    assert any(c.key == CLUSTER_CONSTRAINT_KEY and c.values[0].value == "cw-us-east-08a" for c in constraints)
+    assert submission["coscheduling"].group_by == "nvlink.domain"
+    assert submission["replicas"] == 3
+
+
 @pytest.fixture
 def recorded_bundle_exclude(monkeypatch):
     """Capture the ``bundle_exclude`` passed to ``IrisClient.remote`` by ``iris job run``."""

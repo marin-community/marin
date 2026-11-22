@@ -1,11 +1,13 @@
 """TaskCompendium execution and projection into SkyRL training batches."""
 
 import asyncio
+import heapq
 import math
 import os
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
@@ -62,6 +64,7 @@ from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propagate_data_sources
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
+from skyrl_train.telemetry import record_event
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
@@ -83,7 +86,7 @@ from skyrl_train.rollouts.training_record import (
     reject_malformed_reasoning,
     training_rollout,
 )
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.utils.harbor_errors import AGENT_TIMEOUT_ERROR, ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -292,7 +295,12 @@ def _failed_rollout(
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
-        diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
+        diagnostics.update(
+            error_category=error.category,
+            request_id=error.request_id,
+            status_code=error.status_code,
+            message=error.message,
+        )
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
@@ -301,6 +309,10 @@ def _failed_rollout(
     if (
         interruption.operation == RolloutOperation.ADVANCE
         and not is_shell_harness(lowered.harness)
+        and not (
+            exception_type == AGENT_TIMEOUT_ERROR
+            and rollout.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+        )
         and rollout.steps
         and rollout.steps[-1].transition.metrics.get("advance_incomplete")
     ):
@@ -343,6 +355,72 @@ class RemoteJudgeSettings:
         return JudgeConnection(self.base_url, os.environ[self.api_key_env])
 
 
+class HarborSlots:
+    """Grant available Harbor capacity to the oldest waiting lease batch first."""
+
+    def __init__(self, capacity: int):
+        if capacity < 1:
+            raise ValueError("Harbor slot capacity must be positive")
+        self._available = capacity
+        self._sequence = 0
+        self._waiters: list[tuple[int, int, asyncio.Future[None]]] = []
+
+    def _grant(self) -> None:
+        while self._available and self._waiters:
+            _, _, future = heapq.heappop(self._waiters)
+            if future.cancelled():
+                continue
+            self._available -= 1
+            future.set_result(None)
+
+    def _release(self) -> None:
+        self._available += 1
+        self._grant()
+
+    @asynccontextmanager
+    async def admit(self, batch_id: int) -> AsyncIterator[None]:
+        future = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._waiters, (batch_id, self._sequence, future))
+        self._sequence += 1
+        self._grant()
+        blocked = not future.done()
+        started = time.monotonic()
+        fields = {"gate": "harbor_trials", "batch_id": batch_id}
+        try:
+            if blocked:
+                record_event("rollout_admission_blocked", fields)
+            await future
+        except BaseException:
+            if future.done() and not future.cancelled():
+                self._release()
+            else:
+                future.cancel()
+                self._grant()
+            raise
+        try:
+            if blocked:
+                record_event("rollout_admission_resumed", {**fields, "wait_seconds": time.monotonic() - started})
+            yield
+        finally:
+            self._release()
+
+
+@asynccontextmanager
+async def admission_slot(gate: str, slots: asyncio.Semaphore | None) -> AsyncIterator[None]:
+    """Record a saturated trajectory resource while preserving semaphore ownership."""
+    if slots is None:
+        yield
+        return
+    blocked = slots.locked()
+    started = time.monotonic()
+    if blocked:
+        record_event("rollout_admission_blocked", {"gate": gate})
+    async with slots:
+        if blocked:
+            record_event("rollout_admission_resumed", {"gate": gate, "wait_seconds": time.monotonic() - started})
+        yield
+
+
 class TaskRolloutWorker:
     """Run canonical task rollouts and submit complete groups to the buffer."""
 
@@ -363,11 +441,17 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        retrieval_service: str | None = None,
+        eval_factories: Mapping[str, MachineFactory] | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
         self.judge_connection = judge_connection
+        self.retrieval_service = retrieval_service
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
+        self.eval_factories = {
+            name: OwnedMachineFactory(factory, name) for name, factory in (eval_factories or {}).items()
+        }
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
@@ -376,11 +460,11 @@ class TaskRolloutWorker:
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
         self.group_graders = group_graders
-        self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
+        self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else None
         self.harbor_task_slots = (
-            nullcontext()
+            None
             if harbor is None
-            else asyncio.Semaphore(
+            else HarborSlots(
                 harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
             )
         )
@@ -418,14 +502,18 @@ class TaskRolloutWorker:
     def _configured_task_and_harnesses(
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
+        lowered = lowered.model_copy(update={"judge_connection": self.judge_connection})
         harnesses = episode_harnesses(lowered, self.sessions)
-        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+        if (
+            lowered.harness == ASSISTANT_PREFIX_HARNESS
+            and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT
+        ):
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
             harnesses[lowered.harness] = AssistantPrefixHarness()
         elif is_shell_harness(lowered.harness):
-            harnesses[lowered.harness] = shell_harness(lowered.harness)
+            harnesses[lowered.harness] = shell_harness(lowered.harness, retrieval_service=self.retrieval_service)
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
@@ -440,9 +528,7 @@ class TaskRolloutWorker:
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
             # The bound Harbor trial retains and executes the original setup.
             # The recording engine must not provision a second task machine for it.
-            engine_task = lowered.task.model_copy(
-                update={"environment_requirements": engine_requirements}
-            )
+            engine_task = lowered.task.model_copy(update={"environment_requirements": engine_requirements})
             # Harbor owns the phase deadlines and must still run its verifier
             # after an agent timeout. The outer attempt deadline covers the full trial.
             lowered = lowered.model_copy(
@@ -468,11 +554,11 @@ class TaskRolloutWorker:
             harnesses[SKYRL_AGENT_HARNESS] = AgentHarness(agent)
         return lowered, harnesses
 
-    async def generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
+    async def generate(self, request: TaskRequestBatch, *, batch_id: int = 0) -> list[TrainingRollout]:
         with self._active_request():
-            return await self._generate(request)
+            return await self._generate(request, batch_id=batch_id)
 
-    async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
+    async def _generate(self, request: TaskRequestBatch, *, batch_id: int) -> list[TrainingRollout]:
         lowered_tasks = [row.spec for row in request.rows]
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
@@ -493,9 +579,10 @@ class TaskRolloutWorker:
             lowered, harnesses = self._configured_task_and_harnesses(
                 lowered, harbor_settings[index], session_ids[index], phase
             )
-            lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
+            lowered_tasks[index] = lowered
             selected_harnesses.append(harnesses)
-        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
+        factories = self.factories if phase == "train" else self.factories | self.eval_factories
+        engines = [RolloutEngine(factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
@@ -531,11 +618,12 @@ class TaskRolloutWorker:
                     ) from error
 
             engine = engines[index]
-            harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
+            harbor_slots = None if harbor is None else self.harbor_task_slots
             retries = 0
             while True:
                 try:
-                    async with harbor_slots, self.task_slots:
+                    harbor_slot = nullcontext() if harbor_slots is None else harbor_slots.admit(batch_id)
+                    async with harbor_slot, admission_slot("trajectory_tasks", self.task_slots):
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
@@ -612,7 +700,7 @@ class TaskRolloutWorker:
         """Cancel rollouts and release their machines before actor termination."""
         self.closing = True
         deadline = asyncio.get_running_loop().time() + self.shutdown_timeout
-        for factory in self.factories.values():
+        for factory in (*self.factories.values(), *self.eval_factories.values()):
             factory.stop_creating()
         pending = tuple(self.active_requests)
         for task in pending:
@@ -625,7 +713,8 @@ class TaskRolloutWorker:
                     logger.error("Task worker shutdown deadline expired with {} active rollouts", len(remaining))
                     failures.append(TimeoutError("Task rollouts did not stop before the shutdown deadline"))
             results = await asyncio.gather(
-                *(factory.close(deadline) for factory in self.factories.values()), return_exceptions=True
+                *(factory.close(deadline) for factory in (*self.factories.values(), *self.eval_factories.values())),
+                return_exceptions=True,
             )
             failures.extend(result for result in results if isinstance(result, Exception))
         finally:
@@ -644,8 +733,23 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
-            rollouts = await self.generate(task.request)
+            started = time.perf_counter()
+            rollouts = await self.generate(task.request, batch_id=task.lease.batch_id)
             batch = await self.training_batch(task.request, rollouts)
+            record_event(
+                "task_group_completed",
+                {
+                    "uid": task.prompt["uid"],
+                    "duration_seconds": time.perf_counter() - started,
+                    "response_tokens": sum(len(tokens) for tokens in batch["response_ids"]),
+                    "loss_tokens": sum(sum(mask) for mask in batch["loss_masks"]),
+                    **(batch.get("rollout_metrics") or {}),
+                },
+                attributes={
+                    "source": task.request.metadata[0].data_source or "_unknown",
+                    "step": str(task.lease.policy_step),
+                },
+            )
             return await write_trajectory_batch(task, writer, batch)
 
 
@@ -710,6 +814,7 @@ class TaskRolloutWorkerSpec:
                 ),
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
+        eval_factories = task_machine_factories(self.config.environment.task_sessions, phase="eval")
         if harbor is not None:
             if harbor.environment.type != EnvironmentType.DOCKER:
                 factories[HARBOR_MACHINE_BACKEND] = harbor.machine_factory()
@@ -734,4 +839,6 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            retrieval_service=self.config.environment.task_sessions.get("retrieval_service"),
+            eval_factories=eval_factories,
         )

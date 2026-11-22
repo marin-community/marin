@@ -78,6 +78,60 @@ see if the `{checkpointer.base_path}/{run_id}` directory exists and load the lat
  the trainer will start training from scratch.
 - You can also specify `--trainer.initialize_from` to initialize the model from a specific checkpoint, without loading the optimizer state.
 
+### Stop within an execution duration
+
+Set `trainer.training_budget` to stop between complete updates while reserving
+time for the last update and final checkpoint:
+
+```yaml
+trainer:
+  num_train_steps: 746
+  native_telemetry_root: /path/to/run/telemetry
+  training_budget:
+    duration: 20h
+    finalization_reserve: 40m
+    update_reserve: 10m
+```
+
+The reserves are explicit operating choices, inside the duration. They do not
+change the maximum update count. Without a cooldown, they do not change the optimizer schedule. Marin's Iris worker
+binds the deadline to the earliest task execution start. For direct Levanter
+execution, supply `deadline_epoch_seconds` explicitly. A previously bound earlier
+deadline is retained on recovery.
+
+Rank zero broadcasts the stop decision to every process. The trainer forces the
+last checkpoint, waits for its native commit, and writes `completion.json` under
+the telemetry root with the actual update count, checkpoint and stop reason.
+Finalization after the deadline fails the run. The external execution deadline
+still applies; choose reserves from measured update and checkpoint times.
+
+To cool down by remaining wall time, add an explicit control:
+
+```yaml
+trainer:
+  training_budget:
+    duration: 20h
+    finalization_reserve: 40m
+    update_reserve: 10m
+    cooldown:
+      fraction: 0.15
+      min_lr_ratio: 0.1
+```
+
+The cooldown uses the duration minus both reserves. In this example, usable time
+is 19h10m and the final 2h52m30s decreases the update multiplier linearly to 0.1.
+Rank zero broadcasts the multiplier together with its stop decision. Optimizers opt in by wrapping their LR schedules in
+`levanter.optim.config.ScaledLrSchedule` with `optax.inject_hyperparams`; hero-EP
+MuonH uses this control for all three groups. The multiplier enters the actual
+LR before moment-preserving norm projections. The optimizer's step-based
+schedule (including any warmup) still applies. Use a constant base schedule after
+warmup for a plateau followed by this cooldown. The multiplier is logged as
+`optim/learning_rate_scale`; the completion receipt records the last applied
+value. For a wall-clock stop, the completion reader checks that it is within 10%
+of the minimum. The step cap can stop training earlier at the then-current LR;
+it never triggers cooldown or requires the minimum. Exhausted data fails the
+completion check.
+
 ### Change Evaluation Parameters
 To change how often the model is evaluated during training, you can use the following command:
 

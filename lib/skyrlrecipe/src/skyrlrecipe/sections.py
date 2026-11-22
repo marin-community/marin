@@ -16,7 +16,16 @@ from .sampling import EvalSamplingParams
 
 class Sampling(Section):
     kind: (
-        Literal["domain-weighted", "naive", "thompson", "learnability", "grade-uniform", "grade-adaptive", "grade-prior"]
+        Literal[
+            "domain-weighted",
+            "ordered",
+            "naive",
+            "thompson",
+            "learnability",
+            "grade-uniform",
+            "grade-adaptive",
+            "grade-prior",
+        ]
         | None
     ) = field(None)
     """null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-
@@ -186,6 +195,8 @@ class PolicyMegatronConfig(Section):
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = field("fully_reshardable")
     """dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same tensor/pipeline/context/expert
     geometry. Loading reads the format from the checkpoint."""
+    checkpoint_plan_cache: bool = field(False)
+    "Enable only after the role geometry has qualified repeated checkpoint restores."
     check_train_eval_parity: bool = field(False)
     """Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is from the old log-probs,
     separating eval repeatability from train/eval drift."""
@@ -259,6 +270,8 @@ class RefMegatronConfig(Section):
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = unset_field()
     """dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same tensor/pipeline/context/expert
     geometry. Loading reads the format from the checkpoint."""
+    checkpoint_plan_cache: bool = unset_field()
+    "Enable only after the role geometry has qualified repeated checkpoint restores."
     check_train_eval_parity: bool = unset_field()
     """Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is from the old log-probs,
     separating eval repeatability from train/eval drift."""
@@ -436,6 +449,11 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
+    eval_drain: Literal["wait", "abort"] = field("wait")
+    "Existing rounds choose wait explicitly; abort discards in-flight groups and regenerates their prompts."
+    consumed_route_quotas: OpenMap = field({})
+    "Exact consumed-group quotas, enforced at lease admission; full_batch only."
+    source_routes: OpenMap = field({})
     max_staleness_steps: NonNegativeInt = field(0)
     "How many steps the generating policy may lag the step that trains on its group. colocate_all requires 0."
     batch_policy: Literal["full_batch", "rolling"] = field("full_batch")
@@ -587,6 +605,9 @@ class Trainer(Section):
     flash_attn: bool = field(False)
     disable_fast_tokenizer: bool = field(False)
     project_name: str = field("skyrl")
+    wandb_entity: str | None = field(None)
+    native_telemetry_root: str | None = field(None)
+    dump_training_order: bool = field(False)
     run_name: str | None = field("test_run")
     logger: LoggingBackend | tuple[LoggingBackend, ...] = field("wandb")
     tracker_commit_each_step: bool = field(True)

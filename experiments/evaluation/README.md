@@ -263,11 +263,56 @@ source files. Read each command's `--help` before writing to production storage.
 
 ## Micro210 judge policy
 
-Micro210 uses a [Together serverless judge](judge_config.py) and a
-[content-pinned policy](micro210_policy.py). Scores are not directly comparable
-to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
-for the proposed paired re-score.
+For a bounded recovery, pass `--row-index 3 --row-index 9` on the standard
+`experiments.evaluation.micro210` command for each authorized zero-based row in
+the prepared table pinned by the selected policy. Duplicate indices are rejected;
+flag order does not change source order. This is mutually exclusive with `--benchmark`.
+The CPU selection stage validates the original table digest against the policy
+and preserves complete row contents in source order. It writes `selection.json` with the original row
+indices and selected-table digest. Recovery dump UIDs are dense indices into
+that selection: UID 0 maps to its first `source_row_indices` entry. Use this map
+before combining results.
+Preserve previously scored attempts and report coverage against the full
+declared population.
 
-To read a past run's policy, pass the `policy_reference` from its
-`canonical-evaluation.json` to `read_micro210_policy` in the policy module.
-Mini840 keeps its existing judge policy.
+The runtime emits structured `request_timing` log records keyed by request and
+session ID. Engine events record queue and first-scheduling times; token
+observations record first-token observation time and periodic decode progress
+before a response completes. Compute queue intervals within one engine's monotonic clock; do not
+subtract timestamps from different engines or clients.
+These diagnostics contain no prompts or provider credentials and do not change
+the evaluation's grading policy.
+
+The default Micro210 policy uses Together serverless `zai-org/GLM-5.3-Flash`
+(FP4) and Secret Manager version `TOGETHER_API_KEY/versions/1`. It allocates
+GPUs only for the candidate model. `JudgeConfig` records temperature 0,
+top-p 0.95, low reasoning effort, request timeouts and retry limits. The task-local
+adapter maps the original choice constraint to Together regex decoding. Verdict
+labels, rubric prompts and the 128/512/2048 token schedule stay the same.
+BixBench keeps its JSON schema, 1024-token cap and 600-second request timeout.
+Its temperature is fixed at 1, matching the old pinned model's generation config.
+
+The Marin RL launcher resolves the policy's `judge.credential` on the submitting
+machine and delivers it as `JUDGE_API_KEY` through Iris secret files. CoreWeave
+coordinators read that delivered credential; they do not need Google Application
+Default Credentials. A `TOGETHER_API_KEY` environment variable on either machine
+does not replace the policy's versioned Secret Manager reference.
+
+The policy and prepared tasks have new hashes. Scores from this judge and the
+old MiniMax M3 judge are not directly comparable. A paired re-score of one or
+two existing models can measure the shift; no paired re-score has run.
+Mini/Micro are separate protocols from the full evaluation policy in #10197.
+
+Use `read_micro210_policy(record.policy_reference)` to verify and read an old
+record's specification. `LEGACY_POLICY_REFERENCE` retains the 2026.11.18 pin.
+To rebuild the new task resources from the old prepared table:
+
+```python
+from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.evaluation.micro210_inputs import rebind_judge_inputs
+
+rebind_judge_inputs("old-rollouts.parquet", "new-rollouts.parquet", MICRO210_JUDGE)
+```
+
+Publish rebuilt tasks under a fresh URI and verify their hash before changing
+the canonical policy pin. Mini840 keeps its own frozen task definitions.

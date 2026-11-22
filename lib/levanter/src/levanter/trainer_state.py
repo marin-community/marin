@@ -130,6 +130,7 @@ class TrainerState(eqx.Module, Generic[M]):
         obj_fun: Callable[[M], Scalar] | None = None,
         loss: float | None = None,
         key: PRNGKeyArray,
+        learning_rate_scale: Scalar = 1.0,
     ) -> tuple[S, M]:
         assert isinstance(self, TrainerState)  # make pyrefly happy
         model, opt_state, updates = take_train_step(
@@ -140,6 +141,7 @@ class TrainerState(eqx.Module, Generic[M]):
             obj_fun=obj_fun,
             loss=loss,
             is_trainable=self.is_trainable,
+            learning_rate_scale=learning_rate_scale,
         )
 
         if self.model_averaging is not None:
@@ -171,7 +173,10 @@ def init_optimizer_for_trainables(optimizer, trainable_model):
     Initializes the optimizer state for the trainable parameters of the model.
     """
     _, trainable = partition_for_grad_overwrite(trainable_model)  # doesn't make a huge difference, but saves some ram
-    opt_state = optimizer.init(trainable)
+    # Compile state allocation as one sharded operation rather than issuing
+    # eager zeros_like allocations for every moment on a concrete model.
+    # Return only optimizer state to avoid another live copy of the model.
+    opt_state = haliax.named_jit(optimizer.init)(trainable)
     return opt_state
 
 
@@ -231,6 +236,7 @@ def take_train_step(
     obj_fun: Optional[Callable[[M], Scalar]] = None,
     loss: Optional[float] = None,
     is_trainable: FilterTree = True,
+    learning_rate_scale: Scalar = 1.0,
 ) -> tuple[M, OptState, M]:
     """
 
@@ -239,6 +245,8 @@ def take_train_step(
     - The model parameters that are trainable based on the provided filter.
     - The optional objective function for certain optimizers.
     - quantized state updates (Gradient Overwrite) if applicable.
+
+    Optimizer updates use each parameter's stored dtype before application.
 
     Returns:
     - The updated model after applying the optimizer updates.
@@ -251,7 +259,20 @@ def take_train_step(
     trainable_model = trainables_only(model, is_trainable)
     _, trainable_model = partition_for_grad_overwrite(trainable_model)
 
-    updates, opt_state = optimizer.update(train_grads, opt_state, params=trainable_model, obj_fn=obj_fun, loss=loss)
+    updates, opt_state = optimizer.update(
+        train_grads,
+        opt_state,
+        params=trainable_model,
+        obj_fn=obj_fun,
+        loss=loss,
+        learning_rate_scale=learning_rate_scale,
+    )
+    updates = jax.tree.map(
+        lambda update, param: None if update is None else update.astype(param.dtype),
+        updates,
+        trainable_model,
+        is_leaf=lambda value: value is None,
+    )
     model = apply_updates(model, updates, overwrites)
 
     return model, opt_state, updates

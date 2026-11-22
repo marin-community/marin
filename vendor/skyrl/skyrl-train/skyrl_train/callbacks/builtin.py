@@ -26,12 +26,13 @@ import os
 import time
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
 from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
+from rigging.timing import Timer
 
 from skyrl_train.evaluation_profiles import (
     DEFAULT_EVALUATION_STEPS,
@@ -47,7 +48,14 @@ from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
 from skyrl_train.inline_harbor_client import collect_harbor
 from skyrl_train.telemetry import TelemetryConfig, iris_resources
-from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
+from marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    POLICY_CHECKPOINT_SUBDIRECTORY,
+    VALIDATION_RECEIPTS_FILENAME,
+    ValidationObservation,
+    ValidationReceipt,
+    trailing_validation_ema,
+)
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
 from skyrl_train.inference_observability import (
@@ -125,11 +133,31 @@ class CheckpointCallback(TrainerCallback):
         save_after_fraction: Suppress saves before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+    def __init__(
+        self,
+        save_steps: int = 10,
+        save_on_train_end: bool = True,
+        save_after_fraction: float = 0.0,
+        save_interval_seconds: float | None = None,
+    ):
         validate_save_after_fraction(save_after_fraction)
+        if save_interval_seconds is not None and (
+            not math.isfinite(save_interval_seconds) or save_interval_seconds <= 0
+        ):
+            raise ValueError("Checkpoint time interval must be finite and positive")
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
         self.save_after_fraction = save_after_fraction
+        self.save_interval_seconds = save_interval_seconds
+        self.timer = Timer()
+
+    def on_train_begin(self, state, control, **kwargs):
+        self.timer.reset()
+        return control
+
+    def on_save(self, state, control, **kwargs):
+        self.timer.reset()
+        return control
 
     def on_step_end(
         self,
@@ -137,11 +165,9 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if (
-            self.save_steps > 0
-            and state.global_step % self.save_steps == 0
-            and checkpoint_save_allowed(state, self.save_after_fraction)
-        ):
+        step_due = self.save_steps > 0 and state.global_step % self.save_steps == 0
+        time_due = self.save_interval_seconds is not None and self.timer.elapsed_seconds() >= self.save_interval_seconds
+        if (step_due or time_due) and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 
@@ -151,7 +177,8 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0 and checkpoint_save_allowed(state, self.save_after_fraction):
+        enabled = self.save_steps > 0 or self.save_interval_seconds is not None
+        if self.save_on_train_end and enabled and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 
@@ -210,9 +237,60 @@ class EvaluationStopConfig:
             raise ValueError("evaluation stop thresholds must be finite")
 
 
+@register_callback("wall_time_budget")
+class WallTimeBudgetCallback(TrainerCallback):
+    """Stop at a completed-step boundary after an explicit post-first-update budget."""
+
+    error_behavior = CallbackErrorBehavior.RAISE
+
+    def __init__(self, *, seconds: float, drain_margin: float, groups_per_step: int):
+        if seconds <= 0 or drain_margin < 0 or groups_per_step < 1:
+            raise ValueError("Invalid training wall-time budget")
+        self.seconds = seconds
+        self.drain_margin = drain_margin
+        self.groups_per_step = groups_per_step
+        self.started = None
+        self.initial_step = None
+
+    def on_train_begin(self, state, control, **kwargs):
+        self.initial_step = state.global_step
+        return control
+
+    def on_log(self, state, control, *, logs, trainer, **kwargs):
+        if self.initial_step is None:
+            raise RuntimeError("Training budget clock was not started")
+        if trainer.first_optimizer_step_time is None:
+            return control
+        self.started = trainer.first_optimizer_step_time
+        completed = state.global_step - self.initial_step
+        if completed < 1:
+            return control
+        elapsed = time.monotonic() - self.started
+        mean_step = elapsed / completed
+        remaining = self.seconds - elapsed
+        affordable = max(0, math.floor(remaining / mean_step))
+        report = {
+            "step": state.global_step,
+            "completed_steps": completed,
+            "elapsed_seconds": elapsed,
+            "budget_seconds": self.seconds,
+            "drain_margin_seconds": self.drain_margin,
+            "consumed_groups_per_hour": completed * self.groups_per_step * 3600 / elapsed,
+            "additional_updates_at_observed_rate": affordable,
+            "semantics": "wall clock since first optimizer completion; includes subsequent validation/checkpoint work",
+        }
+        io.write_bytes_atomic(
+            join_resource_path(trainer.cfg.trainer.export_path, "training-budget.json"),
+            json.dumps(report).encode(),
+        )
+        if remaining <= 0:
+            control.should_training_stop = True
+        return control
+
+
 @register_callback("best_checkpoint")
 class BestCheckpointCallback(TrainerCallback):
-    """Persist the best sufficiently covered verifier score, retaining the initial policy on ties."""
+    """Commit every improved eligible validation EMA before publishing its selection."""
 
     error_behavior = CallbackErrorBehavior.RAISE
 
@@ -222,15 +300,30 @@ class BestCheckpointCallback(TrainerCallback):
         initial_model_uri: str,
         expected_tasks: int,
         minimum_scored_tasks: int,
+        selection_eligibility: str = "covered",
+        ema_window: int = 1,
+        evaluation_interval: int = 1,
         selection_metric: str = "eval/all/avg_verifier_score",
         save_after_fraction: float = 0.0,
         preservation_max_drop: dict[str, float] | None = None,
     ):
+        if selection_eligibility not in {"covered", "complete_window"}:
+            raise ValueError("Unknown checkpoint selection eligibility")
+        if selection_eligibility == "complete_window":
+            minimum_scored_tasks = expected_tasks
+        self.selection_eligibility = selection_eligibility
+        if ema_window < 1 or evaluation_interval < 1:
+            raise ValueError("Validation EMA window must be positive")
+        if not 1 <= minimum_scored_tasks <= expected_tasks:
+            raise ValueError("Scored-task threshold must be positive and no larger than the expected cohort")
+        self.ema_window = ema_window
+        self.evaluation_interval = evaluation_interval
         validate_save_after_fraction(save_after_fraction)
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
+        self.best_step: int | None = None
         self.selection_metric = selection_metric
         self.save_after_fraction = save_after_fraction
         self.preservation_max_drop = dict(preservation_max_drop or {})
@@ -238,24 +331,89 @@ class BestCheckpointCallback(TrainerCallback):
             raise ValueError("Preservation drops must be finite and nonnegative")
         self.preservation_baseline: dict[str, float] = {}
 
+    def _record_validation(self, root: str, receipt: ValidationReceipt) -> None:
+        path = join_resource_path(root, VALIDATION_RECEIPTS_FILENAME)
+        rows = json.loads(io.read_bytes(path)) if io.exists(path) else []
+        previous = next((row for row in rows if row["step"] == receipt.step), None)
+        payload = asdict(receipt)
+        if previous is not None:
+            for field in (
+                "expected_tasks",
+                "minimum_scored_tasks",
+                "attempted_count",
+                "scored_count",
+                "eligible",
+                "raw_reward",
+            ):
+                if previous[field] != payload[field]:
+                    raise ValueError("Validation evidence changed for an already recorded optimizer step")
+            if previous["improved"] and not receipt.improved:
+                payload = previous
+        rows = [row for row in rows if row["step"] != receipt.step]
+        rows.append(payload)
+        rows.sort(key=lambda row: row["step"])
+        io.makedirs(root, exist_ok=True)
+        io.write_bytes_atomic(path, json.dumps(rows).encode())
+
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         root = trainer.cfg.trainer.ckpt_path
         best_path = join_resource_path(root, BEST_CHECKPOINT_FILENAME)
         if self.best_score is None and io.exists(best_path):
             with io.open_file(best_path, "r") as stream:
-                saved = json.load(stream)
-                self.best_score = saved["accuracy"]
-                self.preservation_baseline = saved.get("preservation_baseline", {})
-        attempted = metrics["eval/all/num_attempted"]
-        scored = metrics["eval/all/num_scored"]
-        ineligible = (
-            attempted != self.expected_tasks
-            or scored < self.minimum_scored_tasks
-            or not metrics.get("eval/selection_eligible", 1.0)
+                previous = json.load(stream)
+            if (
+                previous.get("ema_window", 1) != self.ema_window
+                or previous.get("evaluation_interval", 1) != self.evaluation_interval
+                or previous["minimum_scored_tasks"] != self.minimum_scored_tasks
+                or previous["expected_tasks"] != self.expected_tasks
+                or previous.get("selection_eligibility", "covered") != self.selection_eligibility
+            ):
+                raise ValueError("Checkpoint selection window, cadence or cohort threshold changed on resume")
+            if previous["model_format"] == "native":
+                self.best_score = previous["accuracy"]
+                self.best_step = previous["step"]
+            self.preservation_baseline = previous.get("preservation_baseline", {})
+        attempted = int(metrics["eval/all/num_attempted"])
+        scored = int(metrics["eval/all/num_scored"])
+        if (
+            attempted != metrics["eval/all/num_attempted"]
+            or scored != metrics["eval/all/num_scored"]
+            or not 0 <= scored <= attempted <= self.expected_tasks
+        ):
+            raise ValueError("Validation counts must be whole, nonnegative and within the declared cohort")
+        ineligible = scored < self.minimum_scored_tasks or not metrics.get("eval/selection_eligible", 1.0)
+        score = metrics.get(self.selection_metric)
+        if score is not None and (not math.isfinite(score) or not 0 <= score <= 1):
+            raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
+        receipt = ValidationReceipt(
+            step=state.global_step,
+            expected_tasks=self.expected_tasks,
+            minimum_scored_tasks=self.minimum_scored_tasks,
+            attempted_count=attempted,
+            scored_count=scored,
+            infrastructure_absent=self.expected_tasks - scored,
+            eligible=not ineligible,
+            reason="coverage_below_threshold"
+            if scored < self.minimum_scored_tasks
+            else "selection_gate"
+            if ineligible
+            else "eligible",
+            raw_reward=score,
         )
+        self._record_validation(root, receipt)
+        metrics["eval/selection_eligible"] = float(not ineligible)
+        metrics["eval/selection_minimum_scored_tasks"] = self.minimum_scored_tasks
+        metrics["eval/selection_infrastructure_absent"] = self.expected_tasks - scored
         if state.global_step == 0 and self.preservation_max_drop and ineligible:
             raise ValueError("Preservation-gated selection requires an eligible step-zero evaluation")
         if ineligible:
+            logger.warning(
+                "Validation step {} is ineligible: {}/{} scored (minimum {}); infrastructure trials remain absent",
+                state.global_step,
+                scored,
+                self.expected_tasks,
+                self.minimum_scored_tasks,
+            )
             return control
         if state.global_step == 0:
             self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}
@@ -268,18 +426,59 @@ class BestCheckpointCallback(TrainerCallback):
             if not math.isfinite(value):
                 raise ValueError(f"Nonfinite preservation metric: {key}")
             if value < self.preservation_baseline[key] - maximum_drop:
+                self._record_validation(root, replace(receipt, reason="preservation_guard"))
                 return control
-        score = metrics[self.selection_metric]
-        if not math.isfinite(score) or not 0 <= score <= 1:
+        if score is None:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
+        raw_score = score
+        if state.global_step:
+            history_path = join_resource_path(root, "validation_selection_history.json")
+            history: list[ValidationObservation] = []
+            if io.exists(history_path):
+                with io.open_file(history_path, "r") as stream:
+                    history = [ValidationObservation(**row) for row in json.load(stream)]
+            recorded = [row for row in history if row.step == state.global_step]
+            if recorded and recorded[0].reward != raw_score:
+                raise ValueError("Validation reward changed for an already recorded optimizer step")
+            history = [row for row in history if row.step != state.global_step]
+            history.append(ValidationObservation(state.global_step, raw_score, attempted, scored))
+            io.makedirs(root, exist_ok=True)
+            io.write_bytes_atomic(history_path, json.dumps([asdict(row) for row in history]).encode())
+            score = trailing_validation_ema(
+                history, state.global_step, self.ema_window, interval=self.evaluation_interval,
+                selection_eligibility=self.selection_eligibility,
+            )
+            if score is None:
+                self._record_validation(root, replace(receipt, reason="incomplete_selection_window"))
+                return control
+            metrics["eval/selection_ema"] = score
+            receipt = replace(receipt, ema_score=score)
         if self.best_score is not None and score <= self.best_score:
+            if self.best_step == state.global_step:
+                self._record_validation(
+                    root,
+                    replace(
+                        receipt,
+                        reason="best_checkpoint_committed",
+                        improved=True,
+                        checkpoint_uri=join_resource_path(
+                            root, f"global_step_{state.global_step}", POLICY_CHECKPOINT_SUBDIRECTORY
+                        ),
+                    ),
+                )
+            else:
+                self._record_validation(root, replace(receipt, reason="not_improved"))
             return control
         if state.global_step and not checkpoint_save_allowed(state, self.save_after_fraction):
+            self._record_validation(root, replace(receipt, reason="save_deferred"))
             return control
         model_uri = self.initial_model_uri
         model_format = "hf"
         if state.global_step:
             await trainer.save_checkpoints()
+            committed = join_resource_path(root, f"global_step_{state.global_step}", "trainer_state.pt")
+            if not io.exists(committed):
+                raise ValueError("Best selection cannot publish before its native checkpoint is committed")
             model_uri = join_resource_path(
                 trainer.cfg.trainer.ckpt_path, f"global_step_{state.global_step}", POLICY_CHECKPOINT_SUBDIRECTORY
             )
@@ -289,9 +488,17 @@ class BestCheckpointCallback(TrainerCallback):
             "accuracy": score,
             "attempted": attempted,
             "scored": scored,
+            "expected_tasks": self.expected_tasks,
+            "minimum_scored_tasks": self.minimum_scored_tasks,
+            "eligible": True,
             "model_uri": model_uri,
             "model_format": model_format,
-            "selection": "Highest eligible selected metric; keep the earliest checkpoint on ties",
+            "raw_reward": raw_score,
+            "ema_window": self.ema_window,
+            "selection_eligibility": self.selection_eligibility,
+            "evaluation_interval": self.evaluation_interval,
+            "ema_alpha": 2 / (self.ema_window + 1),
+            "selection": "Highest eligible selected metric; adjusted validation EMA; earliest checkpoint on ties",
             "selection_metric": self.selection_metric,
             "preservation_baseline": self.preservation_baseline,
             "preservation_max_drop": self.preservation_max_drop,
@@ -303,7 +510,18 @@ class BestCheckpointCallback(TrainerCallback):
         export_root = trainer.cfg.trainer.export_path
         io.makedirs(export_root, exist_ok=True)
         io.write_bytes_atomic(join_resource_path(export_root, BEST_CHECKPOINT_FILENAME), encoded)
-        self.best_score = score
+        self._record_validation(
+            root,
+            replace(
+                receipt,
+                reason="best_checkpoint_committed" if state.global_step else "initial_policy",
+                improved=bool(state.global_step),
+                checkpoint_uri=model_uri,
+            ),
+        )
+        if state.global_step:
+            self.best_score = score
+            self.best_step = state.global_step
         return control
 
 
@@ -512,6 +730,11 @@ class EvaluationCallback(TrainerCallback):
     ) -> Optional[TrainerControl]:
         if self.eval_steps > 0 and state.global_step % self.eval_steps == 0:
             control.should_evaluate = True
+        return control
+
+    async def on_step_begin_async(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs):
+        if self.eval_steps > 0 and state.global_step % self.eval_steps == 0 and trainer.eval_dataset is not None:
+            await trainer.context.prepare_evaluation()
         return control
 
     def on_train_end(

@@ -21,6 +21,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
+from skyrl_gym.envs.nemotron_ultra.math_with_judge import SYMBOLIC_CONCURRENCY
 from transformers import AutoTokenizer
 from skyrl_train.config.utils import model_expert_count
 from collections import defaultdict, deque
@@ -30,6 +31,7 @@ from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
+from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
@@ -248,6 +250,7 @@ class RayPPOTrainer:
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
     _policy_version_step: int | None = None
+    first_optimizer_step_time: float | None = None
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
@@ -313,6 +316,7 @@ class RayPPOTrainer:
         self._checkpoint_save_failures = 0.0
         self._ftpo_stopped = False
         self._shutdown_complete = False
+        self._exit_watchdog: threading.Timer | None = None
         self._restored_rollout_state: TrainingContextState | None = None
         self.global_step = 0
         self.loaded_checkpoint_path: str | None = None
@@ -321,6 +325,7 @@ class RayPPOTrainer:
         self._last_evaluated_step: int | None = None
         self._inference_policy_step: int | None = None
         self._pending_checkpoint_upload: tuple[asyncio.Task[tuple[float, float]], TrainerState] | None = None
+        self._pending_checkpoint_save: asyncio.Task[None] | None = None
         raw_speculative_decoding = cfg.generator.get("speculative_decoding")
         if raw_speculative_decoding is not None:
             raw_speculative_decoding = OmegaConf.to_container(raw_speculative_decoding, resolve=True)
@@ -533,7 +538,8 @@ class RayPPOTrainer:
         """
         # Teacher cleanup can block or resist cancellation. Arm the process guard
         # before any teardown awaits, including executor shutdown after asyncio.run.
-        self._start_exit_watchdog()
+        if self._exit_watchdog is None:
+            self._exit_watchdog = self._start_exit_watchdog()
         if self._expert_block_sync is not None:
             await self._guarded_async(
                 self._expert_block_sync.close(),
@@ -585,8 +591,14 @@ class RayPPOTrainer:
             await self._teardown()
             self._shutdown_complete = True
 
+    def finish_shutdown(self) -> None:
+        """Disarm the process guard after the caller joins the event-loop executor."""
+        if self._exit_watchdog is not None:
+            self._exit_watchdog.cancel()
+            self._exit_watchdog = None
+
     @staticmethod
-    def _start_exit_watchdog(timeout: int = 120) -> None:
+    def _start_exit_watchdog(timeout: int = 300) -> threading.Timer:
         """Start a daemon thread that force-exits the process after *timeout* seconds."""
 
         def _force_exit():
@@ -598,6 +610,7 @@ class RayPPOTrainer:
         t = threading.Timer(timeout, _force_exit)
         t.daemon = True
         t.start()
+        return t
 
     async def train(self):
         """Run the rollout-buffer training loop, then release every resource it started."""
@@ -773,18 +786,29 @@ class RayPPOTrainer:
         self._control.reset()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
+        evaluate = self._control.should_evaluate and self.eval_dataset is not None
         if self._control.should_save:
             if step_wall is not None:
                 step_wall.start("checkpoint_work")
-            await self._save_intermediate_checkpoint(state)
+            if evaluate and not self.colocate_all:
+                # Evaluation uses the already synced rollout engines. Policy
+                # workers can save those frozen weights until the next step.
+                self._pending_checkpoint_save = asyncio.create_task(self._save_intermediate_checkpoint(state))
+            else:
+                await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_evaluate and self.eval_dataset is not None:
-            if step_wall is not None:
-                step_wall.start("evaluation")
-            with Timer("eval", self.all_timings):
-                await self._evaluate_and_log(state, commit=False)
-            self._control.should_evaluate = False
+        try:
+            if evaluate:
+                if step_wall is not None:
+                    step_wall.start("evaluation")
+                with Timer("eval", self.all_timings):
+                    await self._evaluate_and_log(state, commit=False)
+                self._control.should_evaluate = False
+        finally:
+            # Also join on evaluation failure/cancellation: a policy mutation
+            # or shutdown must not race the worker-side checkpoint snapshot.
+            await self._join_checkpoint_save()
 
         if self._control.should_save_hf_model:
             if step_wall is not None:
@@ -800,6 +824,18 @@ class RayPPOTrainer:
 
         if step_wall is not None:
             step_wall.start("step_end_bookkeeping")
+
+    async def _join_checkpoint_save(self) -> None:
+        task = self._pending_checkpoint_save
+        if task is None:
+            return
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+        finally:
+            self._pending_checkpoint_save = None
 
     async def _start_draft_trainer(self) -> None:
         """Start the independent one-GPU draft trainer when online updates are enabled."""
@@ -1196,6 +1232,8 @@ class RayPPOTrainer:
         summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
+        if self.first_optimizer_step_time is None:
+            self.first_optimizer_step_time = time.monotonic()
         self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
             record_consumed_work(summary.work, step=self.global_step)
@@ -1387,6 +1425,47 @@ class RayPPOTrainer:
             },
             attributes={"role": TRAINER_ROLE, "step": str(self.global_step)},
         )
+        workers = self.cfg.trajectory_runner.rollout_workers
+        sessions = self.cfg.environment.task_sessions
+        harbor_trials = OmegaConf.select(self.cfg, "terminal_bench_config.harbor.n_concurrent_trials")
+        record_event(
+            "rollout_concurrency_configuration",
+            {
+                "max_in_flight_groups": buffer.max_in_flight,
+                "effective_in_flight_groups": buffer.max_concurrent_rollouts,
+                "lookahead_groups": buffer.max_untrained_groups,
+                "max_staleness_steps": buffer.max_staleness_steps,
+                "batch_policy": buffer.batch_policy.value,
+                "consumed_route_quotas": json.dumps(buffer.consumed_route_quotas, sort_keys=True),
+                "eval_drain": self.cfg.trainer.rollout_buffer.eval_drain,
+                "samples_per_group": self.cfg.generator.n_samples_per_prompt,
+                "trajectory_bound_per_worker": (
+                    math.ceil(buffer.max_concurrent_rollouts / workers.num_workers)
+                    * self.cfg.generator.n_samples_per_prompt
+                ),
+                "rollout_workers": workers.num_workers,
+                "worker_cpus": workers.cpus_per_worker,
+                "tasks_per_worker": self.cfg.trajectory_runner.max_concurrent_tasks,
+                "executor_threads_per_worker": workers.executor_threads,
+                "verifier_threads_per_worker": sessions.max_verifier_workers,
+                "worker_progress_timeout_seconds": workers.progress_timeout_seconds,
+                "task_attempt_timeout_seconds": sessions.task_spec.session.attempt_timeout,
+                "harbor_trials": harbor_trials,
+                "harbor_trials_per_worker": None if harbor_trials is None else harbor_trials // workers.num_workers,
+                "genrm_comparisons_per_group": sessions.nemotron_ultra.genrm.max_concurrent_comparisons,
+                "symbolic_math_slots_per_process": SYMBOLIC_CONCURRENCY,
+                "teacher_enabled": self.distillation_plan is not None,
+                "teacher_queued_per_endpoint": self.cfg.trainer.teacher_scoring.max_queued_per_teacher,
+                "teacher_workers_per_endpoint": self.cfg.trainer.teacher_scoring.workers_per_teacher,
+                "max_num_seqs": self.cfg.generator.max_num_seqs,
+                "gpu_memory_utilization": self.cfg.generator.gpu_memory_utilization,
+                "max_num_batched_tokens": self.cfg.generator.max_num_batched_tokens,
+                "inference_dp": self.cfg.generator.inference_engine_data_parallel_size,
+                "inference_tp": self.cfg.generator.inference_engine_tensor_parallel_size,
+                "inference_ep": self.cfg.generator.inference_engine_expert_parallel_size,
+            },
+            attributes={"role": TRAINER_ROLE, "step": str(self.global_step)},
+        )
 
     def _update_step_performance_metrics(
         self, summary: BatchSummary, *, core_seconds: float, cycle_started: float
@@ -1450,6 +1529,9 @@ class RayPPOTrainer:
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
             self.all_metrics.update(metadata.metrics)
+        self._control = await self.callback_handler.call_event_async(
+            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
+        )
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
             if self._expert_block_sync is not None:
@@ -1493,6 +1575,9 @@ class RayPPOTrainer:
             metadata = await context.next_batch_metadata(stall_timeout=stall_timeout)
             reader = context.reader(metadata, stall_timeout=stall_timeout)
             self.all_metrics.update(metadata.metrics)
+        self._control = await self.callback_handler.call_event_async(
+            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
+        )
         step_wall.start("batch_assembly")
         plan, metrics = plan_worker_batch(
             self.cfg,
@@ -1634,7 +1719,7 @@ class RayPPOTrainer:
                     await self._sync_policy_for_rollouts(reason="evaluation")
                 yield pool
         finally:
-            self.context.resume()
+            await self.context.resume()
 
     async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
         async with self._evaluation_session() as pool:
@@ -1694,6 +1779,17 @@ class RayPPOTrainer:
         # Batch replay runs this prefix outside an optimizer step, without a step wall clock.
         if step_wall is not None:
             step_wall.start("advantages")
+        if self.cfg.trainer.dump_training_order:
+            order = {
+                "global_step": self.global_step,
+                "uids": to_jsonable(training_input.metadata["uids"]),
+                "trajectory_ids": to_jsonable(training_input.metadata["trajectory_ids"]),
+                "pad_size": training_input.metadata.get("pad_size", 0),
+                "order_semantics": "assembled learner batch before optimizer update; confirm completion against step metrics",
+            }
+            root = join_resource_path(self.cfg.trainer.export_path, "training_order")
+            io.makedirs(root, exist_ok=True)
+            io.write_bytes_atomic(join_resource_path(root, f"step-{self.global_step}.json"), json.dumps(order).encode())
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
@@ -2293,18 +2389,19 @@ class RayPPOTrainer:
                         training_input.get("ftpo_repair_mask"),
                     )
                 )
-        if self.cfg.trainer.step_wise_training:
+        if self.cfg.trainer.step_wise_training or self.cfg.trainer.dump_training_order:
             assert "trajectory_ids" in trajectory_batch, (
                 "Expected `trajectory_ids` in trajectory batch for step wise training"
             )
             training_input.metadata["trajectory_ids"] = [
                 trajectory_id.to_string() for trajectory_id in trajectory_batch["trajectory_ids"]
             ]
-            training_input.metadata["avg_response_length"] = sum(
-                len(sample_response_ids)
-                for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
-                if is_last_step
-            ) / len(response_ids)
+            if self.cfg.trainer.step_wise_training:
+                training_input.metadata["avg_response_length"] = sum(
+                    len(sample_response_ids)
+                    for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
+                    if is_last_step
+                ) / len(response_ids)
         elif ftpo is not None:
             training_input.metadata["avg_response_length"] = sum(map(len, response_ids)) / len(response_ids)
 
@@ -2755,8 +2852,11 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Ensure a complete checkpoint is published for the current step."""
+        """Commit this step's checkpoint, reusing an already completed save."""
+        await self._join_checkpoint_save()
         await self._drain_checkpoint_upload()
+        # Evaluation's best-checkpoint callback can follow a cadence save whose
+        # commit marker was still uploading when evaluation began.
         if self._last_saved_step == self.global_step:
             return
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())

@@ -246,14 +246,17 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if (
         isinstance(grader, ScriptGrader | VerifyitGrader)
         and grader.environment is not None
-        and not grades_with_judge(grader)
+        and not (isinstance(grader, VerifyitGrader) and grades_with_judge(grader))
     ):
         machine = (
             config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         )
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
-    return {**_stored_prompt(lowered), FAMILY_COLUMN: row.get(FAMILY_COLUMN)}
+    prepared = _stored_prompt(lowered)
+    if "teacher_route" in row:
+        prepared["teacher_route"] = row["teacher_route"]
+    return {**prepared, FAMILY_COLUMN: row.get(FAMILY_COLUMN)}
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:

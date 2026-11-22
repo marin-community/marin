@@ -63,7 +63,9 @@ class TitoFullDeclineReason(StrEnum):
     COMPLETION_REGION_MISMATCH = "completion_region_mismatch"
 
 
-def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: List[str]) -> Tuple[float, float]:
+def get_metrics_from_trajectory_batch(
+    trajectory_batch: TrajectoryBatch, uids: List[str], *, scored_only: bool = True
+) -> Tuple[float | None, float | None]:
     """
     Get the mean optimization reward and `pass_at_n` from a trajectory batch.
 
@@ -75,24 +77,39 @@ def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: L
     the optimization reward. ``pass_at_n`` uses ``unshaped_rewards`` when supplied,
     so optimization-specific shaping cannot change the task-success metric.
     Explicit verifier pass verdicts take precedence over positive partial rewards.
+    By default unavailable or masked rows are absent from both denominators;
+    an entirely absent batch returns ``(None, None)``. ``scored_only=False``
+    retains the attempted denominator for explicitly named raw diagnostics.
     """
     rewards: Union[List[float], List[List[float]]] = trajectory_batch["rewards"]
     if not len(rewards):
         raise ValueError(f"`rewards` must be a non-empty list, got {rewards}")
+    if len(uids) != len(rewards):
+        raise ValueError("uids must have one entry per trajectory")
 
     trajectory_passes = get_trajectory_passes(trajectory_batch)
+    indices = list(range(len(rewards)))
+    if scored_only:
+        scores = normalized_verifier_scores(trajectory_batch)
+        if scores is not None:
+            indices = [index for index, score in enumerate(scores) if score is not None]
+        else:
+            excluded = trajectory_batch.get("exclude_from_baseline") or [False] * len(rewards)
+            indices = [index for index, masked in enumerate(excluded) if not masked]
+    if not indices:
+        return None, None
 
     if isinstance(rewards[0], list):
         # Token-level rewards: rewards is List[List[float]]
         # For each trajectory, sum token rewards before computing the batch mean.
-        mean_reward = fsum(fsum(trajectory_rewards) for trajectory_rewards in rewards) / len(rewards)
+        mean_reward = fsum(fsum(rewards[index]) for index in indices) / len(indices)
     else:
         # Evaluation batches arrive in completion order, including after checkpoint restore.
-        mean_reward = fsum(rewards) / len(rewards)
+        mean_reward = fsum(rewards[index] for index in indices) / len(indices)
 
     uid_to_trajectory_passes = defaultdict(list)
-    for uid, passed in zip(uids, trajectory_passes, strict=True):
-        uid_to_trajectory_passes[uid].append(passed)
+    for index in indices:
+        uid_to_trajectory_passes[uids[index]].append(trajectory_passes[index])
 
     pass_at_n = sum(any(passes) for passes in uid_to_trajectory_passes.values()) / len(uid_to_trajectory_passes)
 
@@ -127,8 +144,9 @@ def normalized_verifier_scores(trajectory_batch: TrajectoryBatch) -> List[float 
     if len(results) != len(trajectory_batch["rewards"]):
         raise ValueError("verification_results must have one entry per reward")
     scores: List[float | None] = []
-    for result in results:
-        if result is None or result.status is not VerificationStatus.VERIFIED:
+    excluded = trajectory_batch.get("exclude_from_baseline") or [False] * len(results)
+    for result, masked in zip(results, excluded, strict=True):
+        if masked or result is None or result.status is not VerificationStatus.VERIFIED:
             scores.append(None)
         else:
             scores.append(normalized_verifier_score(result))
@@ -158,11 +176,14 @@ def get_trajectory_passes(trajectory_batch: TrajectoryBatch) -> List[bool]:
     """Return task success, honoring explicit verifier verdicts when available."""
     outcomes = get_outcome_rewards(trajectory_batch)
     results = trajectory_batch.get("verification_results")
+    excluded = trajectory_batch.get("exclude_from_baseline") or [False] * len(outcomes)
     if results is None:
-        return [outcome > 0.0 for outcome in outcomes]
+        return [outcome > 0.0 and not masked for outcome, masked in zip(outcomes, excluded, strict=True)]
     passes = []
-    for outcome, result in zip(outcomes, results, strict=True):
-        if result is None:
+    for outcome, result, masked in zip(outcomes, results, excluded, strict=True):
+        if masked:
+            passes.append(False)
+        elif result is None:
             passes.append(outcome > 0.0)
         elif result.status is not VerificationStatus.VERIFIED:
             passes.append(False)
@@ -420,7 +441,7 @@ def normalize_trajectory_batches(
         result["exclude_from_baseline"] = baseline_exclusions_concat
 
     _concatenate_environment_metrics(result, trajectory_batches, fields=fields)
-    for key in ("verification_results", "evidence_messages", "task_ids", "task_outcomes"):
+    for key in ("verification_results", "evidence_messages", "episode_statistics", "task_ids", "task_outcomes"):
         if key in fields.present:
             result[key] = [
                 value
@@ -457,6 +478,8 @@ def concatenate_trajectory_batches(
             result.get("env_metrics"),
             result.get("env_classes"),
             verification_results=result.get("verification_results"),
+            episode_statistics=result.get("episode_statistics"),
+            excluded=result.get("exclude_from_baseline"),
         )
         metrics.update(
             rollout_counter_metrics(
@@ -642,6 +665,8 @@ def get_rollout_metrics(
     env_metrics: Optional[List[Dict[str, Any]]] = None,
     env_classes: Optional[List[str]] = None,
     verification_results: Optional[List[Optional[VerificationResult]]] = None,
+    episode_statistics: Optional[List[dict[str, int]]] = None,
+    excluded: Optional[List[bool]] = None,
 ):
     """
     Computes rollout metrics including token statistics and optional environment-specific metrics.
@@ -657,7 +682,16 @@ def get_rollout_metrics(
         Dictionary of aggregated metrics
     """
     successes = rollout_successes(rewards, verification_results)
-    return rollout_length_metrics([len(response) for response in responses], successes, env_metrics, env_classes)
+    if excluded is not None:
+        successes = [success and not masked for success, masked in zip(successes, excluded, strict=True)]
+    optimized_lengths = [len(response) for response in responses]
+    lengths = (
+        optimized_lengths if episode_statistics is None else [value["generated_tokens"] for value in episode_statistics]
+    )
+    metrics = rollout_length_metrics(lengths, successes, env_metrics, env_classes)
+    if episode_statistics is not None:
+        metrics["generate/optimized_avg_num_tokens"] = float(np.mean(optimized_lengths))
+    return metrics
 
 
 def rollout_successes(

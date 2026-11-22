@@ -1,0 +1,74 @@
+# Exp5 SFT release. V7 already contains the sealed science repairs.
+# OpenResearcher's 5% share remains reserved; downstream RL is held.
+schema: 1
+name: long-loop-exp5/round5
+version: "2026.11.21.113"
+slug: mochi-exp5
+cluster: cw-rno2a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5
+  temporary_prefix: s3://marin-us-east-08a/tmp
+archive:
+  hf_upload_repo_prefix: open-athena/Snowball-LongLoop-Round5
+  evaldash_run_prefix: long-loop-round5
+data_release: v7-option-g
+pools: exp5-prepared
+evaluation: frozen-micro210
+initializer: exp3-staged
+sft:
+  stopping:
+    type: steps
+    count: 1000
+  epoch_capacity:
+    path: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5/long-loop-exp5/round5/sft/2026.11.21.113/analysis/source-exposure-20261122/epoch-capacity.json
+    sha256: 07446b189a19bec28c01328579fcd5a65c8d68c5dc878315d9f43825618a5093
+  task_timeout_seconds: 72000
+  stage_guard:
+    h100_hour_limit: 5120
+    poll_interval: 30
+    stall_retries: 2
+  training_budget:
+    duration: 20h
+    finalization_reserve: 40m
+    update_reserve: 10m
+  batch_size: 256
+  min_lr_ratio: 0.1
+  learning_rate: 5.0e-05
+  adam_learning_rate: 1.153846153846154e-05
+  warmup_steps: 30
+  lr_schedule: constant
+  wall_clock_cooldown_fraction: 0.15
+  mp: "params=float32,compute=bfloat16,output=bfloat16"
+  compiler_dumps: true
+  # Allow cold-start host skew; the native NCCL operation watchdog remains enabled.
+  first_collective_call_timeout: 600
+  special_token_lr_multiplier: 5.656854249492381
+  # R1 uses cross-node data FSDP and context-sharded expert ownership.
+  expert_weight_sharding:
+    expert: [expert, context]
+    hidden: [data]
+    intermediate: model
+  mesh:
+    axes:
+      context: 8
+      expert: 1
+      model: 1
+      replica: 1
+    batch_axis_name: batch
+    compute_mapping: &id001 {}
+    dcn_axes:
+      replica_dcn: 1
+      data: -1
+    param_mapping:
+      embed: data
+    shared_mapping: *id001
+  resources:
+    cpu: 64
+    ram: 1500GB
+    disk: 512GB
+    device:
+      variant: H100
+      kind: gpu
+      count: 8
+    preemptible: false
+    replicas: 32

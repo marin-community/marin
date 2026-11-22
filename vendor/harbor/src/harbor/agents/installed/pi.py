@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from packaging.version import InvalidVersion, Version
 from upath import UPath
 
 from harbor.agents.installed.base import (
@@ -320,6 +321,7 @@ export default function (pi) {
         model_info: dict[str, Any] | None = None,
         thinking_format: str | None = None,
         http_idle_timeout: float | None = None,
+        mcp_adapter_version: str | None = None,
         mcp_excluded_tools: Sequence[str] = (),
         **kwargs,
     ) -> None:
@@ -360,6 +362,7 @@ export default function (pi) {
         )
         self._thinking_format = thinking_format
         self._http_idle_timeout = http_idle_timeout
+        self._mcp_adapter_version = mcp_adapter_version
         self._mcp_excluded_tools = tuple(mcp_excluded_tools)
         model_info = model_info or {}
         self._configure_compaction = (
@@ -387,6 +390,13 @@ export default function (pi) {
             )
 
         super().__init__(*args, **kwargs)
+        if self.mcp_servers:
+            if self._mcp_adapter_version is None:
+                raise ValueError("mcp_adapter_version must be pinned when Pi uses MCP servers")
+            try:
+                Version(self._mcp_adapter_version)
+            except InvalidVersion as exc:
+                raise ValueError("mcp_adapter_version must be an exact package version") from exc
 
     @classmethod
     def _resolve_model_limit(

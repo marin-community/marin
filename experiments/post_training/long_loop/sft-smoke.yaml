@@ -1,0 +1,300 @@
+data:
+  tokenizer: s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18
+  vocab_size: null
+  cache_dir: cache/
+  cache_catalog: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24.2/cache_catalog.json
+  cache_options:
+    batch_size: 128
+  enforce_eos: true
+  auto_build_caches: false
+  chat_template: null
+  shuffle: true
+  permutation_type: feistel
+  block_cross_document_attention: true
+  stop_strategy: restart
+  target_budget: null
+  experiment_budget: null
+  mixture_block_size: 64000
+  max_train_batches: null
+  num_validation_sequences:
+    sft/source/nemotron_sft_v3/math_v3/train: 8
+    sft/source/nemotron_sft_v3/competitive_programming_v2/competitive_coding_python: 8
+    sft/source/nemotron_sft_v3/math_proofs_v1/lean: 8
+    sft/source/nemotron_sft_v3/finance_v1/train: 8
+    sft/source/nemotron_sft_v3/science_v2/vendor: 8
+    sft/source/agenttrove: 8
+    sft/source/nemotron_sft_v3/agentic_v2/interactive_agent: 8
+    sft/source/identity-data: 8
+    sft/source/nemotron_sft_v3/multilingual_v1/code_zh: 8
+    sft/source/nemotron_sft_v3/multilingual_v1/stem_ja: 8
+    sft/pooled: 8
+  shuffle_before_trainval_split: true
+  prior_context_phases: []
+eval:
+  compute_bpb: false
+  dropless_eval: false
+  dropless_eval_moe_implementation: sonic_cute
+  eval_at_first_step: false
+  eval_batch_size: 32
+  eval_current: true
+  eval_ema: false
+  max_eval_batches: 2
+  max_seq_len: null
+  prefix: eval
+  steps_per_eval: 15
+  best_checkpoint_path: null
+flops_baseline: null
+max_retries_failure: 0
+max_task_failures: 1
+model:
+  attention_implementation: gpu_fa4_cute
+  capacity_factor: 1.0
+  ce_grad_in_forward_token_block_size: null
+  expert_chunks: 1
+  global_every: 4
+  global_kv_heads: null
+  head_dim: 128
+  hidden_dim: 2560
+  initializer_std: 0.009882117688026186
+  intermediate_dim: 1280
+  latent_dim: null
+  layer_norm_eps: 1.0e-05
+  local_kv_heads: null
+  max_seq_len: 32768
+  moe_implementation: sonic
+  num_expert_waves: 1
+  num_experts: 256
+  num_experts_per_token: 4
+  num_heads: 20
+  num_kv_heads: 5
+  num_layers: 26
+  num_shared_experts: 1
+  pooled_transport_capacity_factor: null
+  qb_estimator: topk
+  qb_hist_bins: 1000
+  qk_mult: 1.75
+  qk_mult_long_scale: 1.0
+  remat_mode: recompute_all
+  report_capacity_overflow: false
+  rope:
+    scaling_factor: null
+    theta: 10000.0
+  rope_fused: false
+  sconv: false
+  sconv_kernel: 4
+  sconv_sites:
+  - k
+  - attn
+  - mlp
+  shared_expert_intermediate_dim: 2560
+  sliding_window: 2048
+  vocab_size: 128256
+optimizer:
+  adam_lr: 5.0e-05
+  backend_steps: 5
+  beta1: 0.9062
+  beta2: 0.95
+  coefficient_type: quintic
+  cooldown: null
+  cycle_length: null
+  cycles: null
+  decay: 475
+  default_weight_decay_mask: null
+  epsilon: 3.8339433005718795e-15
+  haps: null
+  learning_rate: 5.0e-05
+  lr_schedule: linear
+  max_grad_norm: null
+  min_lr_ratio: 0.1
+  momentum: 0.95
+  muon_epsilon: 1.0e-08
+  nesterov: true
+  rewarmup: 0.0
+  type: grug_moe_muonh_v1
+  warmup: 0
+  weight_decay: 0
+  weight_decay_modules: null
+processes_per_task: 8
+resources:
+  container_profile: null
+  cpu: 64
+  device:
+    count: 8
+    kind: gpu
+    variant: H100
+  disk: 500GB
+  image: null
+  preemptible: false
+  ram: 1500GB
+  replicas: 4
+  target_cluster: cw-rno2a
+  zone: null
+stop_after_steps: 15
+tensorstore_cache_bytes: 2147483648
+trainer:
+  anchor_token_ids:
+  - 3560
+  - 1984
+  - 1781
+  - 4320
+  - 5507
+  - 842
+  - 128001
+  balance_attention_rows: false
+  context_axis_size: 2
+  data_seed: null
+  ema_beta: null
+  expert_axis_size: 1
+  gc_interval: 1
+  log_every: 1
+  offload_opt_state: true
+  replica_axis_size: 1
+  save_checkpoints: true
+  sharding_dump_path: null
+  special_token_ids:
+  - 128006
+  - 128007
+  - 128002
+  - 128003
+  - 128005
+  - 128011
+  - 128009
+  special_token_lr_multiplier: 5.656854249492381
+  trainer:
+    allow_nondivisible_batch_size: false
+    allow_partial_checkpoint: false
+    checkpointer:
+      append_run_id_to_base_path: false
+      base_path: UNBOUND
+      debug:
+        dump_stacks_after: null
+        enabled: false
+        flush_logs: true
+        force_gc_before_serialize: true
+        log_interval: 60.0
+        top_allocations: 8
+        tracemalloc_frames: 25
+      delete_old_temp_checkpoints: true
+      keep: null
+      keep_last_temporary_checkpoints: 1
+      save_interval: 30m
+      temporary_base_path: UNBOUND
+      write:
+        cache_pool_bytes: 1073741824
+        data_copy_concurrency: 16
+        max_chunk_bytes: 536870912
+        max_staged_host_bytes: 17179869184
+        max_write_replicas: 1024
+        min_replica_slice_bytes: 16777216
+    crash_on_inf: true
+    crash_on_nan: true
+    distributed:
+      coordinator_address: null
+      initialize_jax_distributed: true
+      local_device_ids: null
+      num_processes: null
+      process_id: null
+    id: UNBOUND
+    initialize_from: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/snowball-sft-hf-import-20261024e/step-0
+    jax_compilation_cache_dir: null
+    jax_config:
+      jax_softmax_custom_jvp: true
+      jax_threefry_partitionable: true
+    load_checkpoint: false
+    load_checkpoint_path: []
+    log_dir: logs
+    log_jaxprs: true
+    log_xla_hlo: true
+    max_eval_batches: null
+    mesh:
+      axes:
+        context: 8
+        data: -1
+        model: 1
+        replica: 1
+      batch_axis_name: batch
+      compute_mapping: &id001 {}
+      dcn_axes:
+        replica_dcn: -1
+      param_mapping:
+        embed: data
+      shared_mapping: *id001
+    model_averaging: null
+    mp: params=float32,compute=bfloat16,output=bfloat16
+    num_train_steps: 4750
+    per_device_eval_parallelism: -1
+    per_device_parallelism: -1
+    profiler:
+      create_perfetto_trace: false
+      enabled: false
+      num_steps: 25
+      perfetto_link: false
+      process_index: null
+      profile_options:
+        advanced_configuration: *id001
+        device_tracer_level: null
+        enable_hlo_proto: false
+        host_tracer_level: null
+        include_dataset_ops: null
+        python_tracer_level: null
+      start_step: 5
+      upload:
+        enabled: true
+        service_url: https://iris.oa.dev/proxy/xprof
+        ttl_days: 30
+    progress_watchdog:
+      diagnostic_timeout: null
+      startup_grace_period: 1s
+    quantization: null
+    require_accelerator: true
+    seed: 0
+    shutdown_at_exit: false
+    steps_per_eval: 1000
+    tracker:
+      background: true
+      background_finish_timeout: 120.0
+      background_max_queue_size: 10000
+      entity: marin-community
+      fork_from: null
+      group: null
+      id: null
+      mode: online
+      name: null
+      project: marin-long-loop
+      replicate_path: null
+      resume: allow
+      save_code: false
+      service_teardown_timeout: 60.0
+      tags:
+      - long-loop
+      - plumbing
+      - sft
+      type: wandb
+    train_batch_size: 256
+    use_explicit_mesh_axes: true
+    wandb: null
+    watch:
+      include_histograms: false
+      include_norms: true
+      include_per_parameter_norms: true
+      interval: 0
+      split_scan_layers: true
+      watch_targets:
+      - grads
+      - params
+    xla_dump_upload:
+      enabled: false
+      ttl_days: 30
+  training_data_mode: mixture
+  watch_mode: inline
+  z_loss_weight: 0.0001
+  gradient_accumulation_steps: 8
+max_retries_preemption: 0
+data_sections:
+  components:
+    path: s3://marin-us-east-08a/marin/long-loop/config/2026.11.19/sft-components.json
+    sha256: d372def486ced1418d1ad63bd9f50959f463430ecbcd83029d6db12dfe0ad493
+  train_weights:
+    path: s3://marin-us-east-08a/marin/long-loop/config/2026.11.19/sft-train_weights.json
+    sha256: e954bba2b54492ab3af6ff56a735e4dcaea53a6599f61c5480baae9a57d9bdcd
+train_weight_phases: 1

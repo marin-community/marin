@@ -329,11 +329,16 @@ class ResourceGroups(BaseModel):
         return self
 
 
+class ProviderNetworkAccess(StrEnum):
+    SERVICE_ONLY = "service_only"
+
+
 class ProviderRequirement(BaseModel):
     """One versioned action interface and literal JSON initial state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    network_access: ProviderNetworkAccess | None = Field(default=None, exclude_if=lambda value: value is None)
     action_interface: str = Field(min_length=1)
     initial_state: JsonValue = Field(repr=False)
 
@@ -915,6 +920,21 @@ AnswerFormat = Annotated[
 ]
 
 
+EXECUTION_RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb")
+
+
+class ExecutionRequirements(BaseModel):
+    """Task-declared machine capacity and phase deadlines, in MiB and seconds."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    cpus: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    storage_mb: int = Field(gt=0)
+    agent_timeout_sec: float = Field(gt=0)
+    verifier_timeout_sec: float = Field(gt=0)
+
+
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -923,6 +943,12 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
+    execution_requirements: ExecutionRequirements | None = Field(default=None, exclude_if=lambda value: value is None)
+    verifier_execution_requirements: ExecutionRequirements | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # Non-null integrity contracts need runtime protections outside this source port.
+    integrity_contract: None = None
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
@@ -939,6 +965,12 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        if self.verifier_execution_requirements is not None:
+            if self.execution_requirements is None or any(
+                getattr(self.verifier_execution_requirements, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:

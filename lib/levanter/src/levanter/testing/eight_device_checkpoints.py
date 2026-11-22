@@ -10,6 +10,7 @@ any interpreter can import them regardless of its working directory.
 """
 
 import contextlib
+import json
 import multiprocessing
 import os
 import pathlib
@@ -17,9 +18,11 @@ import socket
 import threading
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+import draccus
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,8 +30,11 @@ import tensorstore as ts
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from rigging.training_journal import TrainingJournal, verify_training_journals
 
 from levanter import tensorstore_serialization
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
+from levanter.config import register_codecs
 from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
     TensorStoreReadConfig,
@@ -156,6 +162,44 @@ def replica_aware_restore_across_processes() -> None:
             np.testing.assert_array_equal(result.arrays[name], expected[name])
         assert result.memory_kinds == {_PINNED_HOST_MEMORY_KIND}
     assert sum(result.tensorstore_chunk_reads for result in results) == len(expected)
+
+
+def _async_checkpoint_roundtrip(process_id: int, coordinator: str, checkpoint_path: str) -> np.ndarray:
+    with _distributed_process(process_id, coordinator):
+        register_codecs()
+        config = CheckpointerConfig(
+            base_path=checkpoint_path, append_run_id_to_base_path=False, save_interval=None, keep=None
+        )
+        config = draccus.decode(CheckpointerConfig, json.loads(json.dumps(draccus.encode(config))))
+        journal = TrainingJournal(
+            str(Path(checkpoint_path) / "telemetry"), "async-wire-roundtrip", "sft", f"rank-{jax.process_index()}"
+        )
+        checkpointer = config.create("async-wire-roundtrip", training_journal=journal)
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        expected = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+        with jax.set_mesh(mesh):
+            source = {"model": jax.device_put(expected, NamedSharding(mesh, P()))}
+            checkpointer.save_checkpoint(source, step=1, destination="step-1", is_temporary=False)
+            checkpointer.wait_until_finished()
+            saved = str(Path(checkpoint_path) / "step-1")
+            metadata = load_checkpoint_metadata(saved)
+            assert metadata["step"] == 1 and metadata["is_temporary"] is False
+            restored = np.asarray(checkpointer.load_checkpoint(source, saved)["model"])
+        journal.log({"checkpoint/restored_values": int(restored.size)}, step=metadata["step"], commit=True)
+        journal.finish(status="completed")
+        return restored
+
+
+def async_checkpoint_roundtrip_across_processes() -> None:
+    with TemporaryDirectory() as tmpdir:
+        results = _run_on_distributed_processes(_async_checkpoint_roundtrip, tmpdir)
+        verify_training_journals(
+            str(Path(tmpdir) / "telemetry"),
+            {f"rank-{rank}" for rank in range(DISTRIBUTED_PROCESS_COUNT)},
+            {"checkpoint_save"},
+        )
+    for result in results:
+        np.testing.assert_array_equal(result, np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32))
 
 
 def _save_halves(checkpoint_path: str, split: NamedSharding, values: np.ndarray) -> None:

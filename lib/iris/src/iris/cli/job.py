@@ -534,6 +534,7 @@ def build_job_constraints(
     zone: str | None = None,
     preemptible: bool | None = None,
     target_cluster: str | None = None,
+    excluded_nvlink_domains: tuple[str, ...] = (),
 ) -> list[Constraint]:
     """Assemble the constraint list for a submitted job.
 
@@ -556,6 +557,9 @@ def build_job_constraints(
         constraints.append(preemptible_constraint(preemptible))
     if target_cluster:
         constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
+    constraints.extend(
+        Constraint.create(key="nvlink.domain", op=ConstraintOp.NE, value=domain) for domain in excluded_nvlink_domains
+    )
 
     # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
@@ -601,6 +605,7 @@ def run_iris_job(
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     target_cluster: str | None = None,
+    excluded_nvlink_domains: tuple[str, ...] = (),
     bundle_exclude: re.Pattern[str] | None = None,
     extra_bundle_includes: Sequence[str] = (),
     secrets: dict[str, str] | None = None,
@@ -652,6 +657,7 @@ def run_iris_job(
         zone=zone,
         preemptible=preemptible,
         target_cluster=target_cluster,
+        excluded_nvlink_domains=excluded_nvlink_domains,
     )
 
     if reserve:
@@ -967,6 +973,11 @@ Examples:
 )
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
+    "--exclude-nvlink-domain",
+    multiple=True,
+    help="Exclude an NVLink domain from placement. Can be repeated.",
+)
+@click.option(
     "--sync-package",
     multiple=True,
     help=(
@@ -1104,6 +1115,7 @@ def run(
     region: tuple[str, ...],
     zone: str | None,
     target_cluster: str | None,
+    exclude_nvlink_domain: tuple[str, ...],
     extra: tuple[str, ...],
     sync_package: tuple[str, ...],
     no_sync: bool,
@@ -1177,6 +1189,7 @@ def run(
             regions=region or None,
             zone=zone,
             target_cluster=target_cluster,
+            excluded_nvlink_domains=exclude_nvlink_domain,
             reserve=reserve or None,
             priority=priority,
             preemptible=preemptible,

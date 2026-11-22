@@ -10,8 +10,11 @@ import json
 import torch
 from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
+    normalized_verifier_scores,
+    verifier_score_summary,
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
+    get_trajectory_passes,
     task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
@@ -21,7 +24,7 @@ from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.checkpoint_listing import extract_step_from_path, list_checkpoint_dirs
-from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, protected_native_checkpoint_steps
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from skyrl_train.batch_metrics import consumed_stop_metrics
@@ -167,7 +170,9 @@ def async_step_metrics(
 
 def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, float]:
     """Return response lengths, stop reasons, score contributions and environment metrics."""
-    lengths = [len(tokens) for tokens in trajectory_batch["response_ids"]]
+    optimized_lengths = [len(tokens) for tokens in trajectory_batch["response_ids"]]
+    episodes = trajectory_batch.get("episode_statistics")
+    lengths = optimized_lengths if episodes is None else [value["generated_tokens"] for value in episodes]
     count = len(lengths)
     if not count:
         raise ValueError("Evaluation response metrics require a nonempty batch")
@@ -202,7 +207,13 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
         response_tokens=float(sum(lengths)),
         response_tokens_mean=sum(lengths) / count,
         response_tokens_max=float(max(lengths)),
+        optimized_response_tokens=float(sum(optimized_lengths)),
+        excluded_count=float(sum(trajectory_batch.get("exclude_from_baseline") or [])),
     )
+    if episodes is not None:
+        for field in ("assistant_turns", "tool_calls", "conversations"):
+            metrics[field] = float(sum(value[field] for value in episodes))
+            metrics[f"{field}_mean"] = metrics[field] / count
     if stops is None or metrics["stop_reason_coverage"] != 1:
         return metrics
     scores = [sum(reward) if isinstance(reward, list) else reward for reward in trajectory_batch["rewards"]]
@@ -247,8 +258,23 @@ def calculate_per_dataset_metrics(
 
         # Add to eval metrics with proper naming
         sanitized_data_source = sanitize_data_source(data_source)
-        eval_metrics[f"eval/{sanitized_data_source}/avg_score"] = avg_score
-        eval_metrics[f"eval/{sanitized_data_source}/pass_at_{n_samples_per_prompt}"] = pass_at_n
+        if avg_score is not None:
+            eval_metrics[f"eval/{sanitized_data_source}/avg_score"] = avg_score
+        if pass_at_n is not None:
+            eval_metrics[f"eval/{sanitized_data_source}/pass_at_{n_samples_per_prompt}"] = pass_at_n
+        raw_batch = {key: value for key, value in subset_trajectory_batch.items() if key != "exclude_from_baseline"}
+        _, raw_pass = get_metrics_from_trajectory_batch(raw_batch, subset_uids, scored_only=False)
+        if raw_pass is not None:
+            eval_metrics[f"eval/{sanitized_data_source}/raw_verifier_pass_at_{n_samples_per_prompt}"] = raw_pass
+        verifier_scores = normalized_verifier_scores(subset_trajectory_batch)
+        if verifier_scores is not None:
+            coverage, average = verifier_score_summary(verifier_scores)
+            eval_metrics[f"eval/{sanitized_data_source}/num_scored"] = float(
+                sum(score is not None for score in verifier_scores)
+            )
+            eval_metrics[f"eval/{sanitized_data_source}/verifier_score_coverage"] = coverage
+            if average is not None:
+                eval_metrics[f"eval/{sanitized_data_source}/avg_verifier_score"] = average
         eval_metrics.update(
             {
                 f"eval/{sanitized_data_source}/{key}": value

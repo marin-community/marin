@@ -1,4 +1,5 @@
 # @package environment.task_sessions
+retrieval_service: null # Run-owned endpoint for the pinned OpenResearcher index.
 local: null # Explicitly enable with {} on Linux hosts with working bubblewrap.
 max_verifier_workers: 32 # verifier threads in each rollout worker
 remote_judge: null # Set base_url and api_key_env to grade judge tasks on the rollout host.

@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import draccus
 import equinox as eqx
 import haliax as hax
 import jax
@@ -29,7 +30,7 @@ import jax.random as random
 import jmp
 import numpy as np
 import pytest
-from haliax import Axis, named_jit
+from haliax import Axis
 from haliax.partitioning import set_mesh
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from jax.extend import core as jax_core
@@ -52,6 +53,9 @@ from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_sett
 from levanter.metrics import ReductionType
 from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
+    ExpertWeightSharding,
+    snowball_to_state_dict,
+    snowball_from_state_dict,
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
     DenseMLP,
@@ -65,6 +69,7 @@ from levanter.models.snowball import (
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
+from levanter.models.snowball_sft import SnowballSftConfig, reseed_snowball_head, snowball_update_transform
 from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
@@ -232,6 +237,41 @@ def test_snowball_state_dict_key_and_shape_manifest():
     ), f"missing={set(expected) - set(sd)} unexpected={set(sd) - set(expected)}"
     for key, shape in expected.items():
         assert tuple(sd[key].shape) == shape, f"{key}: {tuple(sd[key].shape)} != {shape}"
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize("data_axis,context_axis", [(1, 8), (8, 1)])
+def test_sft_reseed_and_update_scale_preserve_other_weights_and_freeze_router(data_axis, context_axis):
+    cfg = _tiny_config()
+    settings = SnowballSftConfig((30, 31), (2, 3), 4.0, True)
+    with use_test_devices(8) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, data_axis, 1, context_axis, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "replica", "model"),
+            axis_types=(AxisType.Explicit,) * 6,
+        )
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
+            original = model.to_state_dict()
+            reseeded = reseed_snowball_head(model, settings)
+            after = reseeded.to_state_dict()
+            for name, value in original.items():
+                if name == "lm_head.weight":
+                    expected = np.array(value)
+                    expected[[30, 31]] = np.asarray(value)[[2, 3]]
+                else:
+                    expected = value
+                np.testing.assert_array_equal(after[name], expected)
+            updates = jax.tree.map(jnp.ones_like, model)
+            transform = snowball_update_transform(settings)
+            scaled, _ = transform.update(updates, transform.init(model), model)
+            for name, value in scaled.to_state_dict().items():
+                expected = np.ones(value.shape)
+                if name in ("model.embed_tokens.weight", "lm_head.weight"):
+                    expected[[30, 31]] = 4
+                elif name.endswith("mlp.router.bias"):
+                    expected[:] = 0
+                np.testing.assert_array_equal(value, expected)
 
 
 def test_snowball_state_dict_roundtrip_is_exact():
@@ -708,7 +748,7 @@ def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
 
 @pytest.mark.timeout(120)
 @pytest.mark.multidevice
-def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
+def test_snowball_context_and_replica_parallel_values_and_gradients_match_data_parallel():
     with use_test_devices(8) as devices:
         cfg = SnowballConfig(
             vocab_size=32,
@@ -730,7 +770,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
             (Axis("batch", 4), Axis("position", 8)),
         )
-        axes = ("replica_dcn", "data", "expert", "context", "model")
+        axes = ("replica_dcn", "replica", "data", "expert", "context", "model")
 
         def run(shape):
             mesh = Mesh(
@@ -752,12 +792,16 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
                 np.asarray(grad.transformer.output_proj),
             )
 
-        data_axis, reference = run((1, 2, 2, 1, 1))
+        data_axis, reference = run((1, 1, 2, 2, 1, 1))
         assert data_axis is None
         # Four context shards make the flattened token sharding larger than the batch.
-        for shape in [(1, 1, 2, 2, 1), (1, 1, 2, 4, 1)]:
+        for shape, expected_axis in [
+            ((1, 1, 1, 2, 2, 1), "context"),
+            ((1, 1, 1, 2, 4, 1), "context"),
+            ((1, 2, 1, 2, 1, 1), None),
+        ]:
             context_axis, sharded = run(shape)
-            assert context_axis == "context"
+            assert context_axis == expected_axis
             for expected, actual in zip(reference, sharded, strict=True):
                 np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
 
@@ -851,11 +895,9 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 expert_spec = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec
                 assert expert_spec == P("expert", ("data", "context"), "model"), expert_spec
                 optimizer = AdamConfig(learning_rate=5e-5).build(1)
-                state = named_jit(
-                    lambda model: TrainerState.init(optimizer, model, key=random.key(1)),
-                    axis_resources=trainer_cfg.parameter_axis_mapping,
-                    out_axis_resources=trainer_cfg.parameter_axis_mapping,
-                )(restored)
+                # Exercise concrete HF/native initialization, where Adam used
+                # to allocate each moment eagerly before the first update.
+                state = TrainerState.init(optimizer, restored, key=random.key(1))
                 expert_shape = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.shape
                 moment_specs = [
                     leaf.sharding.spec
@@ -865,6 +907,9 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 assert moment_specs and all(
                     "expert" in spec and ("data", "context") in spec for spec in moment_specs
                 ), moment_specs
+                for leaf in jax.tree.leaves(state.opt_state):
+                    if isinstance(leaf, jax.Array) and leaf.shape == expert_shape:
+                        np.testing.assert_array_equal(np.asarray(leaf), np.zeros(expert_shape))
             with local_cpu_mesh():
                 examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(
@@ -1131,6 +1176,32 @@ def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
 
 
 @pytest.mark.multidevice
+def test_r1_expert_storage_shards_data_and_survives_weight_import():
+    with use_test_devices(8) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 2, 1, 4, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        config = replace(
+            _tiny_config(),
+            hidden_dim=32,
+            intermediate_dim=16,
+            num_experts=8,
+            expert_weight_sharding=ExpertWeightSharding(expert=("expert", "context"), hidden=("data",)),
+        )
+        config = draccus.decode(SnowballConfig, draccus.encode(config))
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=random.key(31))
+            state = snowball_to_state_dict(model.transformer)
+            restored = snowball_from_state_dict(model.transformer, state)
+            for original, loaded in zip(model.transformer.blocks, restored.blocks, strict=True):
+                bank = loaded.mlp.expert_mlp.w_gate
+                assert bank.sharding.shard_shape(bank.shape) == (2, 16, 16)
+                assert bank.sharding.spec == P(("expert", "context"), "data", "model")
+                np.testing.assert_array_equal(np.asarray(bank), np.asarray(original.mlp.expert_mlp.w_gate))
+
+
 def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries():
     with use_cpu_devices(8), jax.threefry_partitionable(True):
         # Omit `replica_dcn` so Pembed_vocab/Plm_head also exercise absent-axis dropping.

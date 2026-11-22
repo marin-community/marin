@@ -31,6 +31,7 @@ from daytona import (
     DaytonaRateLimitError,
     ExecuteResponse,
 )
+from rigging import telemetry
 from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
@@ -154,8 +155,10 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
                 try:
                     sandbox = await client.get(name)
                     await client.delete(sandbox)
+                    telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "delete_requested"})
                     return
                 except DaytonaNotFoundError:
+                    telemetry.event("daytona_sandbox_lifecycle", {"sandbox_name": name, "state": "destroyed"})
                     return
                 except DaytonaConflictError as error:
                     # Daytona refuses deletion while the sandbox is still starting or stopping.
@@ -759,9 +762,13 @@ class DaytonaMachineFactory:
                     )
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
                 sandbox = await _create_sandbox(client, params, timeout=timeout)
-            if self.auto_stop_interval:
-                keepalive = asyncio.create_task(_keep_active(sandbox, self.auto_stop_interval * 60 / 3))
-                lifetime.push_async_callback(_stop_keepalive, keepalive)
+                telemetry.event(
+                    "daytona_sandbox_lifecycle",
+                    {"sandbox_name": name, "state": "acquired", "vcpu": sandbox.cpu},
+                )
+                if self.auto_stop_interval:
+                    keepalive = asyncio.create_task(_keep_active(sandbox, self.auto_stop_interval * 60 / 3))
+                    lifetime.push_async_callback(_stop_keepalive, keepalive)
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )

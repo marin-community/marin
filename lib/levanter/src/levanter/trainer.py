@@ -3,6 +3,8 @@
 
 import atexit
 import copy
+import dataclasses
+import gc
 import functools
 import logging as pylogging
 import os
@@ -30,7 +32,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -87,10 +89,18 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.telemetry import TelemetryConfig, capture_stall_diagnostics
 from levanter.tracker.wandb import WandbConfig
+from rigging.training_journal import TrainingJournal, phase
+from levanter.tracker.json_logger import _to_jsonable
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
+from levanter.training_budget import (
+    TimeLimitedIterator,
+    TrainingBudgetConfig,
+    TrainingStopReason,
+    record_training_completion,
+)
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import move_tree_to_memory_kind, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
@@ -289,6 +299,7 @@ class Trainer:
         loss_fn: ComputeLossFunction,
         *,
         add_default_hooks: bool = True,
+        loss_weight_fn: Callable | None = None,
     ):
         """
         Args:
@@ -297,12 +308,20 @@ class Trainer:
             loss_fn (Callable): the loss function. This should be a function that takes a model and some inputs and returns
                 either a scalar loss, or a tuple of (scalar loss, metrics_dict). The metrics dict will be automatically
                 logged to the tracker with appropriate prefixes (e.g., "train/accuracy", "eval/perplexity").
+            loss_weight_fn: When supplied, loss_fn returns a summed loss. Normalize by this full-batch weight,
+                including during gradient accumulation. Summed losses also handle empty-label microbatches safely.
                 The function should be jit-able and should not have any side effects.
         """
         self.hooks = TrainerHooks()
         self.config = config
+        if config.training_budget is not None and config.native_telemetry_root is None:
+            raise ValueError("Time-limited training requires an explicit native telemetry root")
+        self._completed_updates: int | None = None
+        self._last_learning_rate_scale = 1.0
+        self._training_stop_reason: TrainingStopReason | None = None
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        self.loss_weight_fn = loss_weight_fn
         self._checkpointer: Optional[Checkpointer] = None
         self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
@@ -312,15 +331,17 @@ class Trainer:
             self.tracker = levanter.tracker.current_tracker()
         except RuntimeError:
             # No global tracker set, create one
-            self.tracker = levanter.tracker.CompositeTracker(
-                [c.init(self.run_id) for c in _compose_with_telemetry(config.tracker)]
+            self.tracker = _configured_tracker(
+                config.tracker, self.run_id, config.native_telemetry_root, config.log_dir
             )
+        self.journal = self.tracker.training_journal
 
         if add_default_hooks:
             self._add_default_hooks()
 
         self._cmanagers = []
         self._logged_jaxprs: set[str] = set()
+        self._compiled_journal_variants: set[str] = set()
 
     @cached_property
     def loss_fn(self) -> WrappedLossFunction:
@@ -423,13 +444,33 @@ class Trainer:
         # letting the background commit thread finish here also avoids it logging into the
         # already-closed tracker/stdout during teardown.
         if self._checkpointer is not None:
-            with progress_event_scope(
-                self.hooks.emit_event,
-                ProgressEvent.CHECKPOINT_STARTED,
-                ProgressEvent.CHECKPOINT_FINISHED,
+            with (
+                phase(self.journal, "checkpoint_drain"),
+                progress_event_scope(
+                    self.hooks.emit_event,
+                    ProgressEvent.CHECKPOINT_STARTED,
+                    ProgressEvent.CHECKPOINT_FINISHED,
+                ),
             ):
                 try:
                     self._checkpointer.wait_until_finished()
+                except Exception as e:
+                    problems.append(e)
+
+        if args[0] is None and not problems and self._completed_updates is not None:
+            budget = self.config.training_budget
+            if budget is not None:
+                assert self.config.native_telemetry_root is not None
+                try:
+                    record_training_completion(
+                        telemetry_root=self.config.native_telemetry_root,
+                        checkpoint=prefix_join(self.checkpoint_path, f"step-{self._completed_updates - 1}"),
+                        completed_updates=self._completed_updates,
+                        maximum_updates=self.num_train_steps,
+                        budget=budget,
+                        stop_reason=self._training_stop_reason,
+                        final_learning_rate_scale=self._last_learning_rate_scale,
+                    )
                 except Exception as e:
                     problems.append(e)
 
@@ -441,6 +482,10 @@ class Trainer:
 
         self._cmanagers = []
         self.hooks.emit_event(ProgressEvent.TRAINING_FINISHED)
+
+        if args[0] is not None or problems:
+            if self.journal is not None:
+                self.journal.finish(status="failed")
 
         if len(problems) > 0:
             raise RuntimeError("Exception(s) occurred while exiting trainer", problems) from problems[0]
@@ -492,7 +537,16 @@ class Trainer:
         if model is not None and not load_checkpoint:
             # The concrete model is on its target mesh. Avoid a compiled init/merge with
             # another live copy of its parameters.
-            return init_state_and_model(model_init, training_key)
+            arrays = [leaf for leaf in jax.tree.leaves(model) if isinstance(leaf, jax.Array)]
+            logger.info(
+                "Concrete optimizer initialization: mesh=%s model_bytes_per_device=%d largest_parameter_shards=%s",
+                self.device_mesh,
+                sum(leaf.addressable_shards[0].data.nbytes for leaf in arrays),
+                [(leaf.shape, str(leaf.sharding)) for leaf in sorted(arrays, key=lambda leaf: leaf.nbytes)[-3:]],
+            )
+            state = init_state_and_model(model_init, training_key)
+            logger.info("Concrete optimizer initialization completed")
+            return state
 
         trainer_state_shape = eqx.filter_eval_shape(init_state_and_model, model_init, training_key)
         saveable_train_state = saveable_training_mask(trainer_state_shape, is_trainable)
@@ -537,7 +591,7 @@ class Trainer:
     def checkpoint_path(self) -> str:
         return self.checkpoint_search_paths[0]
 
-    def train_step(self, state: S, *batch: X, **batch_kwargs) -> StepInfo[S]:
+    def train_step(self, state: S, *batch: X, learning_rate_scale: Scalar = 1.0, **batch_kwargs) -> StepInfo[S]:
         """
         Performs a single training step.
         """
@@ -545,20 +599,32 @@ class Trainer:
         # so we avoid running them when they're not needed
         # this results in two compiles, but the cost of the second compile is worth it
         hooks_this_time = any((state.step + 1) % h.every == 0 for h in self.hooks.jit_hooks)
+        scale = jnp.asarray(learning_rate_scale, dtype=jnp.float32)
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
+            if self.config.offload_opt_state:
+                state = dataclasses.replace(
+                    state, opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="device")
+                )
             # Annotation scoped to the compiled step only (not hooks/logging below) so
             # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
             with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
                 if hooks_this_time:
-                    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+                    result = self._maybe_save_jaxpr(
+                        "train_step", self._jit_train_step_fn, state, batch, batch_kwargs, scale
+                    )
                 else:
                     result = self._maybe_save_jaxpr(
-                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
+                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs, scale
                     )
 
             loss = result.loss.item()
+            self._last_learning_rate_scale = float(learning_rate_scale)
+            if self.config.offload_opt_state:
+                offloaded = move_tree_to_memory_kind(result.new_state.opt_state, memory_kind="pinned_host")
+                jax.block_until_ready(offloaded)
+                result.new_state = dataclasses.replace(result.new_state, opt_state=offloaded)
             self.hooks.emit_event(ProgressEvent.TRAIN_STEP_FINISHED)
 
             if self.config.crash_on_nan and jnp.isnan(loss):
@@ -575,7 +641,11 @@ class Trainer:
                     self.hooks.run_jit_hooks_outside_step(info, result.hook_infos)
 
             # Log metrics from loss function and throughput metrics
-            metrics_to_log = {**result.loss_metrics, "throughput/hook_time": hook_time()}
+            metrics_to_log = {
+                **result.loss_metrics,
+                "throughput/hook_time": hook_time(),
+                "optim/learning_rate_scale": self._last_learning_rate_scale,
+            }
             levanter.tracker.log(metrics_to_log, step=info.step)
 
         return info
@@ -588,7 +658,7 @@ class Trainer:
         is_first_step = True
 
         while int(state.step) < self.num_train_steps:
-            with capture_time() as loading_time:
+            with phase(self.journal, "data_load", step=int(state.step)), capture_time() as loading_time:
                 try:
                     example = next(iter_data)
                 except StopIteration:
@@ -601,14 +671,38 @@ class Trainer:
                     loading_time(),
                 )
 
-            info = self.train_step(state, example)
+            with phase(self.journal, "first_step" if is_first_step else "steady_state", step=int(state.step)):
+                scale = iter_data.learning_rate_scale if isinstance(iter_data, TimeLimitedIterator) else 1.0
+                logger.info(
+                    "SFT_STEP rank=%d phase=start step=%d learning_rate_scale=%g budget_deadline=%s",
+                    jax.process_index(),
+                    int(state.step),
+                    scale,
+                    self.config.training_budget.deadline_epoch_seconds if self.config.training_budget else None,
+                )
+                info = self.train_step(state, example, learning_rate_scale=scale)
+                logger.info(
+                    "SFT_STEP rank=%d phase=completed step=%d completed_updates=%d learning_rate_scale=%g duration=%g loss=%g",
+                    jax.process_index(),
+                    info.step,
+                    info.next_step,
+                    scale,
+                    info.step_duration,
+                    info.loss,
+                )
             state = info.state
 
             if is_first_step:
                 logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
                 is_first_step = False
 
-            levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
+            with capture_time() as gc_time:
+                if self.config.gc_interval is not None and int(state.step) % self.config.gc_interval == 0:
+                    gc.collect()
+
+            levanter.tracker.log(
+                {"throughput/loading_time": loading_time(), "throughput/gc_time": gc_time()}, step=info.step
+            )
 
             yield info
 
@@ -624,10 +718,16 @@ class Trainer:
             )
             info = StepInfo(state, 0.0, 0.0, _event_handler=self.hooks.emit_event)
             self.run_hooks(info, force=True)
+            self._completed_updates = int(info.state.step)
             return info
 
+        limited = (
+            TimeLimitedIterator(train_loader, self.config.training_budget)
+            if self.config.training_budget is not None
+            else None
+        )
         info: Optional[StepInfo[S]] = None
-        for info in self.training_steps(state, train_loader):
+        for info in self.training_steps(state, limited if limited is not None else train_loader):
             pass
 
         if info is None:
@@ -636,6 +736,8 @@ class Trainer:
             )
 
         self.run_hooks(info, force=True)
+        self._completed_updates = int(info.state.step)
+        self._training_stop_reason = limited.stop_reason if limited is not None else None
 
         return info
 
@@ -651,15 +753,19 @@ class Trainer:
         self.add_hook(
             levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
         )
-        # engine.add_hook(callbacks.log_memory_usage(), every=1)
-        checkpointer = self.config.checkpointer.create(self.run_id)
+        if self.config.record_device_memory:
+            self.add_hook(levanter.callbacks._metrics.log_device_memory, every=1)
+        checkpointer = self.config.checkpointer.create(self.run_id, training_journal=self.journal)
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            with progress_event_scope(
-                info.emit_event,
-                ProgressEvent.CHECKPOINT_STARTED,
-                ProgressEvent.CHECKPOINT_FINISHED,
+            with (
+                phase(self.journal, "checkpoint_enqueue", step=info.step),
+                progress_event_scope(
+                    info.emit_event,
+                    ProgressEvent.CHECKPOINT_STARTED,
+                    ProgressEvent.CHECKPOINT_FINISHED,
+                ),
             ):
                 checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
 
@@ -726,10 +832,10 @@ class Trainer:
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            max_buffered_batches=128,
+            max_buffered_batches=self.config.loader_max_buffered_batches,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            fetch_batch_size=32,
+            fetch_batch_size=self.config.loader_fetch_batch_size,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
@@ -752,7 +858,7 @@ class Trainer:
             donate_args=(True,),
         )
 
-    def _train_step(self, state: S, batch, batch_kwargs, _no_hooks=False) -> TrainStepResult[S]:
+    def _train_step(self, state: S, batch, batch_kwargs, learning_rate_scale, _no_hooks=False) -> TrainStepResult[S]:
         key, new_key = jax.random.split(state.training_key)
         model = inference_mode(state.model, False)
 
@@ -771,7 +877,9 @@ class Trainer:
                 loss_for_opt, _metrics = result
                 return loss_for_opt.scalar()
 
-        new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
+        new_state, updates = state.take_step(
+            grads, obj_fun=obj_fun, loss=loss, key=new_key, learning_rate_scale=learning_rate_scale
+        )
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
 
         hook_infos = None
@@ -801,11 +909,21 @@ class Trainer:
         """
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
-        # loss_fn always returns (loss, metrics), so has_aux=True
-        # Only batch inputs should be split; raw model dimensions can match the batch size.
-        grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
-
         mbs = self.config.microbatch_size
+        if self.loss_weight_fn is not None:
+            denominator = jnp.maximum(self.loss_weight_fn(*batch, **batch_kwargs), 1.0)
+            num_microsteps = max(1, Batch.size // mbs) if mbs is not None else 1
+
+            def weighted_loss(model, *microbatch, **kwargs):
+                loss, metrics = loss_fn(model, *microbatch, **kwargs)
+                factor = num_microsteps / denominator
+                return loss * factor, metrics
+
+            differentiated_loss = weighted_loss
+        else:
+            differentiated_loss = loss_fn
+        grad_fn = partial(eqx.filter_value_and_grad(differentiated_loss, has_aux=True), model)
+
         if mbs is not None:
             grad_fn = microbatched(
                 grad_fn,
@@ -813,6 +931,11 @@ class Trainer:
                 mbs,
                 self.parameter_axis_mapping,
                 self.compute_axis_mapping,
+                accum_dtype=(
+                    jnp.dtype(self.config.gradient_accumulation_dtype)
+                    if self.config.gradient_accumulation_dtype is not None
+                    else None
+                ),
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
@@ -835,6 +958,11 @@ class Trainer:
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
+        if self.journal is not None and name not in self._compiled_journal_variants:
+            with phase(self.journal, "compile", step=int(args[0].step)):
+                compiled = fn.lower(*args, **kwargs).compile()
+                logger.info("Compiled %s memory analysis: %s", name, compiled.memory_analysis())
+            self._compiled_journal_variants.add(name)
         logged = False
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
             logger.info("Tracing %s for jaxpr...", name)
@@ -867,9 +995,26 @@ def _compose_with_telemetry(config: TrackerConfig | Sequence[TrackerConfig]) -> 
     return configs
 
 
-def _initialize_global_tracker(config, run_id):
-    tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in _compose_with_telemetry(config)])
-    levanter.tracker.set_global_tracker(tracker)
+def _configured_tracker(config, run_id, native_telemetry_root, log_directory: Path) -> levanter.tracker.Tracker:
+    journal = None
+    if native_telemetry_root is not None:
+        log_directory.mkdir(parents=True, exist_ok=True)
+        journal = TrainingJournal(
+            native_telemetry_root,
+            run_id,
+            "sft",
+            f"rank-{jax.process_index()}",
+            json_default=_to_jsonable,
+            local_directory=str(log_directory),
+        )
+    with phase(journal, "tracker_init"):
+        return levanter.tracker.CompositeTracker(
+            [c.init(run_id) for c in _compose_with_telemetry(config)], training_journal=journal
+        )
+
+
+def _initialize_global_tracker(config, run_id, native_telemetry_root, log_directory: Path):
+    levanter.tracker.set_global_tracker(_configured_tracker(config, run_id, native_telemetry_root, log_directory))
 
 
 @dataclass
@@ -885,17 +1030,28 @@ class TrainerConfig:
     """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
+    offload_opt_state: bool = False
+    """Keep optimizer state in pinned host memory between updates."""
+    loader_fetch_batch_size: int = 32
+    loader_max_buffered_batches: int = 128
+    gc_interval: int | None = None
+    gradient_accumulation_dtype: str | None = None
+    record_device_memory: bool = False
 
     wandb: Optional[WandbConfig] = None
     log_dir: Path = Path("logs/")
     id: Optional[str] = None  # run id. if None, will be set to a random string
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
+    native_telemetry_root: str | None = None
+    """Durable per-process metric history and phase journals; no provider export required."""
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
     xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig()
     """Optional deadlines for training-step and whole-process progress events."""
+    training_budget: TrainingBudgetConfig | None = None
+    """Execution duration and reserves; its absolute deadline is resolved before training."""
 
     log_jaxprs: bool = True
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""
@@ -947,7 +1103,8 @@ class TrainerConfig:
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
-    load_checkpoint_path: Optional[str | list[str]] = None
+    # Draccus tries union members in order; its str decoder stringifies lists.
+    load_checkpoint_path: list[str] | str | None = None
     """One checkpoint root/path, or ordered roots searched for the newest checkpoint.
 
     If None, search the checkpointer's permanent and temporary roots.
@@ -1037,7 +1194,7 @@ class TrainerConfig:
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
-        _initialize_global_tracker(self.tracker, id)
+        _initialize_global_tracker(self.tracker, id, self.native_telemetry_root, self.log_dir)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.shutdown_at_exit is not False:

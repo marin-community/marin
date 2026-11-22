@@ -532,6 +532,42 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
     assert len(factory.machines) == 1
 
 
+async def test_agent_output_budget_changes_keep_every_turn_and_preserve_request_options():
+    # Pi varies this cap as the context fills, even when its message history continues unchanged.
+    caps = (16384, 12554, 14982, 14732, 14359, 14133, 13915)
+    options = [{"max_completion_tokens": caps[index % len(caps)], "temperature": 0.7} for index in range(60)]
+
+    async def agent(_context, complete):
+        history = [{"role": "user", "content": "Return 12."}]
+        for index, settings in enumerate(options):
+            turn = await complete(Prompt(tuple(history), settings))
+            message = json.loads(json.dumps(turn.message))
+            if index < len(options) - 1:
+                # The real Pi round trip reformats tool JSON and adds an empty reasoning field.
+                message["tool_calls"][0]["function"]["arguments"] = json.dumps(
+                    json.loads(message["tool_calls"][0]["function"]["arguments"]), indent=2
+                )
+                message["reasoning_content"] = None
+                history.extend(
+                    [message, {"role": "tool", "tool_call_id": message["tool_calls"][0]["id"], "content": "Done."}]
+                )
+
+    model = ReplayModel(
+        [shell_call("echo done", call_id=f"call-{index}") for index in range(59)]
+        + [{"role": "assistant", "content": "12"}]
+    )
+    result = await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent", max_turns=60)
+    )
+    assert result.grade.reward == 1.0
+    assert len(result.rollout.conversations) == 1
+    conversation = result.rollout.conversations[0]
+    assert len(conversation.steps) == 60
+    assert sum(conversation.loss_mask) == 60
+    assert [request.options for request in model.requests] == options
+    assert all(request.continuation is not None for request in model.requests[1:])
+
+
 @pytest.mark.parametrize(
     ("change", "continues"),
     [
@@ -1390,6 +1426,33 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
     assert model.requests[0].messages[:-1] == ({"role": "user", "content": "What is six plus six?"},)
     assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name="shell")}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+@pytest.mark.parametrize("failure", [TimeoutError, ConnectionError])
+async def test_workspace_verifier_scores_agent_timeout_but_not_transport_failure(answer, reward, failure):
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([{"role": "assistant", "content": "Inspecting the workspace."}])
+
+    async def agent(context, complete):
+        await complete(Prompt(({"role": "user", "content": "Solve the task."},), {}))
+        assert context.machine is not None
+        await context.machine.run(Command(("sh", "-c", f"echo {answer} > /workspace/answer")))
+        raise failure("Agent interrupted while using the workspace")
+
+    task = file_task(answer_type=AnswerType.WORKSPACE_STATE, answer_format=AnswerCall())
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(model, {"local": factory}, harnesses={"agent": AgentHarness(agent)}).run_task(
+            rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent")
+        )
+    result = caught.value
+    assert result.operation == RolloutOperation.ADVANCE
+    assert isinstance(result.__cause__, failure)
+    if failure is TimeoutError:
+        assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
+    else:
+        assert result.grade.status == Outcome.UNAVAILABLE
+        assert result.grade.reward is None
 
 
 @pytest.mark.parametrize(

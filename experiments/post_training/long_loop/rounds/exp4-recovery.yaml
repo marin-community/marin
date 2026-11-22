@@ -1,0 +1,11 @@
+schema: 1
+name: long-loop-exp4/round4
+version: 2026.11.19.82
+slug: mochi-exp4-harbor-recovery
+cluster: cw-rno2a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4
+  temporary_prefix: s3://marin-us-east-08a/tmp
+resolved_plan:
+  path: s3://marin-us-east-08a/marin/long-loop/config/2026.11.19/exp4-recovery82-plan.json
+  sha256: a0ddb064354834de62de27c68102b548009ceed476064f68fed5934bc0d177ca

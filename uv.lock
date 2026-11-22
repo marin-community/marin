@@ -5984,6 +5984,7 @@ name = "marin-rolloutengine"
 version = "0.1.0"
 source = { editable = "lib/rolloutengine" }
 dependencies = [
+    { name = "httpx" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
@@ -6001,6 +6002,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
@@ -6176,6 +6178,7 @@ name = "marin-taskcompendium"
 version = "0.1.0"
 source = { editable = "lib/taskcompendium" }
 dependencies = [
+    { name = "httpx" },
     { name = "marin-rigging" },
     { name = "marin-shellbox" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
@@ -6206,6 +6209,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=5.0.1,<6" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "ijson", marker = "extra == 'pipeline'", specifier = ">=3.3" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
     { name = "marin-rigging", editable = "lib/rigging" },

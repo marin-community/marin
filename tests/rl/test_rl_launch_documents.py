@@ -17,6 +17,7 @@ from tests.rl.launch_document_census import generation_geometry_step, render_lau
 
 
 def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/launch-census")
     monkeypatch.setattr(rl_compose, "SELECTION_ROOT", str(tmp_path / "selections"))
     monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path / "artifacts"))
     producers = set()

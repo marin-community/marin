@@ -33,6 +33,7 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedR
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
 from math import fsum
 import numpy as np
+from loguru import logger
 from skyrl_gym.verification import VerificationStatus
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -57,9 +58,15 @@ class RolloutBufferConfig:
     batch_policy: BatchPolicy
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
+    consumed_route_quotas: dict[str, int] = field(default_factory=dict)
     groups_per_family: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.consumed_route_quotas:
+            if self.batch_policy is not BatchPolicy.FULL_BATCH:
+                raise ValueError("Consumed route quotas require full_batch admission")
+            if sum(self.consumed_route_quotas.values()) != self.batch_size or any(value < 1 for value in self.consumed_route_quotas.values()):
+                raise ValueError("Consumed route quotas must be positive and sum to batch_size")
         if self.batch_size < 1:
             raise ValueError(f"rollout batch size must be positive, got {self.batch_size}")
         if self.max_in_flight is not None and self.max_in_flight < 1:
@@ -90,6 +97,7 @@ class RolloutLease:
     lease_id: str
     policy_step: int
     batch_id: int
+    route: str | None = None
     family: str | None = None
 
 
@@ -261,6 +269,7 @@ class RolloutVerdict:
     rewards: GroupRewards | None
     work: GeneratedWork
     row_facts: RowFacts | None = None
+    masked_reasons: tuple[tuple[str, int], ...] = ()
 
     @property
     def trainable(self) -> bool:
@@ -283,10 +292,16 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        exceptions = batch.get("exception_types") or []
+        masked = collections.Counter(
+            str(exceptions[index]) if index < len(exceptions) and exceptions[index] else "no_loss_tokens"
+            for index, mask in enumerate(batch["loss_masks"]) if not any(mask)
+        )
+        masked_reasons = tuple(sorted(masked.items()))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work)
+            return RolloutVerdict(group.uid, decision.rejections, None, None, work, masked_reasons=masked_reasons)
         facts = RowFacts.from_batch(batch)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts, masked_reasons)
 
 
 class RolloutWriter(Protocol):
@@ -336,6 +351,7 @@ class GroupDisposition:
     disposition: str
     tokens: int
     dwell_seconds: float | None
+    masked_reasons: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -547,8 +563,11 @@ class RolloutBuffer:
         self.config = config
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
+        self._route_order = collections.deque(config.consumed_route_quotas)
         self._family_order = collections.deque(config.groups_per_family)
         self._leases: dict[str, RolloutLease] = {}
+        self._leasing_paused = False
+        self._aborted_leases: set[str] = set()
         # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
         self._ready: list[ReadyRollout] = []
         self._admitted: collections.defaultdict[int, list[ReadyRollout]] = collections.defaultdict(list)
@@ -559,8 +578,11 @@ class RolloutBuffer:
         self._dispositions: list[GroupDisposition] = []
         self._stats: collections.defaultdict[int, _SelectionStats] = collections.defaultdict(_SelectionStats)
         self._changed = asyncio.Condition()
+        self._logged_admission_gate: str | None = None
 
     def _lease_batch(self) -> int | None:
+        if self._leasing_paused:
+            return None
         if self._policy_step == 0:
             return None
         if self.config.max_in_flight is not None and len(self._leases) >= self.config.max_in_flight:
@@ -573,12 +595,47 @@ class RolloutBuffer:
     async def acquire_lease(self) -> RolloutLease:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
-            while (batch_id := self._lease_batch()) is None:
-                await self._changed.wait()
+            await self._changed.wait_for(self._lease_available)
+            batch_id = self._lease_batch()
+            route = None
+            if self.config.consumed_route_quotas:
+                occupied = collections.Counter(lease.route for lease in self._leases.values() if lease.batch_id == batch_id)
+                occupied.update(rollout.prompt["group_route"] for rollout in self._ready if rollout.batch_id == batch_id)
+                occupied.update(rollout.prompt["group_route"] for rollout in self._admitted[batch_id])
+                # Rotate even when a route repeatedly fails, so it cannot monopolize leases.
+                route = next(
+                    (name for name in self._route_order if occupied[name] < self.config.consumed_route_quotas[name]),
+                    None,
+                )
+                if route is None:
+                    raise RuntimeError("No route slot remains in an unfilled batch")
+                while self._route_order[0] != route:
+                    self._route_order.rotate(-1)
+                self._route_order.rotate(-1)
             family = self._lease_family(batch_id) if self.config.groups_per_family else None
-            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, family)
+            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route, family)
             self._leases[lease.lease_id] = lease
             return lease
+
+    def _lease_available(self) -> bool:
+        batch_id = self._lease_batch()
+        gate = None
+        if batch_id is None:
+            if self._policy_step == 0:
+                gate = "policy_not_published"
+            elif self.config.max_in_flight is not None and len(self._leases) >= self.config.max_in_flight:
+                gate = "max_in_flight"
+            else:
+                gate = "batch_lookahead"
+        if gate != self._logged_admission_gate:
+            logger.bind(admission_gate=gate, policy_step=self._policy_step, leased_groups=len(self._leases)).info(
+                "rollout_admission_gate gate={} policy_step={} leased_groups={}",
+                gate,
+                self._policy_step,
+                len(self._leases),
+            )
+            self._logged_admission_gate = gate
+        return batch_id is not None
 
     def _lease_family(self, batch_id: int) -> str:
         occupied = collections.Counter(
@@ -596,7 +653,11 @@ class RolloutBuffer:
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
+            if lease_id in self._aborted_leases:
+                return
             lease = self._leases[lease_id]
+            if lease.route is not None and prompt.get("group_route") != lease.route:
+                raise ValueError("Committed prompt does not match its consumed-route lease")
             if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
                 raise ValueError("Committed prompt family does not match its rollout lease")
             del self._leases[lease_id]
@@ -607,6 +668,21 @@ class RolloutBuffer:
                 )
             )
             self._select()
+            self._changed.notify_all()
+
+    async def abort_leases(self) -> tuple[str, ...]:
+        """Revoke all uncommitted leases and reject their late results until cleanup finishes."""
+        async with self._changed:
+            self._leasing_paused = True
+            leases = tuple(self._leases)
+            self._aborted_leases.update(leases)
+            self._leases.clear()
+            self._changed.notify_all()
+            return leases
+
+    async def resume_leasing(self) -> None:
+        async with self._changed:
+            self._leasing_paused = False
             self._changed.notify_all()
 
     async def publish(self, policy_step: int) -> None:
@@ -672,10 +748,15 @@ class RolloutBuffer:
                 ) from error
             selection = None
             if self._batch_complete():
+                route_counts = collections.Counter(rollout.prompt.get("group_route") for rollout in self._admitted[self._policy_step])
+                if self.config.consumed_route_quotas and route_counts != self.config.consumed_route_quotas:
+                    raise RuntimeError("Consumed batch does not meet exact route quotas")
                 for rollout in self._admitted[self._policy_step]:
                     self._dispose(rollout, "consumed")
                 stats = self._stats.pop(self._policy_step)
                 metrics = stats.metrics(self.config.dynamic_sampling)
+                if self.config.consumed_route_quotas:
+                    metrics.update({f"async/consumed_route/{name}": float(count) for name, count in route_counts.items()})
                 if self.config.groups_per_family:
                     counts = collections.Counter(
                         group.prompt[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
@@ -751,7 +832,8 @@ class RolloutBuffer:
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
         self._dispositions.append(
-            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
+            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell,
+                             rollout.verdict.masked_reasons)
         )
 
     def _batch_complete(self) -> bool:

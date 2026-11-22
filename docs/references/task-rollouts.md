@@ -127,6 +127,18 @@ For these trials, the Harbor task package defines the image, environment variabl
 and agent user. TaskSpec may add `setup_commands` and their setup-only
 `working_directory`; other TaskSpec machine-environment overrides are rejected.
 
+## SkyRL reply text
+
+The SkyRL model client returns visible text in `responses` and assistant message
+`content`. When a reply ends its turn with an EOS or chat turn terminator, these
+fields exclude that terminator, even with `skip_special_tokens=False`. A length
+stop does not end its turn, so its text keeps every sampled token, including a
+final terminator. Graders, task steps, and conversation history use this text. The
+chat template adds the history terminator after each assistant turn.
+`skip_special_tokens` controls only the special tokens inside the reply;
+assistant-prefix completions always keep them. Sampled
+`response_ids` keep every token, including the terminator, for training.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.

@@ -13,11 +13,13 @@ from typing import TypeVar, cast
 
 from draccus.utils import DataclassInstance
 from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
+from iris.client.client import iris_ctx
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
+from levanter.trainer import TrainerConfig
 from mergedeep import mergedeep
 from rigging.filesystem.cluster_config import (
     check_gcs_paths_same_region,
@@ -395,6 +397,26 @@ def _apply_env_to_process(env: dict[str, str]) -> None:
         os.environ.setdefault(key, value)
 
 
+def _trainer_with_execution_deadline(trainer: TrainerConfig) -> TrainerConfig:
+    budget = trainer.training_budget
+    if budget is None:
+        return trainer
+    context = iris_ctx()
+    if context.client is None or context.job_id is None:
+        raise RuntimeError("Time-limited training requires an Iris execution start timestamp")
+    starts = [
+        task.started_at.epoch_seconds()
+        for task in context.client.list_tasks(context.job_id)
+        if task.started_at is not None
+    ]
+    if not starts:
+        raise RuntimeError("Iris has not reported an execution start for this training job")
+    deadline = min(starts) + budget.duration.total_seconds()
+    if budget.deadline_epoch_seconds is not None:
+        deadline = min(deadline, budget.deadline_epoch_seconds)
+    return replace(trainer, training_budget=replace(budget, deadline_epoch_seconds=deadline))
+
+
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """Run the Levanter LM training main function in the current process.
 
@@ -410,6 +432,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     config, train_config, env = _prepare_training_run(config)
+    train_config = cast(TrainLmConfig, train_config)
+    train_config = replace(train_config, trainer=_trainer_with_execution_deadline(train_config.trainer))
 
     model_config = train_config.model
     logger.info(
@@ -423,6 +447,15 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     _apply_env_to_process(env)
     importlib.import_module("levanter.main.train_lm").main(train_config)
+
+
+def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
+    """Run the Levanter DPO training main function in the current process."""
+    config, train_config, env = _prepare_training_run(config)
+    train_config = cast(TrainDpoConfig, train_config)
+    train_config = replace(train_config, trainer=_trainer_with_execution_deadline(train_config.trainer))
+    _apply_env_to_process(env)
+    importlib.import_module("levanter.main.train_dpo").main(train_config)
 
 
 def check_train_config_paths(train_config: object, resources: ResourceConfig) -> None:

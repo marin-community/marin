@@ -22,6 +22,7 @@ import os
 import signal
 import time
 from loguru import logger
+from rigging.training_journal import TrainingJournal, phase
 import asyncio
 import multiprocessing as mp
 
@@ -297,9 +298,19 @@ class BasePPOExp:
         from skyrl_train.tokenizer import validate_checkpoint_vocabulary  # noqa: PLC0415
 
         self.cfg = cfg
+        self.journal = None
+        telemetry_root = cfg.trainer.get("native_telemetry_root")
+        if telemetry_root is not None:
+            if not cfg.trainer.get("wandb_entity") or not cfg.trainer.project_name:
+                raise ValueError("Durable RL telemetry requires explicit W&B entity and project")
+            self.journal = TrainingJournal(
+                telemetry_root, cfg.trainer.run_name, "rl", "trainer",
+                local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
+            )
         self.evaluation_profiles = resolve_evaluation_profiles(cfg)
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
+        self._validate_rollout_worker_capacity()
         self.tokenizer = self.get_tokenizer()
         model = cfg.trainer.policy.model
         validate_checkpoint_vocabulary(
@@ -310,14 +321,25 @@ class BasePPOExp:
             tokenizer_identity=str(model.tokenizer_path),
             disable_fast_tokenizer=cfg.trainer.disable_fast_tokenizer,
         )
-        self.train_dataset = self.get_train_dataset()
-        self.eval_dataset = self.get_eval_dataset()
+        with phase(self.journal, "data_load"):
+            self.train_dataset = self.get_train_dataset()
+            self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
         # Reserve the policy/training placement group BEFORE the inference
         # engines (which are created later, in `_setup_trainer`), so that in the
         # disaggregated case the policy (and optional colocated reference)
         # claims GPU slots before inference engines use the remainder.
         self.policy_pg = self.get_policy_pg()
+
+    def _validate_rollout_worker_capacity(self) -> None:
+        """Check the driver's node before loading model actors for its rollout pool."""
+        if not inference_engines_required(self.cfg):
+            return
+        from skyrl_train.rollouts.workers import RolloutWorkerResources  # noqa: PLC0415
+
+        local_id = ray.get_runtime_context().get_node_id()
+        node = next(node for node in ray.nodes() if node["Alive"] and node["NodeID"] == local_id)
+        RolloutWorkerResources.from_config(self.cfg).validate_node_capacity(node["Resources"].get("CPU", 0))
 
     def create_inference_engine_client(
         self, *, operation: EntrypointOperation = EntrypointOperation.TRAIN
@@ -642,6 +664,7 @@ class BasePPOExp:
             experiment_name=self.cfg.trainer.run_name,
             backends=self.cfg.trainer.logger,
             config=self.cfg,
+            journal=self.journal,
         )
 
     def _setup_trainer(self, tracker):
@@ -656,7 +679,8 @@ class BasePPOExp:
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        inference_engine_client = self.create_inference_engine_client()
+        with phase(self.journal, "inference_engine_init_and_compile"):
+            inference_engine_client = self.create_inference_engine_client()
 
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
 
@@ -684,7 +708,10 @@ class BasePPOExp:
             if distillation_runtime is not None:
                 trainer.configure_distillation(distillation_runtime)
         except BaseException:
-            asyncio.run(trainer.shutdown())
+            try:
+                asyncio.run(trainer.shutdown())
+            finally:
+                trainer.finish_shutdown()
             raise
         return trainer
 
@@ -726,7 +753,8 @@ class BasePPOExp:
         with self.get_tracker() as tracker:
             trainer = None
             try:
-                trainer = self._setup_trainer(tracker)
+                with phase(self.journal, "init"):
+                    trainer = self._setup_trainer(tracker)
                 asyncio.run(trainer.train())
             finally:
                 # Release GPU actors before a Ray retry can start another attempt.
@@ -735,6 +763,8 @@ class BasePPOExp:
                         asyncio.run(trainer.shutdown())
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
+                    finally:
+                        trainer.finish_shutdown()
 
 
 @ray.remote(num_cpus=1, max_retries=0)

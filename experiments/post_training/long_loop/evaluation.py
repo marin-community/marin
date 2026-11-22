@@ -1,0 +1,227 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Micro210 preparation and Snowball evaluation using the existing Mini runtime."""
+
+import hashlib
+import json
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import yaml
+from huggingface_hub import hf_hub_download
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
+from marin.rl.skyrl import (
+    ArtifactDataSource,
+    IrisSkyRLExecution,
+    ResolvedModelLocator,
+    SkyRLGenerationPlan,
+    SkyRLRetentionPolicy,
+    SkyRLRolePlan,
+    SkyRLRun,
+    SkyRLSpec,
+    SkyRLTopology,
+    _materialize_role_plan_config,
+    skyrl_step,
+)
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rolloutengine.models import TaskRolloutSpec
+from skyrlrecipe import RLEntrypoint
+
+from experiments.evaluation.judge_config import MICRO210_JUDGE, JudgeConfig
+from experiments.evaluation.micro210 import judge_runtime_config
+from experiments.evaluation.micro210_inputs import task_with_judge
+from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
+from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
+from experiments.post_training.long_loop.eval_runtime.selection import selected_rollouts
+from experiments.post_training.long_loop.rl_selection import validate_full_selection
+from experiments.post_training.long_loop.stage_config import validate_stage_config
+from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_reference
+
+WHEELS_REVISION = "d5dd315d58f0f47514dd0a2208e90e2a48541328"
+
+
+def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: str, tasks_per_benchmark: int) -> None:
+    path = hf_hub_download(dataset, "data/validation.parquet", repo_type="dataset", revision=revision)
+    table = pq.read_table(path)
+    if table.num_rows != 210:
+        raise ValueError("Pinned Micro210 must contain 210 unique tasks")
+    expanded_path = hf_hub_download(dataset, "data/validation-rollouts.parquet", repo_type="dataset", revision=revision)
+    expanded, receipt = selected_rollouts(table, pq.read_table(expanded_path), tasks_per_benchmark)
+    prepared = repaired_table(expanded, wheels_revision)
+    rows = []
+    for row in prepared.to_pylist():
+        rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+        task = task_with_judge(rollout.task, MICRO210_JUDGE)
+        rollout = rollout.model_copy(update={"task": task})
+        rows.append({**row, "task_spec": task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()})
+    prepared = pa.Table.from_pylist(rows, schema=prepared.schema)
+    receipt.update(dataset=dataset, revision=revision, wheels_revision=wheels_revision)
+    receipt["unique_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    receipt["expanded_source_sha256"] = hashlib.sha256(Path(expanded_path).read_bytes()).hexdigest()
+    (StoragePath(output) / "selection.json").write_bytes(json.dumps(receipt, indent=2).encode())
+    fs, key = filesystem_for(prefix_join(output, "rollouts.parquet"))
+    with fs.open(key, "wb") as target:
+        pq.write_table(prepared, target)
+    environment = {
+        "dataset": dataset,
+        "revision": revision,
+        "wheels_revision": wheels_revision,
+        "data_uri": output,
+        "provisioning": "performed by actual evaluation trials",
+        "setup_preflight_executed": False,
+        "tasks": [
+            {
+                "task_id": row["task_id"],
+                "repetition_index": row["repetition_index"],
+                "task_spec_sha256": hashlib.sha256(row["task_spec"].encode()).hexdigest(),
+                "task_rollout_spec_sha256": hashlib.sha256(row["task_rollout_spec"].encode()).hexdigest(),
+            }
+            for row in prepared.to_pylist()
+        ],
+    }
+    (StoragePath(output) / "environment.json").write_bytes(json.dumps(environment, indent=2).encode())
+
+
+def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:
+    validate_replayable_model_reference(model.local_path, source_uri, model.identity)
+
+
+@dataclass(frozen=True)
+class TerminalPolicy:
+    step: ArtifactStep[SkyRLRun]
+    expected_step: int | None
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
+        if ctx.is_fingerprint:
+            locator = ResolvedModelLocator(
+                uri=prefix_join(artifact_identity(self.step), "terminal-export"),
+                identity=artifact_identity(self.step),
+                local_path="/tmp/marinskyrl/models/long-loop-terminal",
+                tokenizer_uri="<terminal-tokenizer>",
+                tokenizer_revision="<terminal-tokenizer-revision>",
+            )
+            validate_eval_policy(locator, prefix_join(self.step.path(), "terminal-export"))
+            return locator
+        result = ctx.resolved(self.step)
+        if result.hf_model_uri is None or result.global_step is None:
+            raise ValueError("Evaluation requires a committed RL export")
+        if self.expected_step is not None and result.global_step != self.expected_step:
+            raise ValueError("RL export does not match the required checkpoint step")
+        if self.expected_step is None:
+            validate_full_selection(result)
+        return ResolvedModelLocator(
+            uri=result.hf_model_uri,
+            identity=artifact_identity(self.step),
+            local_path="/tmp/marinskyrl/models/long-loop-terminal",
+            tokenizer_uri=result.tokenizer_uri,
+            tokenizer_revision=result.tokenizer_revision,
+        )
+
+
+def _differing_paths(left: dict, right: dict, prefix: str = "") -> list[str]:
+    """The dotted paths where two recipe documents differ, for precise disagreement errors."""
+    paths = []
+    for key in sorted(set(left) | set(right)):
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if key not in left or key not in right:
+            paths.append(path)
+        elif isinstance(left[key], dict) and isinstance(right[key], dict):
+            paths.extend(_differing_paths(left[key], right[key], path))
+        elif left[key] != right[key]:
+            paths.append(path)
+    return paths
+
+
+def configured_evaluation_step(
+    version: str,
+    trained: ArtifactStep[SkyRLRun],
+    data: ArtifactStep,
+    *,
+    name: str,
+    config: dict,
+    role_plan: SkyRLRolePlan,
+    execution: IrisSkyRLExecution,
+    judge: JudgeConfig,
+    seed: int,
+    expected_step: int | None,
+    gpu_variant: str,
+    data_relative_path: str,
+    ray_timeouts: dict[str, int],
+) -> ArtifactStep:
+    """Bind an explicit evaluation recipe to pinned data and the committed model."""
+    config = judge_runtime_config(config, judge)
+    validate_stage_config(config, "evaluation")
+    declared_entrypoint = RLEntrypoint(config.pop("entrypoint", RLEntrypoint.STANDARD.value))
+    if declared_entrypoint is RLEntrypoint.GENERATE:
+        # A generation-only evaluation binds whole-node inference geometry; the
+        # colocated role plan's engine layout carries over unchanged.
+        plan: SkyRLRolePlan | SkyRLGenerationPlan = SkyRLGenerationPlan(
+            gpus_per_node=role_plan.policy_num_gpus_per_node,
+            num_inference_engines=role_plan.num_inference_engines,
+            inference_engine_tensor_parallel_size=role_plan.inference_engine_tensor_parallel_size,
+            inference_engine_pipeline_parallel_size=role_plan.inference_engine_pipeline_parallel_size,
+            inference_engine_data_parallel_size=role_plan.inference_engine_data_parallel_size,
+            inference_engine_expert_parallel_size=role_plan.inference_engine_expert_parallel_size,
+            n_samples_per_prompt=role_plan.n_samples_per_prompt,
+        )
+    else:
+        plan = replace(role_plan, entrypoint=declared_entrypoint.value)
+    materialized = deepcopy(config)
+    _materialize_role_plan_config(materialized, plan)
+    if materialized != config:
+        differences = _differing_paths(config, materialized)
+        raise ValueError(f"Evaluation recipe and explicit role plan disagree at: {differences}")
+    retention = config["generator"]["trajectory_retention"]
+    if not (
+        retention["enabled"]
+        and retention["required"]
+        and retention["eval_sample_fraction"] == 1.0
+        and "eval" in retention["phases"]
+    ):
+        raise ValueError("Evaluation recipe must retain all evaluation traces")
+    step = skyrl_step(
+        SkyRLSpec(
+            name=name,
+            version=version,
+            config_yaml=yaml.safe_dump(config),
+            model=TerminalPolicy(trained, expected_step),
+            train_data=(),
+            validation_data=(ArtifactDataSource(data, relative_path=data_relative_path),),
+            topology=SkyRLTopology(
+                num_nodes=plan.num_nodes,
+                gpus_per_node=role_plan.policy_num_gpus_per_node,
+                gpu_variant=gpu_variant,
+                role_plan=plan,
+            ),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            seed=seed,
+        ),
+        execution,
+        export_hf=False,
+    )
+
+    def build_config(ctx: StepContext) -> JudgedEvaluation:
+        run = step.build_config(ctx)
+        launch = yaml.safe_load(run.launch_config_yaml)
+        launch["ray"].update(ray_timeouts)
+        model = launch["inputs"]["model"]
+        launch["skyrl"]["generator"]["trajectory_retention"].update(
+            model_path=model["uri"],
+            model_source_identity=model["identity"],
+            model_checkpoint_step=expected_step if ctx.is_fingerprint else ctx.resolved(trained).global_step,
+        )
+        run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
+        if not ctx.is_fingerprint:
+            validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
+        return JudgedEvaluation(run, judge)
+
+    configured = replace(step, run=run_judged, build_config=build_config)
+    return replace(configured, expected_fingerprint=configured.fingerprint())

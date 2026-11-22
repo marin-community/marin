@@ -60,6 +60,8 @@ class LaunchResult(BaseModel):
     failure: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    finalization: str = "not_requested"
+    finalization_failure: str | None = None
 
 
 class LaunchReceipt(BaseModel):

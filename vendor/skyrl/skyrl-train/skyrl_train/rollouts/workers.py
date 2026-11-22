@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
@@ -17,6 +18,7 @@ from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
+from skyrl_train.telemetry import WORKER_ROLE, process_telemetry
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.base import TrajectoryRunner
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
@@ -33,6 +35,10 @@ class RolloutWorkers(Protocol):
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         """Generate and write one group, returning its response token count."""
+        ...
+
+    async def abort_training(self, lease_ids: tuple[str, ...]) -> None:
+        """Cancel matching training requests and acknowledge their resource cleanup."""
         ...
 
 
@@ -82,6 +88,15 @@ class RolloutWorkerResources:
             start_interval_seconds=float(workers.start_interval_seconds),
         )
 
+    def validate_node_capacity(self, cpus: float) -> None:
+        """Reject a pool whose workers alone exceed their pinned node's CPU capacity."""
+        required = self.num_workers * self.cpus_per_worker
+        if required > cpus:
+            raise ValueError(
+                f"Rollout workers request {required} CPUs on the driver node; this node has {cpus:g}. "
+                "Reduce trajectory_runner.rollout_workers.num_workers or cpus_per_worker."
+            )
+
 
 class RolloutWorkerStalledError(TimeoutError):
     """A rollout worker completed no request before its progress deadline."""
@@ -95,7 +110,11 @@ class RolloutWorker:
         configure_worker_process()
         configure_ray_worker_logging()
         start_fd_monitor()
+        self._telemetry = ExitStack()
+        self._telemetry.enter_context(process_telemetry(WORKER_ROLE))
         self._executor_threads = executor_threads
+        self._training_tasks: dict[str, asyncio.Task] = {}
+        self._aborted_leases: set[str] = set()
         self._runner = spec.build(tokenizer_from_config(spec.config), shard)
         if sink is not None:
             self._runner.set_trajectory_sink(sink)
@@ -107,7 +126,8 @@ class RolloutWorker:
         await self._runner.startup()
 
     async def shutdown(self) -> None:
-        await self._runner.shutdown()
+        with self._telemetry:
+            await self._runner.shutdown()
 
     async def run(
         self, input_batch: TrajectoryRequestBatch, observe: bool
@@ -119,9 +139,29 @@ class RolloutWorker:
     async def run_task(
         self, task: RolloutTask, writer: RolloutWriter, observe: bool
     ) -> tuple[int, RolloutTimings | None]:
-        with measure_rollout(enabled=observe) as observation:
-            response_tokens = await self._runner.run_task(task, writer)
-        return response_tokens, None if observation is None else observation.timings()
+        lease_id = task.lease.lease_id
+        if lease_id in self._aborted_leases:
+            raise asyncio.CancelledError()
+        current = asyncio.current_task()
+        assert current is not None
+        self._training_tasks[lease_id] = current
+        try:
+            with measure_rollout(enabled=observe) as observation:
+                response_tokens = await self._runner.run_task(task, writer)
+            return response_tokens, None if observation is None else observation.timings()
+        finally:
+            del self._training_tasks[lease_id]
+
+    async def abort_training(self, lease_ids: tuple[str, ...]) -> None:
+        """Reject late RPC arrivals and wait until cancelled runners release their sandboxes."""
+        self._aborted_leases.update(lease_ids)
+        tasks = [self._training_tasks[lease_id] for lease_id in lease_ids if lease_id in self._training_tasks]
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [result for result in results if isinstance(result, Exception)]
+        if errors:
+            raise ExceptionGroup("Aborted rollout cleanup failed", errors)
 
     async def start_eval_session(
         self,
@@ -211,6 +251,9 @@ class RolloutWorkerPool:
         return await self._observed(
             _training_phase(task.request), lambda actor, observe: actor.run_task.remote(task, writer, observe)
         )
+
+    async def abort_training(self, lease_ids: tuple[str, ...]) -> None:
+        await asyncio.gather(*(actor.abort_training.remote(lease_ids) for actor in self._actors))
 
     async def start_eval_session(
         self,

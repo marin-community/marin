@@ -89,6 +89,38 @@ def test_loader_builds_over_a_mixture_that_starts_past_index_zero():
     np.testing.assert_array_equal(np.asarray(batch)[0], sequences[0] + 1)
 
 
+def test_storage_request_batching_preserves_mixed_supervision_and_resume():
+    sources = {}
+    for name, offset, prompt_length in [("chat", 1000, 8), ("replay", 20000, 0)]:
+        weights = np.ones(16, dtype=np.float32)
+        weights[:prompt_length] = 0
+        weights[-1] = 0
+        sources[name] = ListAsyncDataset(
+            [{"tokens": np.arange(16, dtype=np.int32) + offset + 16 * i, "loss_weight": weights} for i in range(64)]
+        )
+    dataset = MixtureDataset(sources, {"chat": 0.5, "replay": 0.5}, 8, key=0)
+    batch_size = 2 * len(jax.devices())
+    observed = {}
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        for request_batches in [4, 32]:
+            loader = DataLoader(
+                dataset,
+                batch_size,
+                max_buffered_batches=4,
+                fetch_batch_size=request_batches,
+                mesh=mesh,
+            )
+            with closing(loader.iter_from_step(0)) as batches:
+                observed[request_batches] = [jax.device_get(next(batches)) for _ in range(4)]
+            with closing(loader.iter_from_step(2)) as resumed:
+                batch = jax.device_get(next(resumed))
+            for key in ["tokens", "loss_weight"]:
+                np.testing.assert_array_equal(batch[key], observed[request_batches][2][key])
+    for expected, actual in zip(observed[32], observed[4], strict=True):
+        np.testing.assert_array_equal(actual["tokens"], expected["tokens"])
+        np.testing.assert_array_equal(actual["loss_weight"], expected["loss_weight"])
+
+
 @pytest.mark.parametrize("buffered_batches", [-1, 0, 2])
 def test_loader_close_releases_prefetch_iterator_and_preserves_resume(buffered_batches):
     with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):

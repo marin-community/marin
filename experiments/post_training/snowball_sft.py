@@ -13,9 +13,9 @@ from fray.types import ResourceConfig
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.lazy import OUT, apply
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedData, SFTPreset, SFTSpec, main
 
@@ -135,7 +135,7 @@ MIXTURE_SPEC = replace(
     version="2026.11.19.1",
     model=replace(_BASE_MODEL, tokenizer_path=MIXTURE_TOKENIZER, task_timeout_seconds=72_000),
     datasets=(),
-    prepared_data=PreparedData(_DATA, _MANIFEST, MIXTURE_TOKENIZER),
+    prepared_manifest=PreparedData(_DATA, _MANIFEST, MIXTURE_TOKENIZER),
     mesh=snowball_mesh(MIXTURE_NODES),
     seq_len=MIXTURE_SEQ_LEN,
     num_train_steps=204,
