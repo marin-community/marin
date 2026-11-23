@@ -426,6 +426,31 @@ def test_api_judge_availability_rejects_unreachable_or_missing_model(monkeypatch
     validate_judge_availability(MICRO210_JUDGE, "fixture-key")
 
 
+@pytest.mark.timeout(120)
+def test_mochi_generation_native_preflight_accepts_four_gpu_hosts(tmp_path, monkeypatch):
+    path = Path(__file__).with_name("fixtures") / "micro210-together-runtime.json"
+    raw = path.read_bytes()
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        replace(policy_fixture_reference(), uri=str(path), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
+    )
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/mochi-generation",
+        version="2026.11.23",
+        serving_profile=ServingProfileName.MOCHI_GB200,
+    )
+    context = StepContext.for_fingerprint(step.runtime_args, step.deps)
+    run = step.build_config(context)
+    report = validate_launch(run.skyrl.launch_config_yaml, tmp_path / "preflight")
+    compiled = yaml.safe_load((tmp_path / "preflight" / "compiled.yaml").read_text())
+    allocation = compiled["iris"]["allocation"]
+    assert allocation["num_nodes"] == 4
+    assert allocation["gpus_per_node"] == 4
+    assert report["runtime_entrypoint"] == "skyrl_train.entrypoints.main_generate"
+
+
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("profile", list(ServingProfileName))
 @pytest.mark.skipif(sys.platform == "darwin", reason="The frozen policy builds Linux bubblewrap task factories")

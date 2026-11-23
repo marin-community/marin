@@ -362,6 +362,7 @@ class SkyRLGenerationPlan(_InferenceGeometry):
         return {
             "trainer.placement.colocate_all": False,
             "trainer.placement.policy_num_gpus_per_node": self.gpus_per_node,
+            "trainer.placement.ref_num_gpus_per_node": self.gpus_per_node,
             **self.inference_config(),
         }
 
