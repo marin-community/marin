@@ -81,6 +81,8 @@ LOCAL_MEMORY = "4g"
 LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
+# The Daytona account that builds and runs campaign images.
+DAYTONA_API_KEY_ENV = "DAYTONA_API_KEY"
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
 TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
@@ -125,7 +127,7 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
         from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
     except ImportError as error:
         raise click.UsageError("--image-backend daytona requires the Shellbox daytona extra") from error
-    return DaytonaMachineFactory(DaytonaConnection(api_key=os.environ.get("DAYTONA_API_KEY")).client_factory())
+    return DaytonaMachineFactory(DaytonaConnection(api_key=os.environ.get(DAYTONA_API_KEY_ENV)).client_factory())
 
 
 def _publish_campaign(report_path: str, selected: dict[str, RlDataSource], catalog_root: str) -> None:

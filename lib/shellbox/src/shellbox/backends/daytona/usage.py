@@ -18,6 +18,7 @@ from daytona import AsyncDaytonaV2Client
 from daytona.v2 import UsageLimit
 
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.machine import VCPUS_PER_CORE
 
 DEFAULT_HEADROOM = 0.2
 
@@ -75,7 +76,7 @@ def max_concurrency(usage: ProjectUsage, *, headroom: float = DEFAULT_HEADROOM) 
 def profile_violations(usage: ProjectUsage, profile: SandboxProfile) -> list[str]:
     """Describe each per-sandbox maximum the profile exceeds; such creates fail."""
     violations = []
-    cores = profile.cpus / 2
+    cores = profile.cpus / VCPUS_PER_CORE
     if usage.max_cores_per_sandbox is not None and cores > usage.max_cores_per_sandbox:
         violations.append(f"{profile.cpus} vCPUs exceed the per-sandbox maximum of {usage.max_cores_per_sandbox} cores")
     if usage.max_memory_gib_per_sandbox is not None and profile.memory_gib > usage.max_memory_gib_per_sandbox:

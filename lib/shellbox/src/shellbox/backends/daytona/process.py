@@ -16,9 +16,9 @@ from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
 from shellbox.process_session import BoundedByteBuffer, StreamProcessSession, own_cleanup
 
-# The log stream keeps flowing while the reader pauses: over HTTP/2 the SDK multiplexes it
-# with stdin writes and the sandbox's other requests, so a waiting consumer stalls them all.
-# Unread stdout is buffered instead, and the session fails once this much is unread.
+# The log stream keeps flowing while the reader pauses, so the provider's bounded per-process
+# log is never left to evict unread frames and, should HTTP/2 come back, a paused stream cannot
+# stall the sandbox's other requests. The session fails once this much stdout is unread.
 OUTPUT_BUFFER_BYTES = 64 * 1024 * 1024
 STDIN_CHUNK_BYTES = 64 * 1024
 # A followed log can end before its eof; it resumes from the last cursor this many times in a row.

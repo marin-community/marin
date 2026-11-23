@@ -24,7 +24,15 @@ import pytest
 
 pytest.importorskip("daytona")
 
-from daytona.v2 import DISABLED, ConflictError, DaytonaError, NotFoundError, RateLimitError, Resources
+from daytona.v2 import (
+    DISABLED,
+    ConflictError,
+    DaytonaError,
+    LimitExceededError,
+    NotFoundError,
+    RateLimitError,
+    Resources,
+)
 from daytona.v2 import ConnectionError as ProviderConnectionError
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.images import ImageRequest, ensure_image, image_name
@@ -218,12 +226,14 @@ class FailedDeletion(LocalDaytona):
         raise self.failure
 
 
-@pytest.mark.parametrize("failure", ["throttled", "lost", "rejected"])
+@pytest.mark.parametrize("failure", ["throttled", "lost", "rejected", "limit"])
 def test_daytona_creation_repeats_the_same_named_request(monkeypatch, failure):
     errors = {
         "throttled": RateLimitError("rate limited", status_code=429, retry_after_seconds=17),
         "lost": ProviderConnectionError("Connection reset by peer"),
         "rejected": DaytonaError("invalid create request", status_code=400),
+        # A full sandbox limit is a 429 too, but waiting out the create deadline would hide it.
+        "limit": LimitExceededError("concurrent sandbox limit reached", status_code=429),
     }
     delays = []
 
@@ -243,11 +253,21 @@ def test_daytona_creation_repeats_the_same_named_request(monkeypatch, failure):
             return SimpleNamespace(id="sbx_created_once", state="started")
 
     client = FlakyCreate()
-    request = _create_sandbox(client, "image", name="fixture", timeout=60, options={})
-    if failure == "rejected":
+    request = _create_sandbox(
+        client,
+        "image",
+        name="fixture",
+        timeout=60,
+        env={},
+        labels={},
+        resources=Resources(),
+        lifecycle_policy={"timeout_seconds": 60, "on_timeout": "delete"},
+        network_policy={"block_all": True},
+    )
+    if failure in ("rejected", "limit"):
         with pytest.raises(DaytonaError) as caught:
             asyncio.run(request)
-        assert caught.value is errors["rejected"]
+        assert caught.value is errors[failure]
         assert client.names == ["fixture"] and not delays
         return
     sandbox = asyncio.run(request)
@@ -420,8 +440,20 @@ def test_daytona_failed_setup_cancels_activity_renewal(lifecycle_client, monkeyp
 
 
 @pytest.mark.parametrize("failure", ["error", "cancelled", "not_started"])
-def test_daytona_failed_creation_deletes_an_accepted_sandbox(failure):
+def test_daytona_failed_creation_deletes_an_accepted_sandbox(monkeypatch, failure):
+    async def no_wait(delay):
+        pass
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+
     class AcceptedThenFailed(LocalDaytona):
+        searches = 0
+
+        async def find_by_name(self, name):
+            # Search is eventually consistent: the accepted sandbox appears on the third read.
+            self.searches += 1
+            return await super().find_by_name(name) if self.searches >= 3 else ()
+
         async def create(self, image, **kwargs):
             sandbox = await super().create(image, **kwargs)
             if failure == "not_started":
@@ -1626,6 +1658,28 @@ def test_ensure_image_reads_back_a_submission_that_did_not_answer(monkeypatch, f
     assert images.submitted == [name]
 
 
+def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(monkeypatch) -> None:
+    class LostResubmission(LocalImages):
+        async def pull(self, reference, *, name, wait):
+            self.submitted.append(name)
+            if len(self.submitted) == 1:
+                self.add(name, reference, status="failed", error="the image build could not be prepared")
+                return
+            # The provider accepted the second submission, but its answer was lost.
+            self.add(name, reference, status="pending", pending_polls=1)
+            raise ProviderConnectionError("Connection reset by peer")
+
+    async def no_wait(delay):
+        pass
+
+    monkeypatch.setattr("shellbox.backends.daytona.images.sleep", no_wait)
+    request = ImageRequest(RegistryImage("fixture:tag"))
+    images = LostResubmission()
+
+    assert asyncio.run(ensure_image(SimpleNamespace(images=images), request)) == request.name
+    assert images.submitted == [request.name, request.name]
+
+
 def test_image_identity_depends_on_the_source_only(tmp_path) -> None:
     registry = RegistryImage("fixture@sha256:" + "a" * 64)
     assert ImageRequest(registry).name == image_name(RegistryImage(registry.reference))
@@ -1662,7 +1716,10 @@ def test_sandbox_resources_request_a_fixed_shape_in_cores() -> None:
     spec = MachineSpec(source=RegistryImage("fixture:tag"), cpus=3, memory_mb=1536, storage_mb=8192)
     # One core is two vCPUs; disk is only a request, since v2 raises it to a platform minimum.
     assert sandbox_resources(spec) == Resources(cpu=1.5, cpu_max=1.5, memory=1.5, memory_max=1.5, disk=8)
-    assert sandbox_resources(MachineSpec(source=RegistryImage("fixture:tag"))) == Resources()
+    # An unset request takes v0's default shape, so the guest never sees v2's burst ceiling.
+    assert sandbox_resources(MachineSpec(source=RegistryImage("fixture:tag"))) == Resources(
+        cpu=0.5, cpu_max=0.5, memory=1, memory_max=1
+    )
 
 
 def test_daytona_refuses_gpus_before_preparing_anything() -> None:

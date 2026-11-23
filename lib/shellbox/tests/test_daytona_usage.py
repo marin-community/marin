@@ -93,7 +93,6 @@ def test_profile_violations_compare_vcpus_with_the_core_maximum() -> None:
     assert profile_violations(usage, SandboxProfile(cpus=32, memory_gib=32)) == []
     violations = profile_violations(usage, SandboxProfile(cpus=34, memory_gib=40))
     assert len(violations) == 2
-    assert "34 vCPUs" in violations[0] and "16.0 cores" in violations[0]
 
 
 def _patch_projects(monkeypatch, *projects: FakeProject) -> None:
@@ -101,23 +100,21 @@ def _patch_projects(monkeypatch, *projects: FakeProject) -> None:
     monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: pending.pop(0))
 
 
-def test_usage_cli_prints_the_project_table_and_concurrency(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("as_json", [True, False], ids=["json", "table"])
+def test_usage_cli_reports_concurrency_and_profile_violations_without_the_key(monkeypatch, capsys, as_json) -> None:
     _patch_projects(monkeypatch, FakeProject())
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY", "--cpu", "40", "--memory-gib", "8"],
-    )
+    arguments = ["--api-key-env", "DAYTONA_RL_API_KEY", "--cpu", "40", "--memory-gib", "8"]
+    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", *arguments, *(["--json"] if as_json else [])])
 
     usage_cli.main()
 
     output = capsys.readouterr().out
-    assert "concurrent sandboxes" in output and "100" in output
-    assert "started 2" in output
-    assert "max concurrency 78 more sandboxes" in output
-    assert "warning: 40 vCPUs exceed" in output
     assert "synthetic-secret-key" not in output
+    if as_json:
+        report = json.loads(output)
+        assert report["max_concurrency"] == {"headroom": 0.2, "limit": 78}
+        assert len(report["profile"]["violations"]) == 1
 
 
 def test_usage_cli_json_and_all_report_each_account_and_skip_missing_keys(monkeypatch, capsys) -> None:

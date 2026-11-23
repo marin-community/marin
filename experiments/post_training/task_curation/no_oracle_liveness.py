@@ -20,8 +20,8 @@ Run it with the RL Daytona credential installed::
         --output /path/to/liveness.jsonl \
         --sample-per-base 20
 
-Snapshot names are written beside each result for cleanup; this repository has
-no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
+The Daytona image name is written beside each result; this repository has no
+code path that deletes Daytona images (see ``.agents/ops/daytona.md``).
 """
 
 import argparse
@@ -38,6 +38,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from rolloutengine.models import MachineRuntimeSpec
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -51,6 +52,8 @@ logger = logging.getLogger(__name__)
 VERIFIER_TIMEOUT = 900.0
 
 UNKNOWN_BASE = "<unknown>"
+# The Daytona account that grades sandboxed tasks.
+DAYTONA_API_KEY_ENV = "DAYTONA_API_KEY"
 """The base bucket for tasks whose rebuild manifest names no base."""
 
 
@@ -113,7 +116,9 @@ def sample_by_base(specs: dict[str, LoweredSpec], bases: dict[str, str], per_bas
     return chosen
 
 
-async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = None) -> LivenessResult:
+async def run_one(
+    spec: LoweredSpec, base: str, daytona: DaytonaConnection, cgroup_parent: Path | None = None
+) -> LivenessResult:
     """Grade an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
         task = spec.task
@@ -128,7 +133,7 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
             return LivenessResult(
                 task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "CPU qualification cannot provision GPUs"
             )
-        placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent)
+        placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent, daytona)
         spec_machine = replace(placement.machine, startup_timeout=runtime.startup_timeout)
         try:
             result = await grade_empty_in_sandbox(task, placement.factory, spec_machine, timeout=VERIFIER_TIMEOUT)
@@ -166,7 +171,7 @@ def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
 
 @dataclass(frozen=True)
 class _GraderPlacement:
-    """Where and how the grader runs: its machine factory, machine spec and snapshot."""
+    """Where and how the grader runs: its machine factory, machine spec and Daytona image name."""
 
     factory: MachineFactory
     machine: MachineSpec
@@ -174,9 +179,13 @@ class _GraderPlacement:
 
 
 def _grader_placement(
-    requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec, context: Path, cgroup_parent: Path | None
+    requirements: EnvironmentRequirements,
+    runtime: MachineRuntimeSpec,
+    context: Path,
+    cgroup_parent: Path | None,
+    daytona: DaytonaConnection,
 ) -> _GraderPlacement:
-    """Resolve the machine factory, machine spec, and snapshot name for the grader."""
+    """Resolve the machine factory, machine spec, and Daytona image name for the grader."""
     if requirements.packages_lock is not None:
         # A packaged grader runs in the local bubblewrap runtime. This branch builds its
         # MachineSpec directly instead of through daytona_identity.declared_machine
@@ -195,7 +204,6 @@ def _grader_placement(
         # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
         factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
         return _GraderPlacement(factory, machine, "")
-    from shellbox.backends.daytona.connection import DaytonaConnection  # noqa: PLC0415
     from shellbox.backends.daytona.images import image_request_for_spec  # noqa: PLC0415
     from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
 
@@ -209,8 +217,9 @@ def _grader_placement(
         memory_mb=runtime.memory_mb,
         storage_mb=runtime.storage_mb,
     )
-    factory = DaytonaMachineFactory(DaytonaConnection(api_key=os.environ.get("DAYTONA_API_KEY")).client_factory())
-    return _GraderPlacement(factory, machine, image_request_for_spec(machine).name)
+    return _GraderPlacement(
+        DaytonaMachineFactory(daytona.client_factory()), machine, image_request_for_spec(machine).name
+    )
 
 
 def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult) -> LivenessResult:
@@ -236,11 +245,14 @@ async def run(
     bases: dict[str, str],
     task_ids: list[str],
     output: Path,
+    daytona: DaytonaConnection,
     cgroup_parent: Path | None = None,
 ) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(specs[task_id], bases.get(task_id, UNKNOWN_BASE), cgroup_parent=cgroup_parent)
+            result = await run_one(
+                specs[task_id], bases.get(task_id, UNKNOWN_BASE), daytona, cgroup_parent=cgroup_parent
+            )
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -270,7 +282,8 @@ def main() -> None:
     if args.limit:
         task_ids = task_ids[: args.limit]
     print(f"sampled {len(task_ids)} of {len(specs)} tasks", flush=True)
-    asyncio.run(run(specs, bases, task_ids, args.output, args.cgroup_parent))
+    daytona = DaytonaConnection(api_key=os.environ.get(DAYTONA_API_KEY_ENV))
+    asyncio.run(run(specs, bases, task_ids, args.output, daytona, args.cgroup_parent))
 
 
 if __name__ == "__main__":

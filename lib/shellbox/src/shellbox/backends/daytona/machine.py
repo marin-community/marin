@@ -28,7 +28,7 @@ from daytona import (
     DaytonaRateLimitError,
     DaytonaTimeoutError,
 )
-from daytona.v2 import DISABLED, AsyncSandbox, LifecyclePolicyOptions, NetworkPolicyInput, Resources
+from daytona.v2 import DISABLED, AsyncSandbox, LifecyclePolicyOptions, LimitExceededError, NetworkPolicyInput, Resources
 from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.images import ensure_image, image_request_for_spec
@@ -69,6 +69,9 @@ PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 STARTED_STATE = "started"
 # A v2 sandbox CPU request is in cores, and one core is two vCPUs; MachineSpec.cpus counts vCPUs.
 VCPUS_PER_CORE = 2
+# The shape of Daytona v0's default sandbox, used when a spec requests no CPU or memory.
+DEFAULT_CPUS = 1
+DEFAULT_MEMORY_MB = 1024
 # The exit trap records the command's status, so a request that lost its connection can still read it.
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
@@ -122,13 +125,13 @@ def sandbox_resources(spec: MachineSpec) -> Resources:
     """Request a fixed CPU and memory shape, so the guest sees what it was given.
 
     Without limits, v2 boots a burstable sandbox whose ``nproc`` reports the
-    burst ceiling. Disk is only requested: v2 raises disk to a platform minimum
-    and refuses a smaller limit.
+    burst ceiling, so an unset request takes v0's default shape. Disk is only
+    requested: v2 raises disk to a platform minimum and refuses a smaller limit.
     """
     if spec.gpus:
         raise UnsupportedMachineSpec("Daytona v2 Linux sandboxes do not provide GPUs")
-    cores = None if spec.cpus is None else spec.cpus / VCPUS_PER_CORE
-    memory = None if spec.memory_mb is None else spec.memory_mb / 1024
+    cores = (DEFAULT_CPUS if spec.cpus is None else spec.cpus) / VCPUS_PER_CORE
+    memory = (DEFAULT_MEMORY_MB if spec.memory_mb is None else spec.memory_mb) / 1024
     disk = None if spec.storage_mb is None else spec.storage_mb / 1024
     return Resources(cpu=cores, cpu_max=cores, memory=memory, memory_max=memory, disk=disk)
 
@@ -139,20 +142,36 @@ async def _create_sandbox(
     *,
     name: str,
     timeout: float,
-    options: Mapping[str, object],
+    env: Mapping[str, str],
+    labels: Mapping[str, str],
+    resources: Resources,
+    lifecycle_policy: LifecyclePolicyOptions,
+    network_policy: NetworkPolicyInput,
 ) -> AsyncSandbox:
     """Create a sandbox, retrying throttling and lost requests, and return it in whatever state it reached.
 
     A named v2 create is get-or-create, so repeating the same request after a
-    lost response or a throttle returns the sandbox that was accepted.
+    lost response or a throttle returns the sandbox that was accepted. A full
+    sandbox limit is not a throttle and raises at once.
     """
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
     budget = math.ceil(timeout)
     while True:
         try:
             sandbox = await client.create(
-                image, name=name, wait_seconds=budget, create_timeout_seconds=budget, **options
+                image,
+                name=name,
+                env=env,
+                labels=labels,
+                resources=resources,
+                user="root",
+                lifecycle_policy=lifecycle_policy,
+                network_policy=network_policy,
+                wait_seconds=budget,
+                create_timeout_seconds=budget,
             )
+        except LimitExceededError:
+            raise
         except DaytonaRateLimitError as error:
             delay = max(error.retry_after_seconds or 0, backoff.next_interval())
             logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
@@ -190,8 +209,10 @@ async def _delete_sandbox(client: AsyncDaytonaV2Client, name: str, created: list
     """Delete the created sandbox, retrying gateway errors and state changes until the interrupt deadline.
 
     When the create request never returned a handle, the sandbox may still have
-    been accepted, so it is looked up by its caller-owned name. When the deadline
-    expires, raise the last retried provider error rather than a bare timeout.
+    been accepted. Sandbox search is eventually consistent, so the caller-owned
+    name is looked up until the deadline before cleanup gives up; the lifecycle
+    policy reclaims a sandbox that appears later. When the deadline expires
+    after a provider error, raise that error rather than a bare timeout.
     """
     backoff = ExponentialBackoff(initial=1, maximum=4, factor=2, jitter=0)
     retried: DaytonaError | None = None
@@ -202,7 +223,8 @@ async def _delete_sandbox(client: AsyncDaytonaV2Client, name: str, created: list
                     sandboxes = tuple(created) or await client.find_by_name(name)
                     for sandbox in sandboxes:
                         await client.delete(sandbox, timeout=INTERRUPT_TIMEOUT)
-                    return
+                    if sandboxes:
+                        return
                 except DaytonaNotFoundError:
                     return
                 except DaytonaConflictError as error:
@@ -220,9 +242,11 @@ async def _delete_sandbox(client: AsyncDaytonaV2Client, name: str, created: list
                     retried = error
                 await sleep(backoff.next_interval())
     except TimeoutError:
-        if retried is None:
+        if retried is not None:
+            raise retried from None
+        if created:
             raise
-        raise retried from None
+        logger.warning("No Daytona sandbox named %s appeared before cleanup ended", name)
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -786,14 +810,11 @@ class DaytonaMachineFactory:
                     image,
                     name=name,
                     timeout=timeout,
-                    options=dict(
-                        env=spec.env,
-                        labels=dict(self.labels),
-                        resources=sandbox_resources(spec),
-                        user="root",
-                        lifecycle_policy=self._lifecycle_policy(),
-                        network_policy=network,
-                    ),
+                    env=spec.env,
+                    labels=dict(self.labels),
+                    resources=sandbox_resources(spec),
+                    lifecycle_policy=self._lifecycle_policy(),
+                    network_policy=network,
                 )
                 created.append(sandbox)
                 if sandbox.state != STARTED_STATE:
