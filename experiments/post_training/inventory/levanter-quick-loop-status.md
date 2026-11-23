@@ -52,7 +52,7 @@ demonstrated lifetime gap, with GPU exit cause and remedy still unproven. The
 five-second grace period, numerical code, transfer layouts and precision remain
 unchanged.
 
-Controlled follow-up `2026.11.22.4` is running from
+Controlled follow-up `2026.11.22.4` ran from
 `768ea250307c746f95464a81ab5944338c8ddc5c` with the owned-cache repair. Its
 coordinator is
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.22.4-coordinator-4367d39b`;
@@ -64,11 +64,21 @@ unchanged; no remedy or completed update is established by startup.
 
 The coordinator was scheduler-preempted and automatically retried. The original
 GPU gang was stopped with `Parent task retried`; all five old GPU pods are gone.
-Current child `2026.11.22.4-a7ebaaff0409` was submitted at 17:24 PST and had all
+Retried child `2026.11.22.4-a7ebaaff0409` was submitted at 17:24 PST and had all
 five tasks running at 17:31 PST, with zero child failures/preemptions. Its new
 accepted bundle again matches all 4,590 entries and 49 required files; all 670
 materialized config fields match the frozen recipe. The coordinator's cumulative
 preemption count is one. Previous-attempt progress is not carried forward.
+
+The retried child failed at 18:04 PST at the same five-second natural-exit
+requirement. All four learners passed initial and step-one finite-state checks;
+model and Adam fingerprints changed, and step-1/version-1 checkpoint metadata
+was committed. All seven cleanup phases returned, followed by shutdown
+acknowledgement and Python `atexit`. The per-publisher cache repair did not
+resolve GPU process exit. All five current GPU pods are gone. Fresh-process
+restore, step two, updated-policy publication and generation remain unverified.
+The newer native inference integration on this branch is outside the frozen
+`768ea25030` run's coverage.
 
 BATCH smoke `2026.11.22.1`, from
 `8dde046e6980e120e13f577f0035be16c62d77f7`, failed at 00:56 PST during

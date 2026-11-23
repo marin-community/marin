@@ -140,14 +140,18 @@ five-second natural exit deadline.
 Commit `768ea25030` bounds stage-transform caches to 64 entries per publisher
 and releases them with their owner. Fresh-process CPU tests verified release
 after normal and aborted publication, and kept exact publication bytes.
-Run `2026.11.22.4` is testing the repair from `768ea25030` with two updates
-on 40 H100s. The coordinator was scheduler-preempted and restarted under its
-existing retry policy; all five original GPU pods are gone. Current child
-`2026.11.22.4-a7ebaaff0409`, submitted at 17:24 PST, had all five tasks running
-at 17:31 PST with zero child failures or preemptions. Its accepted bundle matches
-all 4,590 frozen source entries and 49 required runtime files; all 670 materialized
-configuration fields match the frozen recipe. Progress from the interrupted
-attempt is kept separate. Process exit and restart qualification remain open.
+Run `2026.11.22.4` tested the repair from `768ea25030` on 40 H100s. After
+one coordinator preemption, retried child `2026.11.22.4-a7ebaaff0409` passed
+initial and step-one finite-state checks on all four learners. Model and Adam
+fingerprints changed, and step-1/version-1 checkpoint metadata was committed.
+The learners completed all seven cleanup phases, acknowledged shutdown and
+entered Python `atexit`, but again exceeded the five-second natural-exit limit.
+The driver failed at 18:04 PST; the cache fix did not resolve GPU exit.
+All five current GPU pods and the five interrupted-attempt GPU pods are gone.
+The accepted bundles match all 4,590 frozen source entries and 49 required
+runtime files; all 670 materialized configuration fields match the frozen recipe.
+Progress from the interrupted attempt is kept separate. Fresh-process restore,
+step two, updated-policy publication and generation remain unverified.
 This run covers source `768ea25030`; it does not qualify the newer native
 inference integration now on this branch.
 
