@@ -102,17 +102,25 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     from math_verify.utils import timeout  # noqa: PLC0415
 
     value = strip_math_delimiters(text)
-    text_group = re.search(r"\\(?:text|mbox|mathrm)\{(?!\s*(?:and|or)\s*\})", value)
-    strip_units = bool(text_group)
+    text_groups = list(re.finditer(r"\\(?:text|mbox|mathrm)\{(?!\s*(?:and|or)\s*\})", value))
+    strip_units = bool(text_groups)
+    symbolic_text_group = False
     if re.search(r"(?<!\\)\$", value) or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
         return [], strip_units
-    if text_group:
+    for text_group in text_groups:
         # Unit normalization removes a terminal text-group suffix. It can
         # also swallow any intervening expression up to the final closing brace.
         _, first_close = _scan_brackets(value[text_group.end() - 1 :])
-        if first_close is None or value[text_group.end() + first_close :].strip() not in ("", "^2"):
+        if first_close is None:
             return [], strip_units
         group_contents = value[text_group.end() : text_group.end() + first_close - 1]
+        if value[text_group.end() + first_close :].strip() not in ("", "^2"):
+            prefix = value[: text_group.start()].rstrip()
+            if not re.fullmatch(r"[^\s~]+", group_contents) or (prefix and prefix[-1] not in "([{=+-*/^"):
+                return [], strip_units
+            # A text symbol at the start of a term is part of the expression.
+            symbolic_text_group = True
+            strip_units = False
         if text_group.start() == 0 and len(group_contents.split()) > 4:
             # Long standalone text groups carry prose rather than a math answer.
             return [], strip_units
@@ -122,7 +130,7 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     @timeout(_timeout())
     def parse_whole() -> tuple[object, bool]:
         normalized = normalize_latex(value, config=latex.normalization_config)
-        candidate_strip_units = strip_units or normalized == value
+        candidate_strip_units = not symbolic_text_group and (strip_units or normalized == value)
         if not candidate_strip_units:
             # Default unit normalization also removes trailing symbolic factors.
             normalized = normalize_latex(value, config=replace(latex.normalization_config, units=False))

@@ -174,6 +174,8 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
         (r"2007 + \frac\pi 2", MathType.SCALAR),
         (r"\{x \mid 2 < x < 3\}", MathType.SET),
         (r"32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
+        (r"32 \text{white}, 16 \text{black}", MathType.SCALAR),
+        (r"\mathrm{x}+32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
         (r"[1, 67.\overline{3}]", MathType.LIST),
         (r"x = \frac\pi 2 = 2", MathType.EQUATION),
         (r"1$ + $2", MathType.SCALAR),
@@ -226,6 +228,18 @@ def test_math_list_text_connector_before_final_member(connector):
 def test_math_terminal_unit_power_stays_parseable():
     spec = MathSpec(expected=r"15\mbox{ cm}^2")
     assert grade_math.grade_math_candidate(spec, "15").reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, math_type",
+    [
+        (r"\mathrm{x}+1", r"\mathrm{x}+1", MathType.SCALAR),
+        (r"\frac{\mathrm{x}}{2}", r"\frac{\mathrm{x}}{2}", MathType.SCALAR),
+        (r"[1, \frac{\mathrm{x}}{2}]", r"[1, \frac{\mathrm{x}}{2}]", MathType.LIST),
+    ],
+)
+def test_math_upright_symbols_parse_with_following_math(reference, candidate, math_type):
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference, math_type=math_type), candidate).reward == 1.0
 
 
 @pytest.mark.parametrize(
