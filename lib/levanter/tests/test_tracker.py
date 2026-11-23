@@ -3,6 +3,7 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
+import logging
 import re
 import subprocess
 import warnings
