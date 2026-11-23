@@ -6,9 +6,11 @@
 import hashlib
 import json
 import subprocess
+import sys
 from contextlib import contextmanager
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
 
@@ -449,3 +451,28 @@ def test_unqualified_judge_model_fails_the_queue(tmp_path, difficulty_source):
     )
     with pytest.raises(ValueError, match="has not qualified"):
         difficulty_runtime.batch_judge_route([source])
+
+
+def test_runtime_imports_without_harbor():
+    """The controller and runtime environments have no Harbor package; the import graph must not need it.
+
+    A declared-judge helper briefly imported difficulty_trials from the runtime,
+    which imports Harbor, and every campaign crashed before submission. This
+    regression imports the runtime in a fresh interpreter with Harbor forbidden.
+    """
+    program = (
+        "import sys\n"
+        "class _HarborBlocker:\n"
+        "    def find_module(self, name, path=None):\n"
+        "        if name == 'harbor' or name.startswith('harbor.'):\n"
+        "            return self\n"
+        "    def load_module(self, name):\n"
+        "        raise ModuleNotFoundError(f'{name} is forbidden in the base environment')\n"
+        "sys.meta_path.insert(0, _HarborBlocker())\n"
+        "import experiments.post_training.task_curation.difficulty.runtime\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, text=True, check=True, cwd=Path(__file__).parents[4]
+    )
+    assert result.stdout.strip() == "ok"
