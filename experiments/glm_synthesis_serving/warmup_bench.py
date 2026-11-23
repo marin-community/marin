@@ -28,6 +28,7 @@ import random
 import time
 
 import httpx
+from iris.client.client import iris_ctx
 
 from experiments.glm_synthesis_serving import pool
 
@@ -177,9 +178,7 @@ async def _one_request(
         logger.warning("request failed: %s", str(error)[:200])
 
 
-async def run_load(
-    base_url: str, concurrency: int, duration_seconds: float, reasoning_effort: str
-) -> RequestStats:
+async def run_load(base_url: str, concurrency: int, duration_seconds: float, reasoning_effort: str) -> RequestStats:
     """Drive `concurrency` conversion-shaped streaming requests for `duration_seconds`."""
     stats = RequestStats()
     rng = random.Random(1234)
@@ -212,8 +211,6 @@ def normalize_base_url(url: str) -> str:
 def resolve_base_url(arg: str | None) -> str:
     if arg:
         return normalize_base_url(arg)
-    from iris.client.client import iris_ctx
-
     client = iris_ctx().client
     if client is None:
         raise SystemExit("--base-url is required outside an Iris job")
