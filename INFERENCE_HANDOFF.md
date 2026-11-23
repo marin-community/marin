@@ -173,6 +173,31 @@ step two, updated-policy publication and generation remain unverified.
 This run covers source `768ea25030`; it does not qualify the newer native
 inference integration now on this branch.
 
+A separate two-layer MoE diagnostic at `8502f3c7f9` completed on one host
+with eight H100s. Checkpoint state was restored bit-for-bit. The uninterrupted
+learner and the learner resumed in a fresh process both exited naturally.
+After the same frozen next batch, their model/Adam state and policy scores
+differed, while loss and reported scalar metrics matched. Maximum model and
+Adam differences were `3.51e-6` and `4.58e-5`. Two calls to one compiled gradient
+object used identical state, batch, PRNG key and projection plan; two of 46
+gradient leaves differed, and all were finite. This fixture does not qualify
+full-model restart.
+[Current-source repeatability](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-lifecycle-repeatability-2026-11-23-1)
+
+A single-H100 backward test with head dimension 64 and multi-head attention
+reproduced NaN query gradients on finite inputs after a deliberately NaN
+output-gradient call. Clearing K padding did not prevent the NaNs in a
+same-GPU comparison; that experimental patch remains outside this branch.
+The connection between this reproducer, the update differences and the
+full-model exit failure is unverified.
+[K-padding comparison](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-fallback-k-tail-ab-2026-11-23-2)
+
+Linux CPU controls captured stacks in a deliberately delayed C destructor,
+including with JAX libraries loaded, using the unchanged learner protocol
+and five-second post-ACK exit limit. A hung-debugger test cleaned up safely.
+Capturing the real GPU learner's native shutdown stack remains open.
+[CPU shutdown observer](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-controls-20261123-2)
+
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
 preserves that binding through batching and policy scoring. The distributed
@@ -184,3 +209,4 @@ held H100 comparisons. Those worker responses carry the same replay payload
 used by the native HTTP endpoints.
 [Quick-loop migration design](https://github.com/marin-community/marin/pull/11934)
 · [Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)
+
