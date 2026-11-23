@@ -6,6 +6,7 @@ import json
 import math
 import shlex
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped, AgentInferenceBackend
 from skyrl_train.rollouts.agent_trace import recorded_completion
 from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION
+from skyrl_train.rollouts.training_record import TrainingRollout
 
 
 def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
@@ -128,18 +130,30 @@ class HarborTrialHarness:
     def __init__(self, run_trial: Callable[[AgentCompletion], Awaitable[TrialResult]], reward_key: str) -> None:
         self.run_trial = run_trial
         self.reward_key = reward_key
+        self._grade: GradeResult | None = None
+        self._model_error: RolloutEnded | None = None
+
+    def with_verifier_result(self, rollout: TrainingRollout) -> TrainingRollout:
+        """Keep the completed trial's verdict even when it produced no model turn."""
+        if self._grade is None or self._model_error is not None:
+            return rollout
+        # A completed Harbor trial can time out before any response. The generic
+        # engine's early-harness-return failure is not a verifier failure then.
+        failure = rollout.failure if rollout.response_token_ids else None
+        return replace(rollout, grade=self._grade, failure=failure)
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         pass
 
     async def run(self, context: HarnessContext, session: ModelSession) -> None:
+        self._grade = None
+        self._model_error = None
         last: tuple[Prompt, ModelTurn] | None = None
         stopped: str | None = None
-        model_error: RolloutEnded | None = None
         lock = asyncio.Lock()
 
         async def complete(prompt: Prompt) -> ModelTurn:
-            nonlocal last, stopped, model_error
+            nonlocal last, stopped
             async with lock:
                 if stopped is not None:
                     raise AgentGenerationStopped(stopped)
@@ -150,13 +164,14 @@ class HarborTrialHarness:
                     raise AgentGenerationStopped(stopped) from error
                 except RolloutEnded as error:
                     stopped = "error"
-                    model_error = error
+                    self._model_error = error
                     raise AgentGenerationStopped(stopped) from error
                 last = (prompt, turn)
                 return turn
 
         result = await self.run_trial(complete)
+        self._grade = trial_grade(result, self.reward_key)
         if last is not None:
-            session.record(data=StepReward(grade=trial_grade(result, self.reward_key)))
-        if model_error is not None:
-            raise model_error
+            session.record(data=StepReward(grade=self._grade))
+        if self._model_error is not None:
+            raise self._model_error

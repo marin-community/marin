@@ -19,6 +19,13 @@ class _ReadyServer(uvicorn.Server):
         if self.started:
             self.ready.set()
 
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        # The trial has ended. Its remaining callbacks must stop before the
+        # outer cleanup deadline, rather than consume that deadline draining.
+        for task in tuple(self.server_state.tasks):
+            task.cancel()
+        await super().shutdown(sockets)
+
 
 @asynccontextmanager
 async def serve_agent_app(
@@ -41,9 +48,7 @@ async def serve_agent_app(
                 port=port,
                 log_level="warning",
                 access_log=False,
-                # The trial has ended. Stop its pending model callbacks before
-                # the outer service-cleanup deadline, preserving its verifier result.
-                timeout_graceful_shutdown=0,
+                timeout_graceful_shutdown=shutdown_timeout,
             )
         )
         serving = asyncio.create_task(server.serve(sockets=[listener]))

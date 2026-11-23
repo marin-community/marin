@@ -1,10 +1,15 @@
 """A workspace timeout retains the final verifier verdict and exact model tokens."""
 
 from types import SimpleNamespace
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.verifier.result import VerifierResult
 from rolloutengine.models import (
-    ConversationRecord, GradedRolloutInterrupted, ModelTurn, Rollout, RolloutOperation, RolloutStep, Transition,
+    ConversationRecord, GradedRolloutInterrupted, ModelTurn, Prompt, Rollout, RolloutOperation, RolloutStep, Transition,
 )
 from skyrl_gym.verification import VerificationStatus
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -13,11 +18,15 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.evaluate import _calculate_eval_metrics
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.task_worker import _failed_rollout
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _failed_rollout
+from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
+from skyrl_train.rollouts.agent_backend import AgentGenerationStopped
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 from skyrl_train.trajectory_runners.model_clients import ModelServerError
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from tests.cpu.task_specs import lowered_task, task_input, text_task
+from omegaconf import OmegaConf
 
 
 def test_model_server_error_retains_failure_instead_of_masking_it_with_attribute_error():
@@ -73,3 +82,63 @@ def test_timeout_verdict_survives_worker_projection_and_evaluation(reward):
         assert metrics["eval/SWE/avg_score"] == reward
         assert metrics["eval/SWE/avg_verifier_score"] == reward
         assert metrics["eval/SWE/pass_at_1"] == reward
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reward,model_failure", [(0.0, False), (1.0, False), (None, False), (1.0, True)])
+async def test_completed_harbor_trial_without_model_turn_keeps_actual_verdict(reward, model_failure):
+    config = get_default_config().generator
+    projection = WholeTaskProjection(config, SimpleNamespace(eos_token_id=0))
+    task = text_task().model_copy(update={"tags": ("harbor",)})
+    spec = lowered_task(task, "harbor_trial")
+
+    async def completed_trial(complete):
+        # External trial boundary: the agent exhausted its budget, but Harbor
+        # still ran the workspace verifier without a completed model response.
+        if model_failure:
+            with pytest.raises(AgentGenerationStopped):
+                await complete(Prompt(({"role": "user", "content": "Inspect the workspace."},), {}))
+        return TrialResult(
+            task_name="workspace", trial_name="timeout", trial_uri="/tmp/timeout",
+            task_id=TaskConfig(path=Path("/tmp/task")).get_task_id(), task_checksum="fixture",
+            agent_info=AgentInfo(name="pi", version="0.87.0"),
+            config=TrialConfig(task=TaskConfig(path=Path("/tmp/task")), agent=AgentConfig(name="pi")),
+            verifier_result=None if reward is None else VerifierResult(rewards={"reward": reward}),
+            exception_info=ExceptionInfo(
+                exception_type="AgentTimeoutError", exception_message="Agent budget exhausted",
+                exception_traceback="", occurred_at=datetime.now(timezone.utc),
+            ),
+        )
+
+    async def shutdown():
+        pass
+
+    async def failed_generation(request):
+        raise ModelServerError(category="server_error", request_id="request", status_code=503)
+
+    worker = TaskRolloutWorker(
+        config, projection, SimpleNamespace(generate=failed_generation), {}, shutdown_timeout=5,
+        harbor=HarborTaskSettings.from_config(OmegaConf.create({})),
+        installed_agents=SimpleNamespace(
+            original_harness=lambda *_: HarborTrialHarness(completed_trial, "reward"), shutdown=shutdown,
+        ),
+    )
+    request = TaskRequestBatch((task_input(spec),))
+    try:
+        rollouts = await worker.generate(request)
+        batch = projection.project(rollouts, request)
+        metrics = _calculate_eval_metrics(batch, ["task"], ["SWE"], 1)
+        assert rollouts[0].response_token_ids == ()
+        assert batch["loss_masks"] == [[0]]
+        if model_failure:
+            assert rollouts[0].failure.exception_type == "ModelServerError"
+            assert metrics["eval/SWE/num_scored"] == 0
+        elif reward is None:
+            assert metrics["eval/SWE/num_scored"] == 0
+            assert batch["verification_results"][0].score is None
+        else:
+            assert metrics["eval/SWE/num_scored"] == 1
+            assert metrics["eval/SWE/avg_verifier_score"] == reward
+            assert metrics["eval/SWE/pass_at_1"] == reward
+    finally:
+        await worker.shutdown()

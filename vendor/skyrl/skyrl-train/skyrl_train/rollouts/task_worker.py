@@ -60,6 +60,7 @@ from skyrl_train.rollouts.harbor_tasks import (
     shape_harbor_rollouts,
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
+from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
 from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propagate_data_sources
@@ -647,6 +648,9 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
+                harness = engine.harnesses[lowered.harness]
+                if isinstance(harness, HarborTrialHarness):
+                    result = harness.with_verifier_result(result)
                 if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
                     # Before group grading, so a malformed rollout never enters a GenRM comparison.
                     result = reject_malformed_reasoning(result)
