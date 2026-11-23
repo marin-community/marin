@@ -225,6 +225,10 @@ key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
 to every CoreWeave job, so this key's access policy bounds what Belay runs can
 read and write. Replies on the intake issue use Loom's GitHub App token.
 
+Idle archiving has a 15-minute minimum (five for completed watches) and waits
+for active turns to finish. Suspended sessions still count toward concurrency
+limits. Profile edits apply to new sessions.
+
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
 profiles, which accept a per-launch agent override, and the Claude automation
