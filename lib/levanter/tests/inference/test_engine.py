@@ -147,3 +147,40 @@ def test_generate_admits_waiting_requests_with_reused_pages():
 
     assert result.tokens == [[3] * length for length in output_lengths]
     assert result.total_generated == sum(output_lengths)
+
+
+def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_active():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=4,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=1,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+            ),
+        )
+        params = SeqDecodingParams.default()
+        long_request = Request([1, 2, 4], 10, replace(params, max_num_tokens=jnp.asarray(8)), n_generations=1)
+        short_request = Request([3, 2, 1], 11, replace(params, max_num_tokens=jnp.asarray(4)), n_generations=1)
+        incoming = [short_request]
+        completed = {}
+
+        def poll(free_slots):
+            if not incoming:
+                return []
+            assert free_slots == 1
+            assert engine.results[10][0].tokens_decoded > 0 and not engine.results[10][0].done
+            return [incoming.pop()]
+
+        engine.generate_continuously([long_request], poll_requests=poll, on_complete=completed.__setitem__)
+
+    assert list(completed) == [11, 10]
+    assert completed[11].tokens == [[3]]
+    assert completed[10].tokens == [[3] * 5]
