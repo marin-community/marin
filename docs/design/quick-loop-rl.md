@@ -2251,6 +2251,27 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   inputs and seeds and check replay, occupancy and peak memory. The held
   learner comparison uses the frozen four-request configuration.
 
+  The warmed 57.0-second device decode measurement includes attention,
+  expert computation and route capture. The engine already runs up to
+  32 generation rounds per compiled call. Within each round, the CUDA
+  BF16 reference attention reads one KV page at a time. The opt-in
+  `reference_blocked` prototype gathers four pages and batches their FP32 query-key
+  products for static packs of up to 32 queries. It applies the same
+  ordered FP32 softmax and value recurrence. Large prefill packs follow
+  the reference path. Lowering the eight-slot H100 geometry verified the
+  bounded gather and four-page product. For the archived short inputs,
+  the page geometry gives 615 outer block iterations per layer in place
+  of 1,692 single-page iterations across 512 decode positions. The last
+  block can include masked padding.
+
+  Two real CPU serving processes used identical weights and their own
+  model configuration digests. Ten typed replay frames matched in
+  every other field, including exact tokens, positions, routes, sampled
+  scores and an early stop. Measure synchronized decode time and peak
+  device memory on H100 before enabling the prototype for the inventory
+  comparison.
+  [Page batching source, binary frames and lowering][held-native-page-block-cpu]
+
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
   scores to the same typed frames from one original attempt. The first
@@ -2447,6 +2468,7 @@ arms. [Prior timing comparison][timing]
 [held-native-admission-h100]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-h100-profile-proof.tar.zst
 [held-native-eight-slot-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-eight-slot-cpu-proof.tar.zst
 [held-native-length-aware-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-length-aware-batch-cpu-proof.tar.zst
+[held-native-page-block-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-blocked-paged-decode-cpu-proof.tar.zst
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
