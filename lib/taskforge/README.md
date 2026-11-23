@@ -209,7 +209,7 @@ workpiece without new model calls.
 (author, adversary or reviewer) is recorded as a `context_exceeded` completion, so a resumed visit replays the
 stop. This revision and later ones read every row earlier drivers wrote; earlier drivers reject that row. The
 earlier driver of this journal format raises while it reads the journal, before it claims or publishes anything,
-so the root stays as published (read from its code, not run: `CheckpointSink.claim` decodes the history before it swaps the head). No
+so the root stays as published: `CheckpointSink.claim` decodes the history before it swaps the head. No
 format number fences the drivers before this layout. So roots written by this revision or later must never be
 launched by an earlier driver, and a rollback of the binary uses a fresh output prefix.
 
@@ -236,8 +236,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   with `author.context_tokens` and `adversary.context_tokens` as their prompt limits. There is no output cap;
   the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
-  that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
-  reverting to the earlier submission if the hardening broke something.
+  out of band, too easy or too hard, gets one band-only revision round and is then accepted at its own placement,
+  tagged `accepted_with: too_easy` or `too_hard`. Only a faulted revision, or one at a placement the policy never
+  accepts (`band.accept_too_easy: false`), reverts to the stored fallback.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each

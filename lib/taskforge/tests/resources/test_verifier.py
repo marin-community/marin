@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, cast, override
+from typing import Literal, cast, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
@@ -412,9 +413,17 @@ class Admissions:
         self.engine, self.started = engine, list[str]()
         self.machine_factories = engine.machine_factories
 
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, **options: Any) -> GradedRollout:
-        self.started.append(options["run_id"])
-        return await self.engine.run_task(spec, model, **options)
+    async def run_task(
+        self,
+        spec: TaskRolloutSpec,
+        model: Model,
+        *,
+        run_id: str | None = None,
+        verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
+    ) -> GradedRollout:
+        assert run_id is not None
+        self.started.append(run_id)
+        return await self.engine.run_task(spec, model, run_id=run_id, verifier=verifier)
 
 
 async def test_batch_slots_generate_before_verifier_admission_and_a_grade_is_admitted_before_its_attempt() -> None:
