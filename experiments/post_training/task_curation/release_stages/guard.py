@@ -146,11 +146,26 @@ def assert_stage_sources_landed(repo_root: Path, package_dir: Path = PACKAGE_DIR
         )
 
 
-def assert_submission_allowed(repo_root: Path, package_dir: Path = PACKAGE_DIR) -> None:
-    """The full submission gate: landed modules plus a clean literal scan.
+def assert_submission_allowed(
+    repo_root: Path,
+    package_dir: Path = PACKAGE_DIR,
+    *,
+    preflight_output_root: str | None = None,
+    preflight_digests: dict[str, dict[str, str]] | None = None,
+) -> None:
+    """The full submission gate: landed modules, clean literal scan, fresh preflights.
 
-    Preflight-receipt freshness joins here once ``preflight.py`` lands (DESIGN.md §6);
-    the landed-SHA and literal checks are independent of it.
+    Preflight receipt freshness (DESIGN.md §5 item 3) is enforced when the caller
+    supplies the release output root and each stage's input digests: every submitted
+    stage must hold an ``ok`` receipt sealed at the landed source SHA.
     """
     assert_stage_sources_landed(repo_root, package_dir)
     assert_no_release_literals(package_dir)
+    if preflight_output_root is not None and preflight_digests:
+        from experiments.post_training.task_curation.release_stages.preflight import (  # noqa: PLC0415 — avoids a guard/preflight import cycle at module load
+            require_fresh_preflight,
+        )
+
+        landed_sha = repo_head(repo_root)
+        for stage, digests in sorted(preflight_digests.items()):
+            require_fresh_preflight(preflight_output_root, stage, landed_sha, digests)
