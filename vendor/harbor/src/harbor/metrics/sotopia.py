@@ -24,7 +24,8 @@ from upath import UPath
 
 from harbor.models.benchmark import SOTOPIA_PRIMARY_METRIC
 from harbor.models.trial.result import TrialResult
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor_config.models.job.config import SotopiaCohort
 
 SUMMARY = re.compile(r"/([^/]+)/attempts/(\d+)/agent/sotopia-summary\.json$")
@@ -385,7 +386,7 @@ def correct_sotopia(
     candidate = []
     for trial in trials:
         category = (
-            error_category(trial.exception_info.exception_type)
+            error_category(trial.exception_info.exception_type, categories=ERROR_CATEGORIES)
             if trial.exception_info
             else None
         )
