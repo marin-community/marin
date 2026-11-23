@@ -9,7 +9,10 @@ import pandas as pd
 import pytest
 from marin.datakit.decon_keys import (
     WINDOW,
+    KeyStream,
+    Windows,
     item_stream,
+    keys_table,
     text_stream,
     window_hashes,
 )
@@ -271,3 +274,21 @@ def test_a_generic_stem_shared_by_several_items_is_not_their_passage():
     item = lmh_item("mmlu_x", "mmlu_x-0", task, docs[0], shared_values(docs))
     assert item["passage"] == ""
     assert item["question"].startswith("Which of the following statements is correct?")
+
+
+def test_a_shared_tie_keys_each_item_off_the_question_stem_that_other_items_share():
+    stem = "Which of the following propositions is an immediate consequence of the given premises?"
+    questions = [
+        f"{stem} {premise}" for premise in ("Henry rides a red bicycle daily", "Mara bakes seven loaves weekly")
+    ]
+    streams = [text_stream(q) for q in questions]
+    hashes, owners, offsets = rarest_key.candidate_windows(streams)
+    ids = np.array(["formal-0", "formal-1"], dtype=object)
+    windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION] * 2, dtype=object))
+    # No window occurs in the reference sample, so the tie order decides the keys.
+    counts = np.zeros(len(hashes), dtype=np.int64)
+    stem_windows = set(window_hashes(text_stream(stem)).tolist())
+    earliest = keys_table(windows, counts).column("key1_hash").to_pylist()
+    shared = keys_table(windows, counts, tie=rarest_key.tie_values(windows, rarest_key.Tie.SHARED))
+    assert all(key in stem_windows for key in earliest)
+    assert not any(key in stem_windows for key in shared.column("key1_hash").to_pylist())

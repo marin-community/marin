@@ -23,6 +23,7 @@ import logging
 import random
 import time
 from collections.abc import Iterator
+from enum import StrEnum
 
 import numpy as np
 import pyarrow as pa
@@ -119,7 +120,31 @@ def make_count(output: str, width: int):
     return count
 
 
-def choose(output: str, width: int = WINDOW, middle: bool = False) -> None:
+class Tie(StrEnum):
+    """How ``choose`` orders equally rare windows before the earliest offset."""
+
+    EARLIEST = "earliest"
+    MIDDLE = "middle"  # nearest the middle of the stream
+    SHARED = "shared"  # held by the fewest other items (shared prompt text such as a common question stem)
+
+
+def tie_values(windows: Windows, tie: Tie) -> np.ndarray | None:
+    """One ``keys_table`` tie value per candidate window."""
+    hashes, owners, offsets, ids, _ = windows
+    if tie == Tie.EARLIEST:
+        return None
+    if tie == Tie.MIDDLE:
+        last = np.zeros(int(owners.max()) + 1, dtype=np.int64)
+        np.maximum.at(last, owners, offsets.astype(np.int64))
+        return np.abs(2 * offsets.astype(np.int64) - last[owners])
+    _, item_numbers = np.unique(ids, return_inverse=True)
+    items = item_numbers[owners].astype(np.int64)
+    pairs = np.unique(np.stack([hashes.view(np.int64), items], axis=1), axis=0)
+    distinct, holders = np.unique(pairs[:, 0], return_counts=True)
+    return holders[np.searchsorted(distinct, hashes.view(np.int64))]
+
+
+def choose(output: str, width: int = WINDOW, tie: Tie = Tie.EARLIEST) -> None:
     """Sum the reference counts of every candidate window and write each item's keys (``keys_table``)."""
     windows = load_windows(output)
     parts_hashes, parts_counts = [], []
@@ -131,7 +156,7 @@ def choose(output: str, width: int = WINDOW, middle: bool = False) -> None:
     totals = np.bincount(inverse, weights=np.concatenate(parts_counts)).astype(np.int64)
     slot = np.minimum(np.searchsorted(seen, windows.hashes), len(seen) - 1)
     window_counts = np.where(seen[slot] == windows.hashes, totals[slot], 0)
-    table = keys_table(windows, window_counts, width, middle)
+    table = keys_table(windows, window_counts, width, tie_values(windows, tie))
     write_table(table, prefix_join(output, "keys.parquet"))
     counts = np.array([c for c in table.column("key1_count").to_pylist() if c >= 0])
     firsts = np.array([c for c in table.column("first_count").to_pylist() if c >= 0])
@@ -247,9 +272,7 @@ def main() -> None:
         help="shards.json files of other stage-1 runs whose shards are not drawn; copy their keys.parquet to --output",
     )
     parser.add_argument("--measure-per-source", type=int, default=1, help="measure shards drawn per source")
-    parser.add_argument(
-        "--middle", action="store_true", help="choose: break ties by the window nearest the stream middle"
-    )
+    parser.add_argument("--tie", type=Tie, default=Tie.EARLIEST, help="choose: how equally rare windows are ordered")
     parser.add_argument(
         "--content", action="store_true", help="prepare: windows only outside each eval's shared template"
     )
@@ -258,7 +281,7 @@ def main() -> None:
         prepare(args.items, args.output, args.width, args.content)
         return
     if args.step == "choose":
-        choose(args.output, args.width, args.middle)
+        choose(args.output, args.width, args.tie)
         return
     excluded = frozenset(
         shard

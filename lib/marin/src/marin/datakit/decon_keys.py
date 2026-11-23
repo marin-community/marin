@@ -239,24 +239,19 @@ class KeyTable:
         return [item for index in found.tolist() for item in self.items[self.starts[index] : self.starts[index + 1]]]
 
 
-def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW, middle: bool = False) -> pa.Table:
+def keys_table(
+    windows: Windows, window_counts: np.ndarray, width: int = WINDOW, tie: np.ndarray | None = None
+) -> pa.Table:
     """One row per key stream: its first window, its rarest window (key 1), and the rarest window that does
     not overlap key 1 (key 2). Hash columns are uint64; 0 means "no such key", and its count is -1. Among equally
-    rare windows the earliest wins, or with *middle* the one nearest the middle of the stream (away from prompt
-    text at either end).
+    rare windows the lowest *tie* value (one per candidate window) wins, then the earliest.
 
     A stream other than the question keeps its key only when its rarest window occurs in no reference
     record: an extra key that common text holds (a generic stem taken for a passage) would only add load.
     """
     hashes, owners, offsets, ids, kinds = windows
     columns: dict[str, list] = {name: [] for name in KEY_COLUMNS}
-    if middle:
-        last = np.zeros(int(owners.max()) + 1 if len(owners) else 0, dtype=np.int64)
-        np.maximum.at(last, owners, offsets.astype(np.int64))
-        tie = np.abs(2 * offsets.astype(np.int64) - last[owners])
-    else:
-        tie = offsets
-    order = np.lexsort((tie, window_counts, owners))
+    order = np.lexsort((offsets, window_counts, owners) if tie is None else (offsets, tie, window_counts, owners))
     keyed: set[int] = set()
     start = 0
     while start < len(order):
