@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 10:04 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 10:47 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2004,6 +2004,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [First prompt-aligned child][iris-held-native-prompt-aligned] ·
   [Prompt-aligned replacement][iris-held-native-prompt-aligned-replacement] ·
   [Verified live prompt parity][held-native-live-prompt-parity]
+
+  The replacement filled its first training batch with 32 groups, 128
+  trajectories and 55,301 response tokens at zero staleness. The trainer
+  spent 2,336.8 seconds waiting for the batch, or 73.0 seconds per group.
+  The held vLLM trainer spent 11.4 seconds, or 0.36 seconds per group,
+  filling the equivalent batch. Some native model calls hit the
+  1,800-second per-turn limit, which includes queue wait. The coordinator
+  kept the lease open and filled the batch. All four learners started
+  writing the step-one validation checkpoint. The exact restore and
+  first trained-policy install remain open.
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
